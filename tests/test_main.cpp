@@ -1,6 +1,7 @@
-// Checkpoint B3+B4+B5a+B5b — tests for authentication, session persistence,
-// device identity, URL normalisation, B4 JSON parsing/tab building,
-// B5a artwork infrastructure, and B5b selected artwork loading.
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1 — tests for authentication, session
+// persistence, device identity, URL normalisation, B4 JSON parsing/tab
+// building, B5a artwork infrastructure, B5b selected artwork loading,
+// B5c1 per-type artwork box dimensions, and B5d1 row card geometry + scrolling.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -789,6 +790,144 @@ static void testMetadataXFollowsBoxWidth()
     std::printf("[test] B5c1: metadata X follows box width OK\n");
 }
 
+// -------------------------------------------------------------------
+// B5d1: Row card geometry and scrolling tests
+// -------------------------------------------------------------------
+
+// B5d1: Movie row card is 64×96
+static void testMovieRowCard()
+{
+    std::printf("[test] B5d1: movie row card = 64x96\n");
+    MediaItem m;
+    m.type = "movie";
+    auto box = artworkBoxSize(m);
+    CHECK(box.w == 64);
+    CHECK(box.h == 96);
+    CHECK(rowStripHeight() == 96);
+    std::printf("[test] B5d1: movie row card OK\n");
+}
+
+// B5d1: Show row card is 64×96
+static void testShowRowCard()
+{
+    std::printf("[test] B5d1: show row card = 64x96\n");
+    MediaItem s;
+    s.type = "show";
+    auto box = artworkBoxSize(s);
+    CHECK(box.w == 64);
+    CHECK(box.h == 96);
+    std::printf("[test] B5d1: show row card OK\n");
+}
+
+// B5d1: Episode row card is 128×72
+static void testEpisodeRowCard()
+{
+    std::printf("[test] B5d1: episode row card = 128x72\n");
+    MediaItem e;
+    e.type = "episode";
+    auto box = artworkBoxSize(e);
+    CHECK(box.w == 128);
+    CHECK(box.h == 72);
+    std::printf("[test] B5d1: episode row card OK\n");
+}
+
+// B5d1: Mixed-width card X positions
+static void testMixedWidthPositions()
+{
+    std::printf("[test] B5d1: mixed-width X positions\n");
+    MediaItem movie;  movie.type = "movie";   // w=64
+    MediaItem episode; episode.type = "episode"; // w=128
+    std::vector<MediaItem> row = {movie, episode, movie};
+
+    // startX=4, gap=6
+    CHECK(cardXPosition(row, 0) == 4);                // movie
+    CHECK(cardXPosition(row, 1) == 4 + 64 + 6);      // 74, episode
+    CHECK(cardXPosition(row, 2) == 4 + 64 + 6 + 128 + 6); // 208, movie
+
+    // Total width: right edge of last card
+    int totalW = cardXPosition(row, 3); // past-the-end X = startX + all widths + gaps
+    CHECK(totalW == 4 + 64 + 6 + 128 + 6 + 64 + 6); // 278
+    // totalRowWidth excludes trailing gap
+    CHECK(totalRowWidth(row) == totalW - 6); // 272
+    std::printf("[test] B5d1: mixed-width X positions OK\n");
+}
+
+// B5d1: Scrolling right keeps selected card visible
+static void testScrollRightKeepsVisible()
+{
+    std::printf("[test] B5d1: scroll right keeps selected visible\n");
+    MediaItem m; m.type = "movie"; // w=64
+    std::vector<MediaItem> row(15, m); // 15 movies, each 64 wide
+
+    // Card 14 starts at 4 + 14*(64+6) = 4 + 980 = 984
+    // Right edge = 984 + 64 = 1048.  Viewport = 640.
+    // Needed scroll = 1048 - 640 = 408
+    int scroll = clampCardScroll(row, 14, 0, 640);
+    CHECK(scroll == 408);
+    // Verify the card is now visible: screenX = 984 - 408 = 576, right = 640
+    CHECK(984 - scroll >= 0);
+    CHECK(984 + 64 - scroll <= 640);
+    std::printf("[test] B5d1: scroll right keeps selected visible OK\n");
+}
+
+// B5d1: Scrolling back left decreases pixel scroll
+static void testScrollLeftDecreases()
+{
+    std::printf("[test] B5d1: scroll back left decreases scroll\n");
+    MediaItem m; m.type = "movie"; // w=64
+    std::vector<MediaItem> row(15, m);
+
+    // Start with card 14 visible (scroll = 408)
+    int scroll = clampCardScroll(row, 14, 0, 640);
+    CHECK(scroll == 408);
+
+    // Move to card 0: cardX(0) = 4. Need scroll = 4 so screenX = 0.
+    scroll = clampCardScroll(row, 0, scroll, 640);
+    CHECK(scroll == 4);
+    CHECK(scroll < 408); // scroll decreased
+    std::printf("[test] B5d1: scroll back left decreases OK\n");
+}
+
+// B5d1: Scroll never becomes negative
+static void testScrollNeverNegative()
+{
+    std::printf("[test] B5d1: scroll never negative\n");
+    MediaItem m; m.type = "movie";
+    std::vector<MediaItem> row(5, m);
+
+    // activeCard = 0, currentScroll = -50
+    int scroll = clampCardScroll(row, 0, -50, 640);
+    CHECK(scroll >= 0);
+
+    // activeCard = 2, currentScroll = 0 (small row, fits on screen)
+    scroll = clampCardScroll(row, 2, 0, 640);
+    CHECK(scroll >= 0);
+    CHECK(scroll == 0); // card 2 at 4+2*70=144, right=208, fits
+
+    std::printf("[test] B5d1: scroll never negative OK\n");
+}
+
+// B5d1: No card-index / pixel-offset confusion
+static void testScrollIsPixelNotIndex()
+{
+    std::printf("[test] B5d1: scroll is pixel offset, not card index\n");
+    MediaItem m; m.type = "movie"; // w=64
+    std::vector<MediaItem> row(20, m);
+
+    // Card 19 at 4 + 19*70 = 1334, right edge = 1398
+    // Needed scroll = 1398 - 640 = 758
+    int scroll = clampCardScroll(row, 19, 0, 640);
+    CHECK(scroll == 758);
+    // 758 is a pixel value, far larger than any card index (0-19)
+    CHECK(scroll > 19);
+
+    // Verify: card 19 screenX = 1334 - 758 = 576, right = 640. Visible.
+    CHECK(1334 - scroll >= 0);
+    CHECK(1334 + 64 - scroll <= 640);
+
+    std::printf("[test] B5d1: scroll is pixel offset OK\n");
+}
+
 int main()
 {
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1 tests\n");
@@ -842,9 +981,20 @@ int main()
     testOtherArtworkBox();
     testMetadataXFollowsBoxWidth();
 
+    // B5d1 tests — Row card geometry and scrolling
+    std::printf("\n--- B5d1 row card geometry + scrolling tests ---\n");
+    testMovieRowCard();
+    testShowRowCard();
+    testEpisodeRowCard();
+    testMixedWidthPositions();
+    testScrollRightKeepsVisible();
+    testScrollLeftDecreases();
+    testScrollNeverNegative();
+    testScrollIsPixelNotIndex();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1 tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1 tests passed.\n");
         return 0;
     }
 

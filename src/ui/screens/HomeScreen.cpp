@@ -20,9 +20,8 @@ static constexpr int INFO_Y      = 26;
 static constexpr int INFO_H      = 110;
 static constexpr int ROWS_Y      = INFO_Y + INFO_H + 2;
 static constexpr int BOTTOM_H    = 18;
-static constexpr int CARD_W      = 160;
-static constexpr int CARD_H      = 90;
 static constexpr int CARD_GAP    = 6;
+static constexpr int ROW_STRIP_H = 96;  // max card height across all types
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
 
@@ -92,10 +91,10 @@ void HomeScreen::clampNavigation()
     if (m_activeRow < m_rowScroll) m_rowScroll = m_activeRow;
     if (m_activeRow >= m_rowScroll + VISIBLE_ROWS)
         m_rowScroll = m_activeRow - VISIBLE_ROWS + 1;
-    int visibleCards = (640 - 12) / (CARD_W + CARD_GAP);
-    if (m_activeCard < m_cardScroll) m_cardScroll = m_activeCard;
-    if (m_activeCard >= m_cardScroll + visibleCards)
-        m_cardScroll = m_activeCard - visibleCards + 1;
+    // Horizontal: m_cardScroll is a pixel offset, clamp so active card is visible
+    static constexpr int HMARGIN = 4;
+    m_cardScroll = clampCardScroll(items, m_activeCard, m_cardScroll,
+                                    640, HMARGIN, CARD_GAP);
 }
 
 void HomeScreen::enter()
@@ -506,11 +505,12 @@ void HomeScreen::drawRowList(SDL_Surface *fb)
     const auto &rows = currentTab().rows;
     if (rows.empty()) return;
     static constexpr int VGAP = 4;
+    static constexpr int HMARGIN = 4;
     for (int ri=0; ri<VISIBLE_ROWS; ++ri) {
         int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size()) break;
         const MediaRow &row = rows[rowIdx];
-        int rowY = ROWS_Y + ri * (ROW_LABEL_H + CARD_H + VGAP + 4);
+        int rowY = ROWS_Y + ri * (ROW_LABEL_H + ROW_STRIP_H + VGAP + 4);
         int caY = rowY + ROW_LABEL_H;
         char label[64];
         std::snprintf(label,sizeof(label),"  %s",row.label.c_str());
@@ -519,12 +519,21 @@ void HomeScreen::drawRowList(SDL_Surface *fb)
             rowIdx==m_activeRow?Theme::ACCENT_G:Theme::TEXT_G,
             rowIdx==m_activeRow?Theme::ACCENT_B:Theme::TEXT_B,
             Theme::BG_R,Theme::BG_G,Theme::BG_B);
-        int cx = 4;
-        for (int ci=m_cardScroll; ci<(int)row.items.size(); ++ci) {
-            if (cx+CARD_W > 640-4) break;
+        // Draw cards with per-item sizing and pixel-scroll offset
+        int cardAccumX = HMARGIN;
+        for (int ci=0; ci<(int)row.items.size(); ++ci) {
+            ArtworkBox sz = artworkBoxSize(row.items[ci]);
+            int screenX = cardAccumX - m_cardScroll;
+            if (screenX + sz.w < HMARGIN) {
+                // Fully off-screen left
+                cardAccumX += sz.w + CARD_GAP;
+                continue;
+            }
+            if (screenX > 640 - HMARGIN) break;
             bool sel = (rowIdx==m_activeRow && ci==m_activeCard);
-            drawCard(fb,cx,caY,CARD_W,CARD_H,row.items[ci],sel);
-            cx += CARD_W + CARD_GAP;
+            int cardScreenY = caY + (ROW_STRIP_H - sz.h) / 2;
+            drawCard(fb,screenX,cardScreenY,sz.w,sz.h,row.items[ci],sel);
+            cardAccumX += sz.w + CARD_GAP;
         }
     }
 }

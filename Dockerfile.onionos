@@ -1,0 +1,33 @@
+# -------------------------------------------------------------------
+# Dockerfile for MiyooFin cross-compilation toolchain
+# (Checkpoint A — scaffold only, not yet functional)
+#
+# Based on the XK9274/sdl2_miyoo community toolchain approach.
+# Before building, see docs/toolchain.md for the full investigation.
+#
+# Build command (once approved):
+#   docker build -f Dockerfile.onionos -t miyoofin-toolchain .
+# -------------------------------------------------------------------
+
+FROM debian:buster
+
+RUN apt-get update && \
+    apt-get install -y build-essential make cmake wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# Download and install the Miyoo Buildroot toolchain
+# (from steward-fu/nds_miyoo releases)
+RUN cd /tmp && \
+    wget -q https://github.com/steward-fu/nds_miyoo/releases/download/assets/toolchain.tar.gz && \
+    tar xzf toolchain.tar.gz && \
+    mv mmiyoo /opt/ && \
+    mv prebuilt /opt/ && \
+    rm -f toolchain.tar.gz
+
+ENV PATH="/opt/mmiyoo/bin:${PATH}"
+ENV CROSS_COMPILE="arm-linux-gnueabihf-"
+
+# Cross-compiler prefix: arm-linux-gnueabihf-
+# Sysroot: /opt/mmiyoo/arm-buildroot-linux-gnueabihf/sysroot/
+
+WORKDIR /build

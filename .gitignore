@@ -1,0 +1,21 @@
+# Build outputs
+output/
+
+# Editor temp files
+*~
+*.swp
+*.swo
+.*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Test binaries
+tests/*.o
+tests/*.test

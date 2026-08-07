@@ -1,0 +1,36 @@
+#ifndef MIYOOFIN_SCREEN_HPP
+#define MIYOOFIN_SCREEN_HPP
+
+#include <SDL2/SDL.h>
+#include <vector>
+#include "../input/Action.hpp"
+
+namespace miyoofin {
+
+/// Abstract interface implemented by every screen.
+class Screen {
+public:
+    virtual ~Screen() = default;
+
+    /// Called when this screen becomes the active screen.
+    virtual void enter() {}
+
+    /// Called when this screen is being left (popped or replaced).
+    virtual void leave() {}
+
+    /// Process logical actions for this frame.
+    /// @return true if the screen consumed the action (stops propagation).
+    virtual bool handleAction(Action action) = 0;
+
+    /// Fixed-step update (dt in milliseconds).
+    virtual void update(Uint32 dt) = 0;
+
+    /// Render the current state onto the software framebuffer surface.
+    /// The framebuffer is 640x480 RGBA32, already cleared to the
+    /// background colour before this call.
+    virtual void render(SDL_Surface *fb) = 0;
+};
+
+} // namespace miyoofin
+
+#endif // MIYOOFIN_SCREEN_HPP

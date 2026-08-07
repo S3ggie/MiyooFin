@@ -1,0 +1,13 @@
+{
+    "version": "0.1.0",
+    "app": "MiyooFin",
+    "description": "Native Jellyfin client for Miyoo Mini Plus",
+    "author": "MiyooFin Team",
+    "data_path": "./data",
+    "cache_path": "./cache",
+    "log_path": "./logs",
+    "server": "",
+    "device_id": "",
+    "access_token": "",
+    "user_id": ""
+}

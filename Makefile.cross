@@ -1,0 +1,53 @@
+# -------------------------------------------------------------------
+# Makefile.cross — Cross-compile MiyooFin for Miyoo Mini Plus
+# Used inside the miyoofin-toolchain Docker container.
+# Variables come from the Docker environment or can be overridden.
+# -------------------------------------------------------------------
+
+CROSS_PREFIX ?= arm-linux-gnueabihf-
+SYSROOT      ?= /usr/arm-linux-gnueabihf
+
+CXX := $(CROSS_PREFIX)g++
+CC  := $(CROSS_PREFIX)gcc
+AR  := $(CROSS_PREFIX)ar
+
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -g -O2
+INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
+
+# Source files
+SRCS := \
+    src/main.cpp \
+    src/app/App.cpp \
+    src/app/ScreenStack.cpp \
+    src/input/InputManager.cpp \
+    src/ui/BitmapFont.cpp \
+    src/ui/screens/StartupScreen.cpp \
+    src/ui/screens/InputDiagnosticsScreen.cpp
+
+OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
+TARGET    := output/build-arm/miyoofin
+OUT_DIRS  := output/build-arm/app output/build-arm/input output/build-arm/ui/screens
+
+.PHONY: all
+all: $(TARGET)
+	@echo "=== ARM build complete: $(TARGET) ==="
+	@file $(TARGET)
+	@$(CROSS_PREFIX)readelf -h $(TARGET) | grep -E 'Class|Machine|Flags'
+
+$(TARGET): $(OBJS) | output/build-arm
+	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -o $@ $^ -lSDL2
+	@echo "  [LINK] $@"
+
+output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	@echo "  [CC]   $@"
+
+$(OUT_DIRS):
+	@mkdir -p $@
+
+output/build-arm:
+	@mkdir -p $@
+
+.PHONY: clean
+clean:
+	@rm -rf output/build-arm

@@ -1,33 +1,80 @@
 # -------------------------------------------------------------------
 # Dockerfile for MiyooFin cross-compilation toolchain
-# (Checkpoint A — scaffold only, not yet functional)
 #
-# Based on the XK9274/sdl2_miyoo community toolchain approach.
-# Before building, see docs/toolchain.md for the full investigation.
+# Uses Debian's gcc-arm-linux-gnueabihf cross-compiler packages
+# plus SDL2 from XK9274/sdl2_miyoo vanilla branch (Miyoo-patched).
 #
-# Build command (once approved):
+# Source URLs and pinned revisions:
+#   SDL2:      XK9274/sdl2_miyoo vanilla @ 478ddde6a415d48b4c497ce3a2679c08afd23f40
+#
+# Build:
 #   docker build -f Dockerfile.onionos -t miyoofin-toolchain .
+#
+# Run (cross-compile the application):
+#   docker run --rm -v $(pwd):/build miyoofin-toolchain \
+#       make -f Makefile.cross
 # -------------------------------------------------------------------
 
-FROM debian:buster
+FROM debian:bookworm
 
+# Install cross-compiler and build dependencies
 RUN apt-get update && \
-    apt-get install -y build-essential make cmake wget && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        gcc-arm-linux-gnueabihf \
+        g++-arm-linux-gnueabihf \
+        binutils-arm-linux-gnueabihf \
+        pkg-config \
+        make cmake wget git ca-certificates \
+        autoconf libtool && \
     rm -rf /var/lib/apt/lists/*
 
-# Download and install the Miyoo Buildroot toolchain
-# (from steward-fu/nds_miyoo releases)
-RUN cd /tmp && \
-    wget -q https://github.com/steward-fu/nds_miyoo/releases/download/assets/toolchain.tar.gz && \
-    tar xzf toolchain.tar.gz && \
-    mv mmiyoo /opt/ && \
-    mv prebuilt /opt/ && \
-    rm -f toolchain.tar.gz
+# -------------------------------------------------------------------
+# Build SDL2 for Miyoo target (Miyoo-patched version)
+# Pinned: XK9274/sdl2_miyoo vanilla @ 478ddde6
+# -------------------------------------------------------------------
+RUN git clone https://github.com/XK9274/sdl2_miyoo.git /tmp/sdl2_miyoo && \
+    cd /tmp/sdl2_miyoo && git checkout 478ddde6a415d48b4c497ce3a2679c08afd23f40 && \
+    CC=arm-linux-gnueabihf-gcc \
+    CXX=arm-linux-gnueabihf-g++ \
+    ./configure \
+        --host=arm-linux-gnueabihf \
+        --prefix=/usr/arm-linux-gnueabihf \
+        --disable-joystick-virtual \
+        --disable-jack \
+        --disable-power \
+        --disable-sensor \
+        --disable-ime \
+        --disable-dbus \
+        --disable-fcitx \
+        --disable-hidapi \
+        --disable-libudev \
+        --disable-video-x11 \
+        --disable-video-kmsdrm \
+        --disable-video-vulkan \
+        --disable-video-opengl \
+        --disable-video-opengles \
+        --disable-video-opengles2 \
+        --disable-video-wayland \
+        --disable-video-dummy \
+        --disable-oss \
+        --disable-alsa \
+        --disable-sndio \
+        --disable-diskaudio \
+        --disable-pulseaudio \
+        --disable-dummyaudio && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/sdl2_miyoo
 
-ENV PATH="/opt/mmiyoo/bin:${PATH}"
-ENV CROSS_COMPILE="arm-linux-gnueabihf-"
-
-# Cross-compiler prefix: arm-linux-gnueabihf-
-# Sysroot: /opt/mmiyoo/arm-buildroot-linux-gnueabihf/sysroot/
+# -------------------------------------------------------------------
+# Cross-compilation environment
+# -------------------------------------------------------------------
+ENV CROSS_COMPILE=arm-linux-gnueabihf-
+ENV CC=arm-linux-gnueabihf-gcc
+ENV CXX=arm-linux-gnueabihf-g++
+ENV AR=arm-linux-gnueabihf-ar
+ENV LD=arm-linux-gnueabihf-ld
+ENV SYSROOT=/usr/arm-linux-gnueabihf
+ENV PKG_CONFIG_PATH=${SYSROOT}/lib/pkgconfig:${SYSROOT}/share/pkgconfig
 
 WORKDIR /build

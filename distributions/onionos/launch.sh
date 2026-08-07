@@ -13,6 +13,6 @@ trap 'rm -f /tmp/stay_awake' EXIT
 export LD_LIBRARY_PATH="${PWD}/lib:${LD_LIBRARY_PATH}"
 
 # Run the application
-./MiyooFin
+./miyoofin
 
 exit 0

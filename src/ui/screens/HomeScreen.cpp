@@ -23,6 +23,7 @@ HomeScreen::HomeScreen()
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_tabs(getMockTabs())
+    , m_logoutArmed(false), m_logoutTimer(0), m_logoutRequested(false)
 {
 }
 
@@ -85,6 +86,13 @@ void HomeScreen::leave()
 
 bool HomeScreen::handleAction(Action action)
 {
+    // If we're waiting for logout confirmation and user does
+    // anything other than Y again, disarm.
+    if (m_logoutArmed && action != Action::ActionsMenu) {
+        m_logoutArmed = false;
+        m_logoutTimer = 0;
+    }
+
     switch (action) {
     case Action::Up:     m_activeRow--; clampNavigation(); return true;
     case Action::Down:   m_activeRow++; clampNavigation(); return true;
@@ -103,7 +111,13 @@ bool HomeScreen::handleAction(Action action)
         m_activeTab = 3; m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0; return true;
     case Action::ActionsMenu:
-        printf("[HomeScreen] Actions menu (not implemented)\n"); return true;
+        if (m_logoutArmed) {
+            m_logoutRequested = true;
+        } else {
+            m_logoutArmed = true;
+            m_logoutTimer = 3000;
+        }
+        return true;
     case Action::Settings:
         printf("[HomeScreen] Settings (not implemented)\n"); return true;
     case Action::Menu:
@@ -121,7 +135,17 @@ bool HomeScreen::handleAction(Action action)
     }
 }
 
-void HomeScreen::update(Uint32 dt) { (void)dt; }
+void HomeScreen::update(Uint32 dt)
+{
+    if (m_logoutArmed && !m_logoutRequested) {
+        if (dt >= m_logoutTimer) {
+            m_logoutTimer = 0;
+            m_logoutArmed = false;
+        } else {
+            m_logoutTimer -= dt;
+        }
+    }
+}
 
 void HomeScreen::render(SDL_Surface *fb)
 {
@@ -265,10 +289,20 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
     int y = 480 - BOTTOM_H;
     BitmapFont::fillRect(fb,0,y,640,BOTTOM_H,
         Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3,255);
-    BitmapFont::drawString(fb,8,y+2,
-        "A=Select  B=Back  L/R=Tabs  X=Search  Y=Actions  START=Settings  SELECT=Menu",
-        Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
-        Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+
+    if (m_logoutArmed && !m_logoutRequested) {
+        int secs = (m_logoutTimer + 999) / 1000;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Press Y again to confirm logout (%d)", secs);
+        BitmapFont::drawString(fb,8,y+2,buf,
+            Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,
+            Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+    } else {
+        BitmapFont::drawString(fb,8,y+2,
+            "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout  START=Settings  SELECT=Menu",
+            Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
+            Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+    }
 }
 
 } // namespace miyoofin

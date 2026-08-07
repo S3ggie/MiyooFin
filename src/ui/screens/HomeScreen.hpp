@@ -19,6 +19,9 @@ public:
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
 
+    /// True when the user has confirmed logout (App handles the transition).
+    bool logoutRequested() const { return m_logoutRequested; }
+
 private:
     // Tab / row / card navigation state
     int m_activeTab;     // 0 = Home, 1 = Movies, 2 = Shows, 3 = Search, 4 = Downloads
@@ -29,6 +32,11 @@ private:
 
     // Cached mock data reference
     const std::vector<TabData> &m_tabs;
+
+    // Logout (two-step confirm on Y)
+    bool m_logoutArmed = false;   // first Y pressed
+    Uint32 m_logoutTimer = 0;     // time remaining to confirm
+    bool m_logoutRequested = false;
 
     // Helpers
     const TabData &currentTab() const;

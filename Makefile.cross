@@ -23,11 +23,15 @@ SRCS := \
     src/input/InputManager.cpp \
     src/net/HttpClient.cpp \
     src/net/JellyfinApi.cpp \
+    src/net/Session.cpp \
+    src/net/DeviceIdentity.cpp \
     src/ui/BitmapFont.cpp \
     src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \
     src/ui/screens/ServerEntryScreen.cpp \
     src/ui/screens/ConnectScreen.cpp \
+    src/ui/screens/LoginScreen.cpp \
+    src/ui/screens/AuthCheckScreen.cpp \
     src/ui/screens/InputDiagnosticsScreen.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)

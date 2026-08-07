@@ -1,4 +1,5 @@
 #include "HttpClient.hpp"
+#include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
@@ -26,8 +27,46 @@ bool HttpClient::get(const std::string &url,
                      long &httpCode,
                      std::string &error)
 {
-    responseBody.clear();
-    httpCode = 0;
+    HttpResponse response;
+    if (!perform("GET", url, {}, {}, response, error))
+        return false;
+
+    responseBody = response.body;
+    httpCode = response.status;
+
+    if (response.status != 200) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "HTTP %ld", response.status);
+        error = buf;
+        return false;
+    }
+
+    if (responseBody.empty()) {
+        error = "Empty response body";
+        return false;
+    }
+
+    return true;
+}
+
+bool HttpClient::post(const std::string &url,
+                      const std::vector<std::string> &headers,
+                      const std::string &postBody,
+                      HttpResponse &response,
+                      std::string &error)
+{
+    return perform("POST", url, headers, postBody, response, error);
+}
+
+bool HttpClient::perform(const std::string &method,
+                         const std::string &url,
+                         const std::vector<std::string> &headers,
+                         const std::string &postBody,
+                         HttpResponse &response,
+                         std::string &error)
+{
+    response.status = 0;
+    response.body.clear();
     error.clear();
 
     CURL *curl = curl_easy_init();
@@ -39,38 +78,48 @@ bool HttpClient::get(const std::string &url,
     // Configure the request
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeoutSec);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_timeoutSec);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "MiyooFin/0.1.0");
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);   // no cert validation
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);   // for embedded simplicity
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
+
+    char ua[128];
+    std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, ua);
+
+    // Custom headers (if any)
+    struct curl_slist *headerList = nullptr;
+    for (const auto &h : headers) {
+        headerList = curl_slist_append(headerList, h.c_str());
+    }
+
+    if (!postBody.empty() || method == "POST") {
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postBody.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)postBody.size());
+        if (!headerList)
+            headerList = curl_slist_append(headerList, "Content-Type: application/json");
+    }
+
+    if (headerList)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
     CURLcode res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
         error = curl_easy_strerror(res);
+        curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
         return false;
     }
 
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
+    curl_slist_free_all(headerList);
     curl_easy_cleanup(curl);
-
-    if (httpCode != 200) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "HTTP %ld", httpCode);
-        error = buf;
-        return false;
-    }
-
-    if (responseBody.empty()) {
-        error = "Empty response body";
-        return false;
-    }
 
     return true;
 }

@@ -6,11 +6,13 @@
 #include "ScreenStack.hpp"
 #include "../input/InputManager.hpp"
 #include "../net/JellyfinApi.hpp"
+#include "../net/Session.hpp"
 
 namespace miyoofin {
 
 /// Owns the SDL lifecycle and the main event / render loop.
-/// Manages the startup flow: splash -> connecting -> server entry -> home.
+/// Manages the startup flow:
+///   splash -> connecting -> login (or auth-check) -> home.
 class App {
 public:
     App();
@@ -37,12 +39,23 @@ private:
     // Startup flow state
     std::string     m_serverUrl;   // saved server URL
     ServerInfo      m_serverInfo;  // connected server info
+    std::string     m_deviceId;    // persistent device identifier
+    Session         m_session;     // saved session (token + user)
 
     /// Load saved server URL from server.txt.
     void loadSavedUrl();
 
+    /// Load a saved session (if any) from session.txt.
+    void loadSavedSession();
+
     /// Transition to the home screen.
     void goToHome();
+
+    /// Transition to the login screen (pop stack to root first).
+    void goToLogin(const std::string &initialMessage = {});
+
+    /// Discard the current session (logout).
+    void logout();
 
     // Prevent copy
     App(const App&) = delete;

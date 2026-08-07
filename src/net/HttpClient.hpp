@@ -2,25 +2,55 @@
 #define MIYOOFIN_HTTP_CLIENT_HPP
 
 #include <string>
+#include <vector>
 
 namespace miyoofin {
 
+/// Result of a single HTTP request. The HTTP status code is always
+/// reported even for error responses so callers can distinguish
+/// transport failures from HTTP-level failures (401, 403, 500, ...).
+struct HttpResponse {
+    long         status = 0;   ///< HTTP status code (0 if transport error)
+    std::string  body;         ///< Response body (may be empty)
+    bool         ok() const { return status >= 200 && status < 300; }
+};
+
 /// Minimal synchronous HTTP client wrapping libcurl.
-/// Only supports GET requests with a timeout.
+/// Supports GET and POST with optional custom headers and a JSON body.
 class HttpClient {
 public:
     HttpClient();
 
     /// Perform a GET request.
-    /// @param url          Full URL to fetch.
-    /// @param responseBody  Output: response body if HTTP 200.
-    /// @param httpCode      Output: the HTTP status code (e.g. 200, 404).
-    /// @param error         Output: human-readable error on failure.
     /// @return true if the HTTP status code is 200 and the body is non-empty.
     bool get(const std::string &url,
              std::string &responseBody,
              long &httpCode,
              std::string &error);
+
+    /// Perform a POST request with the given headers and body.
+    /// @param url          Full URL to fetch.
+    /// @param headers      Raw header lines (e.g. "Content-Type: application/json").
+    /// @param postBody     Request body (sent as-is).
+    /// @param response     Output: status + body (populated on any HTTP response).
+    /// @param error        Output: human-readable error on transport failure.
+    /// @return true if the request completed at the HTTP level (any status).
+    bool post(const std::string &url,
+              const std::vector<std::string> &headers,
+              const std::string &postBody,
+              HttpResponse &response,
+              std::string &error);
+
+    /// Low-level request. Performs the given HTTP method with optional
+    /// headers and body. On success (HTTP request completed) returns true
+    /// and fills `response.status`/`response.body` regardless of status.
+    /// On transport failure returns false and sets `error`.
+    bool perform(const std::string &method,
+                 const std::string &url,
+                 const std::vector<std::string> &headers,
+                 const std::string &postBody,
+                 HttpResponse &response,
+                 std::string &error);
 
     /// Set request timeout in seconds (default 5).
     void setTimeoutSec(long sec) { m_timeoutSec = sec; }

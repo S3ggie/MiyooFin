@@ -32,11 +32,15 @@ SRCS        := \
     $(SRC_DIR)/input/InputManager.cpp \
     $(SRC_DIR)/net/HttpClient.cpp \
     $(SRC_DIR)/net/JellyfinApi.cpp \
+    $(SRC_DIR)/net/Session.cpp \
+    $(SRC_DIR)/net/DeviceIdentity.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
     $(SRC_DIR)/ui/screens/ServerEntryScreen.cpp \
     $(SRC_DIR)/ui/screens/ConnectScreen.cpp \
+    $(SRC_DIR)/ui/screens/LoginScreen.cpp \
+    $(SRC_DIR)/ui/screens/AuthCheckScreen.cpp \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
@@ -72,7 +76,9 @@ output/build:
 TEST_TARGET := output/test/test_runner
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
-               src/net/HttpClient.cpp
+               src/net/HttpClient.cpp \
+               src/net/Session.cpp \
+               src/net/DeviceIdentity.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)

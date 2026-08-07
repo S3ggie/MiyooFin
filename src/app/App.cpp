@@ -4,6 +4,9 @@
 #include "../ui/screens/HomeScreen.hpp"
 #include "../ui/screens/ServerEntryScreen.hpp"
 #include "../ui/screens/ConnectScreen.hpp"
+#include "../ui/screens/LoginScreen.hpp"
+#include "../ui/screens/AuthCheckScreen.hpp"
+#include "../net/DeviceIdentity.hpp"
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cstdio>
@@ -96,6 +99,10 @@ bool App::init()
     m_stack.push(std::make_unique<StartupScreen>());
 
     loadSavedUrl();
+    loadSavedSession();
+    m_deviceId = DeviceIdentity::loadOrCreate();
+    printf("[App] Device ID: %s\n", m_deviceId.c_str());
+
     if (!m_serverUrl.empty()) {
         printf("[App] Saved server URL: %s\n", m_serverUrl.c_str());
         m_stack.push(std::make_unique<ConnectScreen>(m_serverUrl));
@@ -126,12 +133,41 @@ void App::loadSavedUrl()
     fclose(f);
 }
 
+void App::loadSavedSession()
+{
+    m_session = Session::load();
+    if (m_session.valid()) {
+        printf("[App] Loaded saved session for user '%s'\n",
+               m_session.userName.c_str());
+        // Prefer the session's server URL if a server URL is not yet known
+        if (m_serverUrl.empty() && !m_session.serverUrl.empty()) {
+            m_serverUrl = m_session.serverUrl;
+        }
+    } else {
+        printf("[App] No valid saved session\n");
+    }
+}
+
 void App::goToHome()
 {
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
     m_stack.push(std::make_unique<HomeScreen>());
+}
+
+void App::goToLogin(const std::string &initialMessage)
+{
+    m_stack.popToRoot();
+    m_stack.push(std::make_unique<LoginScreen>(
+        m_serverUrl, m_serverInfo.serverName, m_deviceId, initialMessage));
+}
+
+void App::logout()
+{
+    printf("[App] Logging out\n");
+    m_session.clear();
+    Session::remove();
 }
 
 int App::run()
@@ -168,8 +204,19 @@ int App::run()
                     if (conn->connected()) {
                         m_serverUrl = conn->serverUrl();
                         m_serverInfo = conn->serverInfo();
-                        printf("[App] ConnectScreen success -> Home\n");
-                        goToHome();
+                        m_stack.pop();  // remove ConnectScreen
+
+                        if (m_session.valid()) {
+                            printf("[App] ConnectScreen success -> AuthCheck\n");
+                            m_stack.push(
+                                std::make_unique<AuthCheckScreen>(m_session));
+                        } else {
+                            printf("[App] ConnectScreen success -> Login\n");
+                            m_stack.push(
+                                std::make_unique<LoginScreen>(
+                                    m_serverUrl, m_serverInfo.serverName,
+                                    m_deviceId));
+                        }
                     } else if (conn->failed()) {
                         printf("[App] ConnectScreen fail -> ServerEntry\n");
                         m_stack.pop();
@@ -184,8 +231,62 @@ int App::run()
                 if (entry->connected() && entry->finished()) {
                     m_serverUrl = entry->serverUrl();
                     m_serverInfo = entry->serverInfo();
-                    printf("[App] ServerEntryScreen success -> Home\n");
-                    goToHome();
+                    printf("[App] ServerEntryScreen success -> Login\n");
+                    m_stack.pop();
+                    m_stack.push(
+                        std::make_unique<LoginScreen>(
+                            m_serverUrl, m_serverInfo.serverName, m_deviceId));
+                }
+            }
+            else if (auto *authCheck = dynamic_cast<AuthCheckScreen *>(top)) {
+                if (authCheck->finished()) {
+                    if (authCheck->ok()) {
+                        printf("[App] AuthCheckScreen valid -> Home\n");
+                        m_stack.pop();
+                        goToHome();
+                    } else {
+                        printf("[App] AuthCheckScreen invalid -> Login\n");
+                        m_stack.pop();
+                        m_stack.push(
+                            std::make_unique<LoginScreen>(
+                                m_serverUrl, m_serverInfo.serverName,
+                                m_deviceId, authCheck->errorMessage()));
+                    }
+                }
+            }
+            else if (auto *login = dynamic_cast<LoginScreen *>(top)) {
+                if (login->finished()) {
+                    if (login->success()) {
+                        // Save the session
+                        printf("[App] LoginScreen success -> Home\n");
+                        m_session.serverUrl   = m_serverUrl;
+                        m_session.accessToken = login->result().accessToken;
+                        m_session.userId      = login->result().userId;
+                        m_session.userName    = login->result().userName;
+                        m_session.deviceId    = m_deviceId;
+                        m_session.save();
+
+                        // Also save server URL for standalone use
+                        FILE *sf = fopen("server.txt", "w");
+                        if (sf) {
+                            fprintf(sf, "%s\n", m_serverUrl.c_str());
+                            fclose(sf);
+                        }
+
+                        m_stack.pop();
+                        goToHome();
+                    }
+                    // Login failed — screen stays with error message
+                }
+            }
+            else if (auto *home = dynamic_cast<HomeScreen *>(top)) {
+                if (home->logoutRequested()) {
+                    logout();
+                    m_stack.popToRoot();
+                    m_stack.push(
+                        std::make_unique<LoginScreen>(
+                            m_serverUrl, m_serverInfo.serverName, m_deviceId,
+                            "Logged out successfully."));
                 }
             }
         }

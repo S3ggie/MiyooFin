@@ -12,6 +12,10 @@ trap 'rm -f /tmp/stay_awake' EXIT
 # Bundle our own libraries so we don't depend on system versions
 export LD_LIBRARY_PATH="${PWD}/lib:${LD_LIBRARY_PATH}"
 
+# Force Miyoo-patched SDL video/audio drivers
+export SDL_VIDEODRIVER=mmiyoo
+export SDL_AUDIODRIVER=mmiyoo
+
 # Run the application
 ./miyoofin
 

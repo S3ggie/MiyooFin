@@ -1,11 +1,10 @@
 # -------------------------------------------------------------------
 # Dockerfile for MiyooFin cross-compilation toolchain
+# Uses Debian Buster (glibc 2.28 = same as Miyoo device) with
+# gcc-arm-linux-gnueabihf cross-compiler from archive.debian.org.
 #
-# Uses Debian's gcc-arm-linux-gnueabihf cross-compiler packages
-# plus SDL2 from XK9274/sdl2_miyoo vanilla branch (Miyoo-patched).
-#
-# Source URLs and pinned revisions:
-#   SDL2:      XK9274/sdl2_miyoo vanilla @ 478ddde6a415d48b4c497ce3a2679c08afd23f40
+# SDL2 from XK9274/sdl2_miyoo vanilla branch (Miyoo-patched).
+# Pinned: vanilla @ 478ddde6a415d48b4c497ce3a2679c08afd23f40
 #
 # Build:
 #   docker build -f Dockerfile.onionos -t miyoofin-toolchain .
@@ -15,17 +14,22 @@
 #       make -f Makefile.cross
 # -------------------------------------------------------------------
 
-FROM debian:bookworm
+FROM debian:buster
 
-# Install cross-compiler and build dependencies
+COPY vendor/miyoo/lib /opt/miyoo/lib
+
+# Switch to archive.debian.org (Buster is EOL as of June 2024)
+RUN sed -i 's/deb\.debian\.org/archive.debian.org/g' /etc/apt/sources.list && \
+    sed -i 's|security.debian.org|archive.debian.org/debian-security|g' /etc/apt/sources.list
+
+# Install cross-compiler and build tools
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         gcc-arm-linux-gnueabihf \
         g++-arm-linux-gnueabihf \
         binutils-arm-linux-gnueabihf \
-        pkg-config \
         make cmake wget git ca-certificates \
-        autoconf libtool && \
+        autoconf libtool pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 # -------------------------------------------------------------------
@@ -34,36 +38,35 @@ RUN apt-get update && \
 # -------------------------------------------------------------------
 RUN git clone https://github.com/XK9274/sdl2_miyoo.git /tmp/sdl2_miyoo && \
     cd /tmp/sdl2_miyoo && git checkout 478ddde6a415d48b4c497ce3a2679c08afd23f40 && \
-    CC=arm-linux-gnueabihf-gcc \
-    CXX=arm-linux-gnueabihf-g++ \
-    ./configure \
-        --host=arm-linux-gnueabihf \
-        --prefix=/usr/arm-linux-gnueabihf \
-        --disable-joystick-virtual \
-        --disable-jack \
-        --disable-power \
-        --disable-sensor \
-        --disable-ime \
-        --disable-dbus \
-        --disable-fcitx \
-        --disable-hidapi \
-        --disable-libudev \
-        --disable-video-x11 \
-        --disable-video-kmsdrm \
-        --disable-video-vulkan \
-        --disable-video-opengl \
-        --disable-video-opengles \
-        --disable-video-opengles2 \
-        --disable-video-wayland \
-        --disable-video-dummy \
-        --disable-oss \
-        --disable-alsa \
-        --disable-sndio \
-        --disable-diskaudio \
-        --disable-pulseaudio \
-        --disable-dummyaudio && \
+      sed -i '/eglUpdateBufferSettings(display, surface, ppFunc, pfb_idx, pfb_vaddr);/d' src/video/mmiyoo/SDL_opengles_mmiyoo.c && \
+    sed -i '/#include "SDL_ttf.h"/d; /#include "SDL_image.h"/d' src/video/mmiyoo/SDL_video_mmiyoo.h && \
+    [ -e /opt/miyoo/lib/libEGL.so ] || ln -s /opt/miyoo/lib/libEGL.so.1 /opt/miyoo/lib/libEGL.so && \
+    echo "=== Patching configure to enable mmiyoo driver with clean flags ===" && \
+    sed -i \
+      -e 's|-I/opt/mmiyoo/arm-buildroot-linux-gnueabihf/sysroot/usr/include/SDL2||g' \
+      -e 's|-lSDL2_image -lSDL2_ttf -ljson-c||g' \
+      -e 's|-Lmmiyoo/libs|-L/opt/miyoo/lib|g' \
+      -e 's|-lshmvar||g' \
+      configure && \
+    echo "=== Creating stub headers for SDL_image.h (unused by driver) ===" && \
+    echo '#ifndef SDL_IMAGE_H' > include/SDL_image.h && \
+    echo '#define SDL_IMAGE_H' >> include/SDL_image.h && \
+    echo '#endif' >> include/SDL_image.h && \
+    echo "=== Creating stub headers for json-c/json.h (unused by driver) ===" && \
+    mkdir -p include/json-c && \
+    echo '#ifndef JSON_H' > include/json-c/json.h && \
+    echo '#define JSON_H' >> include/json-c/json.h && \
+    echo '#endif' >> include/json-c/json.h && \
+    echo "=== Building SDL2 with MMIYOO video/audio drivers ===" && \
+    MOD=mmiyoo HOST=arm-linux CC=arm-linux-gnueabihf-gcc CXX=arm-linux-gnueabihf-g++ \
+    LDFLAGS='-L/opt/miyoo/lib' ./configure --host=arm-linux-gnueabihf --prefix=/usr/arm-linux-gnueabihf && \
+    echo "=== Verifying SDL_config.h has MMIYOO defines ===" && \
+    grep -E '#define SDL_VIDEO_DRIVER_MMIYOO|#define SDL_AUDIO_DRIVER_MMIYOO' include/SDL_config.h && \
+    echo "=== Verifying SDL_video.c includes MMIYOO_bootstrap ===" && \
+    grep -n 'MMIYOO_bootstrap' src/video/SDL_video.c && \
     make -j$(nproc) && \
     make install && \
+    echo "=== SDL build complete ===" && \
     rm -rf /tmp/sdl2_miyoo
 
 # -------------------------------------------------------------------

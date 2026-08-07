@@ -36,31 +36,26 @@ std::vector<Action> InputManager::poll()
             SDL_Keycode kc = ev.key.keysym.sym;
             SDL_Scancode sc = ev.key.keysym.scancode;
 
-            // Tentative host-side mapping for development.
-            // These approximate the Miyoo layout and will be
-            // adjusted once the real device mapping is known.
+            // Confirmed Miyoo Mini Plus physical SDL scancodes.
+            // These are the raw device scancodes reported by the
+            // Miyoo SDL2 fork (verified on-device via diagnostics).
             if (down) {
-                switch (kc) {
-                case SDLK_UP:       action = Action::Up;        break;
-                case SDLK_DOWN:     action = Action::Down;      break;
-                case SDLK_LEFT:     action = Action::Left;      break;
-                case SDLK_RIGHT:    action = Action::Right;     break;
-                case SDLK_RETURN:
-                case SDLK_SPACE:    action = Action::Confirm;   break;
-                case SDLK_BACKSPACE: action = Action::Back;     break;
-                case SDLK_TAB:      action = Action::NextTab;   break;
-                case SDLK_f:        action = Action::Search;    break;
-                case SDLK_g:        action = Action::ActionsMenu; break;
-                case SDLK_PAGEUP:   action = Action::PrevPage;  break;
-                case SDLK_PAGEDOWN: action = Action::NextPage;  break;
-                case SDLK_ESCAPE:
-                    // Escape handled below switch (defaults to Back)
-                    break;
-                case SDLK_LSHIFT:
-                case SDLK_RSHIFT:   action = Action::Settings;  break;
-                case SDLK_LCTRL:
-                case SDLK_RCTRL:    action = Action::Menu;      break;
-                case SDLK_F1:       action = Action::Exit;       break;
+                switch (sc) {
+                case 82:  action = Action::Up;          break;  // Up
+                case 81:  action = Action::Down;        break;  // Down
+                case 80:  action = Action::Left;        break;  // Left
+                case 79:  action = Action::Right;       break;  // Right
+                case 44:  action = Action::Confirm;     break;  // A
+                case 224: action = Action::Back;        break;  // B
+                case 225: action = Action::Search;      break;  // X
+                case 226: action = Action::ActionsMenu; break;  // Y
+                case 40:  action = Action::Settings;    break;  // START
+                case 228: action = Action::Menu;        break;  // SELECT
+                case 41:  action = Action::Exit;        break;  // MENU
+                case 8:   action = Action::PrevTab;     break;  // L
+                case 43:  action = Action::PrevPage;    break;  // L2
+                case 23:  action = Action::NextTab;     break;  // R
+                case 42:  action = Action::NextPage;    break;  // R2
                 default: break;
                 }
 

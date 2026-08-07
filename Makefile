@@ -108,6 +108,17 @@ verify-arm:
 	@echo "--- checking for x86-64 contamination ---"
 	@file $(ARM_TARGET) | grep -qi 'x86-64' && { echo "FAIL: Binary is x86-64!"; exit 1; } || echo "OK: Not x86-64."
 	@file $(ARM_TARGET) | grep -qi 'ARM' && echo "OK: Binary is ARM." || { echo "FAIL: Not ARM!"; exit 1; }
+	@echo "--- checking GLIBC version requirements ---"
+	@docker run --rm -v $(PWD):/build miyoofin-toolchain \
+	    sh -c 'for f in $(ARM_TARGET) /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0.18.2 /usr/arm-linux-gnueabihf/lib/libstdc++.so.6 /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1; do \
+	        maxver=$$(arm-linux-gnueabihf-objdump -T "$$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*" | sort -u -V | tail -1); \
+	        echo "  $$(basename $$f): max $$maxver"; \
+	        if [ "$$(echo "$$maxver" | sed "s/GLIBC_//")" != "2.28" ] && [ "$$(echo "$$maxver" | sed "s/GLIBC_//")" != "2.4" ] && [ "$$(echo "$$maxver" | sed "s/GLIBC_//")" != "2.18" ] && [ "$$(echo "$$maxver" | sed "s/GLIBC_//")" != "2.0" ]; then \
+	            if [ "$$(echo "$$maxver" | sed "s/GLIBC_//" | cut -d. -f1)" -gt 2 ] || [ "$$(echo "$$maxver" | sed "s/GLIBC_//" | cut -d. -f2)" -gt 28 ]; then \
+	                echo "FAIL: $$f requires $$maxver > 2.28!"; exit 1; \
+	            fi; \
+	        fi; \
+	    done && echo "OK: All GLIBC requirements <= 2.28."'
 	@echo "=== ARM verification passed ==="
 # -------------------------------------------------------------------
 # Package
@@ -126,12 +137,14 @@ package: $(ARM_TARGET)
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
 	@echo "  Bundling ARM shared libraries from toolchain..."
 	@docker run --rm -v $(PWD)/$(PACKAGE_DIR)/lib:/out miyoofin-toolchain \
-	    bash -c 'cp /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0 \
-	        /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0.18.2 \
-	        /usr/arm-linux-gnueabihf/lib/libSDL2.so \
-	        /usr/arm-linux-gnueabihf/lib/libstdc++.so.6 \
-	        /usr/arm-linux-gnueabihf/lib/libstdc++.so.6.0.30 \
-	        /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1 /out/ 2>/dev/null; true'
+	    bash -c '\
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0 /out/ && \
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0.18.2 /out/ && \
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libSDL2.so /out/ && \
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libstdc++.so.6 /out/ && \
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libstdc++.so.6.0.25 /out/ && \
+	    cp -aP /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1 /out/ && \
+	    echo "  Libraries bundled successfully"'
 	@echo "  Verifying package binary architecture..."
 	@file $(PACKAGE_DIR)/miyoofin | grep -qi 'ARM' || \
 	    { echo "ERROR: $(PACKAGE_DIR)/miyoofin is NOT ARM!"; exit 1; }

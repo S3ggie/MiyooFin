@@ -35,7 +35,7 @@ all: $(TARGET)
 	@$(CROSS_PREFIX)readelf -h $(TARGET) | grep -E 'Class|Machine|Flags'
 
 $(TARGET): $(OBJS) | output/build-arm
-	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -o $@ $^ -lSDL2
+	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2
 	@echo "  [LINK] $@"
 
 output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)

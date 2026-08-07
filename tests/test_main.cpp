@@ -15,6 +15,7 @@
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/net/HttpClient.hpp"
+#include "../src/ui/ArtworkLayout.hpp"
 #include <unistd.h>
 
 using namespace miyoofin;
@@ -718,10 +719,80 @@ static void testArtworkUrlDimensions()
     CHECK(url.find("tag=tag-abc") != std::string::npos);
     std::printf("[test] B5b: artwork URL dimensions OK\n");
 }
+// B5c1: Movie artwork box is 64×96
+static void testMovieArtworkBox()
+{
+    std::printf("[test] B5c1: movie artwork box = 64x96\n");
+    MediaItem m;
+    m.type = "movie";
+    auto box = artworkBoxSize(m);
+    CHECK(box.w == 64);
+    CHECK(box.h == 96);
+    std::printf("[test] B5c1: movie artwork box OK\n");
+}
+
+// B5c1: Show artwork box is 64×96
+static void testShowArtworkBox()
+{
+    std::printf("[test] B5c1: show artwork box = 64x96\n");
+    MediaItem s;
+    s.type = "show";
+    auto box = artworkBoxSize(s);
+    CHECK(box.w == 64);
+    CHECK(box.h == 96);
+    std::printf("[test] B5c1: show artwork box OK\n");
+}
+
+// B5c1: Episode artwork box is 128×72
+static void testEpisodeArtworkBox()
+{
+    std::printf("[test] B5c1: episode artwork box = 128x72\n");
+    MediaItem e;
+    e.type = "episode";
+    auto box = artworkBoxSize(e);
+    CHECK(box.w == 128);
+    CHECK(box.h == 72);
+    std::printf("[test] B5c1: episode artwork box OK\n");
+}
+
+// B5c1: Anything-else artwork box is 64×96
+static void testOtherArtworkBox()
+{
+    std::printf("[test] B5c1: other type artwork box = 64x96\n");
+    MediaItem x;
+    x.type = "folder";
+    auto box = artworkBoxSize(x);
+    CHECK(box.w == 64);
+    CHECK(box.h == 96);
+    std::printf("[test] B5c1: other type artwork box OK\n");
+}
+
+// B5c1: Metadata X starts after artwork box + gap
+static void testMetadataXFollowsBoxWidth()
+{
+    std::printf("[test] B5c1: metadata X follows box width\n");
+    // ART_X = 8, gap = 10, so mx = 8 + boxW + 10
+    MediaItem movie;
+    movie.type = "movie";
+    auto mbox = artworkBoxSize(movie);
+    int mxMovie = 8 + mbox.w + 10;  // 82
+    CHECK(mxMovie == 82);
+
+    MediaItem episode;
+    episode.type = "episode";
+    auto ebox = artworkBoxSize(episode);
+    int mxEpisode = 8 + ebox.w + 10;  // 146
+    CHECK(mxEpisode == 146);
+
+    // Episode metadata starts further right than movie metadata
+    CHECK(mxEpisode > mxMovie);
+    std::printf("[test] B5c1: metadata X follows box width OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b tests\n");
-    std::printf("========================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1 tests\n");
+    std::printf("============================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -763,9 +834,17 @@ int main()
     testFailedLoadLeavesEmpty();
     testArtworkUrlDimensions();
 
+    // B5c1 tests — Per-type artwork box dimensions
+    std::printf("\n--- B5c1 per-type artwork box tests ---\n");
+    testMovieArtworkBox();
+    testShowArtworkBox();
+    testEpisodeArtworkBox();
+    testOtherArtworkBox();
+    testMetadataXFollowsBoxWidth();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1 tests passed.\n");
         return 0;
     }
 

@@ -1,6 +1,7 @@
 #include "HomeScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
+#include "../ArtworkLayout.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
@@ -25,11 +26,10 @@ static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
 
-// Selected artwork box (top-left of info panel)
+// Selected artwork box origin (top-left of info panel)
 static constexpr int ART_X = 8;
 static constexpr int ART_Y = INFO_Y + 6;   // 32
-static constexpr int ART_W = 72;
-static constexpr int ART_H = INFO_H - 12;  // 98
+// Width and height are now computed per-item via artworkBoxSize()
 
 HomeScreen::HomeScreen(const Session &session)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
@@ -317,6 +317,9 @@ void HomeScreen::tryLoadSelectedArtwork()
         return;
     }
 
+    // Per-type artwork box dimensions
+    ArtworkBox box = artworkBoxSize(*item);
+
     // Look for a Primary image tag
     auto it = item->imageTags.find("Primary");
     if (it == item->imageTags.end() || it->second.empty()) {
@@ -340,19 +343,20 @@ void HomeScreen::tryLoadSelectedArtwork()
     m_selectedArtworkAttempted = true;
 
     const std::string &tag = it->second;
-    printf("[HomeScreen] Artwork: loading %s tag=%s\n", item->id.c_str(), tag.c_str());
+    printf("[HomeScreen] Artwork: loading %s tag=%s (%dx%d)\n",
+           item->id.c_str(), tag.c_str(), box.w, box.h);
 
     // 1. Check disk cache
     std::vector<unsigned char> jpegData;
-    if (ImageCache::isCached(item->id, ImageType::Primary, tag, ART_W, ART_H)) {
-        jpegData = ImageCache::readCached(item->id, ImageType::Primary, tag, ART_W, ART_H);
+    if (ImageCache::isCached(item->id, ImageType::Primary, tag, box.w, box.h)) {
+        jpegData = ImageCache::readCached(item->id, ImageType::Primary, tag, box.w, box.h);
         printf("[HomeScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
     }
 
     // 2. If not cached, synchronous HTTP request
     if (jpegData.empty()) {
         std::string url = buildImageUrl(
-            m_session.serverUrl, item->id, ImageType::Primary, tag, ART_W, ART_H);
+            m_session.serverUrl, item->id, ImageType::Primary, tag, box.w, box.h);
 
         HttpClient client;
         client.setTimeoutSec(8);
@@ -374,7 +378,7 @@ void HomeScreen::tryLoadSelectedArtwork()
         printf("[HomeScreen] Artwork: downloaded %zu bytes\n", jpegData.size());
 
         // Cache to disk (best-effort)
-        ImageCache::writeToCache(item->id, ImageType::Primary, tag, ART_W, ART_H,
+        ImageCache::writeToCache(item->id, ImageType::Primary, tag, box.w, box.h,
                                  jpegData.data(), jpegData.size());
     }
 
@@ -420,7 +424,8 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
     BitmapFont::fillRect(fb,0,INFO_Y,640,INFO_H,24,24,32,255);
     BitmapFont::fillRect(fb,0,INFO_Y,640,1,
         Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,60);
-    int px=ART_X, py=ART_Y, pw=ART_W, ph=ART_H;
+    ArtworkBox box = artworkBoxSize(*item);
+    int px=ART_X, py=ART_Y, pw=box.w, ph=box.h;
     // Placeholder colour behind everything
     BitmapFont::fillRect(fb,px,py,pw,ph,item->artR,item->artG,item->artB,255);
 

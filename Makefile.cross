@@ -21,10 +21,14 @@ SRCS := \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \
     src/input/InputManager.cpp \
+    src/image/stb_image_impl.cpp \
+    src/image/ImageDecoder.cpp \
+    src/net/ArtworkUrl.cpp \
     src/net/HttpClient.cpp \
     src/net/JellyfinApi.cpp \
     src/net/Session.cpp \
     src/net/DeviceIdentity.cpp \
+    src/cache/ImageCache.cpp \
     src/ui/BitmapFont.cpp \
     src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \
@@ -37,7 +41,8 @@ SRCS := \
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
-             output/build-arm/net output/build-arm/ui/screens
+             output/build-arm/image output/build-arm/net output/build-arm/cache \
+             output/build-arm/ui/screens
 
 .PHONY: all
 all: $(TARGET)

@@ -15,6 +15,14 @@ struct HttpResponse {
     bool         ok() const { return status >= 200 && status < 300; }
 };
 
+/// Result of a binary HTTP request (e.g. image download).
+struct BinaryHttpResponse {
+    long                    status = 0;   ///< HTTP status code (0 if transport error)
+    std::vector<unsigned char> data;      ///< Raw response bytes
+    bool                    truncated = false;  ///< true if response exceeded max size
+    bool ok() const { return status >= 200 && status < 300 && !truncated; }
+};
+
 /// Minimal synchronous HTTP client wrapping libcurl.
 /// Supports GET and POST with optional custom headers and a JSON body.
 class HttpClient {
@@ -40,6 +48,21 @@ public:
               const std::string &postBody,
               HttpResponse &response,
               std::string &error);
+
+    /// Perform a binary GET request.  The response body is stored as
+    /// raw bytes.  If the response exceeds maxSize bytes the transfer
+    /// is aborted and truncated is set to true.
+    /// @param url          Full URL to fetch.
+    /// @param headers      Optional custom headers (e.g. "Authorization: ...").
+    /// @param response     Output: status + raw data.
+    /// @param error        Output: human-readable error on transport failure.
+    /// @param maxSize      Maximum allowed response size in bytes (default 2 MB).
+    /// @return true if the request completed at the HTTP level.
+    bool getBinary(const std::string &url,
+                   const std::vector<std::string> &headers,
+                   BinaryHttpResponse &response,
+                   std::string &error,
+                   size_t maxSize = 2 * 1024 * 1024);
 
     /// Low-level request. Performs the given HTTP method with optional
     /// headers and body. On success (HTTP request completed) returns true

@@ -30,10 +30,14 @@ SRCS        := \
     $(SRC_DIR)/app/ScreenStack.cpp \
     $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/input/InputManager.cpp \
+    $(SRC_DIR)/image/stb_image_impl.cpp \
+    $(SRC_DIR)/image/ImageDecoder.cpp \
+    $(SRC_DIR)/net/ArtworkUrl.cpp \
     $(SRC_DIR)/net/HttpClient.cpp \
     $(SRC_DIR)/net/JellyfinApi.cpp \
     $(SRC_DIR)/net/Session.cpp \
     $(SRC_DIR)/net/DeviceIdentity.cpp \
+    $(SRC_DIR)/cache/ImageCache.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
@@ -45,7 +49,8 @@ SRCS        := \
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
-               output/build/net output/build/ui output/build/ui/screens
+               output/build/image output/build/net output/build/cache \
+               output/build/ui output/build/ui/screens
 
 TARGET      := output/build/miyoofin
 
@@ -76,9 +81,13 @@ output/build:
 TEST_TARGET := output/test/test_runner
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
+               src/net/ArtworkUrl.cpp \
                src/net/HttpClient.cpp \
                src/net/Session.cpp \
                src/net/DeviceIdentity.cpp \
+               src/image/stb_image_impl.cpp \
+               src/image/ImageDecoder.cpp \
+               src/cache/ImageCache.cpp \
                src/ui/BitmapFont.cpp
 
 .PHONY: test

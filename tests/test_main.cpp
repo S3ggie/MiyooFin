@@ -1,15 +1,21 @@
-// Checkpoint B3+B4 — tests for authentication, session persistence,
-// device identity, URL normalisation, and B4 JSON parsing/tab building.
+// Checkpoint B3+B4+B5a — tests for authentication, session persistence,
+// device identity, URL normalisation, B4 JSON parsing/tab building,
+// and B5a artwork infrastructure.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include "miyoofin/version.hpp"
 #include "../src/net/JellyfinApi.hpp"
+#include "../src/net/ArtworkUrl.hpp"
 #include "../src/net/Session.hpp"
 #include "../src/net/DeviceIdentity.hpp"
 #include "../src/data/MediaItem.hpp"
 #include "../src/ui/BitmapFont.hpp"
+#include "../src/image/ImageDecoder.hpp"
+#include "../src/cache/ImageCache.hpp"
+#include "../src/net/HttpClient.hpp"
+#include <unistd.h>
 
 using namespace miyoofin;
 
@@ -456,12 +462,147 @@ static void testBuildLatestUrl()
 }
 
 // -------------------------------------------------------------------
+// B5a Test: buildImageUrl — Primary image URL
+// -------------------------------------------------------------------
+static void testBuildImageUrlPrimary()
+{
+    std::printf("[test] buildImageUrl — Primary\n");
+    std::string url = buildImageUrl(
+        "https://jellyfin.example.com", "abc123",
+        ImageType::Primary, "tag42", 300, 200);
+    CHECK(url.find("/Items/abc123/Images/Primary") != std::string::npos);
+    CHECK(url.find("format=jpg") != std::string::npos);
+    CHECK(url.find("maxWidth=300") != std::string::npos);
+    CHECK(url.find("maxHeight=200") != std::string::npos);
+    CHECK(url.find("quality=80") != std::string::npos);
+    CHECK(url.find("tag=tag42") != std::string::npos);
+    std::printf("[test] buildImageUrl Primary OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: buildImageUrl — Thumb image URL
+// -------------------------------------------------------------------
+static void testBuildImageUrlThumb()
+{
+    std::printf("[test] buildImageUrl — Thumb\n");
+    std::string url = buildImageUrl(
+        "http://192.168.1.50:8096", "item999",
+        ImageType::Thumb, "thumbTag", 150, 100);
+    CHECK(url.find("/Items/item999/Images/Thumb") != std::string::npos);
+    CHECK(url.find("maxWidth=150") != std::string::npos);
+    CHECK(url.find("tag=thumbTag") != std::string::npos);
+    std::printf("[test] buildImageUrl Thumb OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: imageTypeToString and cache key differences
+// -------------------------------------------------------------------
+static void testImageTypeAndCacheKeys()
+{
+    std::printf("[test] imageTypeToString + cache keys differ\n");
+    CHECK_EQ(std::string(imageTypeToString(ImageType::Primary)), "Primary");
+    CHECK_EQ(std::string(imageTypeToString(ImageType::Thumb)), "Thumb");
+    std::string p = ImageCache::cacheFilename("i", ImageType::Primary, "t", 100, 200);
+    std::string t = ImageCache::cacheFilename("i", ImageType::Thumb, "t", 100, 200);
+    CHECK(p != t);
+    CHECK(p.find("_Primary_") != std::string::npos);
+    CHECK(t.find("_Thumb_") != std::string::npos);
+    std::printf("[test] imageTypeToString + cache keys OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: Cache filename determinism and contents
+// -------------------------------------------------------------------
+static void testCacheFilename()
+{
+    std::printf("[test] Cache filename\n");
+    std::string a = ImageCache::cacheFilename("abc", ImageType::Primary, "tag", 100, 200);
+    std::string b = ImageCache::cacheFilename("abc", ImageType::Primary, "tag", 100, 200);
+    CHECK_EQ(a, b);
+    CHECK(a.find("100x200") != std::string::npos);
+    CHECK(a.find("abc") != std::string::npos);
+    CHECK(a.find("tag") != std::string::npos);
+    CHECK(a.size() >= 4 && a.substr(a.size()-4) == ".jpg");
+    std::printf("[test] Cache filename OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: Cache write/read roundtrip
+// -------------------------------------------------------------------
+static void testCacheWriteRead()
+{
+    std::printf("[test] Cache write/read roundtrip\n");
+    ImageCache::setCacheDir("test_cache_images/");
+    const unsigned char data[] = {0x01, 0x02, 0x03, 0xFF, 0xFE};
+    CHECK(ImageCache::writeToCache("item1", ImageType::Primary, "t", 50, 50, data, sizeof(data)));
+    CHECK(ImageCache::isCached("item1", ImageType::Primary, "t", 50, 50));
+    auto rb = ImageCache::readCached("item1", ImageType::Primary, "t", 50, 50);
+    CHECK(rb.size() == sizeof(data));
+    CHECK(std::memcmp(rb.data(), data, sizeof(data)) == 0);
+    std::remove(ImageCache::cachePath("item1", ImageType::Primary, "t", 50, 50).c_str());
+    ::rmdir("test_cache_images");
+    ImageCache::setCacheDir("cache/images/");
+    std::printf("[test] Cache write/read OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: JPEG decode valid fixture
+// -------------------------------------------------------------------
+static void testJpegDecodeValid()
+{
+    std::printf("[test] JPEG decode valid fixture\n");
+    auto img = ImageDecoder::decodeJpegFile("tests/fixtures/tiny.jpg");
+    CHECK(!img.empty());
+    CHECK(img.width == 4);
+    CHECK(img.height == 4);
+    CHECK(img.pixels.size() == 4u * 4u * 4u);
+    bool allZero = true;
+    for (auto b : img.pixels) { if (b != 0) { allZero = false; break; } }
+    CHECK(!allZero);
+    std::printf("[test] JPEG decode valid OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: JPEG decode fails safely on invalid data
+// -------------------------------------------------------------------
+static void testJpegDecodeInvalid()
+{
+    std::printf("[test] JPEG decode invalid data\n");
+    const unsigned char garbage[] = {0x00, 0x01, 0x02, 0x03};
+    CHECK(ImageDecoder::decodeJpeg(garbage, sizeof(garbage)).empty());
+    CHECK(ImageDecoder::decodeJpeg(nullptr, 0).empty());
+    CHECK(ImageDecoder::decodeJpeg(nullptr, 10).empty());
+    CHECK(ImageDecoder::decodeJpegFile("nonexistent.jpg").empty());
+    std::printf("[test] JPEG decode invalid OK\n");
+}
+
+// -------------------------------------------------------------------
+// B5a Test: BinaryHttpResponse defaults and ok()
+// -------------------------------------------------------------------
+static void testBinaryHttpResponse()
+{
+    std::printf("[test] BinaryHttpResponse\n");
+    BinaryHttpResponse r;
+    CHECK(r.status == 0);
+    CHECK(r.data.empty());
+    CHECK(!r.truncated);
+    CHECK(!r.ok());
+    r.status = 200; r.data = {0xFF, 0xD8};
+    CHECK(r.ok());
+    r.status = 404;
+    CHECK(!r.ok());
+    r.status = 200; r.truncated = true;
+    CHECK(!r.ok());
+    std::printf("[test] BinaryHttpResponse OK\n");
+}
+
+// -------------------------------------------------------------------
 // Main
 // -------------------------------------------------------------------
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4 tests\n");
-    std::printf("===============================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a tests\n");
+    std::printf("====================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -483,9 +624,20 @@ int main()
     testUnicodeEscapeDecoding();
     testBitmapFontMapCodePoint();
 
+    // B5a tests — Artwork infrastructure
+    std::printf("\n--- B5a artwork infrastructure tests ---\n");
+    testBuildImageUrlPrimary();
+    testBuildImageUrlThumb();
+    testImageTypeAndCacheKeys();
+    testCacheFilename();
+    testCacheWriteRead();
+    testJpegDecodeValid();
+    testJpegDecodeInvalid();
+    testBinaryHttpResponse();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4 tests passed.\n");
+        std::printf("All B3+B4+B5a tests passed.\n");
         return 0;
     }
 

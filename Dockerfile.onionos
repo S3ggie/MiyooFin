@@ -70,6 +70,26 @@ RUN git clone https://github.com/XK9274/sdl2_miyoo.git /tmp/sdl2_miyoo && \
     rm -rf /tmp/sdl2_miyoo
 
 # -------------------------------------------------------------------
+# Install armhf libcurl development files for cross-compilation
+# OnionOS already provides libcurl.so.4 at runtime, so we only need
+# the headers and the .so symlink for linking.
+# -------------------------------------------------------------------
+RUN echo "=== Installing armhf libcurl development files ===" && \
+    dpkg --add-architecture armhf && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        libcurl4-openssl-dev:armhf && \
+    echo "=== Copying headers to sysroot ===" && \
+    cp -r /usr/include/arm-linux-gnueabihf/curl /usr/arm-linux-gnueabihf/include/curl && \
+    echo "=== Copying libraries to sysroot ===" && \
+    cp -r /usr/lib/arm-linux-gnueabihf/libcurl* /usr/arm-linux-gnueabihf/lib/ && \
+    cp -r /usr/lib/arm-linux-gnueabihf/pkgconfig/libcurl.pc /usr/arm-linux-gnueabihf/lib/pkgconfig/ 2>/dev/null || true && \
+    echo "=== Verifying ===" && \
+    ls /usr/arm-linux-gnueabihf/include/curl/curl.h && \
+    ls /usr/arm-linux-gnueabihf/lib/libcurl.so && \
+    echo "=== libcurl armhf installation complete ===" && \
+    rm -rf /var/lib/apt/lists/*
+# -------------------------------------------------------------------
 # Cross-compilation environment
 # -------------------------------------------------------------------
 ENV CROSS_COMPILE=arm-linux-gnueabihf-

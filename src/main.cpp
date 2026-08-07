@@ -8,6 +8,10 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
+    // Unbuffered I/O for debugging
+    setbuf(stdout, nullptr);
+    setbuf(stderr, nullptr);
+
     // --- Temporary: video-driver diagnostics ---
     const char *sdl_video = getenv("SDL_VIDEODRIVER");
     printf("[main] SDL_VIDEODRIVER=%s\n", sdl_video ? sdl_video : "(null)");

@@ -18,19 +18,30 @@ INCLUDES    := -I. -Iinclude
 SDL_CFLAGS  := $(shell pkg-config --cflags sdl2 2>/dev/null || echo '-I/usr/include/SDL2')
 SDL_LIBS    := $(shell pkg-config --libs sdl2 2>/dev/null || echo '-lSDL2')
 
-# Source files for Checkpoint A
+# libcurl flags from pkg-config
+CURL_CFLAGS := $(shell pkg-config --cflags libcurl 2>/dev/null || echo '')
+CURL_LIBS   := $(shell pkg-config --libs libcurl 2>/dev/null || echo '-lcurl')
+
+# Source files
 SRC_DIR     := src
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
+    $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/input/InputManager.cpp \
+    $(SRC_DIR)/net/HttpClient.cpp \
+    $(SRC_DIR)/net/JellyfinApi.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreen.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
+    $(SRC_DIR)/ui/screens/ServerEntryScreen.cpp \
+    $(SRC_DIR)/ui/screens/ConnectScreen.cpp \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
-OUT_DIRS    := output/build/app output/build/input output/build/ui output/build/ui/screens
+OUT_DIRS    := output/build/app output/build/data output/build/input \
+               output/build/net output/build/ui output/build/ui/screens
 
 TARGET      := output/build/miyoofin
 
@@ -41,11 +52,11 @@ TARGET      := output/build/miyoofin
 all: $(TARGET)
 
 $(TARGET): $(OBJS) | output/build
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(SDL_LIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(SDL_LIBS) $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
 output/build/%.o: src/%.cpp | $(OUT_DIRS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 # Create output directories
@@ -59,14 +70,16 @@ output/build:
 # Test
 # -------------------------------------------------------------------
 TEST_TARGET := output/test/test_runner
-TEST_SRCS   := tests/test_main.cpp
+TEST_SRCS   := tests/test_main.cpp \
+               src/net/JellyfinApi.cpp \
+               src/net/HttpClient.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)
 	@$(TEST_TARGET)
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
 output/test:

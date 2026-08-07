@@ -1,9 +1,13 @@
 #include "App.hpp"
 #include "../ui/Theme.hpp"
 #include "../ui/screens/StartupScreen.hpp"
-#include "../ui/screens/InputDiagnosticsScreen.hpp"
+#include "../ui/screens/HomeScreen.hpp"
+#include "../ui/screens/ServerEntryScreen.hpp"
+#include "../ui/screens/ConnectScreen.hpp"
 #include "miyoofin/version.hpp"
+#include <curl/curl.h>
 #include <cstdio>
+#include <cstring>
 
 namespace miyoofin {
 
@@ -24,18 +28,20 @@ App::~App()
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
     if (m_window) SDL_DestroyWindow(m_window);
     SDL_Quit();
+    curl_global_cleanup();
 }
 
 bool App::init()
 {
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
 
-    // Determine actual display dimensions (fallback to 640x480)
     int displayW = SCREEN_W;
     int displayH = SCREEN_H;
     SDL_DisplayMode dm;
@@ -69,16 +75,14 @@ bool App::init()
 
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
 
-    // Create the single software framebuffer (640x480 RGBA32)
     m_fb = SDL_CreateRGBSurfaceWithFormat(
         0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32
     );
     if (!m_fb) {
-        fprintf(stderr, "[App] Failed to create framebuffer surface: %s\n", SDL_GetError());
+        fprintf(stderr, "[App] Failed to create framebuffer: %s\n", SDL_GetError());
         return false;
     }
 
-    // Create the single streaming texture for upload
     m_fbTex = SDL_CreateTexture(
         m_renderer, SDL_PIXELFORMAT_RGBA32,
         SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H
@@ -88,12 +92,17 @@ bool App::init()
         return false;
     }
 
-    // Push the startup screen, then immediately push diagnostics
+    // -- Startup flow --
     m_stack.push(std::make_unique<StartupScreen>());
 
-    // After a brief display of the startup screen, we push diagnostics.
-    // For now push it immediately so Checkpoint A is interactive.
-    m_stack.push(std::make_unique<InputDiagnosticsScreen>(&m_input));
+    loadSavedUrl();
+    if (!m_serverUrl.empty()) {
+        printf("[App] Saved server URL: %s\n", m_serverUrl.c_str());
+        m_stack.push(std::make_unique<ConnectScreen>(m_serverUrl));
+    } else {
+        printf("[App] No saved server URL\n");
+        m_stack.push(std::make_unique<ServerEntryScreen>());
+    }
 
     m_running = true;
     m_lastTick = SDL_GetTicks();
@@ -101,10 +110,33 @@ bool App::init()
     return true;
 }
 
+void App::loadSavedUrl()
+{
+    FILE *f = fopen("server.txt", "r");
+    if (!f) return;
+    char buf[512];
+    if (fgets(buf, sizeof(buf), f)) {
+        buf[511] = '\0';
+        size_t len = std::strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r' || buf[len-1] == ' ')) {
+            buf[--len] = '\0';
+        }
+        m_serverUrl = buf;
+    }
+    fclose(f);
+}
+
+void App::goToHome()
+{
+    if (m_stack.size() > 1) {
+        m_stack.pop();
+    }
+    m_stack.push(std::make_unique<HomeScreen>());
+}
+
 int App::run()
 {
     while (m_running) {
-        // --- Frame timing ---
         Uint32 now = SDL_GetTicks();
         Uint32 dt = now - m_lastTick;
         m_lastTick = now;
@@ -116,7 +148,6 @@ int App::run()
                 m_running = false;
                 break;
             }
-            // Forward actions to the active screen
             Screen *active = m_stack.top();
             if (active) {
                 active->handleAction(a);
@@ -129,21 +160,49 @@ int App::run()
             active->update(dt);
         }
 
+        // --- Startup flow transitions ---
+        Screen *top = m_stack.top();
+        if (top) {
+            if (auto *conn = dynamic_cast<ConnectScreen *>(top)) {
+                if (conn->finished()) {
+                    if (conn->connected()) {
+                        m_serverUrl = conn->serverUrl();
+                        m_serverInfo = conn->serverInfo();
+                        printf("[App] ConnectScreen success -> Home\n");
+                        goToHome();
+                    } else if (conn->failed()) {
+                        printf("[App] ConnectScreen fail -> ServerEntry\n");
+                        m_stack.pop();
+                        std::string msg = "Could not reach " + m_serverUrl
+                                        + ": " + conn->errorMessage();
+                        m_stack.push(
+                            std::make_unique<ServerEntryScreen>(m_serverUrl, msg));
+                    }
+                }
+            }
+            else if (auto *entry = dynamic_cast<ServerEntryScreen *>(top)) {
+                if (entry->connected() && entry->finished()) {
+                    m_serverUrl = entry->serverUrl();
+                    m_serverInfo = entry->serverInfo();
+                    printf("[App] ServerEntryScreen success -> Home\n");
+                    goToHome();
+                }
+            }
+        }
+
         // --- Render ---
-        // Clear the software framebuffer to the background colour
         SDL_FillRect(m_fb, nullptr,
                      SDL_MapRGBA(m_fb->format,
                                  Theme::BG_R, Theme::BG_G,
                                  Theme::BG_B, Theme::BG_A));
 
-        if (active) {
-            active->render(m_fb);
+        Screen *renderTop = m_stack.top();
+        if (renderTop) {
+            renderTop->render(m_fb);
         }
 
-        // Upload software surface to streaming texture
         SDL_UpdateTexture(m_fbTex, nullptr, m_fb->pixels, m_fb->pitch);
 
-        // Present
         SDL_RenderClear(m_renderer);
         SDL_RenderCopy(m_renderer, m_fbTex, nullptr, nullptr);
         SDL_RenderPresent(m_renderer);

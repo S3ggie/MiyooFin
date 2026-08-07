@@ -19,14 +19,21 @@ SRCS := \
     src/main.cpp \
     src/app/App.cpp \
     src/app/ScreenStack.cpp \
+    src/data/MockData.cpp \
     src/input/InputManager.cpp \
+    src/net/HttpClient.cpp \
+    src/net/JellyfinApi.cpp \
     src/ui/BitmapFont.cpp \
+    src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \
+    src/ui/screens/ServerEntryScreen.cpp \
+    src/ui/screens/ConnectScreen.cpp \
     src/ui/screens/InputDiagnosticsScreen.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 TARGET    := output/build-arm/miyoofin
-OUT_DIRS  := output/build-arm/app output/build-arm/input output/build-arm/ui/screens
+OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
+             output/build-arm/net output/build-arm/ui/screens
 
 .PHONY: all
 all: $(TARGET)
@@ -35,7 +42,7 @@ all: $(TARGET)
 	@$(CROSS_PREFIX)readelf -h $(TARGET) | grep -E 'Class|Machine|Flags'
 
 $(TARGET): $(OBJS) | output/build-arm
-	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2
+	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2 -lcurl -lpthread
 	@echo "  [LINK] $@"
 
 output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)

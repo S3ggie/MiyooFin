@@ -5,10 +5,12 @@
 #include <memory>
 #include "ScreenStack.hpp"
 #include "../input/InputManager.hpp"
+#include "../net/JellyfinApi.hpp"
 
 namespace miyoofin {
 
 /// Owns the SDL lifecycle and the main event / render loop.
+/// Manages the startup flow: splash -> connecting -> server entry -> home.
 class App {
 public:
     App();
@@ -31,6 +33,16 @@ private:
 
     bool            m_running;
     Uint32          m_lastTick;
+
+    // Startup flow state
+    std::string     m_serverUrl;   // saved server URL
+    ServerInfo      m_serverInfo;  // connected server info
+
+    /// Load saved server URL from server.txt.
+    void loadSavedUrl();
+
+    /// Transition to the home screen.
+    void goToHome();
 
     // Prevent copy
     App(const App&) = delete;

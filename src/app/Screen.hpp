@@ -7,6 +7,8 @@
 
 namespace miyoofin {
 
+class ScreenStack;  // forward declaration
+
 /// Abstract interface implemented by every screen.
 class Screen {
 public:
@@ -29,6 +31,13 @@ public:
     /// The framebuffer is 640x480 RGBA32, already cleared to the
     /// background colour before this call.
     virtual void render(SDL_Surface *fb) = 0;
+
+    /// Set the owning screen stack (called automatically on push).
+    /// Screens can use this to push/pop screens from the stack.
+    void setStack(ScreenStack *stack) { m_stack = stack; }
+
+protected:
+    ScreenStack *m_stack = nullptr;
 };
 
 } // namespace miyoofin

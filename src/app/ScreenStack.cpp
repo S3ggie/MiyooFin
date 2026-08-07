@@ -5,6 +5,7 @@ namespace miyoofin {
 void ScreenStack::push(std::unique_ptr<Screen> screen)
 {
     if (screen) {
+        screen->setStack(this);
         screen->enter();
         m_stack.push_back(std::move(screen));
     }

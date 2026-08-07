@@ -2,6 +2,10 @@
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../../net/ArtworkUrl.hpp"
+#include "../../net/HttpClient.hpp"
+#include "../../cache/ImageCache.hpp"
+#include "miyoofin/version.hpp"
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -20,6 +24,12 @@ static constexpr int CARD_H      = 90;
 static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
+
+// Selected artwork box (top-left of info panel)
+static constexpr int ART_X = 8;
+static constexpr int ART_Y = INFO_Y + 6;   // 32
+static constexpr int ART_W = 72;
+static constexpr int ART_H = INFO_H - 12;  // 98
 
 HomeScreen::HomeScreen(const Session &session)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
@@ -174,6 +184,10 @@ void HomeScreen::update(Uint32 dt)
     }
     if (m_loadState == LoadState::Loading && m_fetchDone)
         finishFetch();
+
+    // Attempt selected artwork load (identity guard prevents repeats)
+    if (m_loadState == LoadState::Ready)
+        tryLoadSelectedArtwork();
 }
 
 void HomeScreen::render(SDL_Surface *fb)
@@ -293,6 +307,87 @@ void HomeScreen::finishFetch()
     printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
 }
 
+void HomeScreen::tryLoadSelectedArtwork()
+{
+    const MediaItem *item = currentItem();
+    if (!item) {
+        m_selectedArtwork = {};
+        m_selectedArtworkId.clear();
+        m_selectedArtworkAttempted = false;
+        return;
+    }
+
+    // Look for a Primary image tag
+    auto it = item->imageTags.find("Primary");
+    if (it == item->imageTags.end() || it->second.empty()) {
+        // No Primary tag — clear artwork, keep placeholder
+        m_selectedArtwork = {};
+        m_selectedArtworkId.clear();
+        m_selectedArtworkAttempted = false;
+        return;
+    }
+
+    // Build identity key from item id + primary tag
+    std::string key = item->id + ":" + it->second;
+
+    // Already attempted this exact selection?  Do not retry.
+    if (m_selectedArtworkAttempted && m_selectedArtworkId == key)
+        return;
+
+    // New selection — reset and attempt once
+    m_selectedArtwork = {};
+    m_selectedArtworkId = key;
+    m_selectedArtworkAttempted = true;
+
+    const std::string &tag = it->second;
+    printf("[HomeScreen] Artwork: loading %s tag=%s\n", item->id.c_str(), tag.c_str());
+
+    // 1. Check disk cache
+    std::vector<unsigned char> jpegData;
+    if (ImageCache::isCached(item->id, ImageType::Primary, tag, ART_W, ART_H)) {
+        jpegData = ImageCache::readCached(item->id, ImageType::Primary, tag, ART_W, ART_H);
+        printf("[HomeScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
+    }
+
+    // 2. If not cached, synchronous HTTP request
+    if (jpegData.empty()) {
+        std::string url = buildImageUrl(
+            m_session.serverUrl, item->id, ImageType::Primary, tag, ART_W, ART_H);
+
+        HttpClient client;
+        client.setTimeoutSec(8);
+        auto headers = JellyfinApi::buildAuthHeaders(
+            m_session.accessToken, m_session.deviceId);
+
+        BinaryHttpResponse response;
+        std::string error;
+        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
+            printf("[HomeScreen] Artwork fetch failed: %s\n", error.c_str());
+            return;
+        }
+        if (!response.ok()) {
+            printf("[HomeScreen] Artwork HTTP %ld\n", response.status);
+            return;
+        }
+
+        jpegData = std::move(response.data);
+        printf("[HomeScreen] Artwork: downloaded %zu bytes\n", jpegData.size());
+
+        // Cache to disk (best-effort)
+        ImageCache::writeToCache(item->id, ImageType::Primary, tag, ART_W, ART_H,
+                                 jpegData.data(), jpegData.size());
+    }
+
+    // 3. Decode JPEG
+    m_selectedArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
+    if (m_selectedArtwork.empty()) {
+        printf("[HomeScreen] Artwork: decode failed\n");
+    } else {
+        printf("[HomeScreen] Artwork: decoded %dx%d\n",
+               m_selectedArtwork.width, m_selectedArtwork.height);
+    }
+}
+
 void HomeScreen::drawTabBar(SDL_Surface *fb)
 {
     BitmapFont::fillRect(fb, 0, TAB_Y, 640, TAB_H,
@@ -325,8 +420,50 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
     BitmapFont::fillRect(fb,0,INFO_Y,640,INFO_H,24,24,32,255);
     BitmapFont::fillRect(fb,0,INFO_Y,640,1,
         Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,60);
-    int px=8, py=INFO_Y+6, pw=72, ph=INFO_H-12;
+    int px=ART_X, py=ART_Y, pw=ART_W, ph=ART_H;
+    // Placeholder colour behind everything
     BitmapFont::fillRect(fb,px,py,pw,ph,item->artR,item->artG,item->artB,255);
+
+    // Render decoded artwork if available, aspect-fit centred
+    if (!m_selectedArtwork.empty()) {
+        int imgW = m_selectedArtwork.width;
+        int imgH = m_selectedArtwork.height;
+        float imgAspect = (float)imgW / (float)imgH;
+        float boxAspect = (float)pw / (float)ph;
+        int drawW, drawH;
+        if (imgAspect > boxAspect) {
+            // Wider than box — fit to width
+            drawW = pw;
+            drawH = (int)(pw / imgAspect + 0.5f);
+            if (drawH > ph) drawH = ph;
+        } else {
+            // Taller than box — fit to height
+            drawH = ph;
+            drawW = (int)(ph * imgAspect + 0.5f);
+            if (drawW > pw) drawW = pw;
+        }
+        int drawX = px + (pw - drawW) / 2;
+        int drawY = py + (ph - drawH) / 2;
+
+        // Create an SDL surface wrapping the RGBA pixel data.
+        // The DecodedImage (m_selectedArtwork) keeps the pixels alive.
+        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
+            (void *)m_selectedArtwork.pixels.data(),
+            imgW, imgH,
+            32,                    // bits per pixel
+            imgW * 4,              // pitch (bytes per row)
+            0x000000FF,            // R mask
+            0x0000FF00,            // G mask
+            0x00FF0000,            // B mask
+            0xFF000000);           // A mask
+        if (imgSurface) {
+            SDL_Rect srcRect = {0, 0, imgW, imgH};
+            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
+            SDL_FreeSurface(imgSurface);
+        }
+    }
+
     BitmapFont::drawRect(fb,px,py,pw,ph,
         Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);
     int mx=px+pw+10, my=py+2;

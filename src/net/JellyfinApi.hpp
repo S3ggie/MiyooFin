@@ -136,6 +136,13 @@ public:
         const std::vector<std::pair<std::string, std::vector<MediaItem>>> &moviesByView,
         const std::vector<std::pair<std::string, std::vector<MediaItem>>> &showsByView);
 
+    // ---- Auth header helper (public for HomeScreen artwork loading) --------
+
+    /// Build standard X-Emby auth headers.
+    static std::vector<std::string> buildAuthHeaders(
+        const std::string &accessToken,
+        const std::string &deviceId);
+
 private:
     static std::string extractString(const std::string &json,
                                      const std::string &key);
@@ -153,11 +160,6 @@ private:
     /// Split comma-separated elements from an array body string.
     static std::vector<std::string> splitJsonArrayContent(
         const std::string &content);
-
-    /// Build standard X-Emby auth headers.
-    static std::vector<std::string> buildAuthHeaders(
-        const std::string &accessToken,
-        const std::string &deviceId);
 };
 
 } // namespace miyoofin

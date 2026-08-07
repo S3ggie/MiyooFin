@@ -1,6 +1,6 @@
-// Checkpoint B3+B4+B5a — tests for authentication, session persistence,
+// Checkpoint B3+B4+B5a+B5b — tests for authentication, session persistence,
 // device identity, URL normalisation, B4 JSON parsing/tab building,
-// and B5a artwork infrastructure.
+// B5a artwork infrastructure, and B5b selected artwork loading.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -596,13 +596,132 @@ static void testBinaryHttpResponse()
     std::printf("[test] BinaryHttpResponse OK\n");
 }
 
-// -------------------------------------------------------------------
-// Main
-// -------------------------------------------------------------------
+// ===================================================================
+// B5b tests — Selected artwork loading logic
+// ===================================================================
+
+// B5b: Missing Primary tag → no artwork request expected
+static void testNoPrimaryTagNoArtwork()
+{
+    std::printf("[test] B5b: no Primary tag\n");
+    MediaItem item;
+    item.id = "test-item-1";
+    CHECK(item.imageTags.find("Primary") == item.imageTags.end());
+    auto it = item.imageTags.find("Primary");
+    CHECK(!(it != item.imageTags.end() && !it->second.empty()));
+    std::printf("[test] B5b: no Primary tag OK\n");
+}
+
+// B5b: Primary tag present produces correct identity key
+static void testArtworkIdentityKey()
+{
+    std::printf("[test] B5b: artwork identity key\n");
+    MediaItem item;
+    item.id = "movie-42";
+    item.imageTags["Primary"] = "abc123";
+    auto it = item.imageTags.find("Primary");
+    CHECK(it != item.imageTags.end());
+    std::string key = item.id + ":" + it->second;
+    CHECK_EQ(key, "movie-42:abc123");
+
+    MediaItem item2;
+    item2.id = "movie-99";
+    item2.imageTags["Primary"] = "abc123";
+    std::string key2 = item2.id + ":" + item2.imageTags["Primary"];
+    CHECK(key != key2);
+    std::printf("[test] B5b: artwork identity key OK\n");
+}
+
+// B5b: Same selection does not re-trigger load
+static void testArtworkLoadGuard()
+{
+    std::printf("[test] B5b: repeat selection guard\n");
+    std::string loadedId;
+    bool attempted = false;
+
+    MediaItem item;
+    item.id = "item-7";
+    item.imageTags["Primary"] = "tag-aaa";
+    std::string key = item.id + ":" + item.imageTags["Primary"];
+    bool shouldLoad = !(attempted && loadedId == key);
+    CHECK(shouldLoad);
+
+    loadedId = key;
+    attempted = true;
+    shouldLoad = !(attempted && loadedId == key);
+    CHECK(!shouldLoad);
+
+    item.id = "item-8";
+    key = item.id + ":" + item.imageTags["Primary"];
+    shouldLoad = !(attempted && loadedId == key);
+    CHECK(shouldLoad);
+    std::printf("[test] B5b: repeat selection guard OK\n");
+}
+
+// B5b: Cached JPEG can be decoded
+static void testCachedJpegDecodeRoundtrip()
+{
+    std::printf("[test] B5b: cached JPEG decode roundtrip\n");
+    FILE *f = std::fopen("tests/fixtures/tiny.jpg", "rb");
+    CHECK(f != nullptr);
+    std::fseek(f, 0, SEEK_END);
+    long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    std::vector<unsigned char> jpegBytes(static_cast<size_t>(fsize));
+    std::fread(jpegBytes.data(), 1, jpegBytes.size(), f);
+    std::fclose(f);
+
+    ImageCache::setCacheDir("test_b5b_cache/");
+    CHECK(ImageCache::writeToCache("b5b-test", ImageType::Primary,
+        "roundtrip", 72, 98, jpegBytes.data(), jpegBytes.size()));
+    CHECK(ImageCache::isCached("b5b-test", ImageType::Primary, "roundtrip", 72, 98));
+    auto cached = ImageCache::readCached("b5b-test", ImageType::Primary, "roundtrip", 72, 98);
+    CHECK(!cached.empty());
+    auto decoded = ImageDecoder::decodeJpeg(cached.data(), cached.size());
+    CHECK(!decoded.empty());
+
+    std::remove("test_b5b_cache/b5b-test_Primary_roundtrip_72x98.jpg");
+    ::rmdir("test_b5b_cache");
+    ImageCache::setCacheDir("cache/images/");
+    std::printf("[test] B5b: cached JPEG decode roundtrip OK\n");
+}
+
+// B5b: Failed/missing load leaves empty state
+static void testFailedLoadLeavesEmpty()
+{
+    std::printf("[test] B5b: failed load leaves empty\n");
+    MediaItem item;
+    item.id = "item-bad";
+    item.imageTags["Primary"] = "";
+    auto it = item.imageTags.find("Primary");
+    CHECK(!(it != item.imageTags.end() && !it->second.empty()));
+
+    MediaItem item2;
+    item2.id = "item-none";
+    it = item2.imageTags.find("Primary");
+    CHECK(!(it != item2.imageTags.end() && !it->second.empty()));
+
+    const unsigned char garbage[] = {0xFF, 0x00, 0x00, 0x00};
+    CHECK(ImageDecoder::decodeJpeg(garbage, sizeof(garbage)).empty());
+    std::printf("[test] B5b: failed load leaves empty OK\n");
+}
+
+// B5b: Artwork URL uses correct dimensions (72×98)
+static void testArtworkUrlDimensions()
+{
+    std::printf("[test] B5b: artwork URL dimensions\n");
+    std::string url = buildImageUrl("http://server:8096", "item-1",
+        ImageType::Primary, "tag-abc", 72, 98);
+    CHECK(url.find("maxWidth=72") != std::string::npos);
+    CHECK(url.find("maxHeight=98") != std::string::npos);
+    CHECK(url.find("quality=80") != std::string::npos);
+    CHECK(url.find("tag=tag-abc") != std::string::npos);
+    std::printf("[test] B5b: artwork URL dimensions OK\n");
+}
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a tests\n");
-    std::printf("====================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b tests\n");
+    std::printf("========================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -635,9 +754,18 @@ int main()
     testJpegDecodeInvalid();
     testBinaryHttpResponse();
 
+    // B5b tests — Selected artwork loading
+    std::printf("\n--- B5b selected artwork tests ---\n");
+    testNoPrimaryTagNoArtwork();
+    testArtworkIdentityKey();
+    testArtworkLoadGuard();
+    testCachedJpegDecodeRoundtrip();
+    testFailedLoadLeavesEmpty();
+    testArtworkUrlDimensions();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b tests passed.\n");
         return 0;
     }
 

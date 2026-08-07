@@ -4,6 +4,7 @@
 #include "../../app/Screen.hpp"
 #include "../../data/MediaItem.hpp"
 #include "../../net/Session.hpp"
+#include "../../image/ImageDecoder.hpp"
 #include <atomic>
 #include <thread>
 
@@ -74,6 +75,13 @@ private:
     void drawBottomHints(SDL_Surface *fb);
     void drawLoadingState(SDL_Surface *fb);
     void drawErrorState(SDL_Surface *fb);
+
+    // Selected artwork state (B5b)
+    DecodedImage m_selectedArtwork;
+    std::string  m_selectedArtworkId;      // "itemId:imageTag" identity key
+    bool         m_selectedArtworkAttempted = false;
+
+    void tryLoadSelectedArtwork();
 };
 
 } // namespace miyoofin

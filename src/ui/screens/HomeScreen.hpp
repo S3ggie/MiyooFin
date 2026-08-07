@@ -2,16 +2,20 @@
 #define MIYOOFIN_HOME_SCREEN_HPP
 
 #include "../../app/Screen.hpp"
-#include "../../data/MockData.hpp"
+#include "../../data/MediaItem.hpp"
+#include "../../net/Session.hpp"
+#include <atomic>
+#include <thread>
 
 namespace miyoofin {
 
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
+/// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
-    HomeScreen();
-    ~HomeScreen() override = default;
+    explicit HomeScreen(const Session &session);
+    ~HomeScreen() override;
 
     void enter() override;
     void leave() override;
@@ -23,20 +27,37 @@ public:
     bool logoutRequested() const { return m_logoutRequested; }
 
 private:
+    enum class LoadState { Loading, Ready, Error };
+
+    LoadState m_loadState = LoadState::Loading;
+
     // Tab / row / card navigation state
     int m_activeTab;     // 0 = Home, 1 = Movies, 2 = Shows, 3 = Search, 4 = Downloads
-    int m_activeRow;     // index into current tab's rows
-    int m_activeCard;    // index into current row's items
-    int m_rowScroll;     // vertical scroll offset (first visible row index)
-    int m_cardScroll;    // horizontal scroll offset (first visible card index)
+    int m_activeRow;
+    int m_activeCard;
+    int m_rowScroll;
+    int m_cardScroll;
 
-    // Cached mock data reference
-    const std::vector<TabData> &m_tabs;
+    // Tab data (owned, populated by background fetch)
+    std::vector<TabData> m_tabs;
+
+    // Session info for API calls
+    Session m_session;
+    std::string m_userName;
 
     // Logout (two-step confirm on Y)
-    bool m_logoutArmed = false;   // first Y pressed
-    Uint32 m_logoutTimer = 0;     // time remaining to confirm
+    bool m_logoutArmed = false;
+    Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
+
+    // Background fetch
+    std::thread m_fetchThread;
+    std::atomic<bool> m_fetchDone{false};
+    std::string m_fetchError;
+    std::vector<TabData> m_fetchResult;
+
+    void startFetch();
+    void finishFetch();
 
     // Helpers
     const TabData &currentTab() const;
@@ -51,6 +72,8 @@ private:
                   const MediaItem &item, bool selected);
     void drawPlaceholderTab(SDL_Surface *fb, const char *message);
     void drawBottomHints(SDL_Surface *fb);
+    void drawLoadingState(SDL_Surface *fb);
+    void drawErrorState(SDL_Surface *fb);
 };
 
 } // namespace miyoofin

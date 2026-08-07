@@ -1,8 +1,10 @@
 #include "HomeScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
+#include "../../net/JellyfinApi.hpp"
 #include <cstdio>
 #include <cstring>
+#include <map>
 
 namespace miyoofin {
 
@@ -19,12 +21,24 @@ static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
 
-HomeScreen::HomeScreen()
+HomeScreen::HomeScreen(const Session &session)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
-    , m_tabs(getMockTabs())
-    , m_logoutArmed(false), m_logoutTimer(0), m_logoutRequested(false)
+    , m_session(session)
+    , m_userName(session.userName)
 {
+    // Placeholder tabs until fetch completes
+    m_tabs.push_back({"Home", {{"", {}}}});
+    m_tabs.push_back({"Movies", {{"", {}}}});
+    m_tabs.push_back({"Shows", {{"", {}}}});
+    m_tabs.push_back({"Search", {{"", {}}}});
+    m_tabs.push_back({"Downloads", {{"", {}}}});
+}
+
+HomeScreen::~HomeScreen()
+{
+    if (m_fetchThread.joinable())
+        m_fetchThread.join();
 }
 
 const TabData &HomeScreen::currentTab() const
@@ -76,7 +90,10 @@ void HomeScreen::clampNavigation()
 
 void HomeScreen::enter()
 {
-    printf("[HomeScreen] enter (tab=%d)\n", m_activeTab);
+    printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab,
+           m_userName.c_str());
+    if (m_loadState == LoadState::Loading && !m_fetchDone)
+        startFetch();
 }
 
 void HomeScreen::leave()
@@ -86,13 +103,33 @@ void HomeScreen::leave()
 
 bool HomeScreen::handleAction(Action action)
 {
-    // If we're waiting for logout confirmation and user does
-    // anything other than Y again, disarm.
     if (m_logoutArmed && action != Action::ActionsMenu) {
         m_logoutArmed = false;
         m_logoutTimer = 0;
     }
 
+    // Loading: only allow logout
+    if (m_loadState == LoadState::Loading) {
+        if (action == Action::ActionsMenu && !m_logoutArmed) {
+            m_logoutArmed = true; m_logoutTimer = 3000; return true;
+        }
+        return false;
+    }
+
+    // Error: allow retry (A) and logout (Y)
+    if (m_loadState == LoadState::Error) {
+        if (action == Action::Confirm) {
+            m_loadState = LoadState::Loading;
+            m_fetchDone = false; m_fetchError.clear(); m_fetchResult.clear();
+            startFetch(); return true;
+        }
+        if (action == Action::ActionsMenu && !m_logoutArmed) {
+            m_logoutArmed = true; m_logoutTimer = 3000; return true;
+        }
+        return false;
+    }
+
+    // Ready: normal navigation
     switch (action) {
     case Action::Up:     m_activeRow--; clampNavigation(); return true;
     case Action::Down:   m_activeRow++; clampNavigation(); return true;
@@ -100,37 +137,31 @@ bool HomeScreen::handleAction(Action action)
     case Action::Right:  m_activeCard++; clampNavigation(); return true;
     case Action::NextTab:
         m_activeTab = (m_activeTab + 1) % (int)m_tabs.size();
-        m_activeRow = 0; m_activeCard = 0; m_rowScroll = 0; m_cardScroll = 0;
+        m_activeRow = 0; m_activeCard = 0;
+        m_rowScroll = 0; m_cardScroll = 0;
         clampNavigation(); return true;
     case Action::PrevTab:
         m_activeTab--;
         if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
-        m_activeRow = 0; m_activeCard = 0; m_rowScroll = 0; m_cardScroll = 0;
+        m_activeRow = 0; m_activeCard = 0;
+        m_rowScroll = 0; m_cardScroll = 0;
         clampNavigation(); return true;
     case Action::Search:
         m_activeTab = 3; m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0; return true;
     case Action::ActionsMenu:
-        if (m_logoutArmed) {
-            m_logoutRequested = true;
-        } else {
-            m_logoutArmed = true;
-            m_logoutTimer = 3000;
-        }
+        if (m_logoutArmed) { m_logoutRequested = true; }
+        else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
-    case Action::Settings:
-        printf("[HomeScreen] Settings (not implemented)\n"); return true;
-    case Action::Menu:
-        printf("[HomeScreen] Menu (not implemented)\n"); return true;
     case Action::Confirm: {
         const MediaItem *item = currentItem();
-        if (item)
-            printf("[HomeScreen] Select: %s (%s)\n",
-                   item->title.c_str(), item->type.c_str());
+        if (item) printf("[HomeScreen] Select: %s (%s)\n",
+                         item->title.c_str(), item->type.c_str());
         return true;
     }
     case Action::Back:
-        printf("[HomeScreen] Back (not implemented)\n"); return true;
+        if (m_logoutArmed) { m_logoutArmed = false; m_logoutTimer = 0; return true; }
+        return false;
     default: return false;
     }
 }
@@ -138,27 +169,128 @@ bool HomeScreen::handleAction(Action action)
 void HomeScreen::update(Uint32 dt)
 {
     if (m_logoutArmed && !m_logoutRequested) {
-        if (dt >= m_logoutTimer) {
-            m_logoutTimer = 0;
-            m_logoutArmed = false;
-        } else {
-            m_logoutTimer -= dt;
-        }
+        if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
+        else m_logoutTimer -= dt;
     }
+    if (m_loadState == LoadState::Loading && m_fetchDone)
+        finishFetch();
 }
 
 void HomeScreen::render(SDL_Surface *fb)
 {
     drawTabBar(fb);
-    if (m_activeTab == 3)
-        drawPlaceholderTab(fb, "Search - not yet implemented");
-    else if (m_activeTab == 4)
-        drawPlaceholderTab(fb, "Downloads - not yet implemented");
-    else {
-        drawInfoPanel(fb);
-        drawRowList(fb);
+
+    if (m_loadState == LoadState::Loading) {
+        drawLoadingState(fb);
+        drawBottomHints(fb);
+        return;
+    }
+    if (m_loadState == LoadState::Error) {
+        drawErrorState(fb);
+        drawBottomHints(fb);
+        return;
+    }
+
+    // Ready
+    const TabData &tab = currentTab();
+    if (m_activeTab == 3 || m_activeTab == 4) {
+        drawPlaceholderTab(fb, m_activeTab == 3 ?
+            "Search - not yet implemented" :
+            "Downloads - not yet implemented");
+    } else if (tab.rows.size() == 1 && tab.rows[0].items.empty()
+               && tab.rows[0].label.empty()) {
+        drawPlaceholderTab(fb, "No content");
+    } else {
+        bool hasItems = false;
+        for (const auto &r : tab.rows)
+            if (!r.items.empty()) { hasItems = true; break; }
+        if (!hasItems) {
+            drawPlaceholderTab(fb, tab.name == "Movies" ?
+                "No movies on this server" :
+                tab.name == "Shows" ? "No shows on this server" : "No content");
+        } else {
+            drawInfoPanel(fb);
+            drawRowList(fb);
+        }
     }
     drawBottomHints(fb);
+}
+
+void HomeScreen::startFetch()
+{
+    m_fetchDone = false;
+    m_fetchError.clear();
+    m_fetchResult.clear();
+
+    std::string url   = m_session.serverUrl;
+    std::string token = m_session.accessToken;
+    std::string uid   = m_session.userId;
+    std::string devId = m_session.deviceId;
+
+    m_fetchThread = std::thread([this, url, token, uid, devId]() {
+        std::string err;
+
+        // 1. Get library views
+        std::vector<LibraryView> views;
+        if (!JellyfinApi::getViews(url, token, uid, devId, views, err)) {
+            m_fetchError = err;
+            m_fetchDone = true;
+            return;
+        }
+        printf("[HomeScreen] Got %zu library views\n", views.size());
+
+        // 2. Continue watching (non-fatal if fails)
+        std::vector<MediaItem> cw;
+        std::string cwErr;
+        if (!JellyfinApi::getResumeItems(url, token, uid, devId, 12, cw, cwErr))
+            printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
+
+        // 3. Recently added (non-fatal)
+        std::vector<MediaItem> ra;
+        std::string raErr;
+        if (!JellyfinApi::getLatestItems(url, token, uid, devId, 16, ra, raErr))
+            printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
+
+        // 4. Per-library items
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
+        for (const auto &v : views) {
+            if (v.collectionType == "movies") {
+                std::vector<MediaItem> items; std::string ie;
+                if (JellyfinApi::getLibraryItems(url, token, uid, devId,
+                        v.id, "Movie", 50, items, ie))
+                    moviesByView.push_back({v.name, std::move(items)});
+                else printf("[HomeScreen] Movies '%s': %s\n",
+                            v.name.c_str(), ie.c_str());
+            } else if (v.collectionType == "tvshows") {
+                std::vector<MediaItem> items; std::string ie;
+                if (JellyfinApi::getLibraryItems(url, token, uid, devId,
+                        v.id, "Series", 50, items, ie))
+                    showsByView.push_back({v.name, std::move(items)});
+                else printf("[HomeScreen] Shows '%s': %s\n",
+                            v.name.c_str(), ie.c_str());
+            }
+        }
+
+        m_fetchResult = JellyfinApi::buildTabs(
+            views, cw, ra, moviesByView, showsByView);
+        m_fetchDone = true;
+    });
+    m_fetchThread.detach();
+}
+
+void HomeScreen::finishFetch()
+{
+    m_fetchDone = false;
+    if (!m_fetchError.empty()) {
+        m_loadState = LoadState::Error;
+        printf("[HomeScreen] Fetch failed: %s\n", m_fetchError.c_str());
+        return;
+    }
+    m_tabs = std::move(m_fetchResult);
+    m_loadState = LoadState::Ready;
+    clampNavigation();
+    printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
 }
 
 void HomeScreen::drawTabBar(SDL_Surface *fb)
@@ -290,7 +422,15 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
     BitmapFont::fillRect(fb,0,y,640,BOTTOM_H,
         Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3,255);
 
-    if (m_logoutArmed && !m_logoutRequested) {
+    if (m_loadState == LoadState::Loading) {
+        BitmapFont::drawString(fb,8,y+2,"Y=Logout",
+            Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
+            Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+    } else if (m_loadState == LoadState::Error) {
+        BitmapFont::drawString(fb,8,y+2,"A=Retry  Y=Logout",
+            Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
+            Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+    } else if (m_logoutArmed && !m_logoutRequested) {
         int secs = (m_logoutTimer + 999) / 1000;
         char buf[64];
         std::snprintf(buf, sizeof(buf), "Press Y again to confirm logout (%d)", secs);
@@ -299,10 +439,60 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     } else {
         BitmapFont::drawString(fb,8,y+2,
-            "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout  START=Settings  SELECT=Menu",
+            "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout",
             Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     }
+}
+
+void HomeScreen::drawLoadingState(SDL_Surface *fb)
+{
+    char userBuf[64];
+    std::snprintf(userBuf, sizeof(userBuf), "Logged in as %s",
+                  m_userName.c_str());
+    int ux = (fb->w - (int)::strlen(userBuf) * BitmapFont::GLYPH_W) / 2;
+    int uy = fb->h / 3;
+    BitmapFont::drawString(fb, ux, uy, userBuf,
+        Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
+
+    static int dotPhase = 0;
+    dotPhase = (dotPhase + 1) % 60;
+    int dots = dotPhase / 15;
+    char buf[32] = "Loading library";
+    for (int i = 0; i < dots; ++i) std::strcat(buf, ".");
+    int mx = (fb->w - (int)::strlen(buf) * BitmapFont::GLYPH_W) / 2;
+    int my = uy + BitmapFont::GLYPH_H + 16;
+    BitmapFont::drawString(fb, mx, my, buf,
+        Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
+}
+
+void HomeScreen::drawErrorState(SDL_Surface *fb)
+{
+    const char *header = "Failed to load library";
+    int hx = (fb->w - (int)::strlen(header) * BitmapFont::GLYPH_W) / 2;
+    int hy = fb->h / 3;
+    BitmapFont::drawString(fb, hx, hy, header,
+        Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
+
+    char errBuf[128];
+    std::snprintf(errBuf, sizeof(errBuf), "%s", m_fetchError.c_str());
+    int maxChars = (640 - 16) / BitmapFont::GLYPH_W;
+    if ((int)::strlen(errBuf) > maxChars) errBuf[maxChars] = '\0';
+    int ex = (fb->w - (int)::strlen(errBuf) * BitmapFont::GLYPH_W) / 2;
+    int ey = hy + BitmapFont::GLYPH_H + 8;
+    BitmapFont::drawString(fb, ex, ey, errBuf,
+        Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
+
+    const char *hint = "Press A to retry";
+    int hix = (fb->w - (int)::strlen(hint) * BitmapFont::GLYPH_W) / 2;
+    int hiy = ey + BitmapFont::GLYPH_H + 16;
+    BitmapFont::drawString(fb, hix, hiy, hint,
+        Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
 }
 
 } // namespace miyoofin

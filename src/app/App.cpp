@@ -153,7 +153,7 @@ void App::goToHome()
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
-    m_stack.push(std::make_unique<HomeScreen>());
+    m_stack.push(std::make_unique<HomeScreen>(m_session));
 }
 
 void App::goToLogin(const std::string &initialMessage)

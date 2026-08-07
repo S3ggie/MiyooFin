@@ -2,6 +2,9 @@
 #define MIYOOFIN_JELLYFIN_API_HPP
 
 #include <string>
+#include <vector>
+#include <map>
+#include "../data/MediaItem.hpp"
 
 namespace miyoofin {
 
@@ -31,9 +34,17 @@ enum class AuthError {
     ParseError          ///< Could not parse authentication response
 };
 
+/// A user's media library / collection view.
+struct LibraryView {
+    std::string id;
+    std::string name;
+    std::string collectionType; // "movies", "tvshows", "music", etc.
+};
+
 /// Minimal Jellyfin API helper.
-/// Supports the public /System/Info endpoint and
-/// /Users/AuthenticateByName for username/password login.
+/// Supports the public /System/Info endpoint,
+/// /Users/AuthenticateByName for username/password login,
+/// and authenticated library/data fetching.
 class JellyfinApi {
 public:
     /// Call GET /System/Info/Public on the given server base URL.
@@ -42,14 +53,6 @@ public:
                               std::string &error);
 
     /// Authenticate with username/password via POST /Users/AuthenticateByName.
-    /// @param baseUrl      Server base URL (e.g. "http://192.168.1.50:8096").
-    /// @param username     Jellyfin username (JSON-escaped internally).
-    /// @param password     Password (never logged or saved).
-    /// @param deviceId     Persistent device identifier.
-    /// @param result       Output: access token, user info (on success).
-    /// @param errCode      Output: categorised error code.
-    /// @param error        Output: human-readable error message.
-    /// @return true on successful authentication.
     static bool authenticateByName(const std::string &baseUrl,
                                    const std::string &username,
                                    const std::string &password,
@@ -59,7 +62,6 @@ public:
                                    std::string &error);
 
     /// Validate an existing access token via GET /Users/{userId}.
-    /// @return true if the token is valid (HTTP 200).
     static bool validateToken(const std::string &baseUrl,
                               const std::string &accessToken,
                               const std::string &userId,
@@ -69,22 +71,93 @@ public:
     /// Normalise a user-entered URL.
     static std::string normaliseUrl(const std::string &input);
 
-private:
-    /// Extract a top-level JSON string value by key.
-    static std::string extractString(const std::string &json, const std::string &key);
+    // ---- Checkpoint B4: library / media fetching ---------------------------
 
-    /// Find a JSON string value nested under a parent key.
-    /// e.g. extractNestedString(json, "User", "Id").
+    /// Fetch the authenticated user's library views (collections).
+    static bool getViews(const std::string &baseUrl,
+                         const std::string &accessToken,
+                         const std::string &userId,
+                         const std::string &deviceId,
+                         std::vector<LibraryView> &views,
+                         std::string &error);
+
+    /// Fetch items from a specific library.
+    /// @param includeItemTypes  e.g. "Movie" or "Series"
+    static bool getLibraryItems(const std::string &baseUrl,
+                                const std::string &accessToken,
+                                const std::string &userId,
+                                const std::string &deviceId,
+                                const std::string &parentId,
+                                const std::string &includeItemTypes,
+                                int limit,
+                                std::vector<MediaItem> &items,
+                                std::string &error);
+
+    /// Fetch "continue watching" / resume items.
+    static bool getResumeItems(const std::string &baseUrl,
+                               const std::string &accessToken,
+                               const std::string &userId,
+                               const std::string &deviceId,
+                               int limit,
+                               std::vector<MediaItem> &items,
+                               std::string &error);
+
+    /// Fetch "recently added" items across all libraries.
+    static bool getLatestItems(const std::string &baseUrl,
+                               const std::string &accessToken,
+                               const std::string &userId,
+                               const std::string &deviceId,
+                               int limit,
+                               std::vector<MediaItem> &items,
+                               std::string &error);
+
+    // ---- URL helpers (public for testing) ----------------------------------
+
+    static std::string buildLatestUrl(const std::string &baseUrl,
+                                      const std::string &userId,
+                                      int limit);
+
+    // ---- JSON parsing helpers (public for testing) -------------------------
+
+    static std::string jsonStringField(const std::string &obj,
+                                       const std::string &key);
+    static int jsonIntField(const std::string &obj, const std::string &key);
+    static float jsonFloatField(const std::string &obj, const std::string &key);
+    static bool jsonBoolField(const std::string &obj, const std::string &key);
+    static std::vector<std::string> jsonExtractArray(const std::string &json,
+                                                     const std::string &key);
+    static MediaItem jsonToMediaItem(const std::string &obj);
+
+    /// Build TabData from fetched library data.
+    static std::vector<TabData> buildTabs(
+        const std::vector<LibraryView> &views,
+        const std::vector<MediaItem> &continueWatching,
+        const std::vector<MediaItem> &recentlyAdded,
+        const std::vector<std::pair<std::string, std::vector<MediaItem>>> &moviesByView,
+        const std::vector<std::pair<std::string, std::vector<MediaItem>>> &showsByView);
+
+private:
+    static std::string extractString(const std::string &json,
+                                     const std::string &key);
     static std::string extractNestedString(const std::string &json,
                                            const std::string &parent,
                                            const std::string &child);
-
-    /// Escape a string for embedding in a JSON value.
     static std::string jsonEscape(const std::string &s);
-
-    /// Classify an HTTP response from AuthenticateByName.
     static AuthError classifyAuthError(long httpStatus, const std::string &body,
                                        std::string &message);
+
+    /// Extract a raw JSON value (string, number, bool, null, object, array).
+    static std::string jsonRawValue(const std::string &json,
+                                    const std::string &key);
+
+    /// Split comma-separated elements from an array body string.
+    static std::vector<std::string> splitJsonArrayContent(
+        const std::string &content);
+
+    /// Build standard X-Emby auth headers.
+    static std::vector<std::string> buildAuthHeaders(
+        const std::string &accessToken,
+        const std::string &deviceId);
 };
 
 } // namespace miyoofin

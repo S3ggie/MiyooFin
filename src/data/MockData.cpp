@@ -19,7 +19,18 @@ static MediaItem makeItem(const std::string &id,
     g = 80 + g % 120;
     b = 80 + b % 120;
 
-    return {id, title, overview, year, rating, genre, type, r, g, b};
+    MediaItem item;
+    item.id = id;
+    item.title = title;
+    item.overview = overview;
+    item.year = year;
+    item.rating = rating;
+    item.genre = genre;
+    item.type = type;
+    item.artR = r;
+    item.artG = g;
+    item.artB = b;
+    return item;
 }
 // -------------------------------------------------------------------
 // Mock movie rows

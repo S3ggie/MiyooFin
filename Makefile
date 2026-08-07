@@ -78,14 +78,15 @@ TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
                src/net/HttpClient.cpp \
                src/net/Session.cpp \
-               src/net/DeviceIdentity.cpp
+               src/net/DeviceIdentity.cpp \
+               src/ui/BitmapFont.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)
 	@$(TEST_TARGET)
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(CURL_LIBS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 output/test:

@@ -7,19 +7,7 @@
 
 namespace miyoofin {
 
-/// A horizontal row of media items (one section on the home screen).
-struct MediaRow {
-    std::string          label;
-    std::vector<MediaItem> items;
-};
-
-/// A top-level tab with its rows.
-struct TabData {
-    std::string           name;
-    std::vector<MediaRow> rows;
-};
-
-/// Returns the singleton mock dataset.
+/// Returns the singleton mock dataset (used for tests and fallback).
 const std::vector<TabData>& getMockTabs();
 
 } // namespace miyoofin

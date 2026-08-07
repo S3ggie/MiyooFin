@@ -203,6 +203,35 @@ static const uint8_t sFont[95][16] = {
 };
 
 
+/// Map a Unicode code point to an ASCII glyph for the bitmap font.
+/// Returns 0 for characters that have no sensible ASCII equivalent.
+static unsigned int mapCodePointImpl(unsigned int cp)
+{
+    // Common Unicode → ASCII mappings
+    if (cp >= 32 && cp <= 126) return cp;  // already ASCII
+    switch (cp) {
+        case 0x00B2: return '2';   // ² → 2
+        case 0x00B3: return '3';   // ³ → 3
+        case 0x00B9: return '1';   // ¹ → 1
+        case 0x00BD: return '/';   // ½ → /
+        case 0x00BC: return '/';   // ¼ → /
+        case 0x00BE: return '/';   // ¾ → /
+        case 0x00D7: return 'x';   // × → x
+        case 0x00F7: return '/';   // ÷ → /
+        case 0x2013: return '-';   // – → -
+        case 0x2014: return '-';   // — → -
+        case 0x2018: return '\'';  // ' → '
+        case 0x2019: return '\'';  // ' → '
+        case 0x201C: return '"';   // " → "
+        case 0x201D: return '"';   // " → "
+        case 0x2026: return '.';   // … → ...
+        case 0x2122: return 'T';   // ™ → T
+        case 0x00A9: return 'C';   // © → C
+        case 0x00AE: return 'R';   // ® → R
+        default: return 0;         // no mapping
+    }
+}
+
 const uint8_t *BitmapFont::glyphData(unsigned char ch)
 {
     if (ch < 32)
@@ -210,6 +239,11 @@ const uint8_t *BitmapFont::glyphData(unsigned char ch)
     if (ch > 126)
         return sFont[94]; // last printable
     return sFont[ch - 32];
+}
+
+unsigned int BitmapFont::mapCodePoint(unsigned int cp)
+{
+    return mapCodePointImpl(cp);
 }
 
 void BitmapFont::drawChar(SDL_Surface *surface, int x, int y,
@@ -263,16 +297,50 @@ void BitmapFont::drawString(SDL_Surface *surface, int x, int y,
             continue;
         }
 
+        // Decode UTF-8 sequence to a Unicode code point
+        unsigned int cp = 0;
+        int extraBytes = 0;
+        if (ch < 0x80) {
+            cp = ch;
+        } else if ((ch & 0xE0) == 0xC0) {
+            cp = ch & 0x1F; extraBytes = 1;
+        } else if ((ch & 0xF0) == 0xE0) {
+            cp = ch & 0x0F; extraBytes = 2;
+        } else if ((ch & 0xF8) == 0xF0) {
+            cp = ch & 0x07; extraBytes = 3;
+        } else {
+            // Invalid UTF-8 lead byte; render fallback
+            cp = 0;
+        }
+        for (int i = 0; i < extraBytes; ++i) {
+            ++text;
+            unsigned char nb = (unsigned char)*text;
+            if ((nb & 0xC0) == 0x80)
+                cp = (cp << 6) | (nb & 0x3F);
+            else {
+                cp = 0; // invalid continuation
+                break;
+            }
+        }
+        ++text;
+
+        // Map code point to a bitmap-font glyph
+        unsigned int mapped = mapCodePointImpl(cp);
+        unsigned char glyph;
+        if (mapped >= 32 && mapped <= 126)
+            glyph = (unsigned char)mapped;
+        else
+            glyph = '?'; // fallback for unmapped characters
+
         if (wrapCols > 0 && col >= wrapCols) {
             curY += GLYPH_H + 2;
             curX = x;
             col = 0;
         }
 
-        drawChar(surface, curX, curY, ch, fgR, fgG, fgB, bgR, bgG, bgB);
+        drawChar(surface, curX, curY, glyph, fgR, fgG, fgB, bgR, bgG, bgB);
         curX += GLYPH_W;
         ++col;
-        ++text;
     }
 }
 

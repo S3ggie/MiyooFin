@@ -6,9 +6,11 @@
 
 namespace miyoofin {
 
-/// 8×16 monospace bitmap font for rendering text directly onto
-/// the software framebuffer.  Covers printable ASCII (32–126).
+/// 8x16 monospace bitmap font for rendering text directly onto
+/// the software framebuffer.  Covers printable ASCII (32-126).
 /// Each glyph is 16 bytes, 1 bit per pixel, MSB = leftmost pixel.
+/// UTF-8 input is decoded; known Unicode code points are mapped to
+/// suitable ASCII glyphs and unknown ones render as '?'.
 class BitmapFont {
 public:
     /// Draw a single character at (x, y) on the surface.
@@ -17,7 +19,7 @@ public:
                          Uint8 fgR, Uint8 fgG, Uint8 fgB,
                          Uint8 bgR, Uint8 bgG, Uint8 bgB);
 
-    /// Draw a null-terminated string.
+    /// Draw a null-terminated UTF-8 string.
     /// @param x  left edge in pixels
     /// @param y  top edge in pixels
     /// @param wrapCols  if > 0, wrap at this column (character count)
@@ -26,6 +28,10 @@ public:
                            Uint8 fgR, Uint8 fgG, Uint8 fgB,
                            Uint8 bgR, Uint8 bgG, Uint8 bgB,
                            int wrapCols = 0);
+
+    /// Map a Unicode code point to an ASCII glyph for the bitmap font.
+    /// Returns 0 for characters that have no sensible ASCII equivalent.
+    static unsigned int mapCodePoint(unsigned int cp);
 
     /// Glyph dimensions
     static constexpr int GLYPH_W = 8;

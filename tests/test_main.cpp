@@ -1,7 +1,8 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1 — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
-// B5c1 per-type artwork box dimensions, and B5d1 row card geometry + scrolling.
+// B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
+// and B5d2a row artwork loading state.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -928,10 +929,122 @@ static void testScrollIsPixelNotIndex()
     std::printf("[test] B5d1: scroll is pixel offset OK\n");
 }
 
+// ===================================================================
+// B5d2a tests — Row artwork loading state (no rendering)
+// ===================================================================
+
+#include <map>
+
+// Helper: simulate candidate selection (same logic as tryLoadOneRowArtwork)
+static std::string pickCandidate(
+    const std::vector<MediaItem> &items,
+    const std::map<std::string, RowArtworkStatus> &statusMap)
+{
+    for (const auto &item : items) {
+        std::string key = buildRowArtworkKey(item);
+        if (key.empty()) continue;
+        if (statusMap.find(key) == statusMap.end())
+            return key;
+    }
+    return {};
+}
+
+// B5d2a: Movie row artwork uses Primary at 64x96
+static void testMovieRowKeyPrimary()
+{
+    std::printf("[test] B5d2a: movie row key -> Primary 64x96\n");
+    MediaItem m;
+    m.id = "m1"; m.type = "movie";
+    m.imageTags["Primary"] = "tagA";
+    std::string key = buildRowArtworkKey(m);
+    CHECK(!key.empty());
+    CHECK(key.find("Primary") != std::string::npos);
+    CHECK(key.find("Thumb") == std::string::npos);
+    CHECK(key.find("64x96") != std::string::npos);
+    CHECK(key == "m1:Primary:tagA:64x96");
+    std::printf("[test] B5d2a: movie row key -> Primary 64x96 OK\n");
+}
+
+// B5d2a: Episode row artwork uses Primary at 128x72
+static void testEpisodeRowKeyPrimary()
+{
+    std::printf("[test] B5d2a: episode row key -> Primary 128x72\n");
+    MediaItem e;
+    e.id = "e1"; e.type = "episode";
+    e.imageTags["Primary"] = "tagB";
+    std::string key = buildRowArtworkKey(e);
+    CHECK(!key.empty());
+    CHECK(key.find("Primary") != std::string::npos);
+    CHECK(key.find("128x72") != std::string::npos);
+    CHECK(key == "e1:Primary:tagB:128x72");
+    std::printf("[test] B5d2a: episode row key -> Primary 128x72 OK\n");
+}
+
+// B5d2a: No Primary tag → empty key (skip that item)
+static void testNoPrimaryTagEmptyKey()
+{
+    std::printf("[test] B5d2a: no Primary tag -> empty key\n");
+    MediaItem m;
+    m.id = "x1"; m.type = "movie";
+    // no imageTags at all
+    CHECK(buildRowArtworkKey(m).empty());
+    std::printf("[test] B5d2a: no Primary tag -> empty key OK\n");
+}
+
+// B5d2a: Same key does not load twice (already in map → not a candidate)
+static void testSameKeyNotLoadedTwice()
+{
+    std::printf("[test] B5d2a: same key not loaded twice\n");
+    MediaItem m;
+    m.id = "m2"; m.type = "movie";
+    m.imageTags["Primary"] = "t1";
+    std::string key = buildRowArtworkKey(m);
+
+    std::map<std::string, RowArtworkStatus> sm;
+    sm[key] = RowArtworkStatus::Loaded;
+
+    std::vector<MediaItem> items = {m};
+    CHECK(pickCandidate(items, sm).empty());
+
+    sm[key] = RowArtworkStatus::Failed;
+    CHECK(pickCandidate(items, sm).empty());
+
+    std::printf("[test] B5d2a: same key not loaded twice OK\n");
+}
+
+// B5d2a: At most one candidate selected per cycle
+static void testOneCandidatePerCycle()
+{
+    std::printf("[test] B5d2a: one candidate per cycle\n");
+    std::vector<MediaItem> items;
+    for (int i = 0; i < 5; ++i) {
+        MediaItem m;
+        char id[32]; std::snprintf(id, sizeof(id), "item-%d", i);
+        m.id = id; m.type = "movie";
+        char tag[32]; std::snprintf(tag, sizeof(tag), "t%d", i);
+        m.imageTags["Primary"] = tag;
+        items.push_back(m);
+    }
+    std::map<std::string, RowArtworkStatus> sm;
+
+    std::string c1 = pickCandidate(items, sm);
+    CHECK(!c1.empty());
+    sm[c1] = RowArtworkStatus::Failed;
+    std::string c2 = pickCandidate(items, sm);
+    CHECK(!c2.empty());
+    CHECK(c1 != c2);
+    sm[c2] = RowArtworkStatus::Loaded;
+    std::string c3 = pickCandidate(items, sm);
+    CHECK(!c3.empty());
+    CHECK(c3 != c1 && c3 != c2);
+
+    std::printf("[test] B5d2a: one candidate per cycle OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1 tests\n");
-    std::printf("============================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a tests\n");
+    std::printf("=========================================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -992,9 +1105,17 @@ int main()
     testScrollNeverNegative();
     testScrollIsPixelNotIndex();
 
+    // B5d2a tests — Row artwork loading state
+    std::printf("\n--- B5d2a row artwork loading state tests ---\n");
+    testMovieRowKeyPrimary();
+    testEpisodeRowKeyPrimary();
+    testNoPrimaryTagEmptyKey();
+    testSameKeyNotLoadedTwice();
+    testOneCandidatePerCycle();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1 tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a tests passed.\n");
         return 0;
     }
 

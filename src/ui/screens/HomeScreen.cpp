@@ -187,6 +187,10 @@ void HomeScreen::update(Uint32 dt)
     // Attempt selected artwork load (identity guard prevents repeats)
     if (m_loadState == LoadState::Ready)
         tryLoadSelectedArtwork();
+
+    // B5d2a: load at most one new row artwork per update cycle
+    if (m_loadState == LoadState::Ready)
+        tryLoadOneRowArtwork();
 }
 
 void HomeScreen::render(SDL_Surface *fb)
@@ -389,6 +393,128 @@ void HomeScreen::tryLoadSelectedArtwork()
         printf("[HomeScreen] Artwork: decoded %dx%d\n",
                m_selectedArtwork.width, m_selectedArtwork.height);
     }
+}
+
+// -------------------------------------------------------------------
+// B5d2a: Row card artwork — loading state only (no rendering)
+// -------------------------------------------------------------------
+
+std::string HomeScreen::rowArtworkKey(const MediaItem &item)
+{
+    return buildRowArtworkKey(item);
+}
+
+void HomeScreen::evictRowArtworkIfNeeded()
+{
+    while ((int)m_rowArtworkOrder.size() > ROW_ARTWORK_RAM_LIMIT) {
+        std::string oldKey = m_rowArtworkOrder.front();
+        m_rowArtworkOrder.erase(m_rowArtworkOrder.begin());
+
+        auto it = m_rowArtwork.find(oldKey);
+        if (it != m_rowArtwork.end()) {
+            if (it->second.status == RowArtworkStatus::Loaded) {
+                it->second.image = {};
+                it->second.status = RowArtworkStatus::Failed;
+            }
+        }
+    }
+}
+
+void HomeScreen::tryLoadOneRowArtwork()
+{
+    const auto &rows = currentTab().rows;
+    if (rows.empty()) return;
+
+    // Scan visible cards and find ONE not-yet-attempted candidate
+    std::string candidate;
+    for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
+        int rowIdx = m_rowScroll + ri;
+        if (rowIdx >= (int)rows.size()) break;
+        const MediaRow &row = rows[rowIdx];
+        for (int ci = 0; ci < (int)row.items.size(); ++ci) {
+            std::string key = rowArtworkKey(row.items[ci]);
+            if (key.empty()) continue;
+            if (m_rowArtwork.find(key) == m_rowArtwork.end()) {
+                if (candidate.empty())
+                    candidate = key;
+            }
+        }
+    }
+
+    if (candidate.empty()) return;
+
+    // Mark as attempted immediately (tentatively Failed until proven otherwise)
+    m_rowArtwork[candidate].status = RowArtworkStatus::Failed;
+
+    // Find the matching item to get dimensions and tag
+    const MediaItem *matchItem = nullptr;
+    for (int ri = 0; ri < VISIBLE_ROWS && !matchItem; ++ri) {
+        int rowIdx = m_rowScroll + ri;
+        if (rowIdx >= (int)rows.size()) break;
+        const MediaRow &row = rows[rowIdx];
+        for (int ci = 0; ci < (int)row.items.size(); ++ci) {
+            if (rowArtworkKey(row.items[ci]) == candidate) {
+                matchItem = &row.items[ci];
+                break;
+            }
+        }
+    }
+    if (!matchItem) return;
+
+    ArtworkBox box = artworkBoxSize(*matchItem);
+    auto tagIt = matchItem->imageTags.find("Primary");
+    if (tagIt == matchItem->imageTags.end()) return;
+    const std::string &tag = tagIt->second;
+    const std::string &itemId = matchItem->id;
+
+    printf("[HomeScreen] RowArtwork: loading %s (%dx%d)\n",
+           candidate.c_str(), box.w, box.h);
+
+    // 1. Check disk cache
+    std::vector<unsigned char> jpegData;
+    if (ImageCache::isCached(itemId, ImageType::Primary, tag, box.w, box.h))
+        jpegData = ImageCache::readCached(itemId, ImageType::Primary, tag, box.w, box.h);
+
+    // 2. If not cached, synchronous HTTP request
+    if (jpegData.empty()) {
+        std::string url = buildImageUrl(
+            m_session.serverUrl, itemId, ImageType::Primary, tag, box.w, box.h);
+
+        HttpClient client;
+        client.setTimeoutSec(5);
+        auto headers = JellyfinApi::buildAuthHeaders(
+            m_session.accessToken, m_session.deviceId);
+
+        BinaryHttpResponse response;
+        std::string error;
+        if (!client.getBinary(url, headers, response, error, 256 * 1024)) {
+            printf("[HomeScreen] RowArtwork fetch failed: %s\n", error.c_str());
+            return;
+        }
+        if (!response.ok()) {
+            printf("[HomeScreen] RowArtwork HTTP %ld\n", response.status);
+            return;
+        }
+        jpegData = std::move(response.data);
+        ImageCache::writeToCache(itemId, ImageType::Primary, tag, box.w, box.h,
+                                 jpegData.data(), jpegData.size());
+    }
+
+    // 3. Decode JPEG
+    DecodedImage img = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
+    if (img.empty()) {
+        printf("[HomeScreen] RowArtwork: decode failed\n");
+        return;  // status already Failed
+    }
+
+    printf("[HomeScreen] RowArtwork: decoded %s (%dx%d)\n",
+           candidate.c_str(), img.width, img.height);
+
+    // Store decoded image
+    m_rowArtwork[candidate].status = RowArtworkStatus::Loaded;
+    m_rowArtwork[candidate].image = std::move(img);
+    m_rowArtworkOrder.push_back(candidate);
+    evictRowArtworkIfNeeded();
 }
 
 void HomeScreen::drawTabBar(SDL_Surface *fb)

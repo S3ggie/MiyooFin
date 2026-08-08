@@ -5,8 +5,12 @@
 #include "../../data/MediaItem.hpp"
 #include "../../net/Session.hpp"
 #include "../../image/ImageDecoder.hpp"
+#include "../ArtworkLayout.hpp"
 #include <atomic>
+#include <map>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace miyoofin {
 
@@ -26,6 +30,18 @@ public:
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
+
+    // --- Row artwork helpers (public for testing) -------------------------
+
+    /// Build the row-artwork identity key for a media item.
+    /// Format: "itemId:Primary:imageTag:WxH"
+    static std::string rowArtworkKey(const MediaItem &item);
+
+    /// Row artwork state map — public so tests can inspect it.
+    std::map<std::string, RowArtworkEntry> m_rowArtwork;
+
+    /// FIFO eviction order: oldest key at front.
+    std::vector<std::string> m_rowArtworkOrder;
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -82,6 +98,10 @@ private:
     bool         m_selectedArtworkAttempted = false;
 
     void tryLoadSelectedArtwork();
+
+    // Row artwork loading (B5d2a)
+    void tryLoadOneRowArtwork();
+    void evictRowArtworkIfNeeded();
 };
 
 } // namespace miyoofin

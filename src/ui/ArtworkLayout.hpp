@@ -2,6 +2,9 @@
 #define MIYOOFIN_ARTWORK_LAYOUT_HPP
 
 #include "../data/MediaItem.hpp"
+#include "../image/ImageDecoder.hpp"
+#include <cstdio>
+#include <string>
 #include <vector>
 
 namespace miyoofin {
@@ -10,6 +13,22 @@ namespace miyoofin {
 struct ArtworkBox {
     int w;
     int h;
+};
+
+/// Maximum decoded row-artwork images kept in RAM (B5d2a).
+static constexpr int ROW_ARTWORK_RAM_LIMIT = 12;
+
+/// Status of a row-artwork load attempt.
+enum class RowArtworkStatus {
+    NotAttempted,   ///< Never tried (eligible for loading)
+    Loaded,         ///< Decoded image is in RAM
+    Failed          ///< Tried once and failed; do not retry
+};
+
+/// Per-key row-artwork tracking entry (B5d2a).
+struct RowArtworkEntry {
+    RowArtworkStatus status = RowArtworkStatus::NotAttempted;
+    DecodedImage     image;               ///< Valid only when status == Loaded
 };
 
 /// Return the selected-top-artwork box dimensions for a given media item.
@@ -83,6 +102,23 @@ inline int clampCardScroll(const std::vector<MediaItem> &items, int activeCard,
     }
     if (scroll < 0) scroll = 0;
     return scroll;
+}
+
+/// Build the row-artwork identity key for a media item (B5d2a).
+/// All types use Primary image type.
+/// Format: "itemId:Primary:imageTag:WxH"
+/// Returns empty string if no Primary tag is available.
+inline std::string buildRowArtworkKey(const MediaItem &item)
+{
+    auto it = item.imageTags.find("Primary");
+    if (it == item.imageTags.end() || it->second.empty())
+        return {};
+
+    ArtworkBox box = artworkBoxSize(item);
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "%s:Primary:%s:%dx%d",
+                  item.id.c_str(), it->second.c_str(), box.w, box.h);
+    return std::string(buf);
 }
 
 } // namespace miyoofin

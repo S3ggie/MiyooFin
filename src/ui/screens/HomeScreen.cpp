@@ -1,6 +1,7 @@
 #include "HomeScreen.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
+#include "EpisodeBrowserScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
@@ -177,6 +178,34 @@ bool HomeScreen::handleAction(Action action)
             if (item->type == "movie") {
                 m_stack->push(std::make_unique<MovieDetailsScreen>(m_session, *item));
                 return true;
+            }
+            if (item->type == "episode") {
+                // B5e3b: Open EpisodeBrowserScreen focused on this episode
+                if (!item->seriesId.empty() && !item->seasonId.empty()) {
+                    MediaItem series;
+                    series.id = item->seriesId;
+                    series.title = item->seriesName;
+                    series.type = "show";
+
+                    MediaItem season;
+                    season.id = item->seasonId;
+                    season.type = "season";
+                    season.indexNumber = item->parentIndexNumber;
+                    if (item->parentIndexNumber > 0) {
+                        char buf[32];
+                        std::snprintf(buf, sizeof(buf), "Season %d",
+                                      item->parentIndexNumber);
+                        season.title = buf;
+                    } else {
+                        season.title = "Season";
+                    }
+
+                    m_stack->push(std::make_unique<EpisodeBrowserScreen>(
+                        m_session, series, season, item->id));
+                    return true;
+                }
+                printf("[HomeScreen] Cannot open episode browser: "
+                       "missing series/season context\n");
             }
         }
         return true;

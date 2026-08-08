@@ -738,7 +738,8 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
     std::snprintf(urlBuf, sizeof(urlBuf),
         "%s/Users/%s/Items/Resume?Limit=%d&Recursive=true"
         "&IncludeItemTypes=Movie,Episode"
-        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags",
+        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+        "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber",
         baseUrl.c_str(), userId.c_str(), limit);
     HttpResponse response;
     if (!client.perform("GET", urlBuf, headers, {}, response, error)) {

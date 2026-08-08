@@ -17,7 +17,8 @@ class EpisodeBrowserScreen : public Screen {
 public:
     EpisodeBrowserScreen(const Session &session,
                          const MediaItem &series,
-                         const MediaItem &season);
+                         const MediaItem &season,
+                         const std::string &initialEpisodeId = "");
     ~EpisodeBrowserScreen() override = default;
 
     void enter() override;
@@ -25,6 +26,11 @@ public:
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
+
+    /// Find the index of an episode by its ID in a list.
+    /// Returns -1 if not found.  (Public for testing.)
+    static int findEpisodeIndex(const std::vector<MediaItem> &episodes,
+                                const std::string &episodeId);
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -50,6 +56,7 @@ private:
     Session       m_session;
     MediaItem     m_series;
     MediaItem     m_season;
+    std::string   m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
@@ -67,6 +74,9 @@ private:
     DecodedImage  m_episodeArtwork;
     std::string   m_episodeArtworkKey;
     bool          m_episodeArtworkAttempted = false;
+
+    // ----- Initial episode focus (B5e3b) -----
+    bool          m_initialSelectionApplied = false;
 };
 
 } // namespace miyoofin

@@ -91,7 +91,9 @@ TEST_SRCS   := tests/test_main.cpp \
                src/image/stb_image_impl.cpp \
                src/image/ImageDecoder.cpp \
                src/cache/ImageCache.cpp \
-               src/ui/BitmapFont.cpp
+               src/ui/BitmapFont.cpp \
+               src/app/ScreenStack.cpp \
+               src/ui/screens/EpisodeBrowserScreen.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)

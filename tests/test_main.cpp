@@ -1,9 +1,9 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
 // B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
 // B5d2a row artwork loading state, B5e1a season parsing groundwork,
-// and B5e2a episode parsing groundwork.
+// B5e2a episode parsing groundwork, and B5e3b initial episode focus.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -19,6 +19,7 @@
 #include "../src/cache/ImageCache.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
+#include "../src/ui/screens/EpisodeBrowserScreen.hpp"
 #include <unistd.h>
 
 using namespace miyoofin;
@@ -1138,9 +1139,61 @@ static void testEpisodeDefaults()
     std::printf("[test] B5e2a: Episode field defaults OK\n");
 }
 
+// B5e3b: findEpisodeIndex — target found at correct index
+static void testFindEpisodeIndexFound()
+{
+    std::printf("[test] B5e3b: findEpisodeIndex found\n");
+    std::vector<MediaItem> eps;
+    MediaItem a; a.id = "A"; a.indexNumber = 1; eps.push_back(a);
+    MediaItem b; b.id = "B"; b.indexNumber = 2; eps.push_back(b);
+    MediaItem c; c.id = "C"; c.indexNumber = 3; eps.push_back(c);
+
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "B") == 1);
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "A") == 0);
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "C") == 2);
+    std::printf("[test] B5e3b: findEpisodeIndex found OK\n");
+}
+
+// B5e3b: findEpisodeIndex — unknown target returns -1
+static void testFindEpisodeIndexNotFound()
+{
+    std::printf("[test] B5e3b: findEpisodeIndex not found\n");
+    std::vector<MediaItem> eps;
+    MediaItem a; a.id = "A"; eps.push_back(a);
+    MediaItem b; b.id = "B"; eps.push_back(b);
+    MediaItem c; c.id = "C"; eps.push_back(c);
+
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "Z") == -1);
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "D") == -1);
+    std::printf("[test] B5e3b: findEpisodeIndex not found OK\n");
+}
+
+// B5e3b: findEpisodeIndex — empty target returns -1
+static void testFindEpisodeIndexEmpty()
+{
+    std::printf("[test] B5e3b: findEpisodeIndex empty target\n");
+    std::vector<MediaItem> eps;
+    MediaItem a; a.id = "A"; eps.push_back(a);
+    MediaItem b; b.id = "B"; eps.push_back(b);
+
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "") == -1);
+    std::printf("[test] B5e3b: findEpisodeIndex empty target OK\n");
+}
+
+// B5e3b: findEpisodeIndex — empty list returns -1
+static void testFindEpisodeIndexEmptyList()
+{
+    std::printf("[test] B5e3b: findEpisodeIndex empty list\n");
+    std::vector<MediaItem> eps;
+
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "A") == -1);
+    CHECK(EpisodeBrowserScreen::findEpisodeIndex(eps, "") == -1);
+    std::printf("[test] B5e3b: findEpisodeIndex empty list OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a tests\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b tests\n");
     std::printf("==================================================================\n\n");
 
     // B3 tests
@@ -1222,9 +1275,16 @@ int main()
     testTicksToMinutes();
     testEpisodeDefaults();
 
+    // B5e3b tests — Initial episode focus
+    std::printf("\n--- B5e3b initial episode focus tests ---\n");
+    testFindEpisodeIndexFound();
+    testFindEpisodeIndexNotFound();
+    testFindEpisodeIndexEmpty();
+    testFindEpisodeIndexEmptyList();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b tests passed.\n");
         return 0;
     }
 

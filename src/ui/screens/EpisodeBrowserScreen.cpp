@@ -118,11 +118,28 @@ static std::string formatEpNum(int indexNumber)
 // -------------------------------------------------------------------
 EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
-                                           const MediaItem &season)
+                                           const MediaItem &season,
+                                           const std::string &initialEpisodeId)
     : m_session(session)
     , m_series(series)
     , m_season(season)
+    , m_initialEpisodeId(initialEpisodeId)
 {
+}
+
+// -------------------------------------------------------------------
+// findEpisodeIndex — static helper for locating an episode by ID
+// -------------------------------------------------------------------
+int EpisodeBrowserScreen::findEpisodeIndex(
+    const std::vector<MediaItem> &episodes,
+    const std::string &episodeId)
+{
+    if (episodeId.empty()) return -1;
+    for (int i = 0; i < (int)episodes.size(); ++i) {
+        if (episodes[i].id == episodeId)
+            return i;
+    }
+    return -1;
 }
 
 // -------------------------------------------------------------------
@@ -163,6 +180,23 @@ void EpisodeBrowserScreen::fetchEpisodes()
         m_episodeArtwork = {};
         m_episodeArtworkKey.clear();
         m_episodeArtworkAttempted = false;
+
+        // B5e3b: Apply initial episode focus if requested
+        if (!m_initialEpisodeId.empty() && !m_initialSelectionApplied) {
+            int idx = findEpisodeIndex(m_episodes, m_initialEpisodeId);
+            if (idx >= 0) {
+                m_selectedEpisode = idx;
+                printf("[EpisodeBrowserScreen] Initial focus: episode %d (id=%s)\n",
+                       idx, m_initialEpisodeId.c_str());
+            } else {
+                printf("[EpisodeBrowserScreen] Initial focus: id '%s' not found, "
+                       "using default\n", m_initialEpisodeId.c_str());
+            }
+            m_initialSelectionApplied = true;
+        }
+
+        clampListScroll();
+
         printf("[EpisodeBrowserScreen] Loaded %d episodes\n",
                (int)m_episodes.size());
     } else {

@@ -32,6 +32,10 @@ read_kv() {
 }
 
 cleanup_playback() {
+    if [ -n "$REPORTER_PID" ] && kill -0 "$REPORTER_PID" 2>/dev/null; then
+        kill "$REPORTER_PID" 2>/dev/null
+        wait "$REPORTER_PID" 2>/dev/null
+    fi
     if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
         kill "$BRIDGE_PID" 2>/dev/null
         wait "$BRIDGE_PID" 2>/dev/null
@@ -94,6 +98,7 @@ TURL="${TURL}&SubtitleStreamIndex=-1&ApiKey=${ACCESS_TOKEN}"
 # -------------------------------------------------------------------
 rm -f /tmp/stay_awake
 BRIDGE_PID=""
+REPORTER_PID=""
 trap 'cleanup_playback' EXIT
 
 # Keep the device awake during playback
@@ -126,6 +131,23 @@ fi
 playback_log "Bridge running (PID=$BRIDGE_PID)"
 
 # -------------------------------------------------------------------
+# Start the playback reporter (background, decoupled from FFplay I/O)
+# -------------------------------------------------------------------
+if [ -f "$APP_DIR/miyoofin-playback-reporter" ]; then
+    playback_log "Starting playback reporter..."
+    rm -f "$APP_DIR/playback-ffplay-exit.txt"
+    rm -f "$APP_DIR/playback-reporter.log"
+    # Create/truncate the log file BEFORE the reporter opens it.
+    # FFplay will append (>>) below, so the reporter sees a stable file.
+    : > "$APP_DIR/playback-ffplay.log"
+    "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" &
+    REPORTER_PID=$!
+    playback_log "Reporter running (PID=$REPORTER_PID)"
+else
+    playback_log "WARNING: miyoofin-playback-reporter not found, skipping reporting"
+fi
+
+# -------------------------------------------------------------------
 # Clear MiyooFin's SDL driver overrides so FFplay uses Onion's native
 # drivers.
 # -------------------------------------------------------------------
@@ -146,19 +168,42 @@ cd "$SYS" || {
 }
 
 ./bin/ffplay \
+    -stats \
     -autoexit \
-    -vf "hflip,vflip" \
+    -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
     -i "http://127.0.0.1:18080/stream" \
-    > "$APP_DIR/playback-ffplay.log" 2>&1
+    >> "$APP_DIR/playback-ffplay.log" 2>&1
 
 FFPLAY_EXIT=$?
 playback_log "FFplay exited with code $FFPLAY_EXIT"
+
+# -------------------------------------------------------------------
+# Signal FFplay exit to reporter
+# -------------------------------------------------------------------
+if [ -n "$REPORTER_PID" ]; then
+    printf '%s' "$FFPLAY_EXIT" > "$APP_DIR/playback-ffplay-exit.txt"
+
+    # Wait for reporter to send stopped report and exit (bounded)
+    REPORTER_WAIT=0
+    while kill -0 "$REPORTER_PID" 2>/dev/null && [ "$REPORTER_WAIT" -lt 8 ]; do
+        sleep 1
+        REPORTER_WAIT=$((REPORTER_WAIT + 1))
+    done
+    if kill -0 "$REPORTER_PID" 2>/dev/null; then
+        playback_log "WARNING: Reporter did not exit within timeout, terminating"
+        kill "$REPORTER_PID" 2>/dev/null
+        wait "$REPORTER_PID" 2>/dev/null
+    else
+        playback_log "Reporter exited cleanly"
+    fi
+fi
 
 # -------------------------------------------------------------------
 # Cleanup
 # -------------------------------------------------------------------
 cleanup_playback
 rm -f playback-request.txt
+rm -f "$APP_DIR/playback-ffplay-exit.txt"
 trap - EXIT
 
 playback_log "=== Playback complete, returning to MiyooFin ==="

@@ -96,6 +96,18 @@ $(WAIT_RELEASE_ARM): $(WAIT_RELEASE_SRC) | output/build-arm
 .PHONY: wait-release
 wait-release: $(WAIT_RELEASE_ARM)
 
+# -------------------------------------------------------------------
+# playback reporter (standalone Jellyfin playback reporting helper)
+# -------------------------------------------------------------------
+REPORTER_SRC     := tools/playback_reporter.cpp
+REPORTER_ARM     := output/build-arm/miyoofin-playback-reporter
+
+reporter: $(REPORTER_ARM)
+
+$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp | output/build-arm
+	$(CXX) $(CXXFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
+	@echo "  [LINK] $@"
+
 .PHONY: clean
 clean:
 	@rm -rf output/build-arm

@@ -175,6 +175,7 @@ package: $(ARM_TARGET)
 	    echo "  WARNING: cacert.pem not found in repo root"
 	@cp distributions/onionos/launch.sh $(PACKAGE_DIR)/
 	@cp distributions/onionos/playback_runner.sh $(PACKAGE_DIR)/
+	@cp output/build-arm/miyoofin-playback-reporter $(PACKAGE_DIR)/ 2>/dev/null || true
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
@@ -230,6 +231,29 @@ $(WAIT_RELEASE_HOST): $(WAIT_RELEASE_SRC) | output/build
 
 .PHONY: wait-release
 wait-release: $(WAIT_RELEASE_HOST)
+
+# -------------------------------------------------------------------
+# playback reporter (standalone Jellyfin playback reporting helper)
+# -------------------------------------------------------------------
+REPORTER_SRC     := tools/playback_reporter.cpp
+REPORTER_HOST    := output/build/miyoofin-playback-reporter
+REPORTER_TEST    := output/test/test_playback_reporter
+REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
+
+.PHONY: reporter
+reporter: $(REPORTER_HOST)
+
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp | output/build
+	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
+	@echo "  [LINK] $@"
+
+.PHONY: reporter-test
+reporter-test: $(REPORTER_TEST)
+	@$(REPORTER_TEST)
+
+$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp | output/test
+	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
+	@echo "  [LINK] $@"
 
 # -------------------------------------------------------------------
 # Clean

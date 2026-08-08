@@ -410,13 +410,7 @@ void HomeScreen::evictRowArtworkIfNeeded()
         std::string oldKey = m_rowArtworkOrder.front();
         m_rowArtworkOrder.erase(m_rowArtworkOrder.begin());
 
-        auto it = m_rowArtwork.find(oldKey);
-        if (it != m_rowArtwork.end()) {
-            if (it->second.status == RowArtworkStatus::Loaded) {
-                it->second.image = {};
-                it->second.status = RowArtworkStatus::Failed;
-            }
-        }
+        m_rowArtwork.erase(oldKey);
     }
 }
 
@@ -425,19 +419,28 @@ void HomeScreen::tryLoadOneRowArtwork()
     const auto &rows = currentTab().rows;
     if (rows.empty()) return;
 
-    // Scan visible cards and find ONE not-yet-attempted candidate
+    // Scan horizontally visible cards and find ONE not-yet-attempted candidate
+    static constexpr int HMARGIN = 4;
     std::string candidate;
     for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
         int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size()) break;
         const MediaRow &row = rows[rowIdx];
+        int cardAccumX = HMARGIN;
         for (int ci = 0; ci < (int)row.items.size(); ++ci) {
+            ArtworkBox sz = artworkBoxSize(row.items[ci]);
+            int screenX = cardAccumX - m_cardScroll;
+            if (screenX + sz.w < HMARGIN) {
+                cardAccumX += sz.w + CARD_GAP;
+                continue;
+            }
+            if (screenX > 640 - HMARGIN) break;
             std::string key = rowArtworkKey(row.items[ci]);
-            if (key.empty()) continue;
-            if (m_rowArtwork.find(key) == m_rowArtwork.end()) {
+            if (!key.empty() && m_rowArtwork.find(key) == m_rowArtwork.end()) {
                 if (candidate.empty())
                     candidate = key;
             }
+            cardAccumX += sz.w + CARD_GAP;
         }
     }
 
@@ -668,6 +671,53 @@ void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
                           const MediaItem &item,bool selected)
 {
     BitmapFont::fillRect(fb,x,y,w,h,item.artR,item.artG,item.artB,255);
+
+    // B5d2b: render loaded row artwork over the placeholder
+    {
+        std::string key = rowArtworkKey(item);
+        if (!key.empty()) {
+            auto it = m_rowArtwork.find(key);
+            if (it != m_rowArtwork.end()
+                && it->second.status == RowArtworkStatus::Loaded
+                && !it->second.image.empty())
+            {
+                const DecodedImage &img = it->second.image;
+                int imgW = img.width;
+                int imgH = img.height;
+                float imgAspect = (float)imgW / (float)imgH;
+                float boxAspect = (float)w / (float)h;
+                int drawW, drawH;
+                if (imgAspect > boxAspect) {
+                    drawW = w;
+                    drawH = (int)(w / imgAspect + 0.5f);
+                    if (drawH > h) drawH = h;
+                } else {
+                    drawH = h;
+                    drawW = (int)(h * imgAspect + 0.5f);
+                    if (drawW > w) drawW = w;
+                }
+                int drawX = x + (w - drawW) / 2;
+                int drawY = y + (h - drawH) / 2;
+
+                SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
+                    (void *)img.pixels.data(),
+                    imgW, imgH,
+                    32,
+                    imgW * 4,
+                    0x000000FF,
+                    0x0000FF00,
+                    0x00FF0000,
+                    0xFF000000);
+                if (imgSurface) {
+                    SDL_Rect srcRect = {0, 0, imgW, imgH};
+                    SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+                    SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
+                    SDL_FreeSurface(imgSurface);
+                }
+            }
+        }
+    }
+
     int ty = y + h - BitmapFont::GLYPH_H - 2;
     BitmapFont::fillRect(fb,x,ty,w,BitmapFont::GLYPH_H+2,0,0,0,160);
     char buf[64];

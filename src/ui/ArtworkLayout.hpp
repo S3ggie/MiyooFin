@@ -16,7 +16,7 @@ struct ArtworkBox {
 };
 
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
-static constexpr int ROW_ARTWORK_RAM_LIMIT = 12;
+static constexpr int ROW_ARTWORK_RAM_LIMIT = 64;
 
 /// Status of a row-artwork load attempt.
 enum class RowArtworkStatus {

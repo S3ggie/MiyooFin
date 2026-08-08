@@ -40,6 +40,7 @@ SRCS := \
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 DEPS      := $(OBJS:.o=.d)
+.DEFAULT_GOAL := all
 -include $(DEPS)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \

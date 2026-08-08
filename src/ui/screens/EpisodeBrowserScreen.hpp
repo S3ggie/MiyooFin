@@ -3,6 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../data/MediaItem.hpp"
+#include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include <string>
 #include <vector>
@@ -42,6 +43,9 @@ private:
     /// Ensure the selected episode is visible in the scrolled list.
     void clampListScroll();
 
+    /// Load the Primary artwork for the currently selected episode.
+    void tryLoadSelectedEpisodeArtwork();
+
     // ----- Data -----
     Session       m_session;
     MediaItem     m_series;
@@ -58,6 +62,11 @@ private:
     // ----- Focus state -----
     FocusArea     m_focus = FocusArea::EpisodeList;
     ActionButton  m_actionBtn = ActionButton::Play;
+
+    // ----- Selected-episode artwork (B5e2c) -----
+    DecodedImage  m_episodeArtwork;
+    std::string   m_episodeArtworkKey;
+    bool          m_episodeArtworkAttempted = false;
 };
 
 } // namespace miyoofin

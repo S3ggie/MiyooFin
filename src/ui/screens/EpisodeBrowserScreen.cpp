@@ -3,6 +3,9 @@
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../../net/ArtworkUrl.hpp"
+#include "../../net/HttpClient.hpp"
+#include "../../cache/ImageCache.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -157,6 +160,9 @@ void EpisodeBrowserScreen::fetchEpisodes()
         m_overviewScroll = 0;
         m_focus = FocusArea::EpisodeList;
         m_actionBtn = ActionButton::Play;
+        m_episodeArtwork = {};
+        m_episodeArtworkKey.clear();
+        m_episodeArtworkAttempted = false;
         printf("[EpisodeBrowserScreen] Loaded %d episodes\n",
                (int)m_episodes.size());
     } else {
@@ -294,9 +300,107 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 }
 
 // -------------------------------------------------------------------
-// update — no-op (synchronous fetch, no threads)
+// update — load selected-episode artwork when state is Ready
 // -------------------------------------------------------------------
-void EpisodeBrowserScreen::update(Uint32 /*dt*/) {}
+void EpisodeBrowserScreen::update(Uint32 /*dt*/)
+{
+    if (m_loadState == LoadState::Ready)
+        tryLoadSelectedEpisodeArtwork();
+}
+
+// -------------------------------------------------------------------
+// tryLoadSelectedEpisodeArtwork — one-shot per selected episode
+// -------------------------------------------------------------------
+void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
+{
+    int total = (int)m_episodes.size();
+    if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
+        m_episodeArtwork = {};
+        m_episodeArtworkKey.clear();
+        m_episodeArtworkAttempted = false;
+        return;
+    }
+
+    const MediaItem &ep = m_episodes[m_selectedEpisode];
+
+    // Look for Primary image tag (NOT Thumb)
+    auto it = ep.imageTags.find("Primary");
+    if (it == ep.imageTags.end() || it->second.empty()) {
+        // No Primary tag — clear artwork, mark attempted to avoid retry
+        m_episodeArtwork = {};
+        m_episodeArtworkKey = ep.id + ":none:288x162";
+        m_episodeArtworkAttempted = true;
+        return;
+    }
+
+    // Build stable identity key: episodeId:Primary:imageTag:288x162
+    std::string key = ep.id + ":Primary:" + it->second + ":288x162";
+
+    // Identity guard — already attempted this exact selection?  Do not retry.
+    if (m_episodeArtworkAttempted && m_episodeArtworkKey == key)
+        return;
+
+    // New selection — clear previous decoded image and attempt once
+    m_episodeArtwork = {};
+    m_episodeArtworkKey = key;
+    m_episodeArtworkAttempted = true;
+
+    constexpr int w = 288;
+    constexpr int h = 162;
+    const std::string &tag = it->second;
+
+    printf("[EpisodeBrowserScreen] Artwork: loading %s tag=%s (%dx%d)\n",
+           ep.id.c_str(), tag.c_str(), w, h);
+
+    // 1. Check disk cache
+    std::vector<unsigned char> jpegData;
+    if (ImageCache::isCached(ep.id, ImageType::Primary, tag, w, h)) {
+        jpegData = ImageCache::readCached(ep.id, ImageType::Primary, tag, w, h);
+        printf("[EpisodeBrowserScreen] Artwork: cache hit (%zu bytes)\n",
+               jpegData.size());
+    }
+
+    // 2. If not cached, synchronous HTTP request
+    if (jpegData.empty()) {
+        std::string url = buildImageUrl(
+            m_session.serverUrl, ep.id, ImageType::Primary, tag, w, h);
+
+        HttpClient client;
+        client.setTimeoutSec(8);
+        auto headers = JellyfinApi::buildAuthHeaders(
+            m_session.accessToken, m_session.deviceId);
+
+        BinaryHttpResponse response;
+        std::string error;
+        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
+            printf("[EpisodeBrowserScreen] Artwork fetch failed: %s\n",
+                   error.c_str());
+            return;
+        }
+        if (!response.ok()) {
+            printf("[EpisodeBrowserScreen] Artwork HTTP %ld\n",
+                   response.status);
+            return;
+        }
+
+        jpegData = std::move(response.data);
+        printf("[EpisodeBrowserScreen] Artwork: downloaded %zu bytes\n",
+               jpegData.size());
+
+        // Cache to disk (best-effort)
+        ImageCache::writeToCache(ep.id, ImageType::Primary, tag, w, h,
+                                 jpegData.data(), jpegData.size());
+    }
+
+    // 3. Decode JPEG
+    m_episodeArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
+    if (m_episodeArtwork.empty()) {
+        printf("[EpisodeBrowserScreen] Artwork: decode failed\n");
+    } else {
+        printf("[EpisodeBrowserScreen] Artwork: decoded %dx%d\n",
+               m_episodeArtwork.width, m_episodeArtwork.height);
+    }
+}
 
 // -------------------------------------------------------------------
 // render
@@ -412,9 +516,50 @@ void EpisodeBrowserScreen::render(SDL_Surface *fb)
 
     const auto &ep = m_episodes[m_selectedEpisode];
 
-    // Placeholder thumbnail (coloured box, no image loading)
+    // Placeholder thumbnail (coloured box as fallback/background)
     BitmapFont::fillRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H,
         ep.artR, ep.artG, ep.artB, 255);
+
+    // Render decoded episode artwork if available, aspect-fit centred
+    if (!m_episodeArtwork.empty()) {
+        int imgW = m_episodeArtwork.width;
+        int imgH = m_episodeArtwork.height;
+        float imgAspect = (float)imgW / (float)imgH;
+        float boxAspect = (float)THUMB_W / (float)THUMB_H;
+        int drawW, drawH;
+        if (imgAspect > boxAspect) {
+            // Wider than box — fit to width
+            drawW = THUMB_W;
+            drawH = (int)(THUMB_W / imgAspect + 0.5f);
+            if (drawH > THUMB_H) drawH = THUMB_H;
+        } else {
+            // Taller than box — fit to height
+            drawH = THUMB_H;
+            drawW = (int)(THUMB_H * imgAspect + 0.5f);
+            if (drawW > THUMB_W) drawW = THUMB_W;
+        }
+        int drawX = THUMB_X + (THUMB_W - drawW) / 2;
+        int drawY = THUMB_Y + (THUMB_H - drawH) / 2;
+
+        // Create an SDL surface wrapping the RGBA pixel data
+        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
+            (void *)m_episodeArtwork.pixels.data(),
+            imgW, imgH,
+            32,                    // bits per pixel
+            imgW * 4,              // pitch (bytes per row)
+            0x000000FF,            // R mask
+            0x0000FF00,            // G mask
+            0x00FF0000,            // B mask
+            0xFF000000);           // A mask
+        if (imgSurface) {
+            SDL_Rect srcRect = {0, 0, imgW, imgH};
+            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
+            SDL_FreeSurface(imgSurface);
+        }
+    }
+
+    // Thumbnail border (drawn after artwork)
     BitmapFont::drawRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H,
         Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
 

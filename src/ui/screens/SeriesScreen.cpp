@@ -84,6 +84,14 @@ static std::vector<std::string> wrapOverview(const char *text, int wrapCols)
     return lines;
 }
 
+std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
+{
+    auto it = season.imageTags.find("Primary");
+    if (it == season.imageTags.end() || it->second.empty())
+        return {};
+    return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" + std::to_string(POSTER_H);
+}
+
 SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series)
     : m_session(session)
     , m_series(series)
@@ -198,6 +206,90 @@ void SeriesScreen::tryLoadSeriesArtwork()
     }
 }
 
+// -------------------------------------------------------------------
+// Season poster artwork — load at most one per update() cycle
+// -------------------------------------------------------------------
+
+void SeriesScreen::tryLoadOneVisibleSeasonArtwork()
+{
+    if (m_loadState != LoadState::Ready)
+        return;
+
+    int totalSeasons = (int)m_seasons.size();
+
+    for (int vis = 0; vis < GRID_VISIBLE; ++vis) {
+        int gridRow = vis / GRID_COLS;
+        int gridCol = vis % GRID_COLS;
+        int itemIdx = (m_gridScroll + gridRow) * GRID_COLS + gridCol;
+        if (itemIdx >= totalSeasons) break;
+
+        const MediaItem &season = m_seasons[itemIdx];
+
+        std::string key = seasonArtworkKey(season);
+        if (key.empty())
+            continue;
+
+        // Skip if already attempted (successful or not)
+        if (m_seasonArtwork.count(key) > 0)
+            continue;
+
+        // Mark attempted immediately to prevent retry
+        m_seasonArtwork[key] = DecodedImage{};  // empty = attempted, not yet decoded
+
+        auto tagIt = season.imageTags.find("Primary");
+        const std::string &tag = tagIt->second;
+
+        printf("[SeriesScreen] SeasonArtwork: loading %s tag=%s (%dx%d)\n",
+               season.id.c_str(), tag.c_str(), POSTER_W, POSTER_H);
+
+        // 1. Check disk cache
+        std::vector<unsigned char> jpegData;
+        if (ImageCache::isCached(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H)) {
+            jpegData = ImageCache::readCached(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H);
+            printf("[SeriesScreen] SeasonArtwork: cache hit (%zu bytes)\n", jpegData.size());
+        }
+
+        // 2. If not cached, synchronous HTTP request
+        if (jpegData.empty()) {
+            std::string url = buildImageUrl(
+                m_session.serverUrl, season.id, ImageType::Primary, tag, POSTER_W, POSTER_H);
+
+            HttpClient client;
+            client.setTimeoutSec(8);
+            auto headers = JellyfinApi::buildAuthHeaders(
+                m_session.accessToken, m_session.deviceId);
+
+            BinaryHttpResponse response;
+            std::string error;
+            if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
+                printf("[SeriesScreen] SeasonArtwork fetch failed: %s\n", error.c_str());
+                return;  // stop for this cycle
+            }
+            if (!response.ok()) {
+                printf("[SeriesScreen] SeasonArtwork fetch failed: HTTP %ld\n", response.status);
+                return;
+            }
+
+            jpegData = std::move(response.data);
+            printf("[SeriesScreen] SeasonArtwork: downloaded %zu bytes\n", jpegData.size());
+
+            ImageCache::writeToCache(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H,
+                                     jpegData.data(), jpegData.size());
+        }
+
+        // 3. Decode JPEG
+        DecodedImage img = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
+        if (img.empty()) {
+            printf("[SeriesScreen] SeasonArtwork: decode failed\n");
+            return;  // failed decode — leave empty entry, won't retry
+        }
+
+        printf("[SeriesScreen] SeasonArtwork: decoded %dx%d\n", img.width, img.height);
+        m_seasonArtwork[key] = std::move(img);
+        return;  // loaded one this cycle
+    }
+}
+
 bool SeriesScreen::handleAction(Action action)
 {
     if (m_loadState == LoadState::Loading) {
@@ -300,7 +392,10 @@ bool SeriesScreen::handleAction(Action action)
     }
 }
 
-void SeriesScreen::update(Uint32 /*dt*/) {}
+void SeriesScreen::update(Uint32 /*dt*/)
+{
+    tryLoadOneVisibleSeasonArtwork();
+}
 
 // -------------------------------------------------------------------
 // Grid navigation helpers
@@ -347,22 +442,62 @@ static void renderBottomHints(SDL_Surface *fb, const char *hint)
         Theme::BG_B * 2 / 3);
 }
 
-/// Draw a season poster card (placeholder colour + title overlay + border).
+/// Draw a season poster card (placeholder colour + optional artwork + title overlay + border).
 static void drawSeasonPoster(SDL_Surface *fb, int x, int y, int w, int h,
-                              const MediaItem &season, bool selected)
+                              const MediaItem &season, bool selected,
+                              const DecodedImage *artwork = nullptr)
 {
-    // Placeholder colour fill
+    // Placeholder colour fill (always drawn as fallback)
     BitmapFont::fillRect(fb, x, y, w, h,
         season.artR, season.artG, season.artB, 255);
+
+    // Render decoded artwork if available, aspect-fit centred
+    if (artwork && !artwork->empty()) {
+        int imgW = artwork->width;
+        int imgH = artwork->height;
+        float imgAspect = (float)imgW / (float)imgH;
+        float boxAspect = (float)w / (float)h;
+        int drawW, drawH;
+        if (imgAspect > boxAspect) {
+            drawW = w;
+            drawH = (int)(w / imgAspect + 0.5f);
+            if (drawH > h) drawH = h;
+        } else {
+            drawH = h;
+            drawW = (int)(h * imgAspect + 0.5f);
+            if (drawW > w) drawW = w;
+        }
+        int drawX = x + (w - drawW) / 2;
+        int drawY = y + (h - drawH) / 2;
+
+        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
+            (void *)artwork->pixels.data(),
+            imgW, imgH,
+            32,
+            imgW * 4,
+            0x000000FF,
+            0x0000FF00,
+            0x00FF0000,
+            0xFF000000);
+        if (imgSurface) {
+            SDL_Rect srcRect = {0, 0, imgW, imgH};
+            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
+            SDL_FreeSurface(imgSurface);
+        }
+    }
 
     // Dark overlay along the bottom for the title
     int overlayY = y + h - OVERLAY_H;
     BitmapFont::fillRect(fb, x, overlayY, w, OVERLAY_H, 0, 0, 0, 160);
 
-    // Season title (truncated to fit)
+    // Season label — compact fallback if full title doesn't fit
+    int maxChars = (w - 4) / BitmapFont::GLYPH_W;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%s", season.title.c_str());
-    int maxChars = (w - 4) / BitmapFont::GLYPH_W;
+    if ((int)std::strlen(buf) > maxChars && season.indexNumber > 0) {
+        std::snprintf(buf, sizeof(buf), "S%d", season.indexNumber);
+    }
     if ((int)std::strlen(buf) > maxChars) {
         if (maxChars > 2) {
             buf[maxChars - 1] = '.';
@@ -444,8 +579,18 @@ void SeriesScreen::render(SDL_Surface *fb)
         int px = COL_X[gridCol];
         int py = GRID_TOP_Y + gridRow * GRID_ROW_H;
         bool sel = (itemIdx == m_selectedSeason);
+
+        // Look up decoded season artwork (read-only, no mutation during render)
+        const DecodedImage *artPtr = nullptr;
+        std::string key = seasonArtworkKey(m_seasons[itemIdx]);
+        if (!key.empty()) {
+            auto it = m_seasonArtwork.find(key);
+            if (it != m_seasonArtwork.end() && !it->second.empty())
+                artPtr = &it->second;
+        }
+
         drawSeasonPoster(fb, px, py, POSTER_W, POSTER_H,
-                         m_seasons[itemIdx], sel);
+                         m_seasons[itemIdx], sel, artPtr);
     }
 
     // 3. Right-side show poster placeholder

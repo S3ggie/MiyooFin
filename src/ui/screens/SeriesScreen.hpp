@@ -5,6 +5,7 @@
 #include "../../data/MediaItem.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
+#include <map>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,9 @@ private:
     void fetchSeasons();
     void clampGridScroll();
     void tryLoadSeriesArtwork();
+    void tryLoadOneVisibleSeasonArtwork();
+
+    static std::string seasonArtworkKey(const MediaItem &season);
 
     // Data
     Session       m_session;
@@ -46,6 +50,9 @@ private:
     // Series poster artwork (B5e1c2a)
     DecodedImage  m_seriesArtwork;
     bool          m_seriesArtworkAttempted = false;
+
+    // Season poster artwork (B5e1c2b)
+    std::map<std::string, DecodedImage> m_seasonArtwork;
 };
 
 } // namespace miyoofin

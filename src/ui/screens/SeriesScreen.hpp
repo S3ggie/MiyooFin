@@ -3,6 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../data/MediaItem.hpp"
+#include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include <string>
 #include <vector>
@@ -27,6 +28,7 @@ private:
 
     void fetchSeasons();
     void clampGridScroll();
+    void tryLoadSeriesArtwork();
 
     // Data
     Session       m_session;
@@ -40,6 +42,10 @@ private:
     int           m_seasonScroll = 0;  // kept for reset compatibility
     int           m_gridScroll = 0;    // visible top-row index into the grid
     int           m_overviewScroll = 0; // first visible wrapped overview line
+
+    // Series poster artwork (B5e1c2a)
+    DecodedImage  m_seriesArtwork;
+    bool          m_seriesArtworkAttempted = false;
 };
 
 } // namespace miyoofin

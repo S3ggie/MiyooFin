@@ -3,6 +3,9 @@
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../../net/ArtworkUrl.hpp"
+#include "../../net/HttpClient.hpp"
+#include "../../cache/ImageCache.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -26,15 +29,15 @@ static constexpr int GRID_ROW_H     = 135;   // y=51, y=186, y=321
 static constexpr int GRID_ROWS      = 3;     // visible rows
 static constexpr int GRID_COLS      = 2;
 static constexpr int GRID_VISIBLE   = GRID_ROWS * GRID_COLS; // 6
-static constexpr int POSTER_W       = 79;
+static constexpr int POSTER_W       = 74;
 static constexpr int POSTER_H       = 111;
 static constexpr int OVERLAY_H      = 18;    // title bar at bottom of poster
 
 // Right-side show poster placeholder
 static constexpr int SHOW_X         = 360;
 static constexpr int SHOW_Y         = 51;
-static constexpr int SHOW_W         = 197;
-static constexpr int SHOW_H         = 239;
+static constexpr int SHOW_W         = 160;
+static constexpr int SHOW_H         = 240;
 
 // Metadata under the show poster
 static constexpr int META_X         = 363;
@@ -92,6 +95,7 @@ void SeriesScreen::enter()
     printf("[SeriesScreen] enter series=%s\n", m_series.title.c_str());
     if (m_seasons.empty())
         fetchSeasons();
+    tryLoadSeriesArtwork();
 }
 
 void SeriesScreen::leave()
@@ -125,6 +129,72 @@ void SeriesScreen::fetchSeasons()
         m_loadState = LoadState::Error;
         m_error = error.empty() ? "Unknown error" : error;
         printf("[SeriesScreen] Failed to load seasons: %s\n", m_error.c_str());
+    }
+}
+
+void SeriesScreen::tryLoadSeriesArtwork()
+{
+    if (m_seriesArtworkAttempted)
+        return;
+    m_seriesArtworkAttempted = true;
+
+    // Look for Primary image tag using find(), not operator[]
+    auto it = m_series.imageTags.find("Primary");
+    if (it == m_series.imageTags.end() || it->second.empty()) {
+        printf("[SeriesScreen] Artwork: no Primary tag\n");
+        return;
+    }
+
+    const std::string &tag = it->second;
+    constexpr int w = SHOW_W;   // 160
+    constexpr int h = SHOW_H;   // 240
+
+    printf("[SeriesScreen] Artwork: loading %s tag=%s (%dx%d)\n",
+           m_series.id.c_str(), tag.c_str(), w, h);
+
+    // 1. Check disk cache
+    std::vector<unsigned char> jpegData;
+    if (ImageCache::isCached(m_series.id, ImageType::Primary, tag, w, h)) {
+        jpegData = ImageCache::readCached(m_series.id, ImageType::Primary, tag, w, h);
+        printf("[SeriesScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
+    }
+
+    // 2. If not cached, synchronous HTTP request
+    if (jpegData.empty()) {
+        std::string url = buildImageUrl(
+            m_session.serverUrl, m_series.id, ImageType::Primary, tag, w, h);
+
+        HttpClient client;
+        client.setTimeoutSec(8);
+        auto headers = JellyfinApi::buildAuthHeaders(
+            m_session.accessToken, m_session.deviceId);
+
+        BinaryHttpResponse response;
+        std::string error;
+        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
+            printf("[SeriesScreen] Artwork fetch failed: %s\n", error.c_str());
+            return;
+        }
+        if (!response.ok()) {
+            printf("[SeriesScreen] Artwork fetch failed: HTTP %ld\n", response.status);
+            return;
+        }
+
+        jpegData = std::move(response.data);
+        printf("[SeriesScreen] Artwork: downloaded %zu bytes\n", jpegData.size());
+
+        // Cache to disk (best-effort)
+        ImageCache::writeToCache(m_series.id, ImageType::Primary, tag, w, h,
+                                 jpegData.data(), jpegData.size());
+    }
+
+    // 3. Decode JPEG
+    m_seriesArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
+    if (m_seriesArtwork.empty()) {
+        printf("[SeriesScreen] Artwork: decode failed\n");
+    } else {
+        printf("[SeriesScreen] Artwork: decoded %dx%d\n",
+               m_seriesArtwork.width, m_seriesArtwork.height);
     }
 }
 
@@ -381,6 +451,46 @@ void SeriesScreen::render(SDL_Surface *fb)
     // 3. Right-side show poster placeholder
     BitmapFont::fillRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H,
         m_series.artR, m_series.artG, m_series.artB, 255);
+
+    // Render decoded series artwork if available, aspect-fit centred
+    if (!m_seriesArtwork.empty()) {
+        int imgW = m_seriesArtwork.width;
+        int imgH = m_seriesArtwork.height;
+        float imgAspect = (float)imgW / (float)imgH;
+        float boxAspect = (float)SHOW_W / (float)SHOW_H;
+        int drawW, drawH;
+        if (imgAspect > boxAspect) {
+            // Wider than box — fit to width
+            drawW = SHOW_W;
+            drawH = (int)(SHOW_W / imgAspect + 0.5f);
+            if (drawH > SHOW_H) drawH = SHOW_H;
+        } else {
+            // Taller than box — fit to height
+            drawH = SHOW_H;
+            drawW = (int)(SHOW_H * imgAspect + 0.5f);
+            if (drawW > SHOW_W) drawW = SHOW_W;
+        }
+        int drawX = SHOW_X + (SHOW_W - drawW) / 2;
+        int drawY = SHOW_Y + (SHOW_H - drawH) / 2;
+
+        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
+            (void *)m_seriesArtwork.pixels.data(),
+            imgW, imgH,
+            32,                    // bits per pixel
+            imgW * 4,              // pitch (bytes per row)
+            0x000000FF,            // R mask
+            0x0000FF00,            // G mask
+            0x00FF0000,            // B mask
+            0xFF000000);           // A mask
+        if (imgSurface) {
+            SDL_Rect srcRect = {0, 0, imgW, imgH};
+            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
+            SDL_FreeSurface(imgSurface);
+        }
+    }
+
+    // Poster border (drawn after artwork)
     BitmapFont::drawRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H,
         Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
 

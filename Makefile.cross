@@ -39,6 +39,8 @@ SRCS := \
     src/ui/screens/InputDiagnosticsScreen.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
+DEPS      := $(OBJS:.o=.d)
+-include $(DEPS)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
@@ -55,7 +57,7 @@ $(TARGET): $(OBJS) | output/build-arm
 	@echo "  [LINK] $@"
 
 output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 $(OUT_DIRS):

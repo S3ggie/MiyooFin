@@ -26,6 +26,7 @@ private:
     enum class LoadState { Loading, Ready, Error };
 
     void fetchSeasons();
+    void clampGridScroll();
 
     // Data
     Session       m_session;
@@ -35,8 +36,10 @@ private:
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
 
-    // Scroll state for season list
-    int           m_seasonScroll = 0;
+    // Grid scroll state (row offset, not item index)
+    int           m_seasonScroll = 0;  // kept for reset compatibility
+    int           m_gridScroll = 0;    // visible top-row index into the grid
+    int           m_overviewScroll = 0; // first visible wrapped overview line
 };
 
 } // namespace miyoofin

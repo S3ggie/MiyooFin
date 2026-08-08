@@ -540,6 +540,9 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
     if (item.type == "Movie") item.type = "movie";
     else if (item.type == "Series") item.type = "show";
     else if (item.type == "Episode") item.type = "episode";
+    else if (item.type == "Season") item.type = "season";
+
+    item.indexNumber = jsonIntField(obj, "IndexNumber");
 
     // Genres
     std::string gr = jsonRawValue(obj, "Genres");
@@ -797,6 +800,40 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     }
     for (const auto &s : itemStrs)
         items.push_back(jsonToMediaItem(s));
+    return true;
+}
+
+bool JellyfinApi::getSeasons(const std::string &baseUrl,
+                             const std::string &accessToken,
+                             const std::string &userId,
+                             const std::string &deviceId,
+                             const std::string &seriesId,
+                             std::vector<MediaItem> &seasons,
+                             std::string &error)
+{
+    HttpClient client;
+    client.setTimeoutSec(10);
+    auto headers = buildAuthHeaders(accessToken, deviceId);
+    char urlBuf[512];
+    std::snprintf(urlBuf, sizeof(urlBuf),
+        "%s/Shows/%s/Seasons?UserId=%s"
+        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags",
+        baseUrl.c_str(), seriesId.c_str(), userId.c_str());
+    HttpResponse response;
+    if (!client.perform("GET", urlBuf, headers, {}, response, error)) {
+        if (error.empty()) error = "Could not reach server";
+        return false;
+    }
+    if (!response.ok()) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "Failed to fetch seasons (HTTP %ld)",
+                      response.status);
+        error = buf;
+        return false;
+    }
+    auto itemStrs = jsonExtractArray(response.body, "Items");
+    for (const auto &s : itemStrs)
+        seasons.push_back(jsonToMediaItem(s));
     return true;
 }
 

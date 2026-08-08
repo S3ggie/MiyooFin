@@ -1,8 +1,8 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
 // B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
-// and B5d2a row artwork loading state.
+// B5d2a row artwork loading state, and B5e1a season parsing groundwork.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -1041,6 +1041,29 @@ static void testOneCandidatePerCycle()
     std::printf("[test] B5d2a: one candidate per cycle OK\n");
 }
 
+// B5e1a: Season item with IndexNumber
+static void testSeasonIndexNumber()
+{
+    std::printf("[test] B5e1a: Season IndexNumber parsing\n");
+    std::string j = R"({"Id":"sn1","Name":"Season 1","Type":"Season","IndexNumber":1})";
+    auto item = JellyfinApi::jsonToMediaItem(j);
+    CHECK_EQ(item.id, "sn1");
+    CHECK_EQ(item.title, "Season 1");
+    CHECK(item.indexNumber == 1);
+    std::printf("[test] B5e1a: Season IndexNumber parsing OK\n");
+}
+
+// B5e1a: Type "Season" normalised to "season"
+static void testSeasonTypeNormalization()
+{
+    std::printf("[test] B5e1a: Season type normalization\n");
+    std::string j = R"({"Id":"sn2","Name":"Season 2","Type":"Season","IndexNumber":2})";
+    auto item = JellyfinApi::jsonToMediaItem(j);
+    CHECK_EQ(item.type, "season");
+    CHECK(item.indexNumber == 2);
+    std::printf("[test] B5e1a: Season type normalization OK\n");
+}
+
 int main()
 {
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a tests\n");
@@ -1113,9 +1136,14 @@ int main()
     testSameKeyNotLoadedTwice();
     testOneCandidatePerCycle();
 
+    // B5e1a tests — Season parsing groundwork
+    std::printf("\n--- B5e1a season parsing tests ---\n");
+    testSeasonIndexNumber();
+    testSeasonTypeNormalization();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a tests passed.\n");
         return 0;
     }
 

@@ -23,6 +23,7 @@ struct MediaItem {
     bool        played = false;      // User has fully watched
     float       progress = 0.0f;     // 0.0–1.0 playback progress
     std::map<std::string, std::string> imageTags = {}; // e.g. {"Primary":"tagId"}
+    int         indexNumber = 0;     // Jellyfin IndexNumber (season/episode number)
 
     // Placeholder artwork tint colour (for the coloured rectangle)
     Uint8 artR = 128, artG = 128, artB = 128;

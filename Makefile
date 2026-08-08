@@ -47,7 +47,8 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/AuthCheckScreen.cpp \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
-    $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp
+    $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
+    $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \

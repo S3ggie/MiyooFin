@@ -1,5 +1,6 @@
 #include "HomeScreen.hpp"
 #include "SeriesScreen.hpp"
+#include "MovieDetailsScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
@@ -171,6 +172,10 @@ bool HomeScreen::handleAction(Action action)
                    item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
                 m_stack->push(std::make_unique<SeriesScreen>(m_session, *item));
+                return true;
+            }
+            if (item->type == "movie") {
+                m_stack->push(std::make_unique<MovieDetailsScreen>(m_session, *item));
                 return true;
             }
         }

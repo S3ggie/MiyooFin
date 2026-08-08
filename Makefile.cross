@@ -70,6 +70,18 @@ $(OUT_DIRS):
 output/build-arm:
 	@mkdir -p $@
 
+# -------------------------------------------------------------------
+# HTTPS bridge (standalone helper — NOT linked into MiyooFin)
+# -------------------------------------------------------------------
+BRIDGE_SRC := tools/https_bridge.cpp
+BRIDGE_ARM := output/build-arm/miyoofin-https-bridge
+
+bridge: $(BRIDGE_ARM)
+
+$(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp | output/build-arm
+	$(CXX) $(CXXFLAGS) -Itools -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
+	@echo "  [LINK] $@"
+
 .PHONY: clean
 clean:
 	@rm -rf output/build-arm

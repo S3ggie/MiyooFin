@@ -187,6 +187,29 @@ package: $(ARM_TARGET)
 	@echo "  Bundle as: cd output/package && zip -r MiyooFin.zip MiyooFin/"
 
 # -------------------------------------------------------------------
+# HTTPS bridge (standalone helper — NOT linked into MiyooFin)
+# -------------------------------------------------------------------
+BRIDGE_SRC     := tools/https_bridge.cpp
+BRIDGE_HOST    := output/build/miyoofin-https-bridge
+BRIDGE_TEST    := output/test/test_bridge_parse
+BRIDGE_TEST_SRC := tests/test_bridge_parse.cpp
+
+.PHONY: bridge
+bridge: $(BRIDGE_HOST)
+
+$(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp | output/build
+	$(CXX) $(CXXFLAGS) -Itools -o $@ $< $(CURL_LIBS)
+	@echo "  [LINK] $@"
+
+.PHONY: bridge-test
+bridge-test: $(BRIDGE_TEST)
+	@$(BRIDGE_TEST)
+
+$(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | output/test
+	$(CXX) $(CXXFLAGS) -I. -o $@ $< $(CURL_LIBS)
+	@echo "  [LINK] $@"
+
+# -------------------------------------------------------------------
 # Clean
 # -------------------------------------------------------------------
 .PHONY: clean
@@ -202,6 +225,8 @@ help:
 	@echo "MiyooFin Makefile"
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
+	@echo "  make bridge  — Build HTTPS bridge helper (host)"
+	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"

@@ -13,6 +13,10 @@ namespace miyoofin {
 /// Owns the SDL lifecycle and the main event / render loop.
 /// Manages the startup flow:
 ///   splash -> connecting -> login (or auth-check) -> home.
+///
+/// B5f3a: supports in-process external playback handoff — the app
+/// suspends SDL/video/input, spawns a child FFplay process, waits for
+/// it, then reinitializes SDL and resumes the same screen state.
 class App {
 public:
     App();
@@ -24,13 +28,20 @@ public:
     /// Run the main loop until exit is requested.
     int run();
 
-    /// Request a clean exit for playback handoff.
-    /// Called by screens when a playback-request.txt has been written.
-    /// Sets the playback-requested flag and terminates the main loop.
-    void requestPlaybackExit();
+    /// Suspend SDL video/input/joystick subsystems.
+    /// Releases hardware resources (framebuffer, window, renderer,
+    /// joystick) so an external playback process (FFplay) can acquire
+    /// them.  Logical app state (ScreenStack, screen objects, artwork
+    /// caches) is untouched.
+    /// @return true on success.
+    bool suspendPlatform();
 
-    /// True if the app is exiting for a playback request (not user quit).
-    bool playbackRequested() const { return m_playbackRequested; }
+    /// Reinitialize SDL video/input/joystick subsystems after
+    /// external playback completes.  Recreates window, renderer,
+    /// framebuffer surface, streaming texture, and reopens the
+    /// joystick.  Clears any stale SDL events.
+    /// @return true on success.
+    bool resumePlatform();
 
 private:
     SDL_Window     *m_window;
@@ -42,7 +53,6 @@ private:
     InputManager    m_input;
 
     bool            m_running;
-    bool            m_playbackRequested = false;
     Uint32          m_lastTick;
 
     // Startup flow state
@@ -65,6 +75,10 @@ private:
 
     /// Discard the current session (logout).
     void logout();
+
+    /// Handle an external playback request: suspend platform, fork
+    /// playback_runner.sh, wait for child, resume platform.
+    void handleExternalPlayback();
 
     // Prevent copy
     App(const App&) = delete;

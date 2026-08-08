@@ -11,6 +11,10 @@
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <string>
 
 namespace miyoofin {
 
@@ -170,11 +174,157 @@ void App::logout()
     Session::remove();
 }
 
-void App::requestPlaybackExit()
+bool App::suspendPlatform()
 {
-    printf("[App] Playback exit requested\n");
-    m_playbackRequested = true;
-    m_running = false;
+    printf("[App] Suspending platform resources\n");
+
+    // Destroy SDL resources in reverse order of creation
+    if (m_fbTex)    { SDL_DestroyTexture(m_fbTex);      m_fbTex = nullptr; }
+    if (m_fb)       { SDL_FreeSurface(m_fb);             m_fb = nullptr; }
+    if (m_renderer) { SDL_DestroyRenderer(m_renderer);   m_renderer = nullptr; }
+    if (m_window)   { SDL_DestroyWindow(m_window);       m_window = nullptr; }
+
+    // Suspend input (joystick will be closed by QuitSubSystem)
+    m_input.suspend();
+
+    // Shut down SDL subsystems — releases framebuffer/video hardware
+    SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+
+    printf("[App] Platform suspended\n");
+    return true;
+}
+
+bool App::resumePlatform()
+{
+    printf("[App] Resuming platform resources\n");
+
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
+        fprintf(stderr, "[App] SDL_InitSubSystem failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    int displayW = SCREEN_W;
+    int displayH = SCREEN_H;
+    SDL_DisplayMode dm;
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0) {
+        displayW = dm.w;
+        displayH = dm.h;
+    }
+
+    m_window = SDL_CreateWindow(
+        APP_NAME,
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        displayW, displayH,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI
+    );
+    if (!m_window) {
+        fprintf(stderr, "[App] SDL_CreateWindow failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    m_renderer = SDL_CreateRenderer(
+        m_window, -1,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
+    );
+    if (!m_renderer) {
+        fprintf(stderr, "[App] SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
+
+    m_fb = SDL_CreateRGBSurfaceWithFormat(
+        0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32
+    );
+    if (!m_fb) {
+        fprintf(stderr, "[App] Failed to create framebuffer: %s\n", SDL_GetError());
+        return false;
+    }
+
+    m_fbTex = SDL_CreateTexture(
+        m_renderer, SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H
+    );
+    if (!m_fbTex) {
+        fprintf(stderr, "[App] Failed to create streaming texture: %s\n", SDL_GetError());
+        return false;
+    }
+
+    // Reopen the joystick
+    m_input.resume();
+
+    // Clear any stale SDL events
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {}
+
+    printf("[App] Platform resumed\n");
+    return true;
+}
+
+void App::handleExternalPlayback()
+{
+    printf("[App] Starting external playback handoff\n");
+
+    // 1. Suspend SDL/video/input
+    if (!suspendPlatform()) {
+        fprintf(stderr, "[App] Failed to suspend platform — aborting playback\n");
+        return;
+    }
+
+    // 2. Locate the playback runner script relative to this binary
+    std::string runnerPath;
+    {
+        char exePath[4096];
+        ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+        if (len > 0) {
+            exePath[len] = '\0';
+            std::string path(exePath);
+            size_t lastSlash = path.rfind('/');
+            if (lastSlash != std::string::npos) {
+                runnerPath = path.substr(0, lastSlash + 1) + "playback_runner.sh";
+            }
+        }
+    }
+    if (runnerPath.empty()) {
+        runnerPath = "./playback_runner.sh";
+    }
+
+    printf("[App] Playback runner: %s\n", runnerPath.c_str());
+
+    // 3. Fork and exec the playback runner
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[App] fork() failed: %s\n", strerror(errno));
+        resumePlatform();
+        return;
+    }
+
+    if (pid == 0) {
+        // Child process — exec the playback runner script
+        execl("/bin/sh", "sh", runnerPath.c_str(), (char *)nullptr);
+        // exec failed
+        _exit(127);
+    }
+
+    // 4. Parent waits for child to finish
+    printf("[App] Waiting for playback child (PID=%d)\n", pid);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status)) {
+        printf("[App] Playback child exited with status %d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        printf("[App] Playback child killed by signal %d\n", WTERMSIG(status));
+    }
+
+    // 5. Resume SDL/video/input
+    if (!resumePlatform()) {
+        fprintf(stderr, "[App] Failed to resume platform — exiting\n");
+        m_running = false;
+        return;
+    }
+
+    printf("[App] External playback handoff complete, resuming UI\n");
 }
 
 int App::run()
@@ -203,11 +353,12 @@ int App::run()
             active->update(dt);
         }
 
-        // --- Check if a screen requested playback exit ---
-        if (m_stack.pollPlaybackExit()) {
-            printf("[App] Playback exit flagged by screen\n");
-            requestPlaybackExit();
-            break;
+        // --- Check if a screen requested external playback ---
+        if (m_stack.pollExternalPlayback()) {
+            printf("[App] External playback flagged by screen\n");
+            handleExternalPlayback();
+            // Reset timing so dt doesn't include playback duration
+            m_lastTick = SDL_GetTicks();
         }
 
         // --- Startup flow transitions ---
@@ -324,9 +475,7 @@ int App::run()
     }
 
     printf("[App] Exiting cleanly\n");
-    // Return 42 when exiting for playback, 0 otherwise.
-    // launch.sh uses this to distinguish normal quit from playback handoff.
-    return m_playbackRequested ? 42 : 0;
+    return 0;
 }
 
 } // namespace miyoofin

@@ -136,4 +136,25 @@ void InputManager::addRawEvent(Uint32 type, bool isDown,
         m_rawLog.erase(m_rawLog.begin());
 }
 
+void InputManager::suspend()
+{
+    // Joystick will be closed by SDL_QuitSubSystem, just reset our index
+    m_joystickIndex = -1;
+    printf("[Input] Suspended\n");
+}
+
+void InputManager::resume()
+{
+    m_joystickIndex = -1;
+    // Reopen the first available joystick
+    if (SDL_NumJoysticks() > 0) {
+        SDL_Joystick *joy = SDL_JoystickOpen(0);
+        if (joy) {
+            m_joystickIndex = 0;
+            printf("[Input] Reopened joystick: %s\n", SDL_JoystickName(joy));
+        }
+    }
+    printf("[Input] Resumed\n");
+}
+
 } // namespace miyoofin

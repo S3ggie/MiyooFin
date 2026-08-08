@@ -166,8 +166,8 @@ bool MovieDetailsScreen::handleAction(Action action)
             std::string error;
             if (PlaybackRequest::write(m_movie.id, "movie", error)) {
                 printf("[MovieDetailsScreen] Playback request written, "
-                       "requesting exit\n");
-                m_stack->requestPlaybackExit();
+                       "requesting external playback\n");
+                m_stack->requestExternalPlayback();
             } else {
                 printf("[MovieDetailsScreen] Playback request failed: %s\n",
                        error.c_str());

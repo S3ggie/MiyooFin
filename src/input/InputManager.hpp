@@ -31,6 +31,12 @@ public:
     /// and return a list of logical actions for this frame.
     std::vector<Action> poll();
 
+    /// Suspend input (close joystick). Called before SDL_QuitSubSystem.
+    void suspend();
+
+    /// Resume input (reopen joystick). Called after SDL_InitSubSystem.
+    void resume();
+
     /// Access the raw event log (most recent events).
     const std::vector<RawEvent>& rawLog() const { return m_rawLog; }
 

@@ -325,8 +325,8 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                             "episode", error))
                     {
                         printf("[EpisodeBrowserScreen] Playback request "
-                               "written, requesting exit\n");
-                        m_stack->requestPlaybackExit();
+                               "written, requesting external playback\n");
+                        m_stack->requestExternalPlayback();
                     } else {
                         printf("[EpisodeBrowserScreen] Playback request "
                                "failed: %s\n", error.c_str());

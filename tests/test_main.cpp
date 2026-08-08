@@ -1,10 +1,11 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
 // B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
 // B5d2a row artwork loading state, B5e1a season parsing groundwork,
 // B5e2a episode parsing groundwork, B5e3b initial episode focus,
-// and B5f2 playback request writing.
+// B5f2 playback request writing, and B5f3a in-process external playback
+// handoff semantics.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
+#include "../src/app/ScreenStack.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
 #include <unistd.h>
 
@@ -1280,10 +1282,100 @@ static void testPlaybackRequestRemove()
     std::printf("[test] B5f2: PlaybackRequest remove OK\n");
 }
 
+// -------------------------------------------------------------------
+// B5f3a: In-process external playback handoff tests
+// -------------------------------------------------------------------
+
+// B5f3a: ScreenStack external playback flag — initially false
+static void testExternalPlaybackFlagInitial()
+{
+    std::printf("[test] B5f3a: ScreenStack external playback flag initially false\n");
+    ScreenStack stack;
+    CHECK(!stack.pollExternalPlayback());
+    std::printf("[test] B5f3a: ScreenStack external playback flag initially false OK\n");
+}
+
+// B5f3a: ScreenStack external playback flag — set and consume
+static void testExternalPlaybackFlagSetConsume()
+{
+    std::printf("[test] B5f3a: ScreenStack external playback flag set/consume\n");
+    ScreenStack stack;
+    stack.requestExternalPlayback();
+    CHECK(stack.pollExternalPlayback());
+    // After consuming, should be false
+    CHECK(!stack.pollExternalPlayback());
+    std::printf("[test] B5f3a: ScreenStack external playback flag set/consume OK\n");
+}
+
+// B5f3a: ScreenStack external playback flag — multiple sets collapse
+static void testExternalPlaybackFlagMultipleSet()
+{
+    std::printf("[test] B5f3a: ScreenStack external playback flag multiple sets\n");
+    ScreenStack stack;
+    stack.requestExternalPlayback();
+    stack.requestExternalPlayback();  // redundant set
+    CHECK(stack.pollExternalPlayback());
+    CHECK(!stack.pollExternalPlayback());
+    std::printf("[test] B5f3a: ScreenStack external playback flag multiple sets OK\n");
+}
+
+// B5f3a: PlaybackRequest still writes item_id and item_type (no exit code 42)
+static void testPlaybackRequestStillWorks()
+{
+    std::printf("[test] B5f3a: PlaybackRequest still writes correctly\n");
+    const char *tmpPath = "test_b5f3a_request.txt";
+    std::remove(tmpPath);
+
+    std::string error;
+    CHECK(PlaybackRequest::writeTo(tmpPath, "movie-99", "movie", error));
+
+    // Verify contents
+    FILE *f = std::fopen(tmpPath, "r");
+    CHECK(f != nullptr);
+    char buf[256] = {};
+    std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+
+    std::string content(buf);
+    CHECK(content.find("item_id=movie-99\n") != std::string::npos);
+    CHECK(content.find("item_type=movie\n") != std::string::npos);
+    // Must not contain access_token
+    CHECK(content.find("access_token") == std::string::npos);
+
+    std::remove(tmpPath);
+    std::printf("[test] B5f3a: PlaybackRequest still writes correctly OK\n");
+}
+
+// B5f3a: ScreenStack does not get destroyed during external playback
+// (conceptual test — push screens, set flag, verify stack is intact)
+static void testScreenStackPreservedDuringExternalPlayback()
+{
+    std::printf("[test] B5f3a: ScreenStack preserved during external playback\n");
+    // We can't easily instantiate real screens without SDL, but we can
+    // test that the stack size and empty state are unaffected by the flag.
+    ScreenStack stack;
+    CHECK(stack.empty());
+    CHECK(stack.size() == 0);
+
+    // Set the external playback flag
+    stack.requestExternalPlayback();
+
+    // Stack should still be empty (flag doesn't modify stack)
+    CHECK(stack.empty());
+    CHECK(stack.size() == 0);
+
+    // Consume the flag
+    CHECK(stack.pollExternalPlayback());
+
+    // Stack still empty, flag consumed
+    CHECK(stack.empty());
+    std::printf("[test] B5f3a: ScreenStack preserved during external playback OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 tests\n");
-    std::printf("=========================================================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
+    std::printf("==============================================================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -1379,9 +1471,17 @@ int main()
     testPlaybackRequestEmptyType();
     testPlaybackRequestRemove();
 
+    // B5f3a tests — In-process external playback handoff
+    std::printf("\n--- B5f3a external playback handoff tests ---\n");
+    testExternalPlaybackFlagInitial();
+    testExternalPlaybackFlagSetConsume();
+    testExternalPlaybackFlagMultipleSet();
+    testPlaybackRequestStillWorks();
+    testScreenStackPreservedDuringExternalPlayback();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests passed.\n");
         return 0;
     }
 

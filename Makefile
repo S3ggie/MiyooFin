@@ -10,6 +10,7 @@
 # -------------------------------------------------------------------
 
 CXX         := g++
+CC          := gcc
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0
 LDFLAGS     :=
 INCLUDES    := -I. -Iinclude
@@ -173,6 +174,7 @@ package: $(ARM_TARGET)
 	@cp cacert.pem $(PACKAGE_DIR)/cacert.pem 2>/dev/null || \
 	    echo "  WARNING: cacert.pem not found in repo root"
 	@cp distributions/onionos/launch.sh $(PACKAGE_DIR)/
+	@cp distributions/onionos/playback_runner.sh $(PACKAGE_DIR)/
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
@@ -215,6 +217,19 @@ bridge-test: $(BRIDGE_TEST)
 $(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | output/test
 	$(CXX) $(CXXFLAGS) -I. -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
+
+# -------------------------------------------------------------------
+# wait_menu_release (tiny evdev helper — detects MENU button release)
+# -------------------------------------------------------------------
+WAIT_RELEASE_SRC  := tools/wait_menu_release.c
+WAIT_RELEASE_HOST := output/build/wait_menu_release
+
+$(WAIT_RELEASE_HOST): $(WAIT_RELEASE_SRC) | output/build
+	$(CC) -Wall -Wextra -pedantic -O2 -o $@ $<
+	@echo "  [LINK] $@"
+
+.PHONY: wait-release
+wait-release: $(WAIT_RELEASE_HOST)
 
 # -------------------------------------------------------------------
 # Clean

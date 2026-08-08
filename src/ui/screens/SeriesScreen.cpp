@@ -1,4 +1,5 @@
 #include "SeriesScreen.hpp"
+#include "EpisodeBrowserScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -360,6 +361,8 @@ bool SeriesScreen::handleAction(Action action)
         const MediaItem &season = m_seasons[m_selectedSeason];
         printf("[SeriesScreen] Select season: %s index=%d\n",
                season.title.c_str(), season.indexNumber);
+        m_stack->push(std::make_unique<EpisodeBrowserScreen>(
+            m_session, m_series, season));
         return true;
     }
 

@@ -544,6 +544,18 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
 
     item.indexNumber = jsonIntField(obj, "IndexNumber");
 
+    // B5e2a: episode metadata
+    item.parentIndexNumber = jsonIntField(obj, "ParentIndexNumber");
+    {
+        std::string rt = jsonRawValue(obj, "RunTimeTicks");
+        if (!rt.empty() && rt != "null") {
+            try { item.runTimeTicks = std::stoll(rt); } catch (...) { item.runTimeTicks = 0; }
+        }
+    }
+    item.seriesName = jsonStringField(obj, "SeriesName");
+    item.seriesId   = jsonStringField(obj, "SeriesId");
+    item.seasonId   = jsonStringField(obj, "SeasonId");
+
     // Genres
     std::string gr = jsonRawValue(obj, "Genres");
     if (!gr.empty() && gr[0] == '[') {
@@ -834,6 +846,44 @@ bool JellyfinApi::getSeasons(const std::string &baseUrl,
     auto itemStrs = jsonExtractArray(response.body, "Items");
     for (const auto &s : itemStrs)
         seasons.push_back(jsonToMediaItem(s));
+    return true;
+}
+
+bool JellyfinApi::getEpisodes(const std::string &baseUrl,
+                              const std::string &accessToken,
+                              const std::string &userId,
+                              const std::string &deviceId,
+                              const std::string &seriesId,
+                              const std::string &seasonId,
+                              std::vector<MediaItem> &episodes,
+                              std::string &error)
+{
+    HttpClient client;
+    client.setTimeoutSec(10);
+    auto headers = buildAuthHeaders(accessToken, deviceId);
+    char urlBuf[768];
+    std::snprintf(urlBuf, sizeof(urlBuf),
+        "%s/Shows/%s/Episodes?UserId=%s"
+        "&SeasonId=%s"
+        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+        "RunTimeTicks,SeriesName,SeriesId,SeasonId",
+        baseUrl.c_str(), seriesId.c_str(), userId.c_str(),
+        seasonId.c_str());
+    HttpResponse response;
+    if (!client.perform("GET", urlBuf, headers, {}, response, error)) {
+        if (error.empty()) error = "Could not reach server";
+        return false;
+    }
+    if (!response.ok()) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "Failed to fetch episodes (HTTP %ld)",
+                      response.status);
+        error = buf;
+        return false;
+    }
+    auto itemStrs = jsonExtractArray(response.body, "Items");
+    for (const auto &s : itemStrs)
+        episodes.push_back(jsonToMediaItem(s));
     return true;
 }
 

@@ -1,8 +1,9 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
 // B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
-// B5d2a row artwork loading state, and B5e1a season parsing groundwork.
+// B5d2a row artwork loading state, B5e1a season parsing groundwork,
+// and B5e2a episode parsing groundwork.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -1064,10 +1065,83 @@ static void testSeasonTypeNormalization()
     std::printf("[test] B5e1a: Season type normalization OK\n");
 }
 
+// B5e2a: Episode JSON parsing — all episode metadata fields
+static void testEpisodeJsonParsing()
+{
+    std::printf("[test] B5e2a: Episode JSON parsing\n");
+    std::string j = R"({"Id":"ep1","Name":"Pilot","Type":"Episode","
+        R"("IndexNumber":3,"ParentIndexNumber":2,"RunTimeTicks":6600000000,""
+        R"("SeriesName":"Example Show","SeriesId":"series123","SeasonId":"season456"})";
+    auto item = JellyfinApi::jsonToMediaItem(j);
+    CHECK_EQ(item.id, "ep1");
+    CHECK_EQ(item.title, "Pilot");
+    CHECK_EQ(item.type, "episode");
+    CHECK(item.indexNumber == 3);
+    CHECK(item.parentIndexNumber == 2);
+    CHECK(item.runTimeTicks == 6600000000LL);
+    CHECK_EQ(item.seriesName, "Example Show");
+    CHECK_EQ(item.seriesId, "series123");
+    CHECK_EQ(item.seasonId, "season456");
+    std::printf("[test] B5e2a: Episode JSON parsing OK\n");
+}
+
+// B5e2a: Episode type "Episode" normalised to "episode"
+static void testEpisodeTypeNormalization()
+{
+    std::printf("[test] B5e2a: Episode type normalization\n");
+    std::string j = R"({"Id":"ep2","Name":"S2E1","Type":"Episode","IndexNumber":1,"ParentIndexNumber":2})";
+    auto item = JellyfinApi::jsonToMediaItem(j);
+    CHECK_EQ(item.type, "episode");
+    CHECK(item.indexNumber == 1);
+    CHECK(item.parentIndexNumber == 2);
+    std::printf("[test] B5e2a: Episode type normalization OK\n");
+}
+
+// B5e2a: ticksToMinutes helper
+static void testTicksToMinutes()
+{
+    std::printf("[test] B5e2a: ticksToMinutes\n");
+    CHECK(ticksToMinutes(0) == 0);
+    CHECK(ticksToMinutes(-100) == 0);
+
+    // 6600000000 ticks = 660 seconds = 11 minutes exactly
+    CHECK(ticksToMinutes(6600000000LL) == 11);
+
+    // 3300000000 ticks = 330 seconds = 5.5 min -> rounds to 6
+    CHECK(ticksToMinutes(3300000000LL) == 6);
+
+    // 2700000000 ticks = 270 seconds = 4.5 min -> rounds to 5
+    CHECK(ticksToMinutes(2700000000LL) == 5);
+
+    // 600000000 ticks = 60 seconds = 1 min
+    CHECK(ticksToMinutes(600000000LL) == 1);
+
+    // 300000000 ticks = 30 seconds = 0.5 min -> rounds to 1
+    CHECK(ticksToMinutes(300000000LL) == 1);
+
+    std::printf("[test] B5e2a: ticksToMinutes OK\n");
+}
+
+// B5e2a: Episode defaults (fields absent in JSON)
+static void testEpisodeDefaults()
+{
+    std::printf("[test] B5e2a: Episode field defaults\n");
+    std::string j = R"({"Id":"ep3","Name":"Intro","Type":"Episode"})";
+    auto item = JellyfinApi::jsonToMediaItem(j);
+    CHECK_EQ(item.type, "episode");
+    CHECK(item.indexNumber == 0);
+    CHECK(item.parentIndexNumber == 0);
+    CHECK(item.runTimeTicks == 0LL);
+    CHECK(item.seriesName.empty());
+    CHECK(item.seriesId.empty());
+    CHECK(item.seasonId.empty());
+    std::printf("[test] B5e2a: Episode field defaults OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a tests\n");
-    std::printf("=========================================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a tests\n");
+    std::printf("==================================================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -1141,9 +1215,16 @@ int main()
     testSeasonIndexNumber();
     testSeasonTypeNormalization();
 
+    // B5e2a tests — Episode parsing groundwork
+    std::printf("\n--- B5e2a episode parsing tests ---\n");
+    testEpisodeJsonParsing();
+    testEpisodeTypeNormalization();
+    testTicksToMinutes();
+    testEpisodeDefaults();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a tests passed.\n");
         return 0;
     }
 

@@ -120,6 +120,16 @@ public:
                            std::vector<MediaItem> &seasons,
                            std::string &error);
 
+    /// Fetch episodes for a given season of a series.
+    static bool getEpisodes(const std::string &baseUrl,
+                            const std::string &accessToken,
+                            const std::string &userId,
+                            const std::string &deviceId,
+                            const std::string &seriesId,
+                            const std::string &seasonId,
+                            std::vector<MediaItem> &episodes,
+                            std::string &error);
+
     // ---- URL helpers (public for testing) ----------------------------------
 
     static std::string buildLatestUrl(const std::string &baseUrl,

@@ -25,6 +25,13 @@ struct MediaItem {
     std::map<std::string, std::string> imageTags = {}; // e.g. {"Primary":"tagId"}
     int         indexNumber = 0;     // Jellyfin IndexNumber (season/episode number)
 
+    // Checkpoint B5e2a: episode metadata fields
+    int         parentIndexNumber = 0; // Jellyfin ParentIndexNumber (season number for episodes)
+    long long   runTimeTicks = 0;      // Jellyfin RunTimeTicks (10,000,000 ticks/sec)
+    std::string seriesName;            // Jellyfin SeriesName
+    std::string seriesId;              // Jellyfin SeriesId
+    std::string seasonId;              // Jellyfin SeasonId
+
     // Placeholder artwork tint colour (for the coloured rectangle)
     Uint8 artR = 128, artG = 128, artB = 128;
 };
@@ -40,6 +47,15 @@ struct TabData {
     std::string           name;
     std::vector<MediaRow> rows;
 };
+
+/// Convert Jellyfin RunTimeTicks (10,000,000 ticks/sec) to whole minutes.
+/// 0 ticks -> 0; positive ticks -> rounded to nearest whole minute.
+inline int ticksToMinutes(long long ticks)
+{
+    if (ticks <= 0) return 0;
+    long long seconds = (ticks + 5000000LL) / 10000000LL; // round to nearest second
+    return static_cast<int>((seconds + 30) / 60);          // round to nearest minute
+}
 
 } // namespace miyoofin
 

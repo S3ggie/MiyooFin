@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "SeriesScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
@@ -6,6 +7,7 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../app/ScreenStack.hpp"
 #include "miyoofin/version.hpp"
 #include <cstdio>
 #include <cstring>
@@ -164,8 +166,14 @@ bool HomeScreen::handleAction(Action action)
         return true;
     case Action::Confirm: {
         const MediaItem *item = currentItem();
-        if (item) printf("[HomeScreen] Select: %s (%s)\n",
-                         item->title.c_str(), item->type.c_str());
+        if (item) {
+            printf("[HomeScreen] Select: %s (%s)\n",
+                   item->title.c_str(), item->type.c_str());
+            if (item->type == "show") {
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item));
+                return true;
+            }
+        }
         return true;
     }
     case Action::Back:

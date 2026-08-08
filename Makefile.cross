@@ -36,7 +36,8 @@ SRCS := \
     src/ui/screens/ConnectScreen.cpp \
     src/ui/screens/LoginScreen.cpp \
     src/ui/screens/AuthCheckScreen.cpp \
-    src/ui/screens/InputDiagnosticsScreen.cpp
+    src/ui/screens/InputDiagnosticsScreen.cpp \
+    src/ui/screens/SeriesScreen.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 DEPS      := $(OBJS:.o=.d)

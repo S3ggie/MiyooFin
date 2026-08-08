@@ -170,6 +170,13 @@ void App::logout()
     Session::remove();
 }
 
+void App::requestPlaybackExit()
+{
+    printf("[App] Playback exit requested\n");
+    m_playbackRequested = true;
+    m_running = false;
+}
+
 int App::run()
 {
     while (m_running) {
@@ -194,6 +201,13 @@ int App::run()
         Screen *active = m_stack.top();
         if (active) {
             active->update(dt);
+        }
+
+        // --- Check if a screen requested playback exit ---
+        if (m_stack.pollPlaybackExit()) {
+            printf("[App] Playback exit flagged by screen\n");
+            requestPlaybackExit();
+            break;
         }
 
         // --- Startup flow transitions ---
@@ -310,7 +324,9 @@ int App::run()
     }
 
     printf("[App] Exiting cleanly\n");
-    return 0;
+    // Return 42 when exiting for playback, 0 otherwise.
+    // launch.sh uses this to distinguish normal quit from playback handoff.
+    return m_playbackRequested ? 42 : 0;
 }
 
 } // namespace miyoofin

@@ -6,6 +6,7 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../playback/PlaybackRequest.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -315,9 +316,22 @@ bool EpisodeBrowserScreen::handleAction(Action action)
             return true;
         case Action::Confirm:
             if (m_actionBtn == ActionButton::Play) {
-                if (m_selectedEpisode >= 0 && m_selectedEpisode < total)
+                if (m_selectedEpisode >= 0 && m_selectedEpisode < total) {
                     printf("[EpisodeBrowserScreen] Play selected: %s\n",
                            m_episodes[m_selectedEpisode].title.c_str());
+                    std::string error;
+                    if (PlaybackRequest::write(
+                            m_episodes[m_selectedEpisode].id,
+                            "episode", error))
+                    {
+                        printf("[EpisodeBrowserScreen] Playback request "
+                               "written, requesting exit\n");
+                        m_stack->requestPlaybackExit();
+                    } else {
+                        printf("[EpisodeBrowserScreen] Playback request "
+                               "failed: %s\n", error.c_str());
+                    }
+                }
             } else {
                 if (m_selectedEpisode >= 0 && m_selectedEpisode < total)
                     printf("[EpisodeBrowserScreen] Download selected: %s\n",

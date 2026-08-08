@@ -1,9 +1,10 @@
-// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b — tests for authentication, session
+// Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 — tests for authentication, session
 // persistence, device identity, URL normalisation, B4 JSON parsing/tab
 // building, B5a artwork infrastructure, B5b selected artwork loading,
 // B5c1 per-type artwork box dimensions, B5d1 row card geometry + scrolling,
 // B5d2a row artwork loading state, B5e1a season parsing groundwork,
-// B5e2a episode parsing groundwork, and B5e3b initial episode focus.
+// B5e2a episode parsing groundwork, B5e3b initial episode focus,
+// and B5f2 playback request writing.
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
+#include "../src/playback/PlaybackRequest.hpp"
 #include <unistd.h>
 
 using namespace miyoofin;
@@ -1191,10 +1193,97 @@ static void testFindEpisodeIndexEmptyList()
     std::printf("[test] B5e3b: findEpisodeIndex empty list OK\n");
 }
 
+// B5f2: PlaybackRequest — valid movie writes expected fields
+static void testPlaybackRequestMovie()
+{
+    std::printf("[test] B5f2: PlaybackRequest valid movie\n");
+    const char *tmpPath = "test_playback_movie.txt";
+    std::remove(tmpPath);
+
+    std::string error;
+    CHECK(PlaybackRequest::writeTo(tmpPath, "abc123", "movie", error));
+    CHECK(PlaybackRequest::existsAt(tmpPath));
+
+    // Read back and verify
+    FILE *f = std::fopen(tmpPath, "r");
+    CHECK(f != nullptr);
+    char buf[256] = {};
+    std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+
+    std::string content(buf);
+    CHECK(content.find("item_id=abc123\n") != std::string::npos);
+    CHECK(content.find("item_type=movie\n") != std::string::npos);
+    CHECK(content.find("access_token") == std::string::npos);
+
+    std::remove(tmpPath);
+    std::printf("[test] B5f2: PlaybackRequest valid movie OK\n");
+}
+
+// B5f2: PlaybackRequest — valid episode writes expected fields
+static void testPlaybackRequestEpisode()
+{
+    std::printf("[test] B5f2: PlaybackRequest valid episode\n");
+    const char *tmpPath = "test_playback_episode.txt";
+    std::remove(tmpPath);
+
+    std::string error;
+    CHECK(PlaybackRequest::writeTo(tmpPath, "ep-42", "episode", error));
+    CHECK(PlaybackRequest::existsAt(tmpPath));
+
+    FILE *f = std::fopen(tmpPath, "r");
+    CHECK(f != nullptr);
+    char buf[256] = {};
+    std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+
+    std::string content(buf);
+    CHECK(content.find("item_id=ep-42\n") != std::string::npos);
+    CHECK(content.find("item_type=episode\n") != std::string::npos);
+
+    std::remove(tmpPath);
+    std::printf("[test] B5f2: PlaybackRequest valid episode OK\n");
+}
+
+// B5f2: PlaybackRequest — empty ID rejected
+static void testPlaybackRequestEmptyId()
+{
+    std::printf("[test] B5f2: PlaybackRequest empty ID rejected\n");
+    std::string error;
+    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test.txt", "", "movie", error));
+    CHECK(!error.empty());
+    std::printf("[test] B5f2: PlaybackRequest empty ID rejected OK\n");
+}
+
+// B5f2: PlaybackRequest — empty type rejected
+static void testPlaybackRequestEmptyType()
+{
+    std::printf("[test] B5f2: PlaybackRequest empty type rejected\n");
+    std::string error;
+    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test2.txt", "id1", "", error));
+    CHECK(!error.empty());
+    std::printf("[test] B5f2: PlaybackRequest empty type rejected OK\n");
+}
+
+// B5f2: PlaybackRequest — remove
+static void testPlaybackRequestRemove()
+{
+    std::printf("[test] B5f2: PlaybackRequest remove\n");
+    const char *tmpPath = "test_playback_rm.txt";
+    std::string error;
+    CHECK(PlaybackRequest::writeTo(tmpPath, "x", "movie", error));
+    CHECK(PlaybackRequest::existsAt(tmpPath));
+    CHECK(PlaybackRequest::removeAt(tmpPath));
+    CHECK(!PlaybackRequest::existsAt(tmpPath));
+    // Remove when not existing should not fail
+    CHECK(PlaybackRequest::removeAt(tmpPath));
+    std::printf("[test] B5f2: PlaybackRequest remove OK\n");
+}
+
 int main()
 {
-    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b tests\n");
-    std::printf("==================================================================\n\n");
+    std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 tests\n");
+    std::printf("=========================================================================\n\n");
 
     // B3 tests
     testNormaliseUrl();
@@ -1282,9 +1371,17 @@ int main()
     testFindEpisodeIndexEmpty();
     testFindEpisodeIndexEmptyList();
 
+    // B5f2 tests — Playback request
+    std::printf("\n--- B5f2 playback request tests ---\n");
+    testPlaybackRequestMovie();
+    testPlaybackRequestEpisode();
+    testPlaybackRequestEmptyId();
+    testPlaybackRequestEmptyType();
+    testPlaybackRequestRemove();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2 tests passed.\n");
         return 0;
     }
 

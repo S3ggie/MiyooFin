@@ -39,7 +39,8 @@ SRCS := \
     src/ui/screens/InputDiagnosticsScreen.cpp \
     src/ui/screens/SeriesScreen.cpp \
     src/ui/screens/EpisodeBrowserScreen.cpp \
-    src/ui/screens/MovieDetailsScreen.cpp
+    src/ui/screens/MovieDetailsScreen.cpp \
+    src/playback/PlaybackRequest.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 DEPS      := $(OBJS:.o=.d)
@@ -48,7 +49,7 @@ DEPS      := $(OBJS:.o=.d)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
-             output/build-arm/ui/screens
+             output/build-arm/ui/screens output/build-arm/playback
 
 .PHONY: all
 all: $(TARGET)

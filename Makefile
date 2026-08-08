@@ -48,12 +48,14 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
-    $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp
+    $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
+    $(SRC_DIR)/playback/PlaybackRequest.cpp
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
-               output/build/ui output/build/ui/screens
+               output/build/ui output/build/ui/screens \
+               output/build/playback
 
 TARGET      := output/build/miyoofin
 
@@ -93,7 +95,8 @@ TEST_SRCS   := tests/test_main.cpp \
                src/cache/ImageCache.cpp \
                src/ui/BitmapFont.cpp \
                src/app/ScreenStack.cpp \
-               src/ui/screens/EpisodeBrowserScreen.cpp
+               src/ui/screens/EpisodeBrowserScreen.cpp \
+               src/playback/PlaybackRequest.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)
@@ -165,6 +168,10 @@ package: $(ARM_TARGET)
 	@mkdir -p $(PACKAGE_DIR)/lib
 	@mkdir -p $(PACKAGE_DIR)/assets
 	@cp $(ARM_TARGET) $(PACKAGE_DIR)/miyoofin
+	@cp output/build-arm/miyoofin-https-bridge $(PACKAGE_DIR)/miyoofin-https-bridge 2>/dev/null || \
+	    echo "  WARNING: ARM bridge not found (run 'make onionos' with bridge target)"
+	@cp cacert.pem $(PACKAGE_DIR)/cacert.pem 2>/dev/null || \
+	    echo "  WARNING: cacert.pem not found in repo root"
 	@cp distributions/onionos/launch.sh $(PACKAGE_DIR)/
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true

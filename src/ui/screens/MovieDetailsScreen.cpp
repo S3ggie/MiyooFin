@@ -6,6 +6,7 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../playback/PlaybackRequest.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -162,6 +163,15 @@ bool MovieDetailsScreen::handleAction(Action action)
         if (m_actionBtn == ActionButton::Play) {
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());
+            std::string error;
+            if (PlaybackRequest::write(m_movie.id, "movie", error)) {
+                printf("[MovieDetailsScreen] Playback request written, "
+                       "requesting exit\n");
+                m_stack->requestPlaybackExit();
+            } else {
+                printf("[MovieDetailsScreen] Playback request failed: %s\n",
+                       error.c_str());
+            }
         } else {
             printf("[MovieDetailsScreen] Download selected: %s\n",
                    m_movie.title.c_str());

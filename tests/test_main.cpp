@@ -23,6 +23,7 @@
 #include "../src/cache/LibraryCache.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
+#include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
@@ -50,6 +51,69 @@ static int g_failures = 0;
             ++g_failures; \
         } \
     } while (0)
+
+static MediaItem titledMovie(const std::string &id, const std::string &title)
+{
+    MediaItem item;
+    item.id = id;
+    item.title = title;
+    item.type = "movie";
+    return item;
+}
+
+static void testMovieOrganizationalTitles()
+{
+    std::printf("[test] movie organizational titles\n");
+    CHECK_EQ(movieOrganizationalTitle("The Amazing Spider-Man"), "Amazing Spider-Man");
+    CHECK_EQ(movieOrganizationalTitle("The Batman"), "Batman");
+    CHECK_EQ(movieOrganizationalTitle("the matrix"), "matrix");
+    CHECK_EQ(movieOrganizationalTitle("THE MATRIX"), "MATRIX");
+    CHECK_EQ(movieOrganizationalTitle("The Thing"), "Thing");
+    CHECK_EQ(movieOrganizationalTitle("The"), "The");
+    CHECK_EQ(movieOrganizationalTitle("There Will Be Blood"), "There Will Be Blood");
+    CHECK_EQ(movieOrganizationalTitle("Theater Camp"), "Theater Camp");
+    CHECK_EQ(movieOrganizationalTitle("The "), "The ");
+    CHECK_EQ(movieOrganizationalTitle(""), "");
+}
+
+static void testMovieAlphabetOrganization()
+{
+    std::printf("[test] movie alphabet organization\n");
+    CHECK(movieMatchesAlphabetFilter("The Amazing Spider-Man", 0));
+    CHECK(movieMatchesAlphabetFilter("The Batman", 1));
+    CHECK(movieMatchesAlphabetFilter("The Dark Knight", 3));
+    CHECK(movieMatchesAlphabetFilter("The Lord of the Rings", 11));
+    CHECK(movieMatchesAlphabetFilter("The", 19));
+    CHECK(movieMatchesAlphabetFilter("The Thing", 19));
+    CHECK(movieMatchesAlphabetFilter("There Will Be Blood", 19));
+    CHECK(movieMatchesAlphabetFilter("Theater Camp", 19));
+    CHECK(!movieMatchesAlphabetFilter("The Amazing Spider-Man", 19));
+}
+
+static void testMovieOrganizationalSort()
+{
+    std::printf("[test] movie organizational sort\n");
+    std::vector<MediaItem> movies = {
+        titledMovie("1", "The Batman"), titledMovie("2", "Alien"),
+        titledMovie("3", "The Amazing Spider-Man"), titledMovie("4", "Avatar"),
+        titledMovie("5", "The Dark Knight"), titledMovie("6", "Batman"),
+        titledMovie("7", "The Lord of the Rings")};
+    std::sort(movies.begin(), movies.end(), movieOrganizationalLess);
+    const std::vector<std::string> expected = {
+        "Alien", "The Amazing Spider-Man", "Avatar", "Batman", "The Batman",
+        "The Dark Knight", "The Lord of the Rings"};
+    for (size_t i = 0; i < expected.size(); ++i) CHECK_EQ(movies[i].title, expected[i]);
+}
+
+static void testMovieAlphabetFocus()
+{
+    std::printf("[test] movie alphabet focus\n");
+    CHECK(movieAlphabetFocus("The Amazing Spider-Man") == 0);
+    CHECK(movieAlphabetFocus("The Batman") == 1);
+    CHECK(movieAlphabetFocus("The") == 19);
+    CHECK(movieAlphabetFocus("There Will Be Blood") == 19);
+    CHECK(movieAlphabetFocus("1917") == 0);
+}
 
 // -------------------------------------------------------------------
 // Test 1: URL normalisation (from B2, kept)
@@ -1653,6 +1717,12 @@ static void testCacheRemoveNew(){std::string old=ImageCache::cacheDir();ImageCac
 
 int main()
 {
+    std::printf("\n--- Movie title organization tests ---\n");
+    testMovieOrganizationalTitles();
+    testMovieAlphabetOrganization();
+    testMovieOrganizationalSort();
+    testMovieAlphabetFocus();
+
     std::printf("\n--- local-first cache/grid tests ---\n");
     testLibraryCacheNew(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");

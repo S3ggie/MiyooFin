@@ -5,6 +5,7 @@
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
+#include "../MovieTitle.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
@@ -52,15 +53,6 @@ static int clampMovieGridScrollCompact(int selected, int count, int currentScrol
     if (selectedRow >= currentScroll + MOVIE_GRID_ROWS)
         currentScroll = selectedRow - MOVIE_GRID_ROWS + 1;
     return std::max(0, std::min(currentScroll, maxScroll));
-}
-
-static int asciiAlphabetIndexForTitle(const std::string &title)
-{
-    if (title.empty()) return -1;
-    const unsigned char first = static_cast<unsigned char>(title[0]);
-    if (first >= 'A' && first <= 'Z') return first - 'A';
-    if (first >= 'a' && first <= 'z') return first - 'a';
-    return -1;
 }
 
 struct PosterTransfer { MediaItem item; std::string url; std::vector<unsigned char> bytes; curl_slist *headers=nullptr; bool tooLarge=false; };
@@ -113,15 +105,14 @@ std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
-{ std::vector<MediaItem> out; std::map<std::string,bool> seen; for(const auto&v:views)for(const auto&i:v.items)if(seen.emplace(i.id,true).second)out.push_back(i); std::sort(out.begin(),out.end(),[](const MediaItem&a,const MediaItem&b){return a.title<b.title;}); return out; }
+{ std::vector<MediaItem> out; std::map<std::string,bool> seen; for(const auto&v:views)for(const auto&i:v.items)if(seen.emplace(i.id,true).second)out.push_back(i); std::sort(out.begin(),out.end(),movieOrganizationalLess); return out; }
 
 void HomeScreen::refreshMovieFilter()
 {
     if (m_tabs.size() <= 1) return;
     std::vector<MediaItem> displayed;
     for (const auto &item : m_movieMaster) {
-        if (m_movieActiveLetter < 0 ||
-            asciiAlphabetIndexForTitle(item.title) == m_movieActiveLetter)
+        if (movieMatchesAlphabetFilter(item.title, m_movieActiveLetter))
             displayed.push_back(item);
     }
     m_tabs[1].rows = {{"Movies", std::move(displayed)}};
@@ -287,8 +278,7 @@ bool HomeScreen::handleAction(Action action)
                 m_movieRailFocused = true;
                 m_movieAlphabetFocus = m_movieActiveLetter >= 0
                     ? m_movieActiveLetter
-                    : std::max(0, asciiAlphabetIndexForTitle(
-                        currentItem() ? currentItem()->title : std::string()));
+                    : movieAlphabetFocus(currentItem() ? currentItem()->title : std::string());
             } else if (!m_movieRailFocused && currentRow()) {
                 m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),0,-1);
             }

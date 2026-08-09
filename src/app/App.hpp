@@ -55,6 +55,11 @@ private:
     bool            m_running;
     Uint32          m_lastTick;
 
+    // Short visual acknowledgement shown before the external player takes
+    // ownership of the framebuffer.
+    bool            m_playbackStarting;
+    Uint32          m_playbackStartingTick;
+
     // Startup flow state
     std::string     m_serverUrl;   // saved server URL
     ServerInfo      m_serverInfo;  // connected server info
@@ -79,6 +84,9 @@ private:
     /// Handle an external playback request: suspend platform, fork
     /// playback_runner.sh, wait for child, resume platform.
     void handleExternalPlayback();
+
+    /// Draw the playback-starting message over the current screen.
+    void drawPlaybackStartingOverlay(Uint32 elapsedMs);
 
     // Prevent copy
     App(const App&) = delete;

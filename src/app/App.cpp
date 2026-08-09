@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "../ui/Theme.hpp"
+#include "../ui/BitmapFont.hpp"
 #include "../ui/screens/StartupScreen.hpp"
 #include "../ui/screens/HomeScreen.hpp"
 #include "../ui/screens/ServerEntryScreen.hpp"
@@ -18,6 +19,29 @@
 
 namespace miyoofin {
 
+namespace {
+
+constexpr Uint32 PLAYBACK_STARTING_PHASE_MS = 150;
+constexpr Uint32 PLAYBACK_STARTING_PHASE_COUNT = 7;
+constexpr Uint32 PLAYBACK_STARTING_DURATION_MS =
+    PLAYBACK_STARTING_PHASE_MS * PLAYBACK_STARTING_PHASE_COUNT;
+
+const char *playbackStartingLabel(Uint32 elapsedMs)
+{
+    static const char *const labels[] = {
+        "Loading...", "Loading..", "Loading.", "Loading",
+        "Loading.", "Loading..", "Loading..."
+    };
+
+    Uint32 phase = elapsedMs / PLAYBACK_STARTING_PHASE_MS;
+    if (phase >= PLAYBACK_STARTING_PHASE_COUNT) {
+        phase = PLAYBACK_STARTING_PHASE_COUNT - 1;
+    }
+    return labels[phase];
+}
+
+} // namespace
+
 App::App()
     : m_window(nullptr)
     , m_renderer(nullptr)
@@ -25,6 +49,8 @@ App::App()
     , m_fbTex(nullptr)
     , m_running(false)
     , m_lastTick(0)
+    , m_playbackStarting(false)
+    , m_playbackStartingTick(0)
 {
 }
 
@@ -327,6 +353,26 @@ void App::handleExternalPlayback()
     printf("[App] External playback handoff complete, resuming UI\n");
 }
 
+void App::drawPlaybackStartingOverlay(Uint32 elapsedMs)
+{
+    const char *label = playbackStartingLabel(elapsedMs);
+    const int textW = static_cast<int>(std::strlen(label)) * BitmapFont::GLYPH_W;
+    const int paddingX = 12;
+    const int paddingY = 8;
+    const int boxW = textW + paddingX * 2;
+    const int boxH = BitmapFont::GLYPH_H + paddingY * 2;
+    const int boxX = (m_fb->w - boxW) / 2;
+    const int boxY = (m_fb->h - boxH) / 2;
+
+    BitmapFont::fillRect(m_fb, boxX, boxY, boxW, boxH,
+                         Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    BitmapFont::drawRect(m_fb, boxX, boxY, boxW, boxH,
+                         Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B);
+    BitmapFont::drawString(m_fb, boxX + paddingX, boxY + paddingY, label,
+                           Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
+                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+}
+
 int App::run()
 {
     while (m_running) {
@@ -335,15 +381,19 @@ int App::run()
         m_lastTick = now;
 
         // --- Input ---
+        // Continue draining SDL events while the overlay is visible so input
+        // pressed during startup cannot be delivered after playback returns.
         std::vector<Action> actions = m_input.poll();
-        for (Action a : actions) {
-            if (a == Action::Exit) {
-                m_running = false;
-                break;
-            }
-            Screen *active = m_stack.top();
-            if (active) {
-                active->handleAction(a);
+        if (!m_playbackStarting) {
+            for (Action a : actions) {
+                if (a == Action::Exit) {
+                    m_running = false;
+                    break;
+                }
+                Screen *active = m_stack.top();
+                if (active) {
+                    active->handleAction(a);
+                }
             }
         }
 
@@ -354,11 +404,10 @@ int App::run()
         }
 
         // --- Check if a screen requested external playback ---
-        if (m_stack.pollExternalPlayback()) {
+        if (!m_playbackStarting && m_stack.pollExternalPlayback()) {
             printf("[App] External playback flagged by screen\n");
-            handleExternalPlayback();
-            // Reset timing so dt doesn't include playback duration
-            m_lastTick = SDL_GetTicks();
+            m_playbackStarting = true;
+            m_playbackStartingTick = now;
         }
 
         // --- Startup flow transitions ---
@@ -467,11 +516,28 @@ int App::run()
             renderTop->render(m_fb);
         }
 
+        const Uint32 playbackStartingElapsed =
+            now - m_playbackStartingTick;
+        const bool handoffAfterPresent = m_playbackStarting &&
+            playbackStartingElapsed >= PLAYBACK_STARTING_DURATION_MS;
+        if (m_playbackStarting) {
+            drawPlaybackStartingOverlay(playbackStartingElapsed);
+        }
+
         SDL_UpdateTexture(m_fbTex, nullptr, m_fb->pixels, m_fb->pitch);
 
         SDL_RenderClear(m_renderer);
         SDL_RenderCopy(m_renderer, m_fbTex, nullptr, nullptr);
         SDL_RenderPresent(m_renderer);
+
+        // The terminal Loading... frame above has now reached the Miyoo
+        // framebuffer, so it can remain visible while SDL is suspended.
+        if (handoffAfterPresent) {
+            handleExternalPlayback();
+            m_playbackStarting = false;
+            // Reset timing so dt doesn't include playback duration.
+            m_lastTick = SDL_GetTicks();
+        }
     }
 
     printf("[App] Exiting cleanly\n");

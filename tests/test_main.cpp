@@ -24,6 +24,7 @@
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
+#include "../src/input/InputManager.hpp"
 #include <unistd.h>
 
 using namespace miyoofin;
@@ -1438,6 +1439,58 @@ static void testScreenStackPreservedDuringExternalPlayback()
     std::printf("[test] B5f3a: ScreenStack preserved during external playback OK\n");
 }
 
+static void testDpadHoldRepeatTiming()
+{
+    std::printf("[test] D-pad hold repeat timing\n");
+    InputManager::DpadRepeatState state;
+
+    // Fresh press emits immediately; duplicate/native repeat does not.
+    CHECK(InputManager::beginDpadPress(state, Action::Right, 100));
+    CHECK(state.held);
+    CHECK(state.nextRepeatAt == 400);
+    CHECK(!InputManager::beginDpadPress(state, Action::Right, 200));
+    CHECK(state.nextRepeatAt == 400);
+
+    CHECK(!InputManager::takeDpadRepeat(state, 399));
+    CHECK(InputManager::takeDpadRepeat(state, 400));
+    CHECK(!InputManager::takeDpadRepeat(state, 489));
+    CHECK(InputManager::takeDpadRepeat(state, 490));
+
+    // A late poll emits once and advances beyond now, with no catch-up burst.
+    CHECK(InputManager::takeDpadRepeat(state, 1000));
+    CHECK(!InputManager::takeDpadRepeat(state, 1000));
+
+    InputManager::endDpadPress(state);
+    CHECK(!state.held);
+    CHECK(!InputManager::takeDpadRepeat(state, 2000));
+
+    InputManager::DpadRepeatState wrapping;
+    CHECK(InputManager::beginDpadPress(
+        wrapping, Action::Left, 0xffffff00u));
+    CHECK(!InputManager::takeDpadRepeat(wrapping, 43));
+    CHECK(InputManager::takeDpadRepeat(wrapping, 44));
+
+    CHECK(InputManager::isDpadRepeatAction(Action::Up));
+    CHECK(InputManager::isDpadRepeatAction(Action::Down));
+    CHECK(InputManager::isDpadRepeatAction(Action::Left));
+    CHECK(InputManager::isDpadRepeatAction(Action::Right));
+    CHECK(!InputManager::isDpadRepeatAction(Action::Confirm));
+    CHECK(!InputManager::isDpadRepeatAction(Action::Back));
+    CHECK(!InputManager::isDpadRepeatAction(Action::PrevTab));
+    CHECK(!InputManager::isDpadRepeatAction(Action::Raw));
+
+    InputManager::DpadRepeatState nonDirectional;
+    CHECK(!InputManager::beginDpadPress(
+        nonDirectional, Action::Confirm, 0));
+
+    std::array<InputManager::DpadRepeatState, 4> states;
+    for (auto &held : states)
+        CHECK(InputManager::beginDpadPress(held, Action::Down, 0));
+    InputManager::resetDpadRepeatStates(states);
+    for (const auto &cleared : states) CHECK(!cleared.held);
+    std::printf("[test] D-pad hold repeat timing OK\n");
+}
+
 int main()
 {
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
@@ -1549,6 +1602,10 @@ int main()
     testExternalPlaybackFlagMultipleSet();
     testPlaybackRequestStillWorks();
     testScreenStackPreservedDuringExternalPlayback();
+
+    // Central D-pad hold-to-repeat input timing
+    std::printf("\n--- D-pad hold-to-repeat tests ---\n");
+    testDpadHoldRepeatTiming();
 
     std::printf("\n");
     if (g_failures == 0) {

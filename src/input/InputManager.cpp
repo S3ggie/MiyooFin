@@ -3,6 +3,28 @@
 
 namespace miyoofin {
 
+int InputManager::dpadStateIndex(SDL_Scancode scancode)
+{
+    switch (scancode) {
+    case static_cast<SDL_Scancode>(82): return 0;
+    case static_cast<SDL_Scancode>(81): return 1;
+    case static_cast<SDL_Scancode>(80): return 2;
+    case static_cast<SDL_Scancode>(79): return 3;
+    default: return -1;
+    }
+}
+
+Action InputManager::dpadAction(SDL_Scancode scancode)
+{
+    switch (scancode) {
+    case static_cast<SDL_Scancode>(82): return Action::Up;
+    case static_cast<SDL_Scancode>(81): return Action::Down;
+    case static_cast<SDL_Scancode>(80): return Action::Left;
+    case static_cast<SDL_Scancode>(79): return Action::Right;
+    default: return Action::None;
+    }
+}
+
 InputManager::InputManager()
     : m_joystickIndex(-1)
 {
@@ -35,16 +57,29 @@ std::vector<Action> InputManager::poll()
             bool down = (ev.type == SDL_KEYDOWN);
             SDL_Keycode kc = ev.key.keysym.sym;
             SDL_Scancode sc = ev.key.keysym.scancode;
+            const int repeatIndex = dpadStateIndex(sc);
+
+            if (repeatIndex >= 0) {
+                action = dpadAction(sc);
+                if (down) {
+                    if (ev.key.repeat == 0 && beginDpadPress(
+                            m_dpadRepeatStates[repeatIndex], action,
+                            SDL_GetTicks()))
+                        actions.push_back(action);
+                } else {
+                    endDpadPress(m_dpadRepeatStates[repeatIndex]);
+                    action = Action::None;
+                }
+
+                addRawEvent(ev.type, down, kc, sc, 0, action);
+                break;
+            }
 
             // Confirmed Miyoo Mini Plus physical SDL scancodes.
             // These are the raw device scancodes reported by the
             // Miyoo SDL2 fork (verified on-device via diagnostics).
             if (down) {
                 switch (sc) {
-                case 82:  action = Action::Up;          break;  // Up
-                case 81:  action = Action::Down;        break;  // Down
-                case 80:  action = Action::Left;        break;  // Left
-                case 79:  action = Action::Right;       break;  // Right
                 case 44:  action = Action::Confirm;     break;  // A
                 case 224: action = Action::Back;        break;  // B
                 case 225: action = Action::Search;      break;  // X
@@ -64,7 +99,7 @@ std::vector<Action> InputManager::poll()
                     action = Action::Back;
                 }
 
-                if (action != Action::None) {
+                if (action != Action::None && ev.key.repeat == 0) {
                     actions.push_back(action);
                 }
             }
@@ -113,6 +148,11 @@ std::vector<Action> InputManager::poll()
         }
     }
 
+    const Uint32 now = SDL_GetTicks();
+    for (auto &state : m_dpadRepeatStates) {
+        if (takeDpadRepeat(state, now)) actions.push_back(state.action);
+    }
+
     return actions;
 }
 
@@ -138,6 +178,7 @@ void InputManager::addRawEvent(Uint32 type, bool isDown,
 
 void InputManager::suspend()
 {
+    resetDpadRepeatStates(m_dpadRepeatStates);
     // Joystick will be closed by SDL_QuitSubSystem, just reset our index
     m_joystickIndex = -1;
     printf("[Input] Suspended\n");
@@ -145,6 +186,7 @@ void InputManager::suspend()
 
 void InputManager::resume()
 {
+    resetDpadRepeatStates(m_dpadRepeatStates);
     m_joystickIndex = -1;
     // Reopen the first available joystick
     if (SDL_NumJoysticks() > 0) {

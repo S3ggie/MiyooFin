@@ -1195,6 +1195,72 @@ static void testFindEpisodeIndexEmptyList()
     std::printf("[test] B5e3b: findEpisodeIndex empty list OK\n");
 }
 
+// B5g1b: bounded predictive episode-artwork scheduling
+static void testEpisodePrefetchScheduler()
+{
+    std::printf("[test] B5g1b: bounded prefetch scheduler\n");
+    std::set<int> unavailable;
+
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 5);
+    unavailable.insert(5);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 6);
+    unavailable.insert(6);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 7);
+
+    unavailable.clear();
+    for (int i = 5; i <= 13; ++i) unavailable.insert(i);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 4);
+
+    unavailable.clear();
+    unavailable.insert(0);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(0, 20, unavailable) == 1);
+
+    unavailable.clear();
+    unavailable.insert(19);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(19, 20, unavailable) == 18);
+
+    unavailable.clear();
+    unavailable.insert(5); // failed candidate
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 6);
+    unavailable.insert(6); // in-progress candidate
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 7);
+
+    // Even for 1000 episodes, nothing outside selected,+8,-3 is considered.
+    unavailable.clear();
+    unavailable.insert(500);
+    for (int i = 501; i <= 508; ++i) unavailable.insert(i);
+    unavailable.insert(499);
+    unavailable.insert(498);
+    unavailable.insert(497);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(500, 1000, unavailable) == -1);
+
+    // A drastic selection change recomputes directly; there is no backlog.
+    unavailable.clear();
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(900, 1000, unavailable) == 900);
+    std::printf("[test] B5g1b: bounded prefetch scheduler OK\n");
+}
+
+static void testEpisodePrefetchPlaybackResume()
+{
+    std::printf("[test] B5g1b: playback resume countdown\n");
+    bool pending = true;
+    int delayUpdates = 1;
+
+    CHECK(!EpisodeBrowserScreen::advancePrefetchResume(
+        pending, delayUpdates));
+    CHECK(pending);
+    CHECK(delayUpdates == 0);
+
+    CHECK(EpisodeBrowserScreen::advancePrefetchResume(
+        pending, delayUpdates));
+    CHECK(!pending);
+    CHECK(delayUpdates == 0);
+
+    CHECK(!EpisodeBrowserScreen::advancePrefetchResume(
+        pending, delayUpdates));
+    std::printf("[test] B5g1b: playback resume countdown OK\n");
+}
+
 // B5f2: PlaybackRequest — valid movie writes expected fields
 static void testPlaybackRequestMovie()
 {
@@ -1462,6 +1528,11 @@ int main()
     testFindEpisodeIndexNotFound();
     testFindEpisodeIndexEmpty();
     testFindEpisodeIndexEmptyList();
+
+    // B5g1b tests — bounded predictive episode thumbnail prefetch
+    std::printf("\n--- B5g1b bounded prefetch scheduler tests ---\n");
+    testEpisodePrefetchScheduler();
+    testEpisodePrefetchPlaybackResume();
 
     // B5f2 tests — Playback request
     std::printf("\n--- B5f2 playback request tests ---\n");

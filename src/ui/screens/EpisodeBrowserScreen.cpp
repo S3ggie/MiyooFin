@@ -157,6 +157,34 @@ int EpisodeBrowserScreen::findEpisodeIndex(
     return -1;
 }
 
+int EpisodeBrowserScreen::nextPrefetchIndex(
+    int selected, int total, const std::set<int> &unavailable)
+{
+    if (selected < 0 || selected >= total) return -1;
+    if (!unavailable.count(selected)) return selected;
+    for (int offset = 1; offset <= PREFETCH_AHEAD; ++offset) {
+        const int index = selected + offset;
+        if (index < total && !unavailable.count(index)) return index;
+    }
+    for (int offset = 1; offset <= PREFETCH_BEHIND; ++offset) {
+        const int index = selected - offset;
+        if (index >= 0 && !unavailable.count(index)) return index;
+    }
+    return -1;
+}
+
+bool EpisodeBrowserScreen::advancePrefetchResume(
+    bool &pending, int &delayUpdates)
+{
+    if (!pending) return false;
+    if (delayUpdates > 0) {
+        --delayUpdates;
+        return false;
+    }
+    pending = false;
+    return true;
+}
+
 // -------------------------------------------------------------------
 // enter / leave
 // -------------------------------------------------------------------
@@ -166,6 +194,15 @@ void EpisodeBrowserScreen::enter()
            m_series.title.c_str(), m_season.title.c_str());
     if (m_episodes.empty() && m_loadState != LoadState::Error)
         fetchEpisodes();
+    else if (m_loadState == LoadState::Ready) {
+        m_prefetchResumePending = false;
+        m_prefetchResumeDelayUpdates = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            m_workerPaused = false;
+        }
+        wakeArtworkWorker();
+    }
 }
 
 void EpisodeBrowserScreen::leave()
@@ -195,13 +232,27 @@ void EpisodeBrowserScreen::fetchEpisodes()
         m_episodeArtwork = {};
         m_episodeArtworkKey.clear();
 
-        // B5g1a: clear artwork worker state for fresh episode list
+        std::vector<ArtworkJob> artworkJobs;
+        artworkJobs.reserve(m_episodes.size());
+        for (const auto &ep : m_episodes) {
+            ArtworkJob job;
+            auto tag = ep.imageTags.find("Primary");
+            if (tag != ep.imageTags.end() && !tag->second.empty()) {
+                job.itemId = ep.id;
+                job.imageTag = tag->second;
+                job.artworkKey = ep.id + ":Primary:" + tag->second + ":288x162";
+            }
+            artworkJobs.push_back(job);
+        }
+
+        // Publish immutable scheduling data for the fresh episode list.
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);
-            m_workerHasPending = false;
             m_workerHasCompletion = false;
+            m_artworkJobs = std::move(artworkJobs);
+            m_failedKeys.clear();
+            m_workerPaused = false;
         }
-        m_failedKeys.clear();
 
         // B5e3b: Apply initial episode focus if requested
         if (!m_initialEpisodeId.empty() && !m_initialSelectionApplied) {
@@ -221,6 +272,7 @@ void EpisodeBrowserScreen::fetchEpisodes()
 
         printf("[EpisodeBrowserScreen] Loaded %d episodes\n",
                (int)m_episodes.size());
+        wakeArtworkWorker();
     } else {
         m_loadState = LoadState::Error;
         m_error = error.empty() ? "Unknown error" : error;
@@ -301,6 +353,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                 m_selectedEpisode--;
                 clampListScroll();
                 m_overviewScroll = 0;
+                wakeArtworkWorker();
             }
             return true;
         case Action::Down:
@@ -308,6 +361,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                 m_selectedEpisode++;
                 clampListScroll();
                 m_overviewScroll = 0;
+                wakeArtworkWorker();
             }
             return true;
         case Action::Right:
@@ -345,6 +399,13 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                             m_episodes[m_selectedEpisode].id,
                             "episode", error))
                     {
+                        {
+                            std::lock_guard<std::mutex> lock(m_workerMutex);
+                            m_workerPaused = true;
+                            ++m_workerGeneration;
+                        }
+                        m_prefetchResumePending = true;
+                        m_prefetchResumeDelayUpdates = 1;
                         printf("[EpisodeBrowserScreen] Playback request "
                                "written, requesting external playback\n");
                         m_stack->requestExternalPlayback();
@@ -373,6 +434,16 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 {
+    if (advancePrefetchResume(m_prefetchResumePending,
+                              m_prefetchResumeDelayUpdates)) {
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            m_workerPaused = false;
+            ++m_workerGeneration;
+        }
+        m_workerCv.notify_one();
+    }
+
     if (m_loadState == LoadState::Ready)
         tryLoadSelectedEpisodeArtwork();
 }
@@ -418,8 +489,6 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
         if (m_workerHasCompletion) {
             ArtworkCompletion comp = m_workerCompletion;
             m_workerHasCompletion = false;
-            if (!comp.success)
-                m_failedKeys.insert(comp.artworkKey);
             if (comp.artworkKey == key) {
                 if (comp.success) {
                     auto jpegData = ImageCache::readCached(
@@ -447,15 +516,10 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
         m_episodeArtworkKey = key;
     }
 
-    // 4. Failed key?  Do not retry.
-    if (m_failedKeys.count(key))
-        return;
-
-    // 5. Worker already in-progress or pending for this key?  Wait.
+    // 4. Failed or already in progress?  Wait.
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
-        if (m_workerInProgressKey == key ||
-            (m_workerHasPending && m_workerPending.artworkKey == key))
+        if (m_failedKeys.count(key) || m_workerInProgressKey == key)
             return;
     }
 
@@ -475,44 +539,87 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
         }
     }
 
-    // 7. Not cached — submit background worker job (latest-selection-wins)
+    // 6. The worker owns all network scheduling; make sure it is awake.
+    wakeArtworkWorker();
+}
+
+void EpisodeBrowserScreen::wakeArtworkWorker()
+{
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
-        m_workerPending = {ep.id, tag, key, w, h};
-        m_workerHasPending = true;
-
-        // Start worker thread lazily on first job submission
-        if (!m_workerThread.joinable()) {
+        m_workerSelected = m_selectedEpisode;
+        ++m_workerGeneration;
+        if (!m_workerThread.joinable())
             m_workerThread = std::thread(
                 &EpisodeBrowserScreen::artworkWorkerLoop, this);
-        }
     }
     m_workerCv.notify_one();
-    printf("[EpisodeBrowserScreen] ArtworkWorker: request episode=%s\n",
-           ep.id.c_str());
 }
 
 // -------------------------------------------------------------------
 // artworkWorkerLoop — background thread (B5g1a)
 //
-// Executes one artwork job at a time.  After finishing a job, loops
-// back to check for a newer pending request (latest-selection-wins).
+// Chooses one artwork job at a time from a freshly computed bounded window.
 // Never accesses SDL, rendering, or m_episodeArtwork.
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::artworkWorkerLoop()
 {
+    std::uint64_t observedGeneration = 0;
     while (true) {
         ArtworkJob job;
+        int candidate = -1;
+        std::uint64_t generation = 0;
         {
             std::unique_lock<std::mutex> lock(m_workerMutex);
-            while (!m_workerStop && !m_workerHasPending)
-                m_workerCv.wait(lock);
+            m_workerCv.wait(lock, [&] {
+                return m_workerStop || (!m_workerPaused &&
+                    observedGeneration != m_workerGeneration);
+            });
             if (m_workerStop) break;
+            generation = m_workerGeneration;
+            observedGeneration = generation;
+        }
 
-            // Take the latest pending job (latest-selection-wins)
-            job = m_workerPending;
-            m_workerHasPending = false;
-            m_workerInProgressKey = job.artworkKey;
+        std::set<int> unavailable;
+        while (true) {
+            int selected;
+            {
+                std::lock_guard<std::mutex> lock(m_workerMutex);
+                if (m_workerStop) return;
+                if (m_workerPaused || generation != m_workerGeneration) break;
+                selected = m_workerSelected;
+                candidate = nextPrefetchIndex(
+                    selected, (int)m_artworkJobs.size(), unavailable);
+                if (candidate < 0) break;
+                job = m_artworkJobs[candidate];
+                if (job.artworkKey.empty() ||
+                    m_failedKeys.count(job.artworkKey) ||
+                    m_workerInProgressKey == job.artworkKey) {
+                    unavailable.insert(candidate);
+                    continue;
+                }
+            }
+            if (ImageCache::isCached(job.itemId, ImageType::Primary,
+                                     job.imageTag, job.width, job.height)) {
+                unavailable.insert(candidate);
+                continue;
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_workerMutex);
+                if (m_workerPaused || generation != m_workerGeneration) break;
+                m_workerInProgressKey = job.artworkKey;
+            }
+            printf("[EpisodeBrowserScreen] Prefetch: selected=%d candidate=%d\n",
+                   selected, candidate);
+            break;
+        }
+        if (candidate < 0) {
+            printf("[EpisodeBrowserScreen] Prefetch: window warm\n");
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            if (m_workerInProgressKey != job.artworkKey) continue;
         }
 
         // --- Execute job (no lock held) ---
@@ -521,7 +628,6 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         if (ImageCache::isCached(job.itemId, ImageType::Primary,
                                  job.imageTag, job.width, job.height))
         {
-            printf("[EpisodeBrowserScreen] ArtworkWorker: cache hit\n");
             success = true;
         } else {
             std::string url = buildImageUrl(
@@ -539,16 +645,13 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                                  512 * 1024))
             {
                 if (response.ok()) {
-                    printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                           " downloaded %zu bytes\n",
-                           response.data.size());
                     const bool cacheWriteSucceeded = ImageCache::writeToCache(
                         job.itemId, ImageType::Primary, job.imageTag,
                         job.width, job.height,
                         response.data.data(), response.data.size());
                     if (cacheWriteSucceeded) {
                         printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                               " cache write complete\n");
+                               " downloaded episode=%s\n", job.itemId.c_str());
                         success = true;
                     } else {
                         printf("[EpisodeBrowserScreen] ArtworkWorker:"
@@ -569,11 +672,17 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerInProgressKey.clear();
             if (!m_workerStop) {
+                if (!success) m_failedKeys.insert(job.artworkKey);
                 m_workerCompletion = {job.artworkKey, success};
                 m_workerHasCompletion = true;
             }
         }
-        // Loop back — newer job submitted while working?  Pick it up.
+        // Recompute from the current selection after every request.
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            ++m_workerGeneration;
+            observedGeneration = m_workerGeneration - 1;
+        }
     }
 }
 

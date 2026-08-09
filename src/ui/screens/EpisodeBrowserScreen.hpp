@@ -6,6 +6,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <set>
 #include <string>
@@ -36,6 +37,18 @@ public:
     static int findEpisodeIndex(const std::vector<MediaItem> &episodes,
                                 const std::string &episodeId);
 
+    static constexpr int PREFETCH_AHEAD = 8;
+    static constexpr int PREFETCH_BEHIND = 3;
+
+    /// Return the next index in selected/ahead/behind priority order,
+    /// excluding unavailable indices.  Examines at most 12 indices.
+    static int nextPrefetchIndex(int selected, int total,
+                                 const std::set<int> &unavailable);
+
+    /// Advance the deterministic post-playback resume countdown.
+    /// Returns true exactly when the caller should resume prefetching.
+    static bool advancePrefetchResume(bool &pending, int &delayUpdates);
+
 private:
     enum class LoadState { Loading, Ready, Error };
 
@@ -57,7 +70,7 @@ private:
     /// Never performs HTTP on the main thread (B5g1a).
     void tryLoadSelectedEpisodeArtwork();
 
-    // ----- Artwork worker types (B5g1a) -----
+    // ----- Artwork worker types -----
 
     /// Immutable job description copied to the background worker.
     struct ArtworkJob {
@@ -76,6 +89,9 @@ private:
 
     /// Background artwork download worker loop (runs on worker thread).
     void artworkWorkerLoop();
+
+    /// Publish current selection to the worker and wake it to recompute.
+    void wakeArtworkWorker();
 
     // ----- Data -----
     Session       m_session;
@@ -99,15 +115,22 @@ private:
     DecodedImage  m_episodeArtwork;
     std::string   m_episodeArtworkKey;
 
-    // ----- Artwork worker state (B5g1a) -----
+    // ----- Artwork worker state (B5g1b) -----
     std::thread              m_workerThread;
     std::mutex               m_workerMutex;
     std::condition_variable  m_workerCv;
     bool                     m_workerStop = false;
 
-    /// Latest pending job (latest-selection-wins, no queue).
-    ArtworkJob               m_workerPending;
-    bool                     m_workerHasPending = false;
+    /// Immutable per-episode job data, rebuilt after fetchEpisodes().
+    std::vector<ArtworkJob>  m_artworkJobs;
+    int                      m_workerSelected = 0;
+    std::uint64_t            m_workerGeneration = 0;
+    bool                     m_workerPaused = false;
+
+    // Main-thread-only playback return bookkeeping.  App performs exactly
+    // one update between requesting playback and entering external playback.
+    bool                     m_prefetchResumePending = false;
+    int                      m_prefetchResumeDelayUpdates = 0;
 
     /// Key of the job currently being executed by the worker.
     /// Prevents duplicate submissions for the same artwork key.
@@ -117,7 +140,7 @@ private:
     ArtworkCompletion        m_workerCompletion;
     bool                     m_workerHasCompletion = false;
 
-    /// Artwork keys that failed download; not retried for this screen.
+    /// Artwork keys that failed download; guarded by m_workerMutex.
     std::set<std::string>    m_failedKeys;
 
     // ----- Initial episode focus (B5e3b) -----

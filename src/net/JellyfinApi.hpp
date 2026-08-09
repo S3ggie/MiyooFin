@@ -136,6 +136,14 @@ public:
                                       const std::string &userId,
                                       int limit);
 
+    /// Build a paginated library-items URL.
+    static std::string buildLibraryItemsUrl(const std::string &baseUrl,
+                                            const std::string &userId,
+                                            const std::string &parentId,
+                                            const std::string &includeItemTypes,
+                                            int startIndex,
+                                            int limit);
+
     // ---- JSON parsing helpers (public for testing) -------------------------
 
     static std::string jsonStringField(const std::string &obj,

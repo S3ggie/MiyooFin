@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 
 namespace miyoofin {
 
@@ -699,33 +700,60 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
                                   std::vector<MediaItem> &items,
                                   std::string &error)
 {
+    if (limit <= 0) {
+        error = "Library item page size must be positive";
+        return false;
+    }
+
     HttpClient client;
     client.setTimeoutSec(15);
     auto headers = buildAuthHeaders(accessToken, deviceId);
-    char urlBuf[512];
-    std::snprintf(urlBuf, sizeof(urlBuf),
-        "%s/Users/%s/Items?ParentId=%s&IncludeItemTypes=%s"
+    int startIndex = 0;
+
+    while (true) {
+        std::string url = buildLibraryItemsUrl(baseUrl, userId, parentId,
+                                               includeItemTypes, startIndex, limit);
+        HttpResponse response;
+        if (!client.perform("GET", url.c_str(), headers, {}, response, error)) {
+            if (error.empty()) error = "Could not reach server";
+            return false;
+        }
+        if (!response.ok()) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "Failed to fetch items (HTTP %ld)",
+                          response.status);
+            error = buf;
+            return false;
+        }
+
+        auto itemStrs = jsonExtractArray(response.body, "Items");
+        for (const auto &s : itemStrs)
+            items.push_back(jsonToMediaItem(s));
+
+        if (itemStrs.size() < static_cast<size_t>(limit))
+            return true;
+
+        if (startIndex > std::numeric_limits<int>::max() - limit) {
+            error = "Library item pagination offset overflow";
+            return false;
+        }
+        startIndex += limit;
+    }
+}
+
+std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,
+                                              const std::string &userId,
+                                              const std::string &parentId,
+                                              const std::string &includeItemTypes,
+                                              int startIndex,
+                                              int limit)
+{
+    return baseUrl + "/Users/" + userId + "/Items?ParentId=" + parentId +
+        "&IncludeItemTypes=" + includeItemTypes +
         "&SortBy=SortName&SortOrder=Ascending&Recursive=true"
         "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags"
-        "&Limit=%d",
-        baseUrl.c_str(), userId.c_str(), parentId.c_str(),
-        includeItemTypes.c_str(), limit);
-    HttpResponse response;
-    if (!client.perform("GET", urlBuf, headers, {}, response, error)) {
-        if (error.empty()) error = "Could not reach server";
-        return false;
-    }
-    if (!response.ok()) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "Failed to fetch items (HTTP %ld)",
-                      response.status);
-        error = buf;
-        return false;
-    }
-    auto itemStrs = jsonExtractArray(response.body, "Items");
-    for (const auto &s : itemStrs)
-        items.push_back(jsonToMediaItem(s));
-    return true;
+        "&StartIndex=" + std::to_string(startIndex) +
+        "&Limit=" + std::to_string(limit);
 }
 
 bool JellyfinApi::getResumeItems(const std::string &baseUrl,

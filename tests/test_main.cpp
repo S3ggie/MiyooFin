@@ -526,6 +526,28 @@ static void testBuildLatestUrl()
 }
 
 // -------------------------------------------------------------------
+// Test: library-items URL includes pagination and existing filters
+// -------------------------------------------------------------------
+static void testBuildLibraryItemsUrl()
+{
+    std::printf("[test] buildLibraryItemsUrl pagination\n");
+
+    std::string url = JellyfinApi::buildLibraryItemsUrl(
+        "https://jellyfin.example.com", "user123", "movies", "Movie", 50, 50);
+
+    CHECK(url.find("ParentId=movies") != std::string::npos);
+    CHECK(url.find("IncludeItemTypes=Movie") != std::string::npos);
+    CHECK(url.find("SortBy=SortName") != std::string::npos);
+    CHECK(url.find("SortOrder=Ascending") != std::string::npos);
+    CHECK(url.find("Recursive=true") != std::string::npos);
+    CHECK(url.find("Fields=Overview,Genres,CommunityRating,UserData,ImageTags") !=
+          std::string::npos);
+    CHECK(url.find("StartIndex=50") != std::string::npos);
+    CHECK(url.find("Limit=50") != std::string::npos);
+    std::printf("[test] buildLibraryItemsUrl OK\n");
+}
+
+// -------------------------------------------------------------------
 // B5a Test: buildImageUrl — Primary image URL
 // -------------------------------------------------------------------
 static void testBuildImageUrlPrimary()
@@ -1644,6 +1666,7 @@ int main()
     testContinueWatchingRowRefresh();
     testLatestItemsDirectArray();
     testBuildLatestUrl();
+    testBuildLibraryItemsUrl();
     testUnicodeEscapeDecoding();
     testBitmapFontMapCodePoint();
 

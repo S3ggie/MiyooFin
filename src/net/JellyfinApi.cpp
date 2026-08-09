@@ -575,6 +575,11 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
         item.progress = jsonFloatField(ur, "PlayedPercentage") / 100.0f;
         if (item.progress < 0.0f) item.progress = 0.0f;
         if (item.progress > 1.0f) item.progress = 1.0f;
+        std::string position = jsonRawValue(ur, "PlaybackPositionTicks");
+        if (!position.empty() && position != "null") {
+            try { item.playbackPositionTicks = std::stoll(position); }
+            catch (...) { item.playbackPositionTicks = 0; }
+        }
     }
 
     // ImageTags

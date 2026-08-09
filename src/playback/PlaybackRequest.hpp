@@ -11,6 +11,7 @@ namespace miyoofin {
 /// The request file contains only non-secret information:
 ///   item_id=<Jellyfin item ID>
 ///   item_type=movie|episode
+///   resume_ticks=<Jellyfin playback position ticks>
 ///
 /// The access token is NOT stored here; launch.sh reads it from session.txt.
 class PlaybackRequest {
@@ -18,10 +19,12 @@ public:
     /// Write a playback request to the default path ("playback-request.txt").
     /// @param itemId    Jellyfin item ID (must be non-empty).
     /// @param itemType  "movie" or "episode".
+    /// @param resumeTicks Exact Jellyfin resume position; negatives become zero.
     /// @param error     Set on failure with a human-readable message.
     /// @return true on success.
     static bool write(const std::string &itemId,
                       const std::string &itemType,
+                      long long resumeTicks,
                       std::string &error);
 
     /// Check whether a playback request file currently exists.
@@ -38,6 +41,7 @@ public:
     static bool writeTo(const std::string &path,
                         const std::string &itemId,
                         const std::string &itemType,
+                        long long resumeTicks,
                         std::string &error);
 
     /// Check whether a playback request file exists at an explicit path.

@@ -164,7 +164,8 @@ bool MovieDetailsScreen::handleAction(Action action)
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());
             std::string error;
-            if (PlaybackRequest::write(m_movie.id, "movie", error)) {
+            if (PlaybackRequest::write(m_movie.id, "movie",
+                                       m_movie.playbackPositionTicks, error)) {
                 printf("[MovieDetailsScreen] Playback request written, "
                        "requesting external playback\n");
                 m_stack->requestExternalPlayback();

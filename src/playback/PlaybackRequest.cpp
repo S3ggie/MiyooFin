@@ -16,14 +16,16 @@ const char *PlaybackRequest::defaultPath()
 // -------------------------------------------------------------------
 bool PlaybackRequest::write(const std::string &itemId,
                             const std::string &itemType,
+                            long long resumeTicks,
                             std::string &error)
 {
-    return writeTo(DEFAULT_PATH, itemId, itemType, error);
+    return writeTo(DEFAULT_PATH, itemId, itemType, resumeTicks, error);
 }
 
 bool PlaybackRequest::writeTo(const std::string &path,
                               const std::string &itemId,
                               const std::string &itemType,
+                              long long resumeTicks,
                               std::string &error)
 {
     if (itemId.empty()) {
@@ -44,6 +46,7 @@ bool PlaybackRequest::writeTo(const std::string &path,
 
     fprintf(f, "item_id=%s\n", itemId.c_str());
     fprintf(f, "item_type=%s\n", itemType.c_str());
+    fprintf(f, "resume_ticks=%lld\n", resumeTicks < 0 ? 0LL : resumeTicks);
 
     std::fclose(f);
     return true;

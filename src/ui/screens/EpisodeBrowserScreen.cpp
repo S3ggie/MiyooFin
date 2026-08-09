@@ -397,7 +397,9 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                     std::string error;
                     if (PlaybackRequest::write(
                             m_episodes[m_selectedEpisode].id,
-                            "episode", error))
+                            "episode",
+                            m_episodes[m_selectedEpisode].playbackPositionTicks,
+                            error))
                     {
                         {
                             std::lock_guard<std::mutex> lock(m_workerMutex);

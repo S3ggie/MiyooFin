@@ -275,7 +275,8 @@ static void testJsonToMediaItem()
         "ProductionYear":2021,"Overview":"A movie.","CommunityRating":7.5,
         "Genres":["Action","Sci-Fi"],
         "ImageTags":{"Primary":"tag1"},
-        "UserData":{"Played":false,"PlayedPercentage":45.5}})";
+        "UserData":{"Played":false,"PlayedPercentage":45.5,
+        "PlaybackPositionTicks":18822664360}})";
     auto item = JellyfinApi::jsonToMediaItem(j);
     CHECK_EQ(item.id, "i1");
     CHECK_EQ(item.title, "Test Movie");
@@ -287,6 +288,7 @@ static void testJsonToMediaItem()
     CHECK_EQ(item.genre, "Action");
     CHECK(item.played == false);
     CHECK(item.progress > 0.44f && item.progress < 0.46f);
+    CHECK(item.playbackPositionTicks == 18822664360LL);
     CHECK(item.imageTags.size() == 1);
     CHECK_EQ(item.imageTags.at("Primary"), "tag1");
 
@@ -298,7 +300,20 @@ static void testJsonToMediaItem()
     std::string j3 = R"({"Id":"m1","Name":"Min"})";
     auto m = JellyfinApi::jsonToMediaItem(j3);
     CHECK(m.year == 0); CHECK(m.genres.empty());
+    CHECK(m.playbackPositionTicks == 0);
     CHECK(m.imageTags.empty());
+
+    auto nullPosition = JellyfinApi::jsonToMediaItem(
+        R"({"UserData":{"PlaybackPositionTicks":null}})");
+    CHECK(nullPosition.playbackPositionTicks == 0);
+
+    auto malformedPosition = JellyfinApi::jsonToMediaItem(
+        R"({"UserData":{"PlaybackPositionTicks":not-a-number}})");
+    CHECK(malformedPosition.playbackPositionTicks == 0);
+
+    auto largePosition = JellyfinApi::jsonToMediaItem(
+        R"({"UserData":{"PlaybackPositionTicks":9223372036854775806}})");
+    CHECK(largePosition.playbackPositionTicks == 9223372036854775806LL);
     std::printf("[test] jsonToMediaItem OK\n");
 }
 
@@ -1270,7 +1285,8 @@ static void testPlaybackRequestMovie()
     std::remove(tmpPath);
 
     std::string error;
-    CHECK(PlaybackRequest::writeTo(tmpPath, "abc123", "movie", error));
+    CHECK(PlaybackRequest::writeTo(tmpPath, "abc123", "movie",
+                                   18822664360LL, error));
     CHECK(PlaybackRequest::existsAt(tmpPath));
 
     // Read back and verify
@@ -1283,6 +1299,7 @@ static void testPlaybackRequestMovie()
     std::string content(buf);
     CHECK(content.find("item_id=abc123\n") != std::string::npos);
     CHECK(content.find("item_type=movie\n") != std::string::npos);
+    CHECK(content.find("resume_ticks=18822664360\n") != std::string::npos);
     CHECK(content.find("access_token") == std::string::npos);
 
     std::remove(tmpPath);
@@ -1297,7 +1314,7 @@ static void testPlaybackRequestEpisode()
     std::remove(tmpPath);
 
     std::string error;
-    CHECK(PlaybackRequest::writeTo(tmpPath, "ep-42", "episode", error));
+    CHECK(PlaybackRequest::writeTo(tmpPath, "ep-42", "episode", 0, error));
     CHECK(PlaybackRequest::existsAt(tmpPath));
 
     FILE *f = std::fopen(tmpPath, "r");
@@ -1309,6 +1326,7 @@ static void testPlaybackRequestEpisode()
     std::string content(buf);
     CHECK(content.find("item_id=ep-42\n") != std::string::npos);
     CHECK(content.find("item_type=episode\n") != std::string::npos);
+    CHECK(content.find("resume_ticks=0\n") != std::string::npos);
 
     std::remove(tmpPath);
     std::printf("[test] B5f2: PlaybackRequest valid episode OK\n");
@@ -1319,7 +1337,7 @@ static void testPlaybackRequestEmptyId()
 {
     std::printf("[test] B5f2: PlaybackRequest empty ID rejected\n");
     std::string error;
-    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test.txt", "", "movie", error));
+    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test.txt", "", "movie", 0, error));
     CHECK(!error.empty());
     std::printf("[test] B5f2: PlaybackRequest empty ID rejected OK\n");
 }
@@ -1329,7 +1347,7 @@ static void testPlaybackRequestEmptyType()
 {
     std::printf("[test] B5f2: PlaybackRequest empty type rejected\n");
     std::string error;
-    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test2.txt", "id1", "", error));
+    CHECK(!PlaybackRequest::writeTo("/tmp/bpr_test2.txt", "id1", "", 0, error));
     CHECK(!error.empty());
     std::printf("[test] B5f2: PlaybackRequest empty type rejected OK\n");
 }
@@ -1340,7 +1358,15 @@ static void testPlaybackRequestRemove()
     std::printf("[test] B5f2: PlaybackRequest remove\n");
     const char *tmpPath = "test_playback_rm.txt";
     std::string error;
-    CHECK(PlaybackRequest::writeTo(tmpPath, "x", "movie", error));
+    CHECK(PlaybackRequest::writeTo(tmpPath, "x", "movie", -42, error));
+    {
+        FILE *f = std::fopen(tmpPath, "r");
+        CHECK(f != nullptr);
+        char buf[256] = {};
+        std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        CHECK(std::string(buf).find("resume_ticks=0\n") != std::string::npos);
+    }
     CHECK(PlaybackRequest::existsAt(tmpPath));
     CHECK(PlaybackRequest::removeAt(tmpPath));
     CHECK(!PlaybackRequest::existsAt(tmpPath));
@@ -1394,7 +1420,7 @@ static void testPlaybackRequestStillWorks()
     std::remove(tmpPath);
 
     std::string error;
-    CHECK(PlaybackRequest::writeTo(tmpPath, "movie-99", "movie", error));
+    CHECK(PlaybackRequest::writeTo(tmpPath, "movie-99", "movie", 123, error));
 
     // Verify contents
     FILE *f = std::fopen(tmpPath, "r");
@@ -1406,6 +1432,7 @@ static void testPlaybackRequestStillWorks()
     std::string content(buf);
     CHECK(content.find("item_id=movie-99\n") != std::string::npos);
     CHECK(content.find("item_type=movie\n") != std::string::npos);
+    CHECK(content.find("resume_ticks=123\n") != std::string::npos);
     // Must not contain access_token
     CHECK(content.find("access_token") == std::string::npos);
 

@@ -95,6 +95,20 @@ static std::string read_file(const std::string &path)
     return result;
 }
 
+// Read a file as raw bytes (binary-safe for pos.cfg and similar)
+static std::string read_file_binary(const std::string &path)
+{
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) return {};
+    std::string result;
+    char buf[256];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        result.append(buf, n);
+    std::fclose(f);
+    return result;
+}
+
 static bool file_exists(const std::string &path)
 {
     struct stat st;
@@ -447,6 +461,38 @@ int main(int argc, char *argv[])
         if (parse_showinfo_pts(partialBuf, pts)) {
             lastPts = pts; hasPts = true;
         }
+    }
+
+    // ---- pos.cfg final-position lookup (after FFplay has exited) ----
+    //
+    // OnionOS FFplay saves its playback position into
+    // /mnt/SDCARD/.tmp_update/pos.cfg as fixed-size 264-byte records.
+    // The record whose key matches our stream URL contains the most
+    // authoritative final position.  We attempt this lookup once,
+    // after draining all showinfo output.  On any failure we silently
+    // fall back to the latest sampled showinfo PTS — the existing
+    // behaviour.
+    static const char *POS_CFG_PATH =
+        "/mnt/SDCARD/.tmp_update/pos.cfg";
+    static const char *STREAM_KEY =
+        "http://127.0.0.1:18080/stream";
+
+    bool usedPosCfg = false;
+    if (hasPts) {
+        std::string posData = read_file_binary(POS_CFG_PATH);
+        if (!posData.empty()) {
+            uint32_t posSec = 0;
+            if (parse_pos_cfg_position(posData, STREAM_KEY, posSec)) {
+                reporter_log("pos.cfg final position=%us", (unsigned)posSec);
+                lastPts = static_cast<double>(posSec);
+                usedPosCfg = true;
+            } else {
+                reporter_log("pos.cfg position unavailable; using last PTS");
+            }
+        } else {
+            reporter_log("pos.cfg not readable; using last PTS");
+        }
+        (void)usedPosCfg;  // suppress unused-variable warning in non-debug builds
     }
 
     // Send ReportPlaybackStopped

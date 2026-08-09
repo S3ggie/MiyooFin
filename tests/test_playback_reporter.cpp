@@ -300,6 +300,180 @@ static void testPtsEventAlwaysStartThenProgress() {
 }
 
 // ================================================================
+// H: pos.cfg parsing tests
+// ================================================================
+
+static const char *MIYOOFIN_KEY = "http://127.0.0.1:18080/stream";
+
+// Helper: build a single 264-byte record
+static std::string make_record(const char *key, uint8_t posBytes[4])
+{
+    std::string rec(POS_CFG_RECORD_SIZE, '\0');
+    if (key) {
+        size_t klen = std::strlen(key);
+        if (klen > POS_CFG_KEY_SIZE) klen = POS_CFG_KEY_SIZE;
+        std::memcpy(&rec[0], key, klen);
+    }
+    rec[POS_CFG_POS_OFFSET + 0] = (char)posBytes[0];
+    rec[POS_CFG_POS_OFFSET + 1] = (char)posBytes[1];
+    rec[POS_CFG_POS_OFFSET + 2] = (char)posBytes[2];
+    rec[POS_CFG_POS_OFFSET + 3] = (char)posBytes[3];
+    return rec;
+}
+
+// H1: One complete 264-byte record, position = 32
+static void testPosCfgSingleRecord32() {
+    std::printf("[test] pos.cfg: single record position=32\n");
+    uint8_t pos[4] = {0x20, 0x00, 0x00, 0x00};
+    std::string data = make_record(MIYOOFIN_KEY, pos);
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 32);
+    std::printf("[test] pos.cfg: single record 32 OK\n");
+}
+
+// H2: Little-endian decode: 0x52 = 82 seconds
+static void testPosCfgLE82() {
+    std::printf("[test] pos.cfg: little-endian decode 82\n");
+    uint8_t pos[4] = {0x52, 0x00, 0x00, 0x00};
+    std::string data = make_record(MIYOOFIN_KEY, pos);
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 82);
+    std::printf("[test] pos.cfg: LE 82 OK\n");
+}
+
+// H3: Multiple records — unrelated record followed by MiyooFin record
+static void testPosCfgUnrelatedThenMiyooFin() {
+    std::printf("[test] pos.cfg: unrelated record then MiyooFin\n");
+    uint8_t posUnrel[4] = {0x0A, 0x00, 0x00, 0x00};
+    uint8_t posMiyoo[4] = {0x16, 0x00, 0x00, 0x00};
+    std::string data =
+        make_record("http://192.168.1.100:8096/videos", posUnrel) +
+        make_record(MIYOOFIN_KEY, posMiyoo);
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 22);
+    std::printf("[test] pos.cfg: unrelated then MiyooFin OK\n");
+}
+
+// H4: MiyooFin record NOT last — still finds it
+static void testPosCfgMiyooFinNotLast() {
+    std::printf("[test] pos.cfg: MiyooFin record NOT last\n");
+    uint8_t posMiyoo[4] = {0x15, 0x00, 0x00, 0x00};
+    uint8_t posAfter[4] = {0xFF, 0x00, 0x00, 0x00};
+    std::string data =
+        make_record(MIYOOFIN_KEY, posMiyoo) +
+        make_record("something.else", posAfter);
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 21);
+    std::printf("[test] pos.cfg: MiyooFin not last OK\n");
+}
+
+// H5: Multiple exact matching records — last one wins
+static void testPosCfgMultipleMatchesLastWins() {
+    std::printf("[test] pos.cfg: multiple exact matches, last wins\n");
+    uint8_t pos1[4] = {0x0A, 0x00, 0x00, 0x00};
+    uint8_t pos2[4] = {0x20, 0x00, 0x00, 0x00};
+    uint8_t pos3[4] = {0x37, 0x00, 0x00, 0x00};
+    std::string data =
+        make_record(MIYOOFIN_KEY, pos1) +
+        make_record("distractor", pos2) +
+        make_record(MIYOOFIN_KEY, pos3);
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 55);
+    std::printf("[test] pos.cfg: multiple matches last wins OK\n");
+}
+
+// H6: Missing matching key — failure
+static void testPosCfgMissingKey() {
+    std::printf("[test] pos.cfg: missing matching key\n");
+    uint8_t pos[4] = {0x0A, 0x00, 0x00, 0x00};
+    std::string data = make_record("http://wrong-server:8096/stream", pos);
+    uint32_t result = 99;
+    CHECK(!parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 99); // unchanged
+    std::printf("[test] pos.cfg: missing key OK\n");
+}
+
+// H7: Incomplete trailing record — safely ignored
+static void testPosCfgIncompleteTrailing() {
+    std::printf("[test] pos.cfg: incomplete trailing record\n");
+    uint8_t pos[4] = {0x16, 0x00, 0x00, 0x00};
+    std::string data = make_record(MIYOOFIN_KEY, pos);
+    data.append(100, '\x00'); // partial record
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
+    CHECK(result == 22);
+    std::printf("[test] pos.cfg: incomplete trailing OK\n");
+}
+
+// H8: 256-byte key field without any NUL — rejected
+static void testPosCfgNoNulInKeyField() {
+    std::printf("[test] pos.cfg: no NUL in key field\n");
+    std::string rec(POS_CFG_RECORD_SIZE, '\xFF');
+    uint8_t pos[4] = {0x0A, 0x00, 0x00, 0x00};
+    rec[POS_CFG_POS_OFFSET + 0] = pos[0];
+    rec[POS_CFG_POS_OFFSET + 1] = pos[1];
+    rec[POS_CFG_POS_OFFSET + 2] = pos[2];
+    rec[POS_CFG_POS_OFFSET + 3] = pos[3];
+    uint32_t result = 0;
+    CHECK(!parse_pos_cfg_position(rec, MIYOOFIN_KEY, result));
+    std::printf("[test] pos.cfg: no NUL rejected OK\n");
+}
+
+// H9: Stale bytes AFTER the NUL — key before NUL still matches
+static void testPosCfgStaleBytesAfterNul() {
+    std::printf("[test] pos.cfg: stale bytes after NUL still matches\n");
+    std::string rec(POS_CFG_RECORD_SIZE, '\0');
+    size_t klen = std::strlen(MIYOOFIN_KEY);
+    std::memcpy(&rec[0], MIYOOFIN_KEY, klen);
+    // Garbage after NUL within the 256-byte field
+    for (size_t i = klen + 1; i < POS_CFG_KEY_SIZE; ++i)
+        rec[i] = (char)(0xAA + (i & 0x0F));
+    uint8_t pos[4] = {0x2A, 0x00, 0x00, 0x00};
+    rec[POS_CFG_POS_OFFSET + 0] = pos[0];
+    rec[POS_CFG_POS_OFFSET + 1] = pos[1];
+    rec[POS_CFG_POS_OFFSET + 2] = pos[2];
+    rec[POS_CFG_POS_OFFSET + 3] = pos[3];
+    uint32_t result = 0;
+    CHECK(parse_pos_cfg_position(rec, MIYOOFIN_KEY, result));
+    CHECK(result == 42);
+    std::printf("[test] pos.cfg: stale bytes after NUL OK\n");
+}
+
+// H10: Successful pos.cfg value overrides sampled PTS
+static void testPosCfgOverridesSampledPts() {
+    std::printf("[test] pos.cfg: value overrides sampled PTS\n");
+    double lastPts = 31.4833;
+    uint8_t posBytes[4] = {0x20, 0x00, 0x00, 0x00};
+    std::string data = make_record(MIYOOFIN_KEY, posBytes);
+    uint32_t posSec = 0;
+    bool found = parse_pos_cfg_position(data, MIYOOFIN_KEY, posSec);
+    CHECK(found);
+    if (found) lastPts = static_cast<double>(posSec);
+    int64_t ticks = seconds_to_ticks(lastPts);
+    CHECK(ticks == 320000000);
+    std::printf("[test] pos.cfg: overrides sampled PTS OK\n");
+}
+
+// H11: Failed pos.cfg parse falls back to latest sampled showinfo PTS
+static void testPosCfgFallbackToSampledPts() {
+    std::printf("[test] pos.cfg: fallback to sampled PTS\n");
+    double lastPts = 27.2592;
+    uint8_t posBytes[4] = {0x01, 0x00, 0x00, 0x00};
+    std::string data = make_record("http://wrong-server/stream", posBytes);
+    uint32_t posSec = 0;
+    bool found = parse_pos_cfg_position(data, MIYOOFIN_KEY, posSec);
+    CHECK(!found);
+    int64_t ticks = seconds_to_ticks(lastPts);
+    CHECK(ticks == 272592000);
+    std::printf("[test] pos.cfg: fallback to sampled PTS OK\n");
+}
+
+// ================================================================
 // Main
 // ================================================================
 int main()
@@ -336,9 +510,17 @@ int main()
     testPtsEventFirstReturnsStart(); testPtsEventSecondReturnsProgress();
     testPtsEventAlwaysStartThenProgress();
 
+    std::printf("\n--- H: pos.cfg binary-record parsing ---\n");
+    testPosCfgSingleRecord32(); testPosCfgLE82();
+    testPosCfgUnrelatedThenMiyooFin(); testPosCfgMiyooFinNotLast();
+    testPosCfgMultipleMatchesLastWins(); testPosCfgMissingKey();
+    testPosCfgIncompleteTrailing(); testPosCfgNoNulInKeyField();
+    testPosCfgStaleBytesAfterNul(); testPosCfgOverridesSampledPts();
+    testPosCfgFallbackToSampledPts();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B5f3b playback reporter tests passed.\n");
+        std::printf("All playback reporter tests passed.\n");
         return 0;
     }
     std::printf("%d test(s) FAILED.\n", g_failures);

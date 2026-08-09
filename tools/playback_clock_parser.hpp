@@ -142,4 +142,93 @@ inline bool extract_record(const std::string &buf, size_t &pos,
     return true;
 }
 
+// -------------------------------------------------------------------
+// pos.cfg binary-record parsing — OnionOS FFplay saved-position lookup.
+//
+// /mnt/SDCARD/.tmp_update/pos.cfg contains fixed-size 264-byte records:
+//   bytes 0..255   — key/name/URL storage (NUL-terminated string)
+//   bytes 256..259 — saved playback position, little-endian uint32 (seconds)
+//   bytes 260..263 — another field (unused by this parser)
+//
+// This function scans the raw file data, finds the record whose first
+// NUL-terminated field exactly matches `streamKey`, and returns the
+// decoded position in whole seconds.
+//
+// Robustness:
+//   - requires at least one complete 264-byte record
+//   - iterates complete records safely; trailing partial bytes ignored
+//   - iterates ALL records (does not assume ordering or count)
+//   - rejects records with no NUL in the first 256 bytes
+//   - compares only up to the first NUL (stale bytes after NUL ignored)
+//   - decodes little-endian without assuming host endianness
+//   - if multiple matching records exist, returns the LAST one (newest slot)
+//   - does NOT modify the file data
+//
+// Returns true on success and writes decoded seconds to `outSeconds`.
+// Returns false on any failure (caller falls back to showinfo PTS).
+// -------------------------------------------------------------------
+
+static const size_t POS_CFG_RECORD_SIZE = 264;
+static const size_t POS_CFG_KEY_SIZE    = 256;
+static const size_t POS_CFG_POS_OFFSET  = 256;
+
+inline bool parse_pos_cfg_position(const std::string &fileData,
+                                   const char *streamKey,
+                                   uint32_t &outSeconds)
+{
+    if (!streamKey || streamKey[0] == '\0') return false;
+
+    const size_t dataSize = fileData.size();
+    if (dataSize < POS_CFG_RECORD_SIZE) return false;
+
+    // Iterate only complete 264-byte records; trailing partial bytes
+    // beyond the last full record are safely ignored.
+    const size_t recordCount = dataSize / POS_CFG_RECORD_SIZE;
+    const unsigned char *data =
+        reinterpret_cast<const unsigned char *>(fileData.data());
+
+    bool found = false;
+    uint32_t bestSeconds = 0;
+
+    const size_t keyLen = std::strlen(streamKey);
+
+    for (size_t i = 0; i < recordCount; ++i) {
+        const size_t base = i * POS_CFG_RECORD_SIZE;
+
+        // Scan first 256 bytes for a NUL terminator
+        size_t nulPos = 0;
+        bool hasNul = false;
+        for (size_t j = 0; j < POS_CFG_KEY_SIZE; ++j) {
+            if (data[base + j] == 0) {
+                nulPos = j;
+                hasNul = true;
+                break;
+            }
+        }
+
+        // Reject record if no NUL found in the key field
+        if (!hasNul) continue;
+
+        // Reject if NUL-terminated length doesn't match key length
+        if (nulPos != keyLen) continue;
+
+        // Compare the NUL-terminated value against the stream key
+        if (std::memcmp(data + base, streamKey, keyLen) != 0) continue;
+
+        // Decode bytes +256..+259 as little-endian uint32
+        const uint32_t pos =
+            static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 0])
+          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 1]) << 8)
+          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 2]) << 16)
+          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 3]) << 24);
+
+        // Prefer the last matching record in file order
+        bestSeconds = pos;
+        found = true;
+    }
+
+    if (found) outSeconds = bestSeconds;
+    return found;
+}
+
 #endif // PLAYBACK_CLOCK_PARSER_HPP

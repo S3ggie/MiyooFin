@@ -5,7 +5,7 @@
 # The parent suspends SDL before forking and resumes after this script exits.
 #
 # Reads:
-#   playback-request.txt  — item_id and item_type
+#   playback-request.txt  — item_id, item_type, and resume_ticks
 #   session.txt           — server_url and access_token
 #
 # Flow:
@@ -53,6 +53,13 @@ fi
 
 REQUEST_ITEM_ID=$(read_kv playback-request.txt item_id)
 REQUEST_ITEM_TYPE=$(read_kv playback-request.txt item_type)
+REQUEST_RESUME_TICKS=$(read_kv playback-request.txt resume_ticks)
+
+# Keep ticks as a validated decimal string.  Shell arithmetic may not be
+# 64-bit on the target device.
+case "$REQUEST_RESUME_TICKS" in
+    ''|*[!0-9]*) REQUEST_RESUME_TICKS=0 ;;
+esac
 
 if [ -z "$REQUEST_ITEM_ID" ]; then
     playback_log "ERROR: Missing item_id in playback-request.txt"
@@ -79,6 +86,7 @@ for _f in miyoofin-https-bridge cacert.pem; do
 done
 
 playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}) ==="
+playback_log "Resume ticks=${REQUEST_RESUME_TICKS}"
 
 # -------------------------------------------------------------------
 # Construct the EXACT proven forced-transcode URL.
@@ -91,7 +99,8 @@ TURL="${TURL}&MaxVideoBitDepth=8&VideoBitRate=1200000"
 TURL="${TURL}&AudioBitRate=96000&AudioChannels=2&MaxAudioChannels=2"
 TURL="${TURL}&AllowVideoStreamCopy=false&AllowAudioStreamCopy=false"
 TURL="${TURL}&EnableAutoStreamCopy=false&Context=Streaming"
-TURL="${TURL}&SubtitleStreamIndex=-1&ApiKey=${ACCESS_TOKEN}"
+TURL="${TURL}&SubtitleStreamIndex=-1&StartTimeTicks=${REQUEST_RESUME_TICKS}"
+TURL="${TURL}&ApiKey=${ACCESS_TOKEN}"
 
 # -------------------------------------------------------------------
 # Ensure clean state

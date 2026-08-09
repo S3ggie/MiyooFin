@@ -62,6 +62,31 @@ static void testTicksNaN() {
     std::printf("[test] seconds_to_ticks: NaN/Inf clamps OK\n");
 }
 
+// A2: resume parsing and absolute-position conversion
+static void testResumeTicksParsing() {
+    std::printf("[test] resume_ticks parsing\n");
+    CHECK(parse_resume_ticks("") == 0);
+    CHECK(parse_resume_ticks("not-a-number") == 0);
+    CHECK(parse_resume_ticks("12oops") == 0);
+    CHECK(parse_resume_ticks("-42") == 0);
+    CHECK(parse_resume_ticks("6734640000") == 6734640000LL);
+    CHECK(parse_resume_ticks("9223372036854775808") == 0);
+    std::printf("[test] resume_ticks parsing OK\n");
+}
+
+static void testAbsolutePositionTicks() {
+    std::printf("[test] absolute resume positions\n");
+    CHECK(absolute_position_ticks(0, 18.0) == 180000000LL);
+    CHECK(absolute_position_ticks(6734640000LL, 18.0) == 6914640000LL);
+    CHECK(absolute_position_ticks(6734640000LL, 1.48438) == 6749483800LL);
+    CHECK(absolute_position_ticks(6734640000LL, 6.48938) == 6799533800LL);
+    CHECK(absolute_position_ticks(-1, 18.0) == 180000000LL);
+    CHECK(add_resume_ticks(std::numeric_limits<int64_t>::max() - 5, 10)
+          == std::numeric_limits<int64_t>::max());
+    CHECK(add_resume_ticks(10, -1) == 10);
+    std::printf("[test] absolute resume positions OK\n");
+}
+
 // B: Valid showinfo pts_time parsing
 static void testParsePts1() {
     std::printf("[test] parse_showinfo_pts: pts_time:1.46673\n");
@@ -454,8 +479,8 @@ static void testPosCfgOverridesSampledPts() {
     bool found = parse_pos_cfg_position(data, MIYOOFIN_KEY, posSec);
     CHECK(found);
     if (found) lastPts = static_cast<double>(posSec);
-    int64_t ticks = seconds_to_ticks(lastPts);
-    CHECK(ticks == 320000000);
+    int64_t ticks = absolute_position_ticks(6734640000LL, lastPts);
+    CHECK(ticks == 7054640000LL);
     std::printf("[test] pos.cfg: overrides sampled PTS OK\n");
 }
 
@@ -468,8 +493,8 @@ static void testPosCfgFallbackToSampledPts() {
     uint32_t posSec = 0;
     bool found = parse_pos_cfg_position(data, MIYOOFIN_KEY, posSec);
     CHECK(!found);
-    int64_t ticks = seconds_to_ticks(lastPts);
-    CHECK(ticks == 272592000);
+    int64_t ticks = absolute_position_ticks(6734640000LL, lastPts);
+    CHECK(ticks == 7007232000LL);
     std::printf("[test] pos.cfg: fallback to sampled PTS OK\n");
 }
 
@@ -484,6 +509,9 @@ int main()
     std::printf("--- A: seconds_to_ticks ---\n");
     testTicksZero(); testTicks525(); testTicks60(); testTicks138742();
     testTicksNegativeClamp(); testTicksNaN();
+
+    std::printf("\n--- A2: resume ticks and absolute positions ---\n");
+    testResumeTicksParsing(); testAbsolutePositionTicks();
 
     std::printf("\n--- B: valid showinfo pts_time parsing ---\n");
     testParsePts1(); testParsePts2(); testParsePts21();

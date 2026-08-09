@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 
 // -------------------------------------------------------------------
@@ -22,7 +23,44 @@
 inline int64_t seconds_to_ticks(double seconds)
 {
     if (!std::isfinite(seconds) || seconds < 0.0) return 0;
+    const double maxTicks =
+        static_cast<double>(std::numeric_limits<int64_t>::max());
+    if (seconds * 10000000.0 >= maxTicks)
+        return std::numeric_limits<int64_t>::max();
     return static_cast<int64_t>(seconds * 10000000.0 + 0.5);
+}
+
+// Parse playback-request.txt's resume_ticks value.  Only a complete signed
+// decimal int64 is accepted; missing, malformed, negative, and overflowing
+// values normalize to zero.
+inline int64_t parse_resume_ticks(const std::string &value)
+{
+    if (value.empty()) return 0;
+    size_t consumed = 0;
+    try {
+        long long parsed = std::stoll(value, &consumed, 10);
+        if (consumed != value.size() || parsed < 0) return 0;
+        return static_cast<int64_t>(parsed);
+    } catch (...) {
+        return 0;
+    }
+}
+
+// Convert a local playback clock to Jellyfin's absolute clock.  Negative
+// inputs normalize to zero and overflow saturates deterministically.
+inline int64_t add_resume_ticks(int64_t resumeTicks, int64_t localTicks)
+{
+    if (resumeTicks < 0) resumeTicks = 0;
+    if (localTicks < 0) localTicks = 0;
+    const int64_t maxTicks = std::numeric_limits<int64_t>::max();
+    if (localTicks > maxTicks - resumeTicks) return maxTicks;
+    return resumeTicks + localTicks;
+}
+
+inline int64_t absolute_position_ticks(int64_t resumeTicks,
+                                       double localSeconds)
+{
+    return add_resume_ticks(resumeTicks, seconds_to_ticks(localSeconds));
 }
 
 // -------------------------------------------------------------------

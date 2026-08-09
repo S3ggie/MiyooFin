@@ -5,7 +5,7 @@
 //
 // Reads from <app-dir>:
 //   session.txt           — server_url, access_token, user_id, device_id
-//   playback-request.txt  — item_id, item_type
+//   playback-request.txt  — item_id, item_type, resume_ticks
 //   playback-ffplay.log   — FFplay showinfo output (growing file, opened by reporter
 //                           before FFplay starts; FFplay appends with >>)
 //   playback-ffplay-exit.txt — written by playback_runner.sh when FFplay exits
@@ -345,7 +345,10 @@ int main(int argc, char *argv[])
         reporter_log("ERROR: missing item_id");
         std::fclose(g_logFile); return 1;
     }
+    int64_t resumeTicks = parse_resume_ticks(
+        read_kv_from_content(reqContent, "resume_ticks"));
     reporter_log("item=%s server=%s", itemId.c_str(), serverUrl.c_str());
+    reporter_log("resume ticks=%lld", (long long)resumeTicks);
 
     std::string cacertPath = appDir + "/cacert.pem";
     if (!file_exists(cacertPath)) {
@@ -406,13 +409,15 @@ int main(int argc, char *argv[])
                             // First valid PTS → send PlaybackStart (once)
                             reporter_log("first pts %.4f sec", pts);
                             report_start(serverUrl, itemId,
-                                         seconds_to_ticks(pts),
+                                         absolute_position_ticks(resumeTicks,
+                                                                 pts),
                                          accessToken, deviceId,
                                          cacertPath);
                         } else {
                             // Subsequent valid PTS → send PlaybackProgress
                             report_progress(serverUrl, itemId,
-                                            seconds_to_ticks(pts),
+                                            absolute_position_ticks(resumeTicks,
+                                                                    pts),
                                             accessToken, deviceId, cacertPath);
                         }
                     }
@@ -498,7 +503,8 @@ int main(int argc, char *argv[])
     // Send ReportPlaybackStopped
     bool failed = (exitCode != 0);
     if (hasPts) {
-        report_stopped(serverUrl, itemId, seconds_to_ticks(lastPts),
+        report_stopped(serverUrl, itemId,
+                       absolute_position_ticks(resumeTicks, lastPts),
                        failed, accessToken, deviceId, cacertPath);
     } else {
         reporter_log("no pts observed, nothing to report");
@@ -509,5 +515,4 @@ int main(int argc, char *argv[])
     if (g_logFile) { std::fclose(g_logFile); g_logFile = nullptr; }
     return 0;
 }
-
 

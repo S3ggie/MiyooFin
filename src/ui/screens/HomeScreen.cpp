@@ -52,6 +52,8 @@ HomeScreen::~HomeScreen()
 {
     if (m_fetchThread.joinable())
         m_fetchThread.join();
+    if (m_resumeRefreshThread.joinable())
+        m_resumeRefreshThread.join();
 }
 
 const TabData &HomeScreen::currentTab() const
@@ -107,6 +109,12 @@ void HomeScreen::enter()
            m_userName.c_str());
     if (m_loadState == LoadState::Loading && !m_fetchDone)
         startFetch();
+    else if (m_loadState == LoadState::Ready) {
+        if (m_resumeRefreshInFlight)
+            m_resumeRefreshPending = true;
+        else
+            startResumeRefresh();
+    }
 }
 
 void HomeScreen::leave()
@@ -225,6 +233,8 @@ void HomeScreen::update(Uint32 dt)
     }
     if (m_loadState == LoadState::Loading && m_fetchDone)
         finishFetch();
+    if (m_loadState == LoadState::Ready && m_resumeRefreshDone)
+        finishResumeRefresh();
 
     // Attempt selected artwork load (identity guard prevents repeats)
     if (m_loadState == LoadState::Ready)
@@ -350,6 +360,59 @@ void HomeScreen::finishFetch()
     m_loadState = LoadState::Ready;
     clampNavigation();
     printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
+}
+
+void HomeScreen::startResumeRefresh()
+{
+    if (m_resumeRefreshThread.joinable())
+        m_resumeRefreshThread.join();
+
+    m_resumeRefreshDone = false;
+    m_resumeRefreshInFlight = true;
+    m_resumeRefreshSucceeded = false;
+    m_resumeRefreshError.clear();
+    m_resumeRefreshResult.clear();
+
+    std::string url = m_session.serverUrl;
+    std::string token = m_session.accessToken;
+    std::string uid = m_session.userId;
+    std::string devId = m_session.deviceId;
+
+    m_resumeRefreshThread = std::thread([this, url, token, uid, devId]() {
+        std::vector<MediaItem> items;
+        std::string error;
+        if (JellyfinApi::getResumeItems(url, token, uid, devId, 12,
+                                        items, error)) {
+            m_resumeRefreshResult = std::move(items);
+            m_resumeRefreshSucceeded = true;
+        } else {
+            m_resumeRefreshError = error;
+        }
+        m_resumeRefreshDone = true;
+    });
+}
+
+void HomeScreen::finishResumeRefresh()
+{
+    if (m_resumeRefreshThread.joinable())
+        m_resumeRefreshThread.join();
+    m_resumeRefreshDone = false;
+    m_resumeRefreshInFlight = false;
+
+    if (!m_resumeRefreshSucceeded) {
+        printf("[HomeScreen] Continue Watching refresh failed: %s\n",
+               m_resumeRefreshError.c_str());
+    } else {
+        updateContinueWatchingRow(m_tabs, m_resumeRefreshResult);
+        clampNavigation();
+        printf("[HomeScreen] Continue Watching refreshed: %zu items\n",
+               m_resumeRefreshResult.size());
+    }
+
+    if (m_resumeRefreshPending) {
+        m_resumeRefreshPending = false;
+        startResumeRefresh();
+    }
 }
 
 void HomeScreen::tryLoadSelectedArtwork()

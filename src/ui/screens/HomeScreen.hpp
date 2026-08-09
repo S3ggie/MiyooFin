@@ -7,6 +7,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../ArtworkLayout.hpp"
 #include <atomic>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <thread>
@@ -30,6 +31,34 @@ public:
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
+
+    /// Replace, insert, or remove Home's Continue Watching row.
+    /// Public so the row behaviour can be tested without a network request.
+    static void updateContinueWatchingRow(std::vector<TabData> &tabs,
+                                          const std::vector<MediaItem> &items)
+    {
+        auto homeIt = std::find_if(tabs.begin(), tabs.end(),
+            [](const TabData &tab) { return tab.name == "Home"; });
+        if (homeIt == tabs.end()) return;
+
+        auto &rows = homeIt->rows;
+        auto cwIt = std::find_if(rows.begin(), rows.end(),
+            [](const MediaRow &row) { return row.label == "Continue Watching"; });
+        if (!items.empty()) {
+            if (cwIt != rows.end()) {
+                cwIt->items = items;
+            } else {
+                if (rows.size() == 1 && rows[0].label.empty() && rows[0].items.empty())
+                    rows.clear();
+                auto recentlyAdded = std::find_if(rows.begin(), rows.end(),
+                    [](const MediaRow &row) { return row.label == "Recently Added"; });
+                rows.insert(recentlyAdded, {"Continue Watching", items});
+            }
+        } else if (cwIt != rows.end()) {
+            rows.erase(cwIt);
+            if (rows.empty()) rows.push_back({"", {}});
+        }
+    }
 
     // --- Row artwork helpers (public for testing) -------------------------
 
@@ -75,6 +104,18 @@ private:
 
     void startFetch();
     void finishFetch();
+
+    // Lightweight refresh used when returning to an already-loaded Home.
+    std::thread m_resumeRefreshThread;
+    std::atomic<bool> m_resumeRefreshDone{false};
+    std::atomic<bool> m_resumeRefreshInFlight{false};
+    bool m_resumeRefreshPending = false;
+    bool m_resumeRefreshSucceeded = false;
+    std::string m_resumeRefreshError;
+    std::vector<MediaItem> m_resumeRefreshResult;
+
+    void startResumeRefresh();
+    void finishResumeRefresh();
 
     // Helpers
     const TabData &currentTab() const;

@@ -17,6 +17,7 @@
 #include "../src/net/DeviceIdentity.hpp"
 #include "../src/data/MediaItem.hpp"
 #include "../src/ui/BitmapFont.hpp"
+#include "../src/ui/screens/HomeScreen.hpp"
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/net/HttpClient.hpp"
@@ -350,6 +351,44 @@ static void testBuildTabs()
     CHECK(t2[0].rows.size() == 1);
     CHECK(t2[0].rows[0].items.empty());
     std::printf("[test] buildTabs OK\n");
+}
+
+static void testContinueWatchingRowRefresh()
+{
+    std::printf("[test] Continue Watching row refresh\n");
+    MediaItem oldItem; oldItem.id = "old";
+    MediaItem newItem; newItem.id = "new";
+    MediaItem recentItem; recentItem.id = "recent";
+
+    std::vector<TabData> tabs = {{"Home", {
+        {"Continue Watching", {oldItem}}, {"Recently Added", {recentItem}}
+    }}};
+    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    CHECK(tabs[0].rows.size() == 2);
+    CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
+    CHECK_EQ(tabs[0].rows[0].items[0].id, "new");
+    CHECK_EQ(tabs[0].rows[1].label, "Recently Added");
+
+    tabs = {{"Home", {{"Recently Added", {recentItem}}}}};
+    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    CHECK(tabs[0].rows.size() == 2);
+    CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
+    CHECK_EQ(tabs[0].rows[1].label, "Recently Added");
+
+    HomeScreen::updateContinueWatchingRow(tabs, {});
+    CHECK(tabs[0].rows.size() == 1);
+    CHECK_EQ(tabs[0].rows[0].label, "Recently Added");
+
+    tabs = {{"Home", {{"Continue Watching", {oldItem}}}}};
+    HomeScreen::updateContinueWatchingRow(tabs, {});
+    CHECK(tabs[0].rows.size() == 1);
+    CHECK(tabs[0].rows[0].label.empty());
+    CHECK(tabs[0].rows[0].items.empty());
+
+    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    CHECK(tabs[0].rows.size() == 1);
+    CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
+    std::printf("[test] Continue Watching row refresh OK\n");
 }
 
 // -------------------------------------------------------------------
@@ -1602,6 +1641,7 @@ int main()
     testJsonExtractArray();
     testJsonToMediaItem();
     testBuildTabs();
+    testContinueWatchingRowRefresh();
     testLatestItemsDirectArray();
     testBuildLatestUrl();
     testUnicodeEscapeDecoding();

@@ -129,6 +129,20 @@ EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
 }
 
 // -------------------------------------------------------------------
+// Destructor — signal worker to stop, wake it, join (B5g1a)
+// -------------------------------------------------------------------
+EpisodeBrowserScreen::~EpisodeBrowserScreen()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerStop = true;
+    }
+    m_workerCv.notify_one();
+    if (m_workerThread.joinable())
+        m_workerThread.join();
+}
+
+// -------------------------------------------------------------------
 // findEpisodeIndex — static helper for locating an episode by ID
 // -------------------------------------------------------------------
 int EpisodeBrowserScreen::findEpisodeIndex(
@@ -180,7 +194,14 @@ void EpisodeBrowserScreen::fetchEpisodes()
         m_actionBtn = ActionButton::Play;
         m_episodeArtwork = {};
         m_episodeArtworkKey.clear();
-        m_episodeArtworkAttempted = false;
+
+        // B5g1a: clear artwork worker state for fresh episode list
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            m_workerHasPending = false;
+            m_workerHasCompletion = false;
+        }
+        m_failedKeys.clear();
 
         // B5e3b: Apply initial episode focus if requested
         if (!m_initialEpisodeId.empty() && !m_initialSelectionApplied) {
@@ -357,7 +378,9 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 }
 
 // -------------------------------------------------------------------
-// tryLoadSelectedEpisodeArtwork — one-shot per selected episode
+// tryLoadSelectedEpisodeArtwork — non-blocking (B5g1a)
+// Main thread NEVER performs HTTP.  Selection changes are immediate
+// for metadata.  Artwork uses cache-first + background worker.
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
 {
@@ -365,7 +388,6 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
         m_episodeArtwork = {};
         m_episodeArtworkKey.clear();
-        m_episodeArtworkAttempted = false;
         return;
     }
 
@@ -374,79 +396,184 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     // Look for Primary image tag (NOT Thumb)
     auto it = ep.imageTags.find("Primary");
     if (it == ep.imageTags.end() || it->second.empty()) {
-        // No Primary tag — clear artwork, mark attempted to avoid retry
         m_episodeArtwork = {};
         m_episodeArtworkKey = ep.id + ":none:288x162";
-        m_episodeArtworkAttempted = true;
         return;
     }
-
-    // Build stable identity key: episodeId:Primary:imageTag:288x162
-    std::string key = ep.id + ":Primary:" + it->second + ":288x162";
-
-    // Identity guard — already attempted this exact selection?  Do not retry.
-    if (m_episodeArtworkAttempted && m_episodeArtworkKey == key)
-        return;
-
-    // New selection — clear previous decoded image and attempt once
-    m_episodeArtwork = {};
-    m_episodeArtworkKey = key;
-    m_episodeArtworkAttempted = true;
 
     constexpr int w = 288;
     constexpr int h = 162;
     const std::string &tag = it->second;
 
-    printf("[EpisodeBrowserScreen] Artwork: loading %s tag=%s (%dx%d)\n",
-           ep.id.c_str(), tag.c_str(), w, h);
+    // Build stable identity key: episodeId:Primary:imageTag:288x162
+    std::string key = ep.id + ":Primary:" + tag + ":288x162";
 
-    // 1. Check disk cache
-    std::vector<unsigned char> jpegData;
+    // 1. Already decoded artwork for this exact key?  Done.
+    if (m_episodeArtworkKey == key && !m_episodeArtwork.empty())
+        return;
+
+    // 2. Check worker completion signal (consumed once per frame max)
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        if (m_workerHasCompletion) {
+            ArtworkCompletion comp = m_workerCompletion;
+            m_workerHasCompletion = false;
+            if (!comp.success)
+                m_failedKeys.insert(comp.artworkKey);
+            if (comp.artworkKey == key) {
+                if (comp.success) {
+                    auto jpegData = ImageCache::readCached(
+                        ep.id, ImageType::Primary, tag, w, h);
+                    if (!jpegData.empty()) {
+                        m_episodeArtwork = ImageDecoder::decodeJpeg(
+                            jpegData.data(), jpegData.size());
+                        if (!m_episodeArtwork.empty()) {
+                            m_episodeArtworkKey = key;
+                            printf("[EpisodeBrowserScreen] Artwork:"
+                                   " decoded selected %s\n",
+                                   ep.id.c_str());
+                        }
+                    }
+                }
+                return;
+            }
+            // Stale completion (old selection) — fall through
+        }
+    }
+
+    // 3. Selection changed — clear previous decoded artwork
+    if (m_episodeArtworkKey != key) {
+        m_episodeArtwork = {};
+        m_episodeArtworkKey = key;
+    }
+
+    // 4. Failed key?  Do not retry.
+    if (m_failedKeys.count(key))
+        return;
+
+    // 5. Worker already in-progress or pending for this key?  Wait.
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        if (m_workerInProgressKey == key ||
+            (m_workerHasPending && m_workerPending.artworkKey == key))
+            return;
+    }
+
+    // 6. Check disk cache (fast filesystem-only, no network)
     if (ImageCache::isCached(ep.id, ImageType::Primary, tag, w, h)) {
-        jpegData = ImageCache::readCached(ep.id, ImageType::Primary, tag, w, h);
-        printf("[EpisodeBrowserScreen] Artwork: cache hit (%zu bytes)\n",
-               jpegData.size());
+        auto jpegData = ImageCache::readCached(
+            ep.id, ImageType::Primary, tag, w, h);
+        if (!jpegData.empty()) {
+            m_episodeArtwork = ImageDecoder::decodeJpeg(
+                jpegData.data(), jpegData.size());
+            if (!m_episodeArtwork.empty()) {
+                m_episodeArtworkKey = key;
+                printf("[EpisodeBrowserScreen] Artwork:"
+                       " cache hit, decoded %s\n", ep.id.c_str());
+                return;
+            }
+        }
     }
 
-    // 2. If not cached, synchronous HTTP request
-    if (jpegData.empty()) {
-        std::string url = buildImageUrl(
-            m_session.serverUrl, ep.id, ImageType::Primary, tag, w, h);
+    // 7. Not cached — submit background worker job (latest-selection-wins)
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerPending = {ep.id, tag, key, w, h};
+        m_workerHasPending = true;
 
-        HttpClient client;
-        client.setTimeoutSec(8);
-        auto headers = JellyfinApi::buildAuthHeaders(
-            m_session.accessToken, m_session.deviceId);
-
-        BinaryHttpResponse response;
-        std::string error;
-        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
-            printf("[EpisodeBrowserScreen] Artwork fetch failed: %s\n",
-                   error.c_str());
-            return;
+        // Start worker thread lazily on first job submission
+        if (!m_workerThread.joinable()) {
+            m_workerThread = std::thread(
+                &EpisodeBrowserScreen::artworkWorkerLoop, this);
         }
-        if (!response.ok()) {
-            printf("[EpisodeBrowserScreen] Artwork HTTP %ld\n",
-                   response.status);
-            return;
-        }
-
-        jpegData = std::move(response.data);
-        printf("[EpisodeBrowserScreen] Artwork: downloaded %zu bytes\n",
-               jpegData.size());
-
-        // Cache to disk (best-effort)
-        ImageCache::writeToCache(ep.id, ImageType::Primary, tag, w, h,
-                                 jpegData.data(), jpegData.size());
     }
+    m_workerCv.notify_one();
+    printf("[EpisodeBrowserScreen] ArtworkWorker: request episode=%s\n",
+           ep.id.c_str());
+}
 
-    // 3. Decode JPEG
-    m_episodeArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
-    if (m_episodeArtwork.empty()) {
-        printf("[EpisodeBrowserScreen] Artwork: decode failed\n");
-    } else {
-        printf("[EpisodeBrowserScreen] Artwork: decoded %dx%d\n",
-               m_episodeArtwork.width, m_episodeArtwork.height);
+// -------------------------------------------------------------------
+// artworkWorkerLoop — background thread (B5g1a)
+//
+// Executes one artwork job at a time.  After finishing a job, loops
+// back to check for a newer pending request (latest-selection-wins).
+// Never accesses SDL, rendering, or m_episodeArtwork.
+// -------------------------------------------------------------------
+void EpisodeBrowserScreen::artworkWorkerLoop()
+{
+    while (true) {
+        ArtworkJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_workerMutex);
+            while (!m_workerStop && !m_workerHasPending)
+                m_workerCv.wait(lock);
+            if (m_workerStop) break;
+
+            // Take the latest pending job (latest-selection-wins)
+            job = m_workerPending;
+            m_workerHasPending = false;
+            m_workerInProgressKey = job.artworkKey;
+        }
+
+        // --- Execute job (no lock held) ---
+        bool success = false;
+
+        if (ImageCache::isCached(job.itemId, ImageType::Primary,
+                                 job.imageTag, job.width, job.height))
+        {
+            printf("[EpisodeBrowserScreen] ArtworkWorker: cache hit\n");
+            success = true;
+        } else {
+            std::string url = buildImageUrl(
+                m_session.serverUrl, job.itemId, ImageType::Primary,
+                job.imageTag, job.width, job.height);
+
+            HttpClient client;
+            client.setTimeoutSec(3);
+            auto headers = JellyfinApi::buildAuthHeaders(
+                m_session.accessToken, m_session.deviceId);
+
+            BinaryHttpResponse response;
+            std::string error;
+            if (client.getBinary(url, headers, response, error,
+                                 512 * 1024))
+            {
+                if (response.ok()) {
+                    printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                           " downloaded %zu bytes\n",
+                           response.data.size());
+                    const bool cacheWriteSucceeded = ImageCache::writeToCache(
+                        job.itemId, ImageType::Primary, job.imageTag,
+                        job.width, job.height,
+                        response.data.data(), response.data.size());
+                    if (cacheWriteSucceeded) {
+                        printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                               " cache write complete\n");
+                        success = true;
+                    } else {
+                        printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                               " cache write failed\n");
+                    }
+                } else {
+                    printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                           " HTTP %ld\n", response.status);
+                }
+            } else {
+                printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                       " network error: %s\n", error.c_str());
+            }
+        }
+
+        // --- Publish completion signal (under lock) ---
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            m_workerInProgressKey.clear();
+            if (!m_workerStop) {
+                m_workerCompletion = {job.artworkKey, success};
+                m_workerHasCompletion = true;
+            }
+        }
+        // Loop back — newer job submitted while working?  Pick it up.
     }
 }
 

@@ -5,7 +5,11 @@
 #include "../../data/MediaItem.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
+#include <condition_variable>
+#include <mutex>
+#include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace miyoofin {
@@ -19,7 +23,7 @@ public:
                          const MediaItem &series,
                          const MediaItem &season,
                          const std::string &initialEpisodeId = "");
-    ~EpisodeBrowserScreen() override = default;
+    ~EpisodeBrowserScreen() override;
 
     void enter() override;
     void leave() override;
@@ -50,7 +54,28 @@ private:
     void clampListScroll();
 
     /// Load the Primary artwork for the currently selected episode.
+    /// Never performs HTTP on the main thread (B5g1a).
     void tryLoadSelectedEpisodeArtwork();
+
+    // ----- Artwork worker types (B5g1a) -----
+
+    /// Immutable job description copied to the background worker.
+    struct ArtworkJob {
+        std::string itemId;
+        std::string imageTag;
+        std::string artworkKey;   ///< Stable identity key for completion matching
+        int         width  = 288;
+        int         height = 162;
+    };
+
+    /// Completion signal published by the artwork worker.
+    struct ArtworkCompletion {
+        std::string artworkKey;
+        bool        success = false;
+    };
+
+    /// Background artwork download worker loop (runs on worker thread).
+    void artworkWorkerLoop();
 
     // ----- Data -----
     Session       m_session;
@@ -70,10 +95,30 @@ private:
     FocusArea     m_focus = FocusArea::EpisodeList;
     ActionButton  m_actionBtn = ActionButton::Play;
 
-    // ----- Selected-episode artwork (B5e2c) -----
+    // ----- Selected-episode artwork (B5g1a: non-blocking) -----
     DecodedImage  m_episodeArtwork;
     std::string   m_episodeArtworkKey;
-    bool          m_episodeArtworkAttempted = false;
+
+    // ----- Artwork worker state (B5g1a) -----
+    std::thread              m_workerThread;
+    std::mutex               m_workerMutex;
+    std::condition_variable  m_workerCv;
+    bool                     m_workerStop = false;
+
+    /// Latest pending job (latest-selection-wins, no queue).
+    ArtworkJob               m_workerPending;
+    bool                     m_workerHasPending = false;
+
+    /// Key of the job currently being executed by the worker.
+    /// Prevents duplicate submissions for the same artwork key.
+    std::string              m_workerInProgressKey;
+
+    /// Latest completion signal (consumed once by main thread).
+    ArtworkCompletion        m_workerCompletion;
+    bool                     m_workerHasCompletion = false;
+
+    /// Artwork keys that failed download; not retried for this screen.
+    std::set<std::string>    m_failedKeys;
 
     // ----- Initial episode focus (B5e3b) -----
     bool          m_initialSelectionApplied = false;

@@ -92,6 +92,12 @@ private:
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;
+    // Movies keeps this complete, deduplicated local collection intact.  The
+    // displayed row is always derived from it when an alphabet filter changes.
+    std::vector<MediaItem> m_movieMaster;
+    int m_movieActiveLetter = -1;
+    int m_movieAlphabetFocus = 0;
+    bool m_movieRailFocused = false;
 
     // Session info for API calls
     Session m_session;
@@ -157,6 +163,10 @@ private:
     void tryLoadOneRowArtwork();
     void evictRowArtworkIfNeeded();
     void drawMovieGrid(SDL_Surface *fb);
+    void drawMoviePreview(SDL_Surface *fb);
+    void drawMovieAlphabetRail(SDL_Surface *fb);
+    void refreshMovieFilter();
+    int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
     static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);
 };

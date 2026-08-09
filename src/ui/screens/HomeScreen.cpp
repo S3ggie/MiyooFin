@@ -16,6 +16,7 @@
 #include <map>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <curl/curl.h>
 
 namespace miyoofin {
@@ -33,6 +34,34 @@ static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
+static constexpr int MOVIE_GRID_COLUMNS = 8;
+static constexpr int MOVIE_GRID_ROWS = 3;
+
+// Keep the selected grid row within the compact three-row movie viewport.
+// This is deliberately independent of logical MediaRow navigation.
+static int clampMovieGridScrollCompact(int selected, int count, int currentScroll)
+{
+    if (count <= 0) return 0;
+    selected = std::max(0, std::min(selected, count - 1));
+    const int selectedRow = selected / MOVIE_GRID_COLUMNS;
+    const int lastRow = (count - 1) / MOVIE_GRID_COLUMNS;
+    const int maxScroll = std::max(0, lastRow - MOVIE_GRID_ROWS + 1);
+
+    currentScroll = std::max(0, std::min(currentScroll, maxScroll));
+    if (selectedRow < currentScroll) currentScroll = selectedRow;
+    if (selectedRow >= currentScroll + MOVIE_GRID_ROWS)
+        currentScroll = selectedRow - MOVIE_GRID_ROWS + 1;
+    return std::max(0, std::min(currentScroll, maxScroll));
+}
+
+static int asciiAlphabetIndexForTitle(const std::string &title)
+{
+    if (title.empty()) return -1;
+    const unsigned char first = static_cast<unsigned char>(title[0]);
+    if (first >= 'A' && first <= 'Z') return first - 'A';
+    if (first >= 'a' && first <= 'z') return first - 'a';
+    return -1;
+}
 
 struct PosterTransfer { MediaItem item; std::string url; std::vector<unsigned char> bytes; curl_slist *headers=nullptr; bool tooLarge=false; };
 static size_t posterWrite(void *p, size_t s, size_t n, void *u) {
@@ -86,6 +115,33 @@ std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
 { std::vector<MediaItem> out; std::map<std::string,bool> seen; for(const auto&v:views)for(const auto&i:v.items)if(seen.emplace(i.id,true).second)out.push_back(i); std::sort(out.begin(),out.end(),[](const MediaItem&a,const MediaItem&b){return a.title<b.title;}); return out; }
 
+void HomeScreen::refreshMovieFilter()
+{
+    if (m_tabs.size() <= 1) return;
+    std::vector<MediaItem> displayed;
+    for (const auto &item : m_movieMaster) {
+        if (m_movieActiveLetter < 0 ||
+            asciiAlphabetIndexForTitle(item.title) == m_movieActiveLetter)
+            displayed.push_back(item);
+    }
+    m_tabs[1].rows = {{"Movies", std::move(displayed)}};
+    m_activeRow = 0; m_activeCard = 0; m_rowScroll = 0; m_cardScroll = 0;
+    m_selectedArtwork = {}; m_selectedArtworkId.clear(); m_selectedArtworkAttempted = false;
+}
+
+int HomeScreen::moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const
+{
+    if (count <= 0) return 0;
+    if (index < 0) index = 0;
+    if (index >= count) index = count - 1;
+    int row = index / MOVIE_GRID_COLUMNS + deltaRow;
+    int col = index % MOVIE_GRID_COLUMNS + deltaCol;
+    if (col < 0 || col >= MOVIE_GRID_COLUMNS || row < 0) return index;
+    int target = row * MOVIE_GRID_COLUMNS + col;
+    if (target >= count) return deltaRow > 0 ? count - 1 : index;
+    return target;
+}
+
 const TabData &HomeScreen::currentTab() const
 {
     return m_tabs[m_activeTab];
@@ -115,6 +171,25 @@ void HomeScreen::clampNavigation()
         m_rowScroll = 0; m_cardScroll = 0;
         return;
     }
+    if (m_activeTab == 1) {
+        // Movies has exactly one logical MediaRow.  Here m_rowScroll is the
+        // first visible *grid* row, so never apply the generic row-list rules.
+        m_activeRow = 0;
+        const auto &items = rows[0].items;
+        if (items.empty()) {
+            m_activeCard = 0;
+            m_rowScroll = 0;
+            m_cardScroll = 0;
+            return;
+        }
+        if (m_activeCard < 0) m_activeCard = 0;
+        if (m_activeCard >= (int)items.size())
+            m_activeCard = (int)items.size() - 1;
+        m_rowScroll = clampMovieGridScrollCompact(
+            m_activeCard, (int)items.size(), m_rowScroll);
+        m_cardScroll = 0;
+        return;
+    }
     if (m_activeRow < 0) m_activeRow = 0;
     if (m_activeRow >= (int)rows.size()) m_activeRow = (int)rows.size() - 1;
     const auto &items = rows[m_activeRow].items;
@@ -141,6 +216,8 @@ void HomeScreen::enter()
         std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
         if (LibraryCache::load(path, m_cachedSnapshot)) {
             m_tabs = tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
+            m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
+            refreshMovieFilter();
             m_loadState = LoadState::Ready; clampNavigation();
             printf("[HomeScreen] Loaded local library cache\n");
         }
@@ -161,6 +238,13 @@ void HomeScreen::leave()
 
 bool HomeScreen::handleAction(Action action)
 {
+    // Back always dismisses an armed logout prompt before any screen-specific
+    // Back behavior (including the Movies alphabet rail).
+    if (m_logoutArmed && action == Action::Back) {
+        m_logoutArmed = false;
+        m_logoutTimer = 0;
+        return true;
+    }
     if (m_logoutArmed && action != Action::ActionsMenu) {
         m_logoutArmed = false;
         m_logoutTimer = 0;
@@ -189,29 +273,58 @@ bool HomeScreen::handleAction(Action action)
 
     // Ready: normal navigation
     switch (action) {
-    case Action::Up: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),-1,0); else m_activeRow--; clampNavigation(); return true;
-    case Action::Down: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),1,0); else m_activeRow++; clampNavigation(); return true;
-    case Action::Left: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),0,-1); else m_activeCard--; clampNavigation(); return true;
-    case Action::Right: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),0,1); else m_activeCard++; clampNavigation(); return true;
+    case Action::Up:
+        if (m_activeTab == 1) { if (m_movieRailFocused) { if (m_movieAlphabetFocus > 0) --m_movieAlphabetFocus; } else if (currentRow()) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),-1,0); }
+        else m_activeRow--;
+        clampNavigation(); return true;
+    case Action::Down:
+        if (m_activeTab == 1) { if (m_movieRailFocused) { if (m_movieAlphabetFocus < 25) ++m_movieAlphabetFocus; } else if (currentRow()) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),1,0); }
+        else m_activeRow++;
+        clampNavigation(); return true;
+    case Action::Left:
+        if (m_activeTab == 1) {
+            if (!m_movieRailFocused && (!currentRow() || m_activeCard % MOVIE_GRID_COLUMNS == 0)) {
+                m_movieRailFocused = true;
+                m_movieAlphabetFocus = m_movieActiveLetter >= 0
+                    ? m_movieActiveLetter
+                    : std::max(0, asciiAlphabetIndexForTitle(
+                        currentItem() ? currentItem()->title : std::string()));
+            } else if (!m_movieRailFocused && currentRow()) {
+                m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),0,-1);
+            }
+        }
+        else m_activeCard--;
+        clampNavigation(); return true;
+    case Action::Right:
+        if (m_activeTab == 1) { if (m_movieRailFocused) m_movieRailFocused=false; else if (currentRow()) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),0,1); }
+        else m_activeCard++;
+        clampNavigation(); return true;
     case Action::NextTab:
         m_activeTab = (m_activeTab + 1) % (int)m_tabs.size();
+        m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
         clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
     case Action::PrevTab:
         m_activeTab--;
         if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
+        m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
         clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
     case Action::Search:
         m_activeTab = 3; m_activeRow = 0; m_activeCard = 0;
-        m_rowScroll = 0; m_cardScroll = 0; return true;
+        m_rowScroll = 0; m_cardScroll = 0; m_movieRailFocused = false; return true;
     case Action::ActionsMenu:
         if (m_logoutArmed) { m_logoutRequested = true; }
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
+        if (m_activeTab == 1 && m_movieRailFocused) {
+            m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
+            refreshMovieFilter();
+            return true;
+        }
         const MediaItem *item = currentItem();
         if (item) {
             printf("[HomeScreen] Select: %s (%s)\n",
@@ -257,6 +370,10 @@ bool HomeScreen::handleAction(Action action)
     }
     case Action::Back:
         if (m_logoutArmed) { m_logoutArmed = false; m_logoutTimer = 0; return true; }
+        if (m_activeTab == 1 && m_movieRailFocused) {
+            m_movieRailFocused = false;
+            return true;
+        }
         return false;
     default: return false;
     }
@@ -310,12 +427,14 @@ void HomeScreen::render(SDL_Surface *fb)
         bool hasItems = false;
         for (const auto &r : tab.rows)
             if (!r.items.empty()) { hasItems = true; break; }
-        if (!hasItems) {
+        if (m_activeTab == 1) {
+            drawMoviePreview(fb); drawMovieAlphabetRail(fb); drawMovieGrid(fb);
+        } else if (!hasItems) {
             drawPlaceholderTab(fb, tab.name == "Movies" ?
                 "No movies on this server" :
                 tab.name == "Shows" ? "No shows on this server" : "No content");
         } else {
-            if (m_activeTab == 1) drawMovieGrid(fb); else { drawInfoPanel(fb); drawRowList(fb); }
+            drawInfoPanel(fb); drawRowList(fb);
         }
     }
     drawBottomHints(fb);
@@ -435,7 +554,8 @@ void HomeScreen::finishFetch()
         startPosterSync(m_cachedSnapshot);
     }
     m_tabs = std::move(m_fetchResult);
-    if (m_tabs.size() > 1) m_tabs[1].rows = {{"Movies", combineMovieViews(m_cachedSnapshot.movies)}};
+    m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
+    refreshMovieFilter();
     m_loadState = LoadState::Ready;
     clampNavigation();
     printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n", m_tabs.size(), stats.added, stats.changed);
@@ -633,9 +753,10 @@ void HomeScreen::tryLoadOneRowArtwork()
     // TabData row.  Decode only its actual visible cached posters.
     if (m_activeTab == 1) {
         const MediaRow &row = rows[0];
-        MovieArtworkRange range = movieVisibleArtworkRange(m_rowScroll, (int)row.items.size());
+        int first = m_rowScroll * MOVIE_GRID_COLUMNS;
+        int last = std::min((int)row.items.size(), first + MOVIE_GRID_COLUMNS * MOVIE_GRID_ROWS);
         int attempts = 0;
-        for (int i=range.first; i<range.lastExclusive && attempts<MOVIE_ARTWORK_DECODE_BUDGET; ++i) {
+        for (int i=first; i<last && attempts<MOVIE_ARTWORK_DECODE_BUDGET; ++i) {
             const MediaItem &item=row.items[i]; std::string key=rowArtworkKey(item);
             if (key.empty() || m_rowArtwork.find(key)!=m_rowArtwork.end()) continue;
             auto tag=item.imageTags.find("Primary");
@@ -901,18 +1022,63 @@ void HomeScreen::drawRowList(SDL_Surface *fb)
 void HomeScreen::drawMovieGrid(SDL_Surface *fb)
 {
     const MediaRow *row = currentRow(); if (!row) return;
-    m_rowScroll = clampMovieGridScroll(m_activeCard, (int)row->items.size(), m_rowScroll);
-    const int top = 36, gap = 6;
+    const int top = 134, gap = 6;
     for (int i=0; i<(int)row->items.size(); ++i) {
-        int gr = movieGridRow(i), gc = movieGridColumn(i);
-        if (gr < m_rowScroll || gr >= m_rowScroll + 4) continue;
-        int x = 8 + gc * (64 + gap), y = top + (gr - m_rowScroll) * (96 + gap);
-        drawCard(fb, x, y, 64, 96, row->items[i], i == m_activeCard);
+        int gr = i / MOVIE_GRID_COLUMNS, gc = i % MOVIE_GRID_COLUMNS;
+        if (gr < m_rowScroll || gr >= m_rowScroll + MOVIE_GRID_ROWS) continue;
+        int x = 42 + gc * (64 + gap), y = top + (gr - m_rowScroll) * (96 + gap);
+        drawCard(fb, x, y, 64, 96, row->items[i], !m_movieRailFocused && i == m_activeCard);
     }
-    if (currentTab().rows.size() > 1) {
-        char label[96]; std::snprintf(label,sizeof(label),"%s (%d/%d)",row->label.c_str(),m_activeRow+1,(int)currentTab().rows.size());
-        BitmapFont::drawString(fb,8,26,label,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+    if (row->items.empty() && m_movieActiveLetter >= 0) {
+        char message[48]; std::snprintf(message, sizeof(message), "No movies starting with %c", 'A' + m_movieActiveLetter);
+        BitmapFont::drawString(fb, 48, 210, message, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
     }
+}
+
+void HomeScreen::drawMovieAlphabetRail(SDL_Surface *fb)
+{
+    BitmapFont::fillRect(fb, 0, 25, 36, 437, 24, 24, 32, 255);
+    BitmapFont::fillRect(fb, 35, 25, 1, 437, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
+    for (int i = 0; i < 26; ++i) {
+        int y = 27 + i * 16;
+        bool focused = m_movieRailFocused && i == m_movieAlphabetFocus;
+        bool active = i == m_movieActiveLetter;
+        if (focused) BitmapFont::fillRect(fb, 2, y - 1, 31, BitmapFont::GLYPH_H + 2, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 120);
+        char letter[2] = {static_cast<char>('A' + i), '\0'};
+        BitmapFont::drawString(fb, 14, y, letter,
+            active ? Theme::HIGHLIGHT_R : focused ? Theme::BG_R : Theme::TEXT_R,
+            active ? Theme::HIGHLIGHT_G : focused ? Theme::BG_G : Theme::TEXT_G,
+            active ? Theme::HIGHLIGHT_B : focused ? Theme::BG_B : Theme::TEXT_B,
+            focused ? Theme::ACCENT_R : 24, focused ? Theme::ACCENT_G : 24, focused ? Theme::ACCENT_B : 32);
+        if (active && !focused) BitmapFont::fillRect(fb, 4, y + BitmapFont::GLYPH_H + 1, 27, 1, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, 255);
+    }
+}
+
+void HomeScreen::drawMoviePreview(SDL_Surface *fb)
+{
+    BitmapFont::fillRect(fb, 36, 25, 604, 105, 24, 24, 32, 255);
+    BitmapFont::fillRect(fb, 36, 129, 604, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 70);
+    const MediaItem *item = currentItem();
+    if (!item) return;
+    int px = 42, py = 29;
+    BitmapFont::fillRect(fb, px, py, 64, 96, item->artR, item->artG, item->artB, 255);
+    if (!m_selectedArtwork.empty()) {
+        SDL_Surface *image = SDL_CreateRGBSurfaceFrom((void *)m_selectedArtwork.pixels.data(), m_selectedArtwork.width, m_selectedArtwork.height, 32, m_selectedArtwork.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+        if (image) { SDL_Rect src={0,0,m_selectedArtwork.width,m_selectedArtwork.height}, dst={px,py,64,96}; SDL_BlitScaled(image,&src,fb,&dst); SDL_FreeSurface(image); }
+    }
+    BitmapFont::drawRect(fb, px, py, 64, 96, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
+    int x=114, y=33;
+    char title[68]; std::snprintf(title, sizeof(title), "%s", item->title.c_str());
+    if ((int)std::strlen(title) > 64) { title[61]='.'; title[62]='.'; title[63]='.'; title[64]='\0'; }
+    BitmapFont::drawString(fb, x, y, title, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 24,24,32);
+    char meta[96] = {}; int n=0;
+    if (item->year > 0) n += std::snprintf(meta+n, sizeof(meta)-n, "%d", item->year);
+    int mins=ticksToMinutes(item->runTimeTicks); if (mins > 0) n += std::snprintf(meta+n, sizeof(meta)-n, "%s%dh %dm", n ? " * " : "", mins/60, mins%60);
+    if (item->rating > 0) std::snprintf(meta+n, sizeof(meta)-n, "%s%.1f", n ? " * " : "", (double)item->rating);
+    BitmapFont::drawString(fb, x, y+18, meta, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,24,24,32);
+    char state[96]; std::snprintf(state, sizeof(state), "%s%s", item->genre.c_str(), item->played ? (item->genre.empty()?"Watched":" * Watched") : item->progress > 0 ? "" : "");
+    if (item->progress > 0 && !item->played) std::snprintf(state, sizeof(state), "%s%s%d%% watched", item->genre.c_str(), item->genre.empty()?"":" * ", (int)(item->progress*100.0f+0.5f));
+    BitmapFont::drawString(fb, x, y+36, state, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,24,24,32);
 }
 
 void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
@@ -1013,8 +1179,13 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
             Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     } else {
-        BitmapFont::drawString(fb,8,y+2,
-            "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout",
+        const char *hints = "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout";
+        if (m_activeTab == 1) {
+            hints = m_movieRailFocused
+                ? "A=Filter  Right=Movies  B=Back"
+                : "A=Select  Left@edge=Alphabet  L/R=Tabs";
+        }
+        BitmapFont::drawString(fb,8,y+2, hints,
             Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     }

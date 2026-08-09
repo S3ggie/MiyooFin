@@ -44,6 +44,10 @@ private:
 
     // ----- Focus state -----
     ActionButton m_actionBtn = ActionButton::Play;
+
+    // Main-thread-only playback return bookkeeping.
+    bool m_playbackResultPending = false;
+    int  m_playbackResultDelayUpdates = 0;
 };
 
 } // namespace miyoofin

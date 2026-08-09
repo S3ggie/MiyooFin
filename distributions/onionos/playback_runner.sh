@@ -23,6 +23,10 @@ cd "$APP_DIR" || exit 1
 
 PLAYBACK_LOG="$APP_DIR/playback-launch.log"
 
+# A result belongs only to the immediately preceding playback session.
+# Clear it before any new-session validation can fail and return to the UI.
+rm -f "$APP_DIR/playback-result.txt"
+
 playback_log() {
     echo "[$(date '+%H:%M:%S')] $1" >> "$PLAYBACK_LOG"
 }
@@ -86,7 +90,6 @@ for _f in miyoofin-https-bridge cacert.pem; do
 done
 
 playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}) ==="
-playback_log "Resume ticks=${REQUEST_RESUME_TICKS}"
 
 # -------------------------------------------------------------------
 # Construct the EXACT proven forced-transcode URL.
@@ -100,7 +103,10 @@ TURL="${TURL}&AudioBitRate=96000&AudioChannels=2&MaxAudioChannels=2"
 TURL="${TURL}&AllowVideoStreamCopy=false&AllowAudioStreamCopy=false"
 TURL="${TURL}&EnableAutoStreamCopy=false&Context=Streaming"
 TURL="${TURL}&SubtitleStreamIndex=-1&StartTimeTicks=${REQUEST_RESUME_TICKS}"
+PLAY_SESSION_ID="miyoofin-$(date +%s)-$$"
+TURL="${TURL}&PlaySessionId=${PLAY_SESSION_ID}"
 TURL="${TURL}&ApiKey=${ACCESS_TOKEN}"
+playback_log "Resume ticks=$REQUEST_RESUME_TICKS PlaySessionId=$PLAY_SESSION_ID"
 
 # -------------------------------------------------------------------
 # Ensure clean state

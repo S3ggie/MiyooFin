@@ -408,6 +408,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                         }
                         m_prefetchResumePending = true;
                         m_prefetchResumeDelayUpdates = 1;
+                        m_playbackEpisodeId = m_episodes[m_selectedEpisode].id;
                         printf("[EpisodeBrowserScreen] Playback request "
                                "written, requesting external playback\n");
                         m_stack->requestExternalPlayback();
@@ -444,6 +445,20 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
             ++m_workerGeneration;
         }
         m_workerCv.notify_one();
+
+        std::int64_t resultTicks = 0;
+        std::string error;
+        if (PlaybackRequest::consumeResult(m_playbackEpisodeId,
+                                           resultTicks, error)) {
+            const int playedIndex = findEpisodeIndex(m_episodes,
+                                                      m_playbackEpisodeId);
+            if (playedIndex >= 0) {
+                m_episodes[playedIndex].playbackPositionTicks = resultTicks;
+                printf("[EpisodeBrowserScreen] Playback position updated: "
+                       "%lld\n", (long long)resultTicks);
+            }
+        }
+        m_playbackEpisodeId.clear();
     }
 
     if (m_loadState == LoadState::Ready)

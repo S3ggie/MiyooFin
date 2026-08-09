@@ -1375,6 +1375,70 @@ static void testPlaybackRequestRemove()
     std::printf("[test] B5f2: PlaybackRequest remove OK\n");
 }
 
+static void writePlaybackResultFixture(const char *path,
+                                       const char *content)
+{
+    FILE *f = std::fopen(path, "w");
+    CHECK(f != nullptr);
+    if (f) {
+        CHECK(std::fputs(content, f) >= 0);
+        CHECK(std::fclose(f) == 0);
+    }
+}
+
+static void testPlaybackResultParsing()
+{
+    std::printf("[test] playback result strict 64-bit parsing\n");
+    const char *path = "test_playback_result.txt";
+    std::int64_t ticks = -1;
+    std::string error;
+
+    writePlaybackResultFixture(path,
+        "item_id=abc\nposition_ticks=24758110000\n");
+    CHECK(PlaybackRequest::consumeResultFrom(path, "abc", ticks, error));
+    CHECK(ticks == 24758110000LL);
+    CHECK(!PlaybackRequest::existsAt(path));
+
+    writePlaybackResultFixture(path, "item_id=abc\nposition_ticks=0\n");
+    CHECK(PlaybackRequest::consumeResultFrom(path, "abc", ticks, error));
+    CHECK(ticks == 0);
+
+    const char *invalid[] = {
+        "item_id=abc\n",
+        "item_id=abc\nposition_ticks=12oops\n",
+        "item_id=abc\nposition_ticks=-1\n",
+        "item_id=abc\nposition_ticks=9223372036854775808\n",
+        "position_ticks=10\n"
+    };
+    for (const char *content : invalid) {
+        writePlaybackResultFixture(path, content);
+        ticks = 777;
+        CHECK(!PlaybackRequest::consumeResultFrom(path, "abc", ticks, error));
+        CHECK(ticks == 777);
+        CHECK(!PlaybackRequest::existsAt(path));
+    }
+
+    writePlaybackResultFixture(path, "item_id=other\nposition_ticks=99\n");
+    ticks = 777;
+    CHECK(!PlaybackRequest::consumeResultFrom(path, "abc", ticks, error));
+    CHECK(ticks == 777);
+    CHECK(!PlaybackRequest::existsAt(path));
+    std::printf("[test] playback result strict 64-bit parsing OK\n");
+}
+
+static void testPlaybackResultDelay()
+{
+    std::printf("[test] playback result one-update delay\n");
+    bool pending = true;
+    int delayUpdates = 1;
+    CHECK(!PlaybackRequest::advanceResultConsumption(pending, delayUpdates));
+    CHECK(pending && delayUpdates == 0);
+    CHECK(PlaybackRequest::advanceResultConsumption(pending, delayUpdates));
+    CHECK(!pending);
+    CHECK(!PlaybackRequest::advanceResultConsumption(pending, delayUpdates));
+    std::printf("[test] playback result one-update delay OK\n");
+}
+
 // -------------------------------------------------------------------
 // B5f3a: In-process external playback handoff tests
 // -------------------------------------------------------------------
@@ -1621,6 +1685,8 @@ int main()
     testPlaybackRequestEmptyId();
     testPlaybackRequestEmptyType();
     testPlaybackRequestRemove();
+    testPlaybackResultParsing();
+    testPlaybackResultDelay();
 
     // B5f3a tests — In-process external playback handoff
     std::printf("\n--- B5f3a external playback handoff tests ---\n");

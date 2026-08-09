@@ -131,6 +131,7 @@ private:
     // one update between requesting playback and entering external playback.
     bool                     m_prefetchResumePending = false;
     int                      m_prefetchResumeDelayUpdates = 0;
+    std::string              m_playbackEpisodeId;
 
     /// Key of the job currently being executed by the worker.
     /// Prevents duplicate submissions for the same artwork key.

@@ -12,6 +12,7 @@
 //
 // Writes to <app-dir>:
 //   playback-reporter.log  — reporter diagnostics
+//   playback-result.txt    — final absolute Jellyfin position for the UI
 //
 // The reporter is a separate process from FFplay.  It watches the
 // playback-ffplay.log file as it grows (never blocking FFplay's I/O)
@@ -113,6 +114,19 @@ static bool file_exists(const std::string &path)
 {
     struct stat st;
     return stat(path.c_str(), &st) == 0;
+}
+
+static bool write_playback_result(const std::string &path,
+                                  const std::string &itemId,
+                                  int64_t positionTicks)
+{
+    FILE *f = std::fopen(path.c_str(), "w");
+    if (!f) return false;
+    const bool wrote = std::fprintf(f, "item_id=%s\nposition_ticks=%lld\n",
+                                    itemId.c_str(),
+                                    (long long)positionTicks) >= 0;
+    const bool closed = std::fclose(f) == 0;
+    return wrote && closed;
 }
 
 static std::string read_kv_from_content(const std::string &content,
@@ -503,8 +517,15 @@ int main(int argc, char *argv[])
     // Send ReportPlaybackStopped
     bool failed = (exitCode != 0);
     if (hasPts) {
-        report_stopped(serverUrl, itemId,
-                       absolute_position_ticks(resumeTicks, lastPts),
+        const int64_t finalTicks =
+            absolute_position_ticks(resumeTicks, lastPts);
+        const std::string resultPath = appDir + "/playback-result.txt";
+        if (write_playback_result(resultPath, itemId, finalTicks))
+            reporter_log("playback result position=%lld",
+                         (long long)finalTicks);
+        else
+            reporter_log("ERROR: failed to write playback result");
+        report_stopped(serverUrl, itemId, finalTicks,
                        failed, accessToken, deviceId, cacertPath);
     } else {
         reporter_log("no pts observed, nothing to report");
@@ -515,4 +536,3 @@ int main(int argc, char *argv[])
     if (g_logFile) { std::fclose(g_logFile); g_logFile = nullptr; }
     return 0;
 }
-

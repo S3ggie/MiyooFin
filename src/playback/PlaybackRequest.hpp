@@ -2,6 +2,7 @@
 #define MIYOOFIN_PLAYBACK_REQUEST_HPP
 
 #include <string>
+#include <cstdint>
 
 namespace miyoofin {
 
@@ -49,6 +50,22 @@ public:
 
     /// Remove the file at an explicit path.
     static bool removeAt(const std::string &path);
+
+    /// Consume the default playback-result.txt for expectedItemId.
+    /// The file is removed after the attempt, whether valid or not.
+    static bool consumeResult(const std::string &expectedItemId,
+                              std::int64_t &positionTicks,
+                              std::string &error);
+
+    /// Testable explicit-path form of consumeResult().
+    static bool consumeResultFrom(const std::string &path,
+                                  const std::string &expectedItemId,
+                                  std::int64_t &positionTicks,
+                                  std::string &error);
+
+    /// Advance the one-update delay used around blocking external playback.
+    /// Returns true once, on the first update eligible to consume a result.
+    static bool advanceResultConsumption(bool &pending, int &delayUpdates);
 };
 
 } // namespace miyoofin

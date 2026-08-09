@@ -166,6 +166,8 @@ bool MovieDetailsScreen::handleAction(Action action)
             std::string error;
             if (PlaybackRequest::write(m_movie.id, "movie",
                                        m_movie.playbackPositionTicks, error)) {
+                m_playbackResultPending = true;
+                m_playbackResultDelayUpdates = 1;
                 printf("[MovieDetailsScreen] Playback request written, "
                        "requesting external playback\n");
                 m_stack->requestExternalPlayback();
@@ -189,6 +191,16 @@ bool MovieDetailsScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 void MovieDetailsScreen::update(Uint32 /*dt*/)
 {
+    if (PlaybackRequest::advanceResultConsumption(
+            m_playbackResultPending, m_playbackResultDelayUpdates)) {
+        std::int64_t resultTicks = 0;
+        std::string error;
+        if (PlaybackRequest::consumeResult(m_movie.id, resultTicks, error)) {
+            m_movie.playbackPositionTicks = resultTicks;
+            printf("[MovieDetailsScreen] Playback position updated: %lld\n",
+                   (long long)resultTicks);
+        }
+    }
 }
 
 // -------------------------------------------------------------------

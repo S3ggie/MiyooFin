@@ -538,6 +538,7 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
     item.year     = jsonIntField(obj, "ProductionYear");
     item.rating   = jsonFloatField(obj, "CommunityRating");
     item.type     = jsonStringField(obj, "Type");
+    item.etag     = jsonStringField(obj, "Etag");
     if (item.type == "Movie") item.type = "movie";
     else if (item.type == "Series") item.type = "show";
     else if (item.type == "Episode") item.type = "episode";

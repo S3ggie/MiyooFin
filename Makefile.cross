@@ -29,6 +29,7 @@ SRCS := \
     src/net/Session.cpp \
     src/net/DeviceIdentity.cpp \
     src/cache/ImageCache.cpp \
+    src/cache/LibraryCache.cpp \
     src/ui/BitmapFont.cpp \
     src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \

@@ -17,6 +17,47 @@ struct ArtworkBox {
 
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
 static constexpr int ROW_ARTWORK_RAM_LIMIT = 64;
+static constexpr int MOVIE_ARTWORK_DECODE_BUDGET = 4;
+struct MovieArtworkRange { int first; int lastExclusive; };
+inline MovieArtworkRange movieVisibleArtworkRange(int scrollRow, int itemCount)
+{
+    if (scrollRow < 0) scrollRow = 0;
+    int first = scrollRow * 9;
+    if (first > itemCount) first = itemCount;
+    int last = first + 36;
+    if (last > itemCount) last = itemCount;
+    return {first, last};
+}
+
+// Pure Movies grid helpers.  The grid is deliberately index based so it is
+// independent of SDL and straightforward to test.
+inline int movieGridRow(int index) { return index < 0 ? 0 : index / 9; }
+inline int movieGridColumn(int index) { return index < 0 ? 0 : index % 9; }
+inline int moveMovieGrid(int index, int count, int deltaRow, int deltaCol)
+{
+    if (count <= 0) return 0;
+    if (index < 0) index = 0;
+    if (index >= count) index = count - 1;
+    int row = movieGridRow(index) + deltaRow, col = movieGridColumn(index) + deltaCol;
+    if (col < 0 || col >= 9 || row < 0) return index;
+    int target = row * 9 + col;
+    if (target >= count) {
+        if (deltaRow > 0) target = count - 1; // nearest valid item in final row
+        else return index;
+    }
+    return target;
+}
+inline int clampMovieGridScroll(int selected, int itemCount, int scrollRow)
+{
+    if (itemCount <= 0) return 0;
+    int lastRow = (itemCount - 1) / 9;
+    int row = movieGridRow(selected);
+    if (row < scrollRow) scrollRow = row;
+    if (row >= scrollRow + 4) scrollRow = row - 3;
+    int maxScroll = lastRow > 3 ? lastRow - 3 : 0;
+    if (scrollRow < 0) scrollRow = 0;
+    return scrollRow > maxScroll ? maxScroll : scrollRow;
+}
 
 /// Status of a row-artwork load attempt.
 enum class RowArtworkStatus {

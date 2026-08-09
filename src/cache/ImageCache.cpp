@@ -141,4 +141,11 @@ bool ImageCache::writeToCache(const std::string &itemId,
     return written == size;
 }
 
+bool ImageCache::removeCached(const std::string &itemId, ImageType type,
+                              const std::string &imageTag, int width, int height)
+{
+    std::string path = cachePath(itemId, type, imageTag, width, height);
+    return std::remove(path.c_str()) == 0 || errno == ENOENT;
+}
+
 } // namespace miyoofin

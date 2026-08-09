@@ -17,6 +17,7 @@ struct MediaItem {
     float       rating = 0.0f;       // Community rating (0.0–10.0 from Jellyfin)
     std::string genre;               // First genre (for compact display)
     std::string type;                // "movie", "show", or "episode"
+    std::string etag;                // Jellyfin Etag, when supplied
 
     // Checkpoint B4: additional fields from Jellyfin
     std::vector<std::string> genres = {}; // All genres from server

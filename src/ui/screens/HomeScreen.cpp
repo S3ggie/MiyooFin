@@ -14,6 +14,9 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <atomic>
+#include <chrono>
+#include <curl/curl.h>
 
 namespace miyoofin {
 
@@ -28,6 +31,15 @@ static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_STRIP_H = 96;  // max card height across all types
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
+static constexpr int POSTER_MAX_CONCURRENT = 4;
+static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
+
+struct PosterTransfer { MediaItem item; std::string url; std::vector<unsigned char> bytes; curl_slist *headers=nullptr; bool tooLarge=false; };
+static size_t posterWrite(void *p, size_t s, size_t n, void *u) {
+    PosterTransfer *t=static_cast<PosterTransfer*>(u); size_t z=s*n;
+    if (z > POSTER_MAX_BYTES-t->bytes.size()) { t->tooLarge=true; return 0; }
+    const unsigned char *b=static_cast<const unsigned char*>(p); t->bytes.insert(t->bytes.end(),b,b+z); return z;
+}
 
 // Selected artwork box origin (top-left of info panel)
 static constexpr int ART_X = 8;
@@ -54,7 +66,25 @@ HomeScreen::~HomeScreen()
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
         m_resumeRefreshThread.join();
+    if (m_posterThread.joinable()) m_posterThread.join();
 }
+
+std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
+{
+    std::vector<TabData> tabs;
+    tabs.push_back({"Home", {{"", {}}}});
+    TabData movies{"Movies", {{"Movies", combineMovieViews(s.movies)}}};
+    if (movies.rows.empty()) movies.rows.push_back({"No movies found", {}});
+    tabs.push_back(std::move(movies));
+    TabData shows{"Shows", {}}; for (const auto &v : s.shows) shows.rows.push_back({v.name, v.items});
+    if (shows.rows.empty()) shows.rows.push_back({"No shows found", {}});
+    tabs.push_back(std::move(shows));
+    tabs.push_back({"Search", {{"", {}}}}); tabs.push_back({"Downloads", {{"", {}}}});
+    return tabs;
+}
+
+std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
+{ std::vector<MediaItem> out; std::map<std::string,bool> seen; for(const auto&v:views)for(const auto&i:v.items)if(seen.emplace(i.id,true).second)out.push_back(i); std::sort(out.begin(),out.end(),[](const MediaItem&a,const MediaItem&b){return a.title<b.title;}); return out; }
 
 const TabData &HomeScreen::currentTab() const
 {
@@ -107,8 +137,15 @@ void HomeScreen::enter()
 {
     printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab,
            m_userName.c_str());
-    if (m_loadState == LoadState::Loading && !m_fetchDone)
-        startFetch();
+    if (m_loadState == LoadState::Loading && !m_fetchDone) {
+        std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
+        if (LibraryCache::load(path, m_cachedSnapshot)) {
+            m_tabs = tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
+            m_loadState = LoadState::Ready; clampNavigation();
+            printf("[HomeScreen] Loaded local library cache\n");
+        }
+        requestFetch(SDL_GetTicks());
+    }
     else if (m_loadState == LoadState::Ready) {
         if (m_resumeRefreshInFlight)
             m_resumeRefreshPending = true;
@@ -152,21 +189,21 @@ bool HomeScreen::handleAction(Action action)
 
     // Ready: normal navigation
     switch (action) {
-    case Action::Up:     m_activeRow--; clampNavigation(); return true;
-    case Action::Down:   m_activeRow++; clampNavigation(); return true;
-    case Action::Left:   m_activeCard--; clampNavigation(); return true;
-    case Action::Right:  m_activeCard++; clampNavigation(); return true;
+    case Action::Up: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),-1,0); else m_activeRow--; clampNavigation(); return true;
+    case Action::Down: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),1,0); else m_activeRow++; clampNavigation(); return true;
+    case Action::Left: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),0,-1); else m_activeCard--; clampNavigation(); return true;
+    case Action::Right: if (m_activeTab==1) m_activeCard=moveMovieGrid(m_activeCard,(int)currentRow()->items.size(),0,1); else m_activeCard++; clampNavigation(); return true;
     case Action::NextTab:
         m_activeTab = (m_activeTab + 1) % (int)m_tabs.size();
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); return true;
+        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
     case Action::PrevTab:
         m_activeTab--;
         if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); return true;
+        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
     case Action::Search:
         m_activeTab = 3; m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0; return true;
@@ -231,7 +268,7 @@ void HomeScreen::update(Uint32 dt)
         if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
         else m_logoutTimer -= dt;
     }
-    if (m_loadState == LoadState::Loading && m_fetchDone)
+    if (m_fetchDone)
         finishFetch();
     if (m_loadState == LoadState::Ready && m_resumeRefreshDone)
         finishResumeRefresh();
@@ -278,8 +315,7 @@ void HomeScreen::render(SDL_Surface *fb)
                 "No movies on this server" :
                 tab.name == "Shows" ? "No shows on this server" : "No content");
         } else {
-            drawInfoPanel(fb);
-            drawRowList(fb);
+            if (m_activeTab == 1) drawMovieGrid(fb); else { drawInfoPanel(fb); drawRowList(fb); }
         }
     }
     drawBottomHints(fb);
@@ -287,6 +323,9 @@ void HomeScreen::render(SDL_Surface *fb)
 
 void HomeScreen::startFetch()
 {
+    // A single worker owns all Movies/Shows networking.  Tab flips merely
+    // coalesce while it is active.
+    if (m_fetchThread.joinable()) return;
     m_fetchDone = false;
     m_fetchError.clear();
     m_fetchResult.clear();
@@ -323,43 +362,103 @@ void HomeScreen::startFetch()
         // 4. Per-library items
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
         std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
+        LibrarySnapshot snapshot;
         for (const auto &v : views) {
             if (v.collectionType == "movies") {
                 std::vector<MediaItem> items; std::string ie;
                 if (JellyfinApi::getLibraryItems(url, token, uid, devId,
-                        v.id, "Movie", 50, items, ie))
+                        v.id, "Movie", 50, items, ie)) {
                     moviesByView.push_back({v.name, std::move(items)});
-                else printf("[HomeScreen] Movies '%s': %s\n",
-                            v.name.c_str(), ie.c_str());
+                    snapshot.movies.push_back({v.id, v.name, v.collectionType, moviesByView.back().second});
+                } else { m_fetchError=ie; m_fetchDone=true; return; }
             } else if (v.collectionType == "tvshows") {
                 std::vector<MediaItem> items; std::string ie;
                 if (JellyfinApi::getLibraryItems(url, token, uid, devId,
-                        v.id, "Series", 50, items, ie))
+                        v.id, "Series", 50, items, ie)) {
                     showsByView.push_back({v.name, std::move(items)});
-                else printf("[HomeScreen] Shows '%s': %s\n",
-                            v.name.c_str(), ie.c_str());
+                    snapshot.shows.push_back({v.id, v.name, v.collectionType, showsByView.back().second});
+                } else { m_fetchError=ie; m_fetchDone=true; return; }
             }
         }
 
         m_fetchResult = JellyfinApi::buildTabs(
             views, cw, ra, moviesByView, showsByView);
-        m_fetchDone = true;
+        m_remoteSnapshot = std::move(snapshot);
+        /* Poster work is deliberately not part of metadata completion.
+        // sync worker; UI selection/rendering never issues these requests.
+        std::vector<MediaItem> posterJobs;
+        for (const auto &v : m_remoteSnapshot.movies) for (const auto &i : v.items) {
+            auto p=i.imageTags.find("Primary");
+            if (p!=i.imageTags.end() && !p->second.empty() && !ImageCache::isCached(i.id,ImageType::Primary,p->second,64,96)) posterJobs.push_back(i);
+        }
+        for (const auto &v : m_remoteSnapshot.shows) for (const auto &i : v.items) {
+            auto p=i.imageTags.find("Primary");
+            if (p!=i.imageTags.end() && !p->second.empty() && !ImageCache::isCached(i.id,ImageType::Primary,p->second,64,96)) posterJobs.push_back(i);
+        }
+        std::atomic<size_t> next{0}; std::vector<std::thread> downloaders;
+        const int workers = posterJobs.size() < 4 ? (int)posterJobs.size() : 4;
+        for (int w=0; w<workers; ++w) downloaders.emplace_back([&] {
+            for (;;) { size_t n=next.fetch_add(1); if (n>=posterJobs.size()) break; const MediaItem &i=posterJobs[n];
+                auto p=i.imageTags.find("Primary"); HttpClient client; client.setTimeoutSec(8);
+                BinaryHttpResponse response; std::string pe;
+                if (client.getBinary(buildImageUrl(url,i.id,ImageType::Primary,p->second,64,96), JellyfinApi::buildAuthHeaders(token,devId),response,pe,256*1024)
+                    && response.ok() && !response.data.empty()) ImageCache::writeToCache(i.id,ImageType::Primary,p->second,64,96,response.data.data(),response.data.size());
+            }
+        });
+        for (auto &worker : downloaders) worker.join();
+        */ m_fetchDone = true;
     });
-    m_fetchThread.detach();
+}
+
+void HomeScreen::requestFetch(Uint32 now)
+{
+    if (m_syncSchedule.request(now)) startFetch();
 }
 
 void HomeScreen::finishFetch()
 {
+    if (m_fetchThread.joinable()) m_fetchThread.join();
     m_fetchDone = false;
     if (!m_fetchError.empty()) {
-        m_loadState = LoadState::Error;
+        if (!m_haveCachedSnapshot) m_loadState = LoadState::Error;
         printf("[HomeScreen] Fetch failed: %s\n", m_fetchError.c_str());
+        if (m_syncSchedule.complete(SDL_GetTicks())) startFetch();
         return;
     }
+    std::vector<StalePoster> stale;
+    ReconcileStats stats = LibraryCache::reconcile(m_cachedSnapshot, m_remoteSnapshot, &stale);
+    std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
+    if (!LibraryCache::save(path, m_remoteSnapshot)) {
+        printf("[HomeScreen] Library cache save failed; retaining old cache\n");
+    } else { m_cachedSnapshot = m_remoteSnapshot; m_haveCachedSnapshot = true;
+        for (const auto &p : stale) ImageCache::removeCached(p.itemId, ImageType::Primary, p.tag, 64, 96);
+        startPosterSync(m_cachedSnapshot);
+    }
     m_tabs = std::move(m_fetchResult);
+    if (m_tabs.size() > 1) m_tabs[1].rows = {{"Movies", combineMovieViews(m_cachedSnapshot.movies)}};
     m_loadState = LoadState::Ready;
     clampNavigation();
-    printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
+    printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n", m_tabs.size(), stats.added, stats.changed);
+    if (m_syncSchedule.complete(SDL_GetTicks())) startFetch();
+}
+
+void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
+{
+    if (m_posterThread.joinable()) m_posterThread.join();
+    std::vector<MediaItem> jobs; for(const auto& group : {snapshot.movies, snapshot.shows}) for(const auto&v:group) for(const auto&i:v.items) { auto p=i.imageTags.find("Primary"); if(p!=i.imageTags.end()&&!p->second.empty()&&!ImageCache::isCached(i.id,ImageType::Primary,p->second,64,96)) jobs.push_back(i); }
+    std::string url=m_session.serverUrl, token=m_session.accessToken, dev=m_session.deviceId;
+    m_posterThread=std::thread([jobs=std::move(jobs),url,token,dev](){
+        CURLM *multi=curl_multi_init(); if(!multi) return; size_t next=0; int running=0;
+        std::map<CURL*,PosterTransfer*> active;
+        auto launch=[&](const MediaItem&i){ PosterTransfer *t=new PosterTransfer; t->item=i; auto tag=i.imageTags.find("Primary");
+            CURL *easy=curl_easy_init(); if(!easy){delete t;return;} for(const auto&h:JellyfinApi::buildAuthHeaders(token,dev))t->headers=curl_slist_append(t->headers,h.c_str());
+            t->url=buildImageUrl(url,i.id,ImageType::Primary,tag->second,64,96); curl_easy_setopt(easy,CURLOPT_URL,t->url.c_str());
+            curl_easy_setopt(easy,CURLOPT_WRITEFUNCTION,posterWrite); curl_easy_setopt(easy,CURLOPT_WRITEDATA,t); curl_easy_setopt(easy,CURLOPT_HTTPHEADER,t->headers);
+            curl_easy_setopt(easy,CURLOPT_NOSIGNAL,1L); curl_easy_setopt(easy,CURLOPT_TIMEOUT,8L); curl_easy_setopt(easy,CURLOPT_CONNECTTIMEOUT,8L); curl_easy_setopt(easy,CURLOPT_FOLLOWLOCATION,1L); curl_easy_setopt(easy,CURLOPT_MAXREDIRS,5L); curl_easy_setopt(easy,CURLOPT_SSL_VERIFYPEER,0L); curl_easy_setopt(easy,CURLOPT_SSL_VERIFYHOST,0L);
+            curl_multi_add_handle(multi,easy); active[easy]=t; };
+        while(next<jobs.size() || !active.empty()) { while(next<jobs.size() && active.size()<POSTER_MAX_CONCURRENT) launch(jobs[next++]); curl_multi_perform(multi,&running); int num=0; CURLMsg *msg; while((msg=curl_multi_info_read(multi,&num))){if(msg->msg!=CURLMSG_DONE)continue; CURL *easy=msg->easy_handle; PosterTransfer*t=active[easy];long status=0;curl_easy_getinfo(easy,CURLINFO_RESPONSE_CODE,&status);auto tag=t->item.imageTags.find("Primary");if(msg->data.result==CURLE_OK&&status>=200&&status<300&&!t->tooLarge&&!t->bytes.empty())ImageCache::writeToCache(t->item.id,ImageType::Primary,tag->second,64,96,t->bytes.data(),t->bytes.size());curl_multi_remove_handle(multi,easy);curl_easy_cleanup(easy);curl_slist_free_all(t->headers);delete t;active.erase(easy);} if(!active.empty()){int numfds=0;curl_multi_wait(multi,nullptr,0,200,&numfds);if(numfds==0)std::this_thread::sleep_for(std::chrono::milliseconds(1));} }
+        curl_multi_cleanup(multi);
+    });
 }
 
 void HomeScreen::startResumeRefresh()
@@ -448,7 +547,9 @@ void HomeScreen::tryLoadSelectedArtwork()
     // New selection — reset and attempt once
     m_selectedArtwork = {};
     m_selectedArtworkId = key;
-    m_selectedArtworkAttempted = true;
+    // Local library artwork remains retryable until the poster worker writes
+    // it; Home retains its historical one-shot network behavior below.
+    m_selectedArtworkAttempted = false;
 
     const std::string &tag = it->second;
     printf("[HomeScreen] Artwork: loading %s tag=%s (%dx%d)\n",
@@ -461,7 +562,11 @@ void HomeScreen::tryLoadSelectedArtwork()
         printf("[HomeScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
     }
 
-    // 2. If not cached, synchronous HTTP request
+    // Movies/Shows are deliberately local-first: their artwork is only
+    // populated by the background library sync, never by navigation.
+    if ((m_activeTab == 1 || m_activeTab == 2) && jpegData.empty()) return;
+    m_selectedArtworkAttempted = true;
+    // 2. Dynamic Home artwork may still use its existing request path.
     if (jpegData.empty()) {
         std::string url = buildImageUrl(
             m_session.serverUrl, item->id, ImageType::Primary, tag, box.w, box.h);
@@ -524,6 +629,27 @@ void HomeScreen::tryLoadOneRowArtwork()
     const auto &rows = currentTab().rows;
     if (rows.empty()) return;
 
+    // Movies is a flattened 9x4 grid: m_rowScroll is a grid row, not a
+    // TabData row.  Decode only its actual visible cached posters.
+    if (m_activeTab == 1) {
+        const MediaRow &row = rows[0];
+        MovieArtworkRange range = movieVisibleArtworkRange(m_rowScroll, (int)row.items.size());
+        int attempts = 0;
+        for (int i=range.first; i<range.lastExclusive && attempts<MOVIE_ARTWORK_DECODE_BUDGET; ++i) {
+            const MediaItem &item=row.items[i]; std::string key=rowArtworkKey(item);
+            if (key.empty() || m_rowArtwork.find(key)!=m_rowArtwork.end()) continue;
+            auto tag=item.imageTags.find("Primary");
+            if (tag==item.imageTags.end() || !ImageCache::isCached(item.id,ImageType::Primary,tag->second,64,96)) continue;
+            ++attempts;
+            auto data=ImageCache::readCached(item.id,ImageType::Primary,tag->second,64,96);
+            DecodedImage image=ImageDecoder::decodeJpeg(data.data(),data.size());
+            if (image.empty()) { m_rowArtwork[key].status=RowArtworkStatus::Failed; continue; }
+            m_rowArtwork[key].status=RowArtworkStatus::Loaded;
+            m_rowArtwork[key].image=std::move(image); m_rowArtworkOrder.push_back(key); evictRowArtworkIfNeeded();
+        }
+        return;
+    }
+
     // Scan horizontally visible cards and find ONE not-yet-attempted candidate
     static constexpr int HMARGIN = 4;
     std::string candidate;
@@ -550,9 +676,6 @@ void HomeScreen::tryLoadOneRowArtwork()
     }
 
     if (candidate.empty()) return;
-
-    // Mark as attempted immediately (tentatively Failed until proven otherwise)
-    m_rowArtwork[candidate].status = RowArtworkStatus::Failed;
 
     // Find the matching item to get dimensions and tag
     const MediaItem *matchItem = nullptr;
@@ -583,7 +706,10 @@ void HomeScreen::tryLoadOneRowArtwork()
     if (ImageCache::isCached(itemId, ImageType::Primary, tag, box.w, box.h))
         jpegData = ImageCache::readCached(itemId, ImageType::Primary, tag, box.w, box.h);
 
-    // 2. If not cached, synchronous HTTP request
+    if ((m_activeTab == 1 || m_activeTab == 2) && jpegData.empty()) return;
+    // A real read/decode failure is the only permanent failure state.
+    m_rowArtwork[candidate].status = RowArtworkStatus::Failed;
+    // 2. Dynamic Home artwork may still use its existing request path.
     if (jpegData.empty()) {
         std::string url = buildImageUrl(
             m_session.serverUrl, itemId, ImageType::Primary, tag, box.w, box.h);
@@ -769,6 +895,23 @@ void HomeScreen::drawRowList(SDL_Surface *fb)
             drawCard(fb,screenX,cardScreenY,sz.w,sz.h,row.items[ci],sel);
             cardAccumX += sz.w + CARD_GAP;
         }
+    }
+}
+
+void HomeScreen::drawMovieGrid(SDL_Surface *fb)
+{
+    const MediaRow *row = currentRow(); if (!row) return;
+    m_rowScroll = clampMovieGridScroll(m_activeCard, (int)row->items.size(), m_rowScroll);
+    const int top = 36, gap = 6;
+    for (int i=0; i<(int)row->items.size(); ++i) {
+        int gr = movieGridRow(i), gc = movieGridColumn(i);
+        if (gr < m_rowScroll || gr >= m_rowScroll + 4) continue;
+        int x = 8 + gc * (64 + gap), y = top + (gr - m_rowScroll) * (96 + gap);
+        drawCard(fb, x, y, 64, 96, row->items[i], i == m_activeCard);
+    }
+    if (currentTab().rows.size() > 1) {
+        char label[96]; std::snprintf(label,sizeof(label),"%s (%d/%d)",row->label.c_str(),m_activeRow+1,(int)currentTab().rows.size());
+        BitmapFont::drawString(fb,8,26,label,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
     }
 }
 

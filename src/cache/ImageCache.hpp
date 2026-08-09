@@ -58,6 +58,9 @@ public:
                              int height,
                              const unsigned char *data,
                              size_t size);
+    /// Remove exactly one known cached image; never scans the cache directory.
+    static bool removeCached(const std::string &itemId, ImageType type,
+                             const std::string &imageTag, int width, int height);
 };
 
 } // namespace miyoofin

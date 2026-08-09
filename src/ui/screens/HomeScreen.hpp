@@ -5,6 +5,7 @@
 #include "../../data/MediaItem.hpp"
 #include "../../net/Session.hpp"
 #include "../../image/ImageDecoder.hpp"
+#include "../../cache/LibraryCache.hpp"
 #include "../ArtworkLayout.hpp"
 #include <atomic>
 #include <algorithm>
@@ -14,6 +15,11 @@
 #include <vector>
 
 namespace miyoofin {
+struct LibrarySyncSchedule {
+    bool inFlight=false, pending=false, hasStarted=false; Uint32 lastStart=0;
+    bool request(Uint32 now) { if(inFlight){pending=true;return false;} if(hasStarted && now-lastStart<60000)return false; inFlight=true;hasStarted=true;lastStart=now;return true; }
+    bool complete(Uint32 now) { inFlight=false; if(!pending || now-lastStart<60000) return false; pending=false; inFlight=true;lastStart=now;return true; }
+};
 
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
@@ -101,9 +107,16 @@ private:
     std::atomic<bool> m_fetchDone{false};
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;
+    LibrarySnapshot m_cachedSnapshot;
+    LibrarySnapshot m_remoteSnapshot;
+    bool m_haveCachedSnapshot = false;
+    LibrarySyncSchedule m_syncSchedule;
+    std::thread m_posterThread;
 
     void startFetch();
+    void requestFetch(Uint32 now);
     void finishFetch();
+    void startPosterSync(const LibrarySnapshot &snapshot);
 
     // Lightweight refresh used when returning to an already-loaded Home.
     std::thread m_resumeRefreshThread;
@@ -143,6 +156,9 @@ private:
     // Row artwork loading (B5d2a)
     void tryLoadOneRowArtwork();
     void evictRowArtworkIfNeeded();
+    void drawMovieGrid(SDL_Surface *fb);
+    static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
+    static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);
 };
 
 } // namespace miyoofin

@@ -7,9 +7,14 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../ArtworkLayout.hpp"
+#include "../ShowsBrowser.hpp"
 #include <atomic>
 #include <algorithm>
+#include <condition_variable>
+#include <deque>
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +31,7 @@ struct LibrarySyncSchedule {
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
+    struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
     explicit HomeScreen(const Session &session);
     ~HomeScreen() override;
 
@@ -71,12 +77,13 @@ public:
     /// Build the row-artwork identity key for a media item.
     /// Format: "itemId:Primary:imageTag:WxH"
     static std::string rowArtworkKey(const MediaItem &item);
+    static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot &snapshot);
 
     /// Row artwork state map — public so tests can inspect it.
     std::map<std::string, RowArtworkEntry> m_rowArtwork;
 
-    /// FIFO eviction order: oldest key at front.
-    std::vector<std::string> m_rowArtworkOrder;
+    /// LRU eviction order: oldest key at front.  Loaded keys occur once.
+    std::deque<std::string> m_rowArtworkOrder;
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -98,6 +105,12 @@ private:
     int m_movieActiveLetter = -1;
     int m_movieAlphabetFocus = 0;
     bool m_movieRailFocused = false;
+    enum class ShowsFocus { ShowsGrid, AnimeGrid, AlphabetRail };
+    std::vector<MediaItem> m_showMaster, m_animeMaster, m_filteredShows, m_filteredAnime;
+    ShowsFocus m_showsFocus = ShowsFocus::AlphabetRail;
+    int m_showSelected=0, m_animeSelected=0, m_showScroll=0, m_animeScroll=0;
+    int m_showsAlphabetFocus=0, m_showsActiveLetter=-1;
+    std::string m_showsPreviewId;
 
     // Session info for API calls
     Session m_session;
@@ -118,11 +131,32 @@ private:
     bool m_haveCachedSnapshot = false;
     LibrarySyncSchedule m_syncSchedule;
     std::thread m_posterThread;
+    std::mutex m_posterMutex;
+    std::condition_variable m_posterWake;
+    std::vector<PosterJob> m_pendingPosterJobs;
+    bool m_stopPosterWorker = false;
+    std::thread m_decodeThread;
+    std::mutex m_decodeMutex;
+    std::condition_variable m_decodeWake;
+    struct DecodeJob { std::string key; PosterJob artwork; bool shows = false; };
+    struct DecodeResult { std::string key; DecodedImage image; bool shows = false; };
+    std::deque<DecodeJob> m_decodeJobs;
+    std::deque<DecodeResult> m_decodeResults;
+    std::set<std::string> m_decodeOutstanding;
+    // Keys wanted by the current Shows viewport.  This is main-thread state;
+    // queued jobs are reconciled with it under m_decodeMutex.
+    std::set<std::string> m_activeShowsDecodeKeys;
+    bool m_stopDecodeWorker = false;
 
     void startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
     void startPosterSync(const LibrarySnapshot &snapshot);
+    void posterWorker();
+    void decodeWorker();
+    void drainDecodedArtwork();
+    void submitDecode(const MediaItem &item, bool highPriority=false,
+                      bool shows=false);
 
     // Lightweight refresh used when returning to an already-loaded Home.
     std::thread m_resumeRefreshThread;
@@ -162,10 +196,21 @@ private:
     // Row artwork loading (B5d2a)
     void tryLoadOneRowArtwork();
     void evictRowArtworkIfNeeded();
+    std::set<std::string> protectedRowArtworkKeys() const;
+    void touchRowArtwork(const std::string &key);
+    void storeDecodedRowArtwork(const std::string &key, DecodedImage image);
+    void updateShowsDecodeWorkingSet();
     void drawMovieGrid(SDL_Surface *fb);
     void drawMoviePreview(SDL_Surface *fb);
     void drawMovieAlphabetRail(SDL_Surface *fb);
     void refreshMovieFilter();
+    void rebuildShowsPresentation();
+    void refreshShowsFilter();
+    const MediaItem *showsSelectedItem() const;
+    void clampShowsNavigation();
+    void drawShowsGrid(SDL_Surface *fb);
+    void drawShowsPreview(SDL_Surface *fb);
+    void drawShowsAlphabetRail(SDL_Surface *fb);
     int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
     static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);

@@ -3,6 +3,7 @@
 
 #include "../data/MediaItem.hpp"
 #include "../image/ImageDecoder.hpp"
+#include "../cache/ImageCache.hpp"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -14,6 +15,30 @@ struct ArtworkBox {
     int w;
     int h;
 };
+
+/// The single source of truth for display/cache artwork selection.
+struct DisplayArtwork {
+    ImageType imageType = ImageType::Primary;
+    std::string tag;
+    int width = 0;
+    int height = 0;
+    bool valid() const { return !tag.empty() && width > 0 && height > 0; }
+};
+
+inline DisplayArtwork displayArtworkForItem(const MediaItem &item)
+{
+    const int w = item.type == "episode" ? 128 : 64;
+    const int h = item.type == "episode" ? 72 : 96;
+    if (item.type == "episode") {
+        auto thumb = item.imageTags.find("Thumb");
+        if (thumb != item.imageTags.end() && !thumb->second.empty()) return {ImageType::Thumb, thumb->second, w, h};
+    }
+    auto primary = item.imageTags.find("Primary");
+    if (primary != item.imageTags.end() && !primary->second.empty()) return {ImageType::Primary, primary->second, w, h};
+    return {};
+}
+
+inline const char *imageTypeName(ImageType type) { return type == ImageType::Thumb ? "Thumb" : "Primary"; }
 
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
 static constexpr int ROW_ARTWORK_RAM_LIMIT = 64;
@@ -146,19 +171,14 @@ inline int clampCardScroll(const std::vector<MediaItem> &items, int activeCard,
 }
 
 /// Build the row-artwork identity key for a media item (B5d2a).
-/// All types use Primary image type.
-/// Format: "itemId:Primary:imageTag:WxH"
-/// Returns empty string if no Primary tag is available.
+/// Format: "itemId:imageType:imageTag:WxH".
 inline std::string buildRowArtworkKey(const MediaItem &item)
 {
-    auto it = item.imageTags.find("Primary");
-    if (it == item.imageTags.end() || it->second.empty())
-        return {};
-
-    ArtworkBox box = artworkBoxSize(item);
+    DisplayArtwork artwork = displayArtworkForItem(item);
+    if (!artwork.valid()) return {};
     char buf[512];
-    std::snprintf(buf, sizeof(buf), "%s:Primary:%s:%dx%d",
-                  item.id.c_str(), it->second.c_str(), box.w, box.h);
+    std::snprintf(buf, sizeof(buf), "%s:%s:%s:%dx%d",
+                  item.id.c_str(), imageTypeName(artwork.imageType), artwork.tag.c_str(), artwork.width, artwork.height);
     return std::string(buf);
 }
 

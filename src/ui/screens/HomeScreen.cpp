@@ -38,6 +38,8 @@ static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
+static constexpr int SEASON_POSTER_W = 74;
+static constexpr int SEASON_POSTER_H = 111;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
 static constexpr int SHOWS_RAIL_W=36, SHOWS_PREVIEW_H=105, SHOWS_GRID_TOP=153;
@@ -93,6 +95,7 @@ HomeScreen::HomeScreen(const Session &session, std::shared_ptr<DownloadManager> 
     m_tabs.push_back({"Search", {{"", {}}}});
     m_tabs.push_back({"Downloads", {{"", {}}}});
     m_posterThread = std::thread(&HomeScreen::posterWorker, this);
+    m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
 }
 
@@ -102,6 +105,9 @@ HomeScreen::~HomeScreen()
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
         m_resumeRefreshThread.join();
+    { std::lock_guard<std::mutex> lock(m_hierarchyMutex); m_stopHierarchyWorker = true; }
+    m_hierarchyWake.notify_one();
+    if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
     m_posterWake.notify_one();
     if (m_posterThread.joinable()) m_posterThread.join();
@@ -675,6 +681,7 @@ void HomeScreen::finishFetch()
     } else { m_cachedSnapshot = m_remoteSnapshot; m_haveCachedSnapshot = true;
         for (const auto &p : stale) ImageCache::removeCached(p.itemId, ImageType::Primary, p.tag, 64, 96);
         startPosterSync(m_cachedSnapshot);
+        startHierarchyCache(m_cachedSnapshot);
     }
     m_tabs = std::move(m_fetchResult);
     m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
@@ -688,9 +695,20 @@ void HomeScreen::finishFetch()
 
 void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
 {
-    auto jobs = collectPosterJobs(snapshot);
+    queuePosterJobs(collectPosterJobs(snapshot));
+}
+
+void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs)
+{
     std::lock_guard<std::mutex> lock(m_posterMutex);
-    m_pendingPosterJobs = std::move(jobs); // newest snapshot coalesces stale work
+    std::set<std::string> queued;
+    for (const auto &job : m_pendingPosterJobs)
+        queued.insert(job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height));
+    for (auto &job : jobs) {
+        std::string key=job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height);
+        if (queued.insert(key).second && !ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+            m_pendingPosterJobs.push_back(std::move(job));
+    }
     m_posterWake.notify_one();
 }
 
@@ -702,6 +720,55 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySn
     for(const auto &item:snapshot.continueWatching) add(item);
     for(const auto &item:snapshot.recentlyAdded) add(item);
     return out;
+}
+
+std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std::vector<MediaItem> &seasons)
+{
+    std::vector<PosterJob> out; std::set<std::string> seen;
+    for (const auto &season : seasons) {
+        if (!season.type.empty() && season.type != "season") continue;
+        auto tag=season.imageTags.find("Primary");
+        if (season.id.empty() || tag==season.imageTags.end() || tag->second.empty()) continue;
+        PosterJob job{season.id,ImageType::Primary,tag->second,SEASON_POSTER_W,SEASON_POSTER_H};
+        std::string key=job.itemId+":"+job.imageTag;
+        if (seen.insert(key).second && !ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
+    }
+    return out;
+}
+
+void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot)
+{
+    std::vector<MediaItem> shows; std::set<std::string> seen;
+    for (const auto &view : snapshot.shows) for (const auto &show : view.items)
+        if (!show.id.empty() && seen.insert(show.id).second) shows.push_back(show);
+    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
+    m_hierarchyWake.notify_one();
+}
+
+void HomeScreen::hierarchyWorker()
+{
+    for (;;) {
+        std::vector<MediaItem> shows;
+        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); }
+        const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+        for (const auto &series : shows) {
+            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
+            std::vector<MediaItem> seasons; std::string error;
+            if (!JellyfinApi::getSeasons(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error)) continue;
+            // A successful level is committed immediately.  Failed later calls
+            // cannot erase prior data, and can retry on the next library sync.
+            OfflineCatalog::storeSeasons(catalog,series,seasons,nullptr);
+            queuePosterJobs(collectSeasonPosterJobs(seasons));
+            for (const auto &season : seasons) {
+                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
+                if (season.id.empty()) continue;
+                std::vector<MediaItem> episodes; error.clear();
+                if (JellyfinApi::getEpisodes(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error))
+                    OfflineCatalog::storeEpisodes(catalog,series,season,episodes,nullptr);
+            }
+        }
+    }
 }
 
 void HomeScreen::posterWorker()

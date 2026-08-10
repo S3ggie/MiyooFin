@@ -112,7 +112,10 @@ TEST_SRCS   := tests/test_main.cpp \
                src/download/HlsPlaylist.cpp \
                src/ui/BitmapFont.cpp \
                src/app/ScreenStack.cpp \
+               src/ui/screens/HomeScreen.cpp \
+               src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
+               src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp
 

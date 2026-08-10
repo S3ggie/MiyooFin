@@ -6,6 +6,7 @@
 #include "../../net/Session.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
+#include "../../cache/OfflineCatalog.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../download/DownloadUi.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
@@ -82,6 +83,8 @@ public:
     /// Format: "itemId:Primary:imageTag:WxH"
     static std::string rowArtworkKey(const MediaItem &item);
     static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot &snapshot);
+    /// Season posters use the exact dimensions of SeriesScreen's grid.
+    static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
 
     /// Row artwork state map — public so tests can inspect it.
     std::map<std::string, RowArtworkEntry> m_rowArtwork;
@@ -148,6 +151,13 @@ private:
     std::condition_variable m_posterWake;
     std::vector<PosterJob> m_pendingPosterJobs;
     bool m_stopPosterWorker = false;
+    // Hierarchy discovery is deliberately a single background worker: it keeps
+    // startup and the SDL thread free while placing a firm bound on requests.
+    std::thread m_hierarchyThread;
+    std::mutex m_hierarchyMutex;
+    std::condition_variable m_hierarchyWake;
+    std::vector<MediaItem> m_pendingHierarchyShows;
+    bool m_stopHierarchyWorker = false;
     std::thread m_decodeThread;
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeWake;
@@ -165,7 +175,10 @@ private:
     void requestFetch(Uint32 now);
     void finishFetch();
     void startPosterSync(const LibrarySnapshot &snapshot);
+    void queuePosterJobs(std::vector<PosterJob> jobs);
     void posterWorker();
+    void startHierarchyCache(const LibrarySnapshot &snapshot);
+    void hierarchyWorker();
     void decodeWorker();
     void drainDecodedArtwork();
     void submitDecode(const MediaItem &item, bool highPriority=false,

@@ -22,6 +22,7 @@
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/cache/LibraryCache.hpp"
+#include "../src/cache/SyncState.hpp"
 #include "../src/cache/OfflineCatalog.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
@@ -1741,6 +1742,7 @@ static void testDpadHoldRepeatTiming()
 static MediaItem cacheItem(const std::string &id) { MediaItem i; i.id=id;i.title="\xCE\xA9 \"title\"";i.overview="line one\nline two";i.year=2024;i.rating=8.5f;i.genre="Drama";i.type="movie";i.etag="etag-"+id;i.genres={"Drama","Sci-Fi"};i.played=true;i.progress=.5f;i.playbackPositionTicks=987654;i.imageTags["Primary"]="tag-"+id;i.indexNumber=2;i.parentIndexNumber=3;i.runTimeTicks=10000000;i.seriesName="series";i.seriesId="sid";i.seasonId="seid";i.artR=1;i.artG=2;i.artB=3;return i; }
 static bool sameItem(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.etag==b.etag&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId&&a.artR==b.artR&&a.artG==b.artG&&a.artB==b.artB;}
 static void testLibraryCacheNew(){std::string d="/tmp/miyoofin-cache-test";mkdir(d.c_str(),0755);std::string p=d+"/x.bin";LibrarySnapshot s;CachedLibraryView v;v.id="v";v.name="Movies";v.collectionType="movies";for(int i=0;i<500;i++)v.items.push_back(cacheItem(std::to_string(i)));s.movies.push_back(v);s.shows.push_back({"s","Shows","tvshows",{cacheItem("show")}});CHECK(LibraryCache::save(p,s));LibrarySnapshot got;CHECK(LibraryCache::load(p,got));CHECK(got.movies.size()==1&&got.movies[0].items.size()==500&&sameItem(got.movies[0].items[0],s.movies[0].items[0]));FILE*f=fopen(p.c_str(),"r+b");fputc('X',f);fclose(f);LibrarySnapshot keep=s;CHECK(!LibraryCache::load(p,keep));CHECK(keep.movies[0].items.size()==500);}
+static void testSyncState(){std::string p="/tmp/miyoofin-sync-state-"+std::to_string((long long)getpid())+"/state";SyncState a;a.lastSuccessfulMs=1000;a.lastReconcileMs=800;CHECK(SyncStateStore::save(p,a));SyncState b;CHECK(SyncStateStore::load(p,b)&&b.lastSuccessfulMs==1000&&b.lastReconcileMs==800);CHECK(syncStateFresh(b,1000+15*60*1000-1,15*60*1000));CHECK(!syncStateFresh(b,1000+15*60*1000,15*60*1000));FILE*f=fopen(p.c_str(),"wb");CHECK(f!=nullptr);if(f){fputs("broken",f);fclose(f);}SyncState keep=b;CHECK(!SyncStateStore::load(p,keep));CHECK(keep.lastSuccessfulMs==1000);}
 static std::string readFixture(const std::string &path){std::string out;FILE*f=fopen(path.c_str(),"rb");if(!f)return out;char b[128];size_t n;while((n=fread(b,1,sizeof(b),f)))out.append(b,n);fclose(f);return out;}
 static void writeFixture(const std::string &path,const char *data,size_t size){FILE *f=fopen(path.c_str(),"wb");CHECK(f!=nullptr);if(f){CHECK(fwrite(data,1,size,f)==size);fclose(f);}}
 static void testHlsDownloadStore(){
@@ -1771,6 +1773,9 @@ static void testOfflineCatalog(){std::string root="/tmp/miyoofin-offline-catalog
     MediaItem other=cacheItem("other-series"),season2=cacheItem("season-2"),ep2=cacheItem("episode-2");season2.seriesId=s.id;ep2.seriesId=s.id;ep2.seasonId=season2.id;CHECK(OfflineCatalog::storeSeasons(p,other,{cacheItem("other-season")}));CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{season,season2,season2},{{season.id,{ep,ep}},{season2.id,{ep2,ep2}}}));CHECK(OfflineCatalog::load(p,x));CHECK(x.series.count(other.id)==1&&x.seasonsBySeries[s.id].size()==(size_t)2&&x.episodesBySeason[season.id].size()==(size_t)1&&x.episodesBySeason[season2.id].size()==(size_t)1);
     // An incomplete planner result is a no-op and cannot erase valid cached hierarchy.
     CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{},{{season.id,{}}},false));CHECK(OfflineCatalog::load(p,x));CHECK(x.seasonsBySeries[s.id].size()==(size_t)2&&x.episodesBySeason[season.id].size()==(size_t)1);
+    // A successful authoritative top-level listing prunes deleted series and
+    // their hierarchy only; failed/incomplete refreshes above never do.
+    CHECK(OfflineCatalog::reconcileSeries(p,{other}));CHECK(OfflineCatalog::load(p,x));CHECK(!x.series.count(s.id)&&x.series.count(other.id)&&!x.seasonsBySeries.count(s.id)&&!x.episodesBySeason.count(season.id));
     // Corrupting metadata never rewrites it or touches a real downloaded-item fixture.
     DownloadStore store(root+"/downloads");std::string scope="fixture",itemId="downloaded-item";DownloadItem downloaded;downloaded.itemId=itemId;downloaded.expectedSize=5;downloaded.chunkSize=5;downloaded.state=DownloadState::Complete;downloaded.downloadedBytes=5;CHECK(store.saveManifest(scope,downloaded));CHECK(store.saveIndex(scope,{downloaded}));std::string chunks=store.itemPath(scope,itemId)+"/chunks";CHECK(mkdir(chunks.c_str(),0755)==0);FILE*chunk=fopen(store.chunkPath(scope,itemId,0).c_str(),"wb");fwrite("hello",1,5,chunk);fclose(chunk);std::string manifestBefore=readFixture(store.manifestPath(scope,itemId)),chunkBefore=readFixture(store.chunkPath(scope,itemId,0));FILE*f=fopen(p.c_str(),"wb");fputs("bad",f);fclose(f);std::string catalogBefore=readFixture(p);OfflineCatalogSnapshot keep=x;CHECK(!OfflineCatalog::load(p,keep));CHECK(!OfflineCatalog::storeDiscoveredHierarchy(p,s,{season},{{season.id,{ep}}}));CHECK(readFixture(p)==catalogBefore);CHECK(readFixture(store.manifestPath(scope,itemId))==manifestBefore);CHECK(readFixture(store.chunkPath(scope,itemId,0))==chunkBefore);DownloadItem loaded;CHECK(store.loadManifest(scope,itemId,loaded));CHECK(store.validateCompletedDownload(scope,loaded));std::vector<DownloadItem> index;CHECK(store.loadIndex(scope,index));CHECK(index.size()==(size_t)1&&index[0].itemId==itemId);}
 static void testSeasonPosterScheduling(){
@@ -1785,7 +1790,21 @@ static void testSeasonPosterScheduling(){
     CHECK(HomeScreen::collectSeasonPosterJobs({episode}).empty());
     ImageCache::removeCached(season.id,ImageType::Primary,season.imageTags["Primary"],74,111); ImageCache::setCacheDir(old);
 }
-static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);LibrarySyncSchedule q;CHECK(q.request(0));CHECK(!q.request(1000));CHECK(q.pending);CHECK(!q.complete(1000));CHECK(q.complete(60000));}
+static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);
+    // A successful sync is fresh for fifteen minutes, and tab requests while
+    // in flight coalesce instead of spawning another worker.
+    LibrarySyncSchedule q; CHECK(q.request(0)); CHECK(!q.request(1)); CHECK(q.pending); CHECK(!q.complete(10,true)); CHECK(!q.request(10+LibrarySyncSchedule::FRESH_MS-1)); CHECK(q.request(10+LibrarySyncSchedule::FRESH_MS));
+    // Failed cached refreshes wait before another normal-navigation attempt.
+    LibrarySyncSchedule failed; CHECK(failed.request(0)); failed.complete(10,false); CHECK(!failed.request(11)); CHECK(failed.request(10+LibrarySyncSchedule::RETRY_DELAY_MS));
+    // Shows progress is real, clamped and monotonic; poster work is not an input.
+    ShowsSyncProgress zero{0,120}, mid{48,120}, done{120,120}, overflow{140,120}, regressed{12,120}; CHECK(zero.percent()==0); CHECK(mid.percent()==40); CHECK(done.percent()==100); CHECK(overflow.percent()==100); CHECK(regressed.percent(40)==40);
+    // Cached content remains browseable and explicitly reports offline rather
+    // than promoting a transient network failure to a fatal browsing error.
+    CHECK_EQ(librarySyncStatus(0,true,true,false,true),"OFFLINE");
+    CHECK_EQ(librarySyncStatus(1,true,false,true,true),"SYNCING...");
+    CHECK_EQ(librarySyncStatus(2,true,false,false,true,mid,true),"SYNC 40%");
+    CHECK_EQ(librarySyncStatus(2,true,false,false,true,done,false),"SYNCED");
+}
 static void testCacheRemoveNew(){std::string old=ImageCache::cacheDir();ImageCache::setCacheDir("/tmp/miyoofin-images/");unsigned char b[2]={1,2};CHECK(ImageCache::writeToCache("a",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::writeToCache("b",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::removeCached("a",ImageType::Primary,"x",64,96));CHECK(!ImageCache::isCached("a",ImageType::Primary,"x",64,96));CHECK(ImageCache::isCached("b",ImageType::Primary,"x",64,96));ImageCache::setCacheDir(old);}
 
 static DownloadItem planItem(const std::string &id, std::uint64_t size, std::uint64_t done=0) {
@@ -1963,7 +1982,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testOfflineCatalog(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 

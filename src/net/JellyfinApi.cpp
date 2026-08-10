@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdint>
 #include <limits>
+#include <ctime>
 #include <cstdlib>
 
 namespace miyoofin {
@@ -802,6 +803,20 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
         }
         startIndex += limit;
     }
+}
+
+bool JellyfinApi::getChangedHierarchyItems(const std::string &baseUrl,const std::string &accessToken,const std::string &userId,const std::string &deviceId,std::int64_t sinceMs,std::vector<MediaItem>&items,std::string&error)
+{
+    if(sinceMs<=0){error="missing sync checkpoint";return false;}
+    std::time_t seconds=(std::time_t)(sinceMs/1000); std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc,&seconds);
+#else
+    gmtime_r(&seconds,&utc);
+#endif
+    char stamp[32];std::strftime(stamp,sizeof(stamp),"%Y-%m-%dT%H:%M:%S.0000000Z",&utc);
+    HttpClient client;client.setTimeoutSec(15);auto headers=buildAuthHeaders(accessToken,deviceId);int start=0;const int limit=100;
+    for(;;){std::string url=baseUrl+"/Users/"+userId+"/Items?Recursive=true&IncludeItemTypes=Series,Season,Episode&SortBy=DateLastSaved&SortOrder=Ascending&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,RunTimeTicks,SeriesName,SeriesId,SeasonId&MinDateLastSaved="+stamp+"&StartIndex="+std::to_string(start)+"&Limit="+std::to_string(limit);HttpResponse response;if(!client.perform("GET",url,headers,{},response,error)){if(error.empty())error="Could not reach server";return false;}if(!response.ok()){error="Changed items failed (HTTP "+std::to_string(response.status)+")";return false;}auto raw=jsonExtractArray(response.body,"Items");for(const auto&s:raw)items.push_back(jsonToMediaItem(s));if(raw.size()<(size_t)limit)return true;if(start>std::numeric_limits<int>::max()-limit){error="changed item pagination overflow";return false;}start+=limit;}
 }
 
 std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,

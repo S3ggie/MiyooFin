@@ -7,6 +7,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
+#include "../../cache/SyncState.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../download/DownloadUi.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -26,10 +28,45 @@
 
 namespace miyoofin {
 struct LibrarySyncSchedule {
-    bool inFlight=false, pending=false, hasStarted=false; Uint32 lastStart=0;
-    bool request(Uint32 now) { if(inFlight){pending=true;return false;} if(hasStarted && now-lastStart<60000)return false; inFlight=true;hasStarted=true;lastStart=now;return true; }
-    bool complete(Uint32 now) { inFlight=false; if(!pending || now-lastStart<60000) return false; pending=false; inFlight=true;lastStart=now;return true; }
+    static constexpr Uint32 FRESH_MS = 15u * 60u * 1000u;
+    static constexpr Uint32 RETRY_DELAY_MS = 60u * 1000u;
+    bool inFlight=false, pending=false, hasAttempted=false, hasSucceeded=false;
+    Uint32 lastAttempt=0, lastSuccess=0;
+    bool request(Uint32 now) {
+        if (inFlight) { pending=true; return false; }
+        if (hasSucceeded && now-lastSuccess < FRESH_MS) return false;
+        if (hasAttempted && now-lastAttempt < RETRY_DELAY_MS) return false;
+        inFlight=true; hasAttempted=true; lastAttempt=now; return true;
+    }
+    // A completed request already includes all coalesced navigation requests.
+    // Never immediately retry a failed hostname/network request on the UI path.
+    bool complete(Uint32 now, bool succeeded) {
+        inFlight=false; pending=false;
+        if (succeeded) { hasSucceeded=true; lastSuccess=now; }
+        return false;
+    }
 };
+
+struct ShowsSyncProgress {
+    size_t completed=0, total=0;
+    int percent(int previous=0) const {
+        if (!total) return 100;
+        const size_t bounded=std::min(completed,total);
+        const int value=(int)((bounded*100)/total);
+        return std::max(0,std::min(100,std::max(previous,value)));
+    }
+};
+
+inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
+                                     bool metadataActive, bool syncSucceeded,
+                                     const ShowsSyncProgress &shows={}, bool hierarchyActive=false) {
+    if (tab < 0 || tab > 2) return "";
+    if (offline && haveCache) return "OFFLINE";
+    if (tab == 2 && shows.total && (hierarchyActive || shows.completed < shows.total))
+        return "SYNC " + std::to_string(shows.percent()) + "%";
+    if (metadataActive) return "SYNCING...";
+    return syncSucceeded ? "SYNCED" : "SYNCING...";
+}
 
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
@@ -144,8 +181,13 @@ private:
     std::vector<TabData> m_fetchResult;
     LibrarySnapshot m_cachedSnapshot;
     LibrarySnapshot m_remoteSnapshot;
+    ReconcileStats m_fetchStats;
+    bool m_fetchCacheSaved = false;
     bool m_haveCachedSnapshot = false;
+    SyncState m_syncState;
+    bool m_forceHierarchyReconcile = false;
     LibrarySyncSchedule m_syncSchedule;
+    bool m_libraryOffline = false;
     std::thread m_posterThread;
     std::mutex m_posterMutex;
     std::condition_variable m_posterWake;
@@ -157,6 +199,11 @@ private:
     std::mutex m_hierarchyMutex;
     std::condition_variable m_hierarchyWake;
     std::vector<MediaItem> m_pendingHierarchyShows;
+    std::uint64_t m_pendingHierarchyGeneration = 0;
+    std::atomic<std::uint64_t> m_hierarchyGeneration{0};
+    std::atomic<size_t> m_hierarchyCompleted{0}, m_hierarchyTotal{0};
+    std::atomic<bool> m_hierarchyActive{false};
+    std::atomic<bool> m_hierarchyOffline{false};
     bool m_stopHierarchyWorker = false;
     std::thread m_decodeThread;
     std::mutex m_decodeMutex;
@@ -177,8 +224,10 @@ private:
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs);
     void posterWorker();
-    void startHierarchyCache(const LibrarySnapshot &snapshot);
+    void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
+                             const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
+    std::string syncStatusText() const;
     void decodeWorker();
     void drainDecodedArtwork();
     void submitDecode(const MediaItem &item, bool highPriority=false,

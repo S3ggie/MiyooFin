@@ -30,6 +30,7 @@ SRCS := \
     src/net/DeviceIdentity.cpp \
     src/cache/ImageCache.cpp \
     src/cache/LibraryCache.cpp \
+    src/cache/SyncState.cpp \
     src/cache/OfflineCatalog.cpp \
     src/download/DownloadStore.cpp \
     src/download/DownloadManager.cpp \

@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstring>
 #include <mutex>
+#include <set>
 #define mutex recursive_mutex
 #include <sys/stat.h>
 #include <unistd.h>
@@ -24,5 +25,6 @@ bool OfflineCatalog::load(const std::string&p,OfflineCatalogSnapshot&o,std::stri
 bool OfflineCatalog::storeSeasons(const std::string&p,const MediaItem&s,const std::vector<MediaItem>&v,std::string*e){return storeDiscoveredHierarchy(p,s,v,{},true,e);}
 bool OfflineCatalog::storeEpisodes(const std::string&p,const MediaItem&s,const MediaItem&season,const std::vector<MediaItem>&v,std::string*e){return storeDiscoveredHierarchy(p,s,{season},{{season.id,v}},true,e);}
 bool OfflineCatalog::storeDiscoveredHierarchy(const std::string&p,const MediaItem&s,const std::vector<MediaItem>&v,const std::map<std::string,std::vector<MediaItem> >&eps,bool complete,std::string*e){if(!complete)return true;if(s.id.empty()){if(e)*e="missing series id";return false;}std::lock_guard<std::mutex>g(lock);OfflineCatalogSnapshot x;std::string loadError;if(!loadForUpdate(p,x,&loadError)){if(e)*e=loadError;return false;}auto old=x.series.find(s.id);if(old==x.series.end()||!s.title.empty())x.series[s.id]=s;mergeItems(x.seasonsBySeries[s.id],v);for(const auto&a:eps)if(!a.first.empty())mergeItems(x.episodesBySeason[a.first],a.second);return save(p,x,e);}
+bool OfflineCatalog::reconcileSeries(const std::string&p,const std::vector<MediaItem>&series,std::string*e){std::lock_guard<std::mutex>g(lock);OfflineCatalogSnapshot x;std::string le;if(!loadForUpdate(p,x,&le)){if(e)*e=le;return false;}std::set<std::string> keep;for(const auto&i:series)if(!i.id.empty())keep.insert(i.id);for(auto it=x.series.begin();it!=x.series.end();)if(!keep.count(it->first))it=x.series.erase(it);else ++it;for(auto it=x.seasonsBySeries.begin();it!=x.seasonsBySeries.end();){if(!keep.count(it->first)){for(const auto&s:it->second)x.episodesBySeason.erase(s.id);it=x.seasonsBySeries.erase(it);}else ++it;}return save(p,x,e);}
 std::vector<MediaItem> OfflineCatalog::seasons(const std::string&p,const std::string&id){OfflineCatalogSnapshot x;load(p,x,nullptr);return x.seasonsBySeries[id];} std::vector<MediaItem> OfflineCatalog::episodes(const std::string&p,const std::string&id){OfflineCatalogSnapshot x;load(p,x,nullptr);return x.episodesBySeason[id];}
 }

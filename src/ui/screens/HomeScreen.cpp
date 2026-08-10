@@ -20,6 +20,7 @@
 #include <map>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cctype>
 #include <curl/curl.h>
 
@@ -44,6 +45,9 @@ static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
 static constexpr int SHOWS_RAIL_W=36, SHOWS_PREVIEW_H=105, SHOWS_GRID_TOP=153;
 static constexpr int SHOWS_HALF_W=302, SHOWS_LEFT_X=36, SHOWS_RIGHT_X=338;
+static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
+static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
+static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
 // Keep the selected grid row within the compact three-row movie viewport.
 // This is deliberately independent of logical MediaRow navigation.
@@ -249,7 +253,14 @@ void HomeScreen::enter()
             m_loadState = LoadState::Ready; clampNavigation();
             printf("[HomeScreen] Loaded local library cache\n");
         }
-        requestFetch(SDL_GetTicks());
+        const std::string scope=LibraryCache::scopeKey(m_session.serverUrl,m_session.userId);
+        const bool haveState=SyncStateStore::load(SyncStateStore::path("cache",scope),m_syncState);
+        m_forceHierarchyReconcile=!haveState || !syncStateFresh(m_syncState,wallClockMs(),HIERARCHY_RECONCILE_MS);
+        if (haveState && syncStateFresh(m_syncState,wallClockMs(),SYNC_FRESH_WALL_MS)) {
+            // Persisted freshness survives process lifetime; cache is already
+            // rendered above, so a relaunch does not begin another crawl.
+            m_syncSchedule.hasSucceeded=true; m_syncSchedule.lastSuccess=SDL_GetTicks();
+        } else requestFetch(SDL_GetTicks());
     }
     else if (m_loadState == LoadState::Ready) {
         if (m_resumeRefreshInFlight)
@@ -575,6 +586,7 @@ void HomeScreen::startFetch()
     m_fetchDone = false;
     m_fetchError.clear();
     m_fetchResult.clear();
+    m_fetchCacheSaved = false;
 
     std::string url   = m_session.serverUrl;
     std::string token = m_session.accessToken;
@@ -629,9 +641,33 @@ void HomeScreen::startFetch()
             }
         }
 
-        m_fetchResult = JellyfinApi::buildTabs(
-            views, cw, ra, moviesByView, showsByView);
+        m_fetchResult = JellyfinApi::buildTabs(views, cw, ra, moviesByView, showsByView);
         m_remoteSnapshot = std::move(snapshot);
+        std::set<std::string> changedSeries;
+        // A top-level listing is cheap and catches added/deleted series.  The
+        // change feed catches episode/season UserData and metadata edits
+        // without walking every cached hierarchy.
+        if (m_syncState.lastSuccessfulMs > 0 && !m_forceHierarchyReconcile) {
+            std::vector<MediaItem> changed; std::string changedError;
+            if (!JellyfinApi::getChangedHierarchyItems(url,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError)) {
+                m_fetchError=changedError; m_fetchDone=true; return;
+            }
+            for(const auto&i:changed) {
+                if(i.type=="show") changedSeries.insert(i.id);
+                else if(!i.seriesId.empty()) changedSeries.insert(i.seriesId);
+            }
+        }
+        // Disk writes, poster enumeration and catalog scheduling used to run
+        // from finishFetch() on SDL's update path.  Do all of that here.
+        std::vector<StalePoster> stale;
+        m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale);
+        const std::string scope=LibraryCache::scopeKey(url,uid);
+        if (LibraryCache::save(LibraryCache::cachePath("cache",scope),m_remoteSnapshot)) {
+            m_fetchCacheSaved=true;
+            for(const auto&p:stale) ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);
+            startPosterSync(m_remoteSnapshot);
+            startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);
+        }
         /* Poster work is deliberately not part of metadata completion.
         // sync worker; UI selection/rendering never issues these requests.
         std::vector<MediaItem> posterJobs;
@@ -668,29 +704,27 @@ void HomeScreen::finishFetch()
     if (m_fetchThread.joinable()) m_fetchThread.join();
     m_fetchDone = false;
     if (!m_fetchError.empty()) {
+        // Cached libraries remain usable when DNS/network access is transiently
+        // unavailable.  The schedule's retry delay prevents tab flips from
+        // turning that failure into a request storm.
+        m_libraryOffline = m_haveCachedSnapshot;
         if (!m_haveCachedSnapshot) m_loadState = LoadState::Error;
         printf("[HomeScreen] Fetch failed: %s\n", m_fetchError.c_str());
-        if (m_syncSchedule.complete(SDL_GetTicks())) startFetch();
+        m_syncSchedule.complete(SDL_GetTicks(), false);
         return;
     }
-    std::vector<StalePoster> stale;
-    ReconcileStats stats = LibraryCache::reconcile(m_cachedSnapshot, m_remoteSnapshot, &stale);
-    std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-    if (!LibraryCache::save(path, m_remoteSnapshot)) {
+    if (!m_fetchCacheSaved) {
         printf("[HomeScreen] Library cache save failed; retaining old cache\n");
-    } else { m_cachedSnapshot = m_remoteSnapshot; m_haveCachedSnapshot = true;
-        for (const auto &p : stale) ImageCache::removeCached(p.itemId, ImageType::Primary, p.tag, 64, 96);
-        startPosterSync(m_cachedSnapshot);
-        startHierarchyCache(m_cachedSnapshot);
-    }
+    } else { m_cachedSnapshot = m_remoteSnapshot; m_haveCachedSnapshot = true; }
     m_tabs = std::move(m_fetchResult);
     m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
     refreshMovieFilter();
     rebuildShowsPresentation();
     m_loadState = LoadState::Ready;
+    m_libraryOffline = false;
     clampNavigation();
-    printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n", m_tabs.size(), stats.added, stats.changed);
-    if (m_syncSchedule.complete(SDL_GetTicks())) startFetch();
+    printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n", m_tabs.size(), m_fetchStats.added, m_fetchStats.changed);
+    m_syncSchedule.complete(SDL_GetTicks(), true);
 }
 
 void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
@@ -736,13 +770,34 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std
     return out;
 }
 
-void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot)
+void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
+                                     const std::set<std::string> &changedSeries)
 {
-    std::vector<MediaItem> shows; std::set<std::string> seen;
+    std::vector<MediaItem> all, shows; std::set<std::string> seen;
     for (const auto &view : snapshot.shows) for (const auto &show : view.items)
-        if (!show.id.empty() && seen.insert(show.id).second) shows.push_back(show);
+        if (!show.id.empty() && seen.insert(show.id).second) all.push_back(show);
+    OfflineCatalogSnapshot catalogSnapshot;
+    const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+    const bool catalogValid=OfflineCatalog::load(catalog,catalogSnapshot);
+    std::map<std::string,MediaItem> old;
+    for(const auto&v:previous.shows)for(const auto&i:v.items)old[i.id]=i;
+    for(const auto&s:all){auto it=old.find(s.id);if(!catalogValid||m_forceHierarchyReconcile||changedSeries.count(s.id)||it==old.end()||!LibraryCache::itemEquivalent(it->second,s))shows.push_back(s);}
+    // An authoritative top-level list also provides deletion reconciliation;
+    // this remains background work and never affects download files.
+    OfflineCatalog::reconcileSeries(catalog,all,nullptr);
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    const std::uint64_t generation=m_hierarchyGeneration.fetch_add(1)+1;
     m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
+    m_pendingHierarchyGeneration=generation;
+    m_hierarchyCompleted.store(0);
+    m_hierarchyTotal.store(m_pendingHierarchyShows.size());
+    m_hierarchyActive.store(!m_pendingHierarchyShows.empty());
+    if(m_pendingHierarchyShows.empty()) {
+        m_syncState.lastSuccessfulMs=wallClockMs();
+        if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
+        SyncStateStore::save(SyncStateStore::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_syncState);
+    }
+    m_hierarchyOffline.store(false);
     m_hierarchyWake.notify_one();
 }
 
@@ -750,22 +805,39 @@ void HomeScreen::hierarchyWorker()
 {
     for (;;) {
         std::vector<MediaItem> shows;
-        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); }
+        std::uint64_t generation=0;
+        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; }
         const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
         for (const auto &series : shows) {
             { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
             std::vector<MediaItem> seasons; std::string error;
-            if (!JellyfinApi::getSeasons(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error)) continue;
-            // A successful level is committed immediately.  Failed later calls
-            // cannot erase prior data, and can retry on the next library sync.
-            OfflineCatalog::storeSeasons(catalog,series,seasons,nullptr);
+            if (!JellyfinApi::getSeasons(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error)) { if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); continue; }
             queuePosterJobs(collectSeasonPosterJobs(seasons));
+            std::map<std::string,std::vector<MediaItem> > episodesBySeason;
+            bool complete=true;
             for (const auto &season : seasons) {
                 { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
-                if (season.id.empty()) continue;
+                if (season.id.empty()) { complete=false; break; }
                 std::vector<MediaItem> episodes; error.clear();
-                if (JellyfinApi::getEpisodes(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error))
-                    OfflineCatalog::storeEpisodes(catalog,series,season,episodes,nullptr);
+                if (!JellyfinApi::getEpisodes(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error)) { complete=false; if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); break; }
+                episodesBySeason[season.id]=std::move(episodes);
+            }
+            // A show is only complete after every discovered level has been
+            // fetched and atomically merged into the offline catalog.
+            if (complete && OfflineCatalog::storeDiscoveredHierarchy(catalog,series,seasons,episodesBySeason,true,nullptr)
+                && generation==m_hierarchyGeneration.load())
+                m_hierarchyCompleted.fetch_add(1);
+        }
+        if (generation==m_hierarchyGeneration.load()) {
+            m_hierarchyActive.store(false);
+            // A watermark means the requested hierarchy was fully committed,
+            // never merely that the metadata request happened.  Failures keep
+            // the old checkpoint so the next online attempt is conservative.
+            if (!m_hierarchyOffline.load() && m_hierarchyCompleted.load()==m_hierarchyTotal.load()) {
+                m_syncState.lastSuccessfulMs=wallClockMs();
+                if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
+                SyncStateStore::save(SyncStateStore::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_syncState);
+                m_forceHierarchyReconcile=false;
             }
         }
     }
@@ -1239,6 +1311,7 @@ void HomeScreen::drawTabBar(SDL_Surface *fb)
         }
         x += (int)::strlen(name) * BitmapFont::GLYPH_W + 16;
     }
+    std::string status = syncStatusText();
     std::string login = "Logged in as: " + m_userName;
     const int maxChars = 24;
     if ((int)login.size() > maxChars) login = login.substr(0, maxChars - 3) + "...";
@@ -1247,6 +1320,18 @@ void HomeScreen::drawTabBar(SDL_Surface *fb)
     if (loginX > x + 4)
         BitmapFont::drawString(fb, loginX, tabY, login.c_str(), Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
                                Theme::BG_R*2/3, Theme::BG_G*2/3, Theme::BG_B*2/3);
+    int statusX=loginX-8-(int)status.size()*BitmapFont::GLYPH_W;
+    if (!status.empty() && statusX > x+4)
+        BitmapFont::drawString(fb,statusX,tabY,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,
+                               Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+}
+
+std::string HomeScreen::syncStatusText() const
+{
+    return librarySyncStatus(m_activeTab,m_haveCachedSnapshot,
+        m_libraryOffline || m_hierarchyOffline.load(),m_syncSchedule.inFlight,
+        m_syncSchedule.hasSucceeded,{m_hierarchyCompleted.load(),m_hierarchyTotal.load()},
+        m_hierarchyActive.load());
 }
 
 void HomeScreen::drawInfoPanel(SDL_Surface *fb)

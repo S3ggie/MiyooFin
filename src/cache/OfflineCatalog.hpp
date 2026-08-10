@@ -25,6 +25,9 @@ public:
                                          const std::vector<MediaItem> &seasons,
                                          const std::map<std::string, std::vector<MediaItem> > &episodesBySeason,
                                          bool complete=true, std::string *error=nullptr);
+    // Called only after a successful authoritative library listing.  It prunes
+    // metadata for deleted series without touching download bytes.
+    static bool reconcileSeries(const std::string &path, const std::vector<MediaItem> &series, std::string *error=nullptr);
     static std::vector<MediaItem> seasons(const std::string &path, const std::string &seriesId);
     static std::vector<MediaItem> episodes(const std::string &path, const std::string &seasonId);
 };

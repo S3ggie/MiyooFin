@@ -40,6 +40,7 @@ SRCS        := \
     $(SRC_DIR)/net/DeviceIdentity.cpp \
     $(SRC_DIR)/cache/ImageCache.cpp \
     $(SRC_DIR)/cache/LibraryCache.cpp \
+    $(SRC_DIR)/cache/SyncState.cpp \
     $(SRC_DIR)/cache/OfflineCatalog.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
@@ -104,6 +105,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/image/ImageDecoder.cpp \
                src/cache/ImageCache.cpp \
                src/cache/LibraryCache.cpp \
+               src/cache/SyncState.cpp \
                src/cache/OfflineCatalog.cpp \
                src/download/DownloadStore.cpp \
                src/download/DownloadManager.cpp \

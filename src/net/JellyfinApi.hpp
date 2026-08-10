@@ -130,6 +130,11 @@ public:
                                 int limit,
                                 std::vector<MediaItem> &items,
                                 std::string &error);
+    /// Changed hierarchy records since a durable UTC checkpoint.  Jellyfin's
+    /// DateLastSaved includes metadata and per-user UserData changes.
+    static bool getChangedHierarchyItems(const std::string &baseUrl, const std::string &accessToken,
+                                         const std::string &userId, const std::string &deviceId,
+                                         std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error);
 
     /// Fetch "continue watching" / resume items.
     static bool getResumeItems(const std::string &baseUrl,

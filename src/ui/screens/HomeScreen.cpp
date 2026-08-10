@@ -93,7 +93,11 @@ HomeScreen::~HomeScreen()
 std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
 {
     std::vector<TabData> tabs;
-    tabs.push_back({"Home", {{"", {}}}});
+    std::vector<MediaRow> home;
+    if (!s.continueWatching.empty()) home.push_back({"Continue Watching", s.continueWatching});
+    if (!s.recentlyAdded.empty()) home.push_back({"Recently Added", s.recentlyAdded});
+    if (home.empty()) home.push_back({"", {}});
+    tabs.push_back({"Home", std::move(home)});
     TabData movies{"Movies", {{"Movies", combineMovieViews(s.movies)}}};
     if (movies.rows.empty()) movies.rows.push_back({"No movies found", {}});
     tabs.push_back(std::move(movies));
@@ -472,6 +476,8 @@ void HomeScreen::startFetch()
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
         std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
         LibrarySnapshot snapshot;
+        snapshot.continueWatching = cw;
+        snapshot.recentlyAdded = ra;
         for (const auto &v : views) {
             if (v.collectionType == "movies") {
                 std::vector<MediaItem> items; std::string ie;
@@ -613,6 +619,10 @@ void HomeScreen::finishResumeRefresh()
                m_resumeRefreshError.c_str());
     } else {
         updateContinueWatchingRow(m_tabs, m_resumeRefreshResult);
+        m_cachedSnapshot.continueWatching = m_resumeRefreshResult;
+        const std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
+        if (!LibraryCache::save(path, m_cachedSnapshot))
+            printf("[HomeScreen] Continue Watching cache save failed\n");
         clampNavigation();
         printf("[HomeScreen] Continue Watching refreshed: %zu items\n",
                m_resumeRefreshResult.size());
@@ -672,9 +682,9 @@ void HomeScreen::tryLoadSelectedArtwork()
         printf("[HomeScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
     }
 
-    // Movies/Shows are deliberately local-first: their artwork is only
-    // populated by the background library sync, never by navigation.
-    if ((m_activeTab == 1 || m_activeTab == 2) && jpegData.empty()) return;
+    // All browsing artwork is deliberately local-first: poster workers fill
+    // the disk cache, while rendering and navigation never issue HTTP.
+    if (jpegData.empty()) return;
     m_selectedArtworkAttempted = true;
     // 2. Dynamic Home artwork may still use its existing request path.
     if (jpegData.empty()) {
@@ -817,7 +827,7 @@ void HomeScreen::tryLoadOneRowArtwork()
     if (ImageCache::isCached(itemId, ImageType::Primary, tag, box.w, box.h))
         jpegData = ImageCache::readCached(itemId, ImageType::Primary, tag, box.w, box.h);
 
-    if ((m_activeTab == 1 || m_activeTab == 2) && jpegData.empty()) return;
+    if (jpegData.empty()) return;
     // A real read/decode failure is the only permanent failure state.
     m_rowArtwork[candidate].status = RowArtworkStatus::Failed;
     // 2. Dynamic Home artwork may still use its existing request path.
@@ -885,6 +895,14 @@ void HomeScreen::drawTabBar(SDL_Surface *fb)
         }
         x += (int)::strlen(name) * BitmapFont::GLYPH_W + 16;
     }
+    std::string login = "Logged in as: " + m_userName;
+    const int maxChars = 24;
+    if ((int)login.size() > maxChars) login = login.substr(0, maxChars - 3) + "...";
+    int loginX = 640 - 8 - (int)login.size() * BitmapFont::GLYPH_W;
+    // Do not obscure tabs on unusually narrow font/theme combinations.
+    if (loginX > x + 4)
+        BitmapFont::drawString(fb, loginX, tabY, login.c_str(), Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
+                               Theme::BG_R*2/3, Theme::BG_G*2/3, Theme::BG_B*2/3);
 }
 
 void HomeScreen::drawInfoPanel(SDL_Surface *fb)

@@ -7,7 +7,12 @@
 
 namespace miyoofin {
 struct CachedLibraryView { std::string id, name, collectionType; std::vector<MediaItem> items; };
-struct LibrarySnapshot { std::vector<CachedLibraryView> movies, shows; };
+// Home rows are deliberately part of the same atomic snapshot as libraries:
+// cached browsing must not wait for the network on application startup.
+struct LibrarySnapshot {
+    std::vector<CachedLibraryView> movies, shows;
+    std::vector<MediaItem> continueWatching, recentlyAdded;
+};
 struct ReconcileStats { int added=0, changed=0, removed=0, unchanged=0, postersNeeded=0, stalePosters=0; };
 struct StalePoster { std::string itemId, tag; };
 

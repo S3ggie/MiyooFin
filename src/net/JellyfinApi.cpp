@@ -309,6 +309,15 @@ bool JellyfinApi::validateToken(const std::string &baseUrl,
                                 const std::string &deviceId,
                                 std::string &error)
 {
+    return validateTokenStatus(baseUrl, accessToken, userId, deviceId, error) == TokenValidation::Valid;
+}
+
+TokenValidation JellyfinApi::validateTokenStatus(const std::string &baseUrl,
+                                                  const std::string &accessToken,
+                                                  const std::string &userId,
+                                                  const std::string &deviceId,
+                                                  std::string &error)
+{
     HttpClient client;
     client.setTimeoutSec(5);
 
@@ -329,11 +338,11 @@ bool JellyfinApi::validateToken(const std::string &baseUrl,
     HttpResponse response;
     if (!client.perform("GET", url, headers, {}, response, error)) {
         if (error.empty()) error = "Could not reach server";
-        return false;
+        return TokenValidation::Unavailable;
     }
 
     if (response.ok()) {
-        return true;  // token is valid
+        return TokenValidation::Valid;
     }
 
     if (response.status == 401) {
@@ -343,7 +352,8 @@ bool JellyfinApi::validateToken(const std::string &baseUrl,
         std::snprintf(buf, sizeof(buf), "Token validation failed (HTTP %ld)", response.status);
         error = buf;
     }
-    return false;
+    return response.status == 401 || response.status == 403
+        ? TokenValidation::Unauthorized : TokenValidation::Unavailable;
 }
 
 std::string JellyfinApi::normaliseUrl(const std::string &input)

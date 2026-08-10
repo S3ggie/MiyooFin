@@ -44,11 +44,7 @@ void ConnectScreen::update(Uint32 dt)
 {
     if (m_finished) return;
 
-    if (m_connected && m_infoTimer > 0) {
-        if (dt >= m_infoTimer) { m_infoTimer = 0; m_finished = true; }
-        else { m_infoTimer -= dt; }
-        return;
-    }
+    if (m_connected) { m_finished = true; return; }
 
     if (m_failed) {
         m_finished = true;
@@ -92,7 +88,7 @@ void ConnectScreen::finishConnection()
     if (m_connectSuccess) {
         m_connected = true;
         m_serverInfo = m_connectResult;
-        m_infoTimer = 3000;
+        m_infoTimer = 0;
         printf("[ConnectScreen] Connected to %s (%s v%s)\n",
                m_savedUrl.c_str(), m_serverInfo.serverName.c_str(),
                m_serverInfo.version.c_str());

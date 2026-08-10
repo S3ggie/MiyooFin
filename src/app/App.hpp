@@ -3,6 +3,8 @@
 
 #include <SDL2/SDL.h>
 #include <memory>
+#include <atomic>
+#include <thread>
 #include "ScreenStack.hpp"
 #include "../input/InputManager.hpp"
 #include "../net/JellyfinApi.hpp"
@@ -65,6 +67,9 @@ private:
     ServerInfo      m_serverInfo;  // connected server info
     std::string     m_deviceId;    // persistent device identifier
     Session         m_session;     // saved session (token + user)
+    std::thread     m_savedValidationThread;
+    std::atomic<int> m_savedValidation{0}; // 0 pending, 1 valid/unavailable, 2 unauthorized
+    bool            m_savedFastPath = false;
 
     /// Load saved server URL from server.txt.
     void loadSavedUrl();
@@ -80,6 +85,8 @@ private:
 
     /// Discard the current session (logout).
     void logout();
+    void startSavedSessionValidation();
+    void finishSavedSessionValidation();
 
     /// Handle an external playback request: suspend platform, fork
     /// playback_runner.sh, wait for child, resume platform.

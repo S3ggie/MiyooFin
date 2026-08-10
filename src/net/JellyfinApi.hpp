@@ -33,6 +33,7 @@ enum class AuthError {
     ServerError,        ///< HTTP 5xx or other error
     ParseError          ///< Could not parse authentication response
 };
+enum class TokenValidation { Valid, Unauthorized, Unavailable };
 
 /// A user's media library / collection view.
 struct LibraryView {
@@ -67,6 +68,11 @@ public:
                               const std::string &userId,
                               const std::string &deviceId,
                               std::string &error);
+    static TokenValidation validateTokenStatus(const std::string &baseUrl,
+                                               const std::string &accessToken,
+                                               const std::string &userId,
+                                               const std::string &deviceId,
+                                               std::string &error);
 
     /// Normalise a user-entered URL.
     static std::string normaliseUrl(const std::string &input);

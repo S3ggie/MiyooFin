@@ -56,6 +56,7 @@ App::App()
 
 App::~App()
 {
+    if (m_savedValidationThread.joinable()) m_savedValidationThread.join();
     if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
     if (m_fb)     SDL_FreeSurface(m_fb);
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
@@ -133,7 +134,13 @@ bool App::init()
     m_deviceId = DeviceIdentity::loadOrCreate();
     printf("[App] Device ID: %s\n", m_deviceId.c_str());
 
-    if (!m_serverUrl.empty()) {
+    if (m_session.valid() && !m_serverUrl.empty()) {
+        // Cached UI is useful even without Wi-Fi. Validation continues in the
+        // background and only an explicit authorization rejection logs out.
+        m_savedFastPath = true;
+        goToHome();
+        startSavedSessionValidation();
+    } else if (!m_serverUrl.empty()) {
         printf("[App] Saved server URL: %s\n", m_serverUrl.c_str());
         m_stack.push(std::make_unique<ConnectScreen>(m_serverUrl));
     } else {
@@ -145,6 +152,31 @@ bool App::init()
     m_lastTick = SDL_GetTicks();
     printf("[App] Initialisation complete\n");
     return true;
+}
+
+void App::startSavedSessionValidation()
+{
+    const Session session = m_session;
+    m_savedValidation = 0;
+    m_savedValidationThread = std::thread([this, session] {
+        std::string error;
+        TokenValidation result = JellyfinApi::validateTokenStatus(session.serverUrl, session.accessToken,
+            session.userId, session.deviceId, error);
+        m_savedValidation = result == TokenValidation::Unauthorized ? 2 : 1;
+    });
+}
+
+void App::finishSavedSessionValidation()
+{
+    if (!m_savedFastPath || m_savedValidation.load() == 0) return;
+    if (m_savedValidationThread.joinable()) m_savedValidationThread.join();
+    const bool unauthorized = m_savedValidation.load() == 2;
+    m_savedFastPath = false;
+    if (unauthorized) {
+        printf("[App] Saved session rejected; returning to login\n");
+        logout();
+        goToLogin("Session expired. Please log in again.");
+    }
 }
 
 void App::loadSavedUrl()
@@ -402,6 +434,7 @@ int App::run()
         if (active) {
             active->update(dt);
         }
+        finishSavedSessionValidation();
 
         // --- Check if a screen requested external playback ---
         if (!m_playbackStarting && m_stack.pollExternalPlayback()) {

@@ -44,11 +44,7 @@ void AuthCheckScreen::update(Uint32 dt)
 {
     if (m_finished) return;
 
-    if (m_ok && m_welcomeTimer > 0) {
-        if (dt >= m_welcomeTimer) { m_welcomeTimer = 0; m_finished = true; }
-        else { m_welcomeTimer -= dt; }
-        return;
-    }
+    if (m_ok) { m_finished = true; return; }
 
     if (m_checkDone) {
         finishCheck();
@@ -82,7 +78,7 @@ void AuthCheckScreen::finishCheck()
 
     if (m_checkSuccess) {
         m_ok = true;
-        m_welcomeTimer = 1500;
+        m_welcomeTimer = 0;
         printf("[AuthCheckScreen] Session valid for user '%s'\n",
                m_userName.c_str());
         return;

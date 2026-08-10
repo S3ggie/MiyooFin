@@ -7,6 +7,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
+#include "../../cache/OfflineLibraryProjection.hpp"
 #include "../../cache/SyncState.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../download/DownloadUi.hpp"
@@ -120,6 +121,14 @@ public:
     /// Format: "itemId:Primary:imageTag:WxH"
     static std::string rowArtworkKey(const MediaItem &item);
     static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot &snapshot);
+    /// Pure online Home projection; exposed to keep its cached row semantics testable.
+    static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
+    static std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot);
+    /// Offline contains only locally playable libraries; Home is intentionally absent.
+    static std::vector<std::string> tabNames(const std::vector<TabData> &tabs);
+    /// Keep a named tab across a layout change, falling back to Movies.
+    static int transitionTabIndex(const std::vector<TabData> &from, int selected,
+                                  const std::vector<TabData> &to);
     /// Season posters use the exact dimensions of SeriesScreen's grid.
     static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
 
@@ -135,7 +144,7 @@ private:
     LoadState m_loadState = LoadState::Loading;
 
     // Tab / row / card navigation state
-    int m_activeTab;     // 0 = Home, 1 = Movies, 2 = Shows, 3 = Search, 4 = Downloads
+    int m_activeTab;
     int m_activeRow;
     int m_activeCard;
     int m_rowScroll;
@@ -180,6 +189,7 @@ private:
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;
     LibrarySnapshot m_cachedSnapshot;
+    LibrarySnapshot m_offlineSnapshot;
     LibrarySnapshot m_remoteSnapshot;
     ReconcileStats m_fetchStats;
     bool m_fetchCacheSaved = false;
@@ -221,6 +231,7 @@ private:
     void startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
+    void applyOfflineProjection();
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs);
     void posterWorker();
@@ -247,6 +258,8 @@ private:
 
     // Helpers
     const TabData &currentTab() const;
+    bool activeTabNamed(const char *name) const;
+    int tabIndex(const char *name) const;
     const MediaRow *currentRow() const;
     const MediaItem *currentItem() const;
 
@@ -290,7 +303,6 @@ private:
     void drawShowsPreview(SDL_Surface *fb);
     void drawShowsAlphabetRail(SDL_Surface *fb);
     int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
-    static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);
 };
 

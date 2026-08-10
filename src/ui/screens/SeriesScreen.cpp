@@ -9,6 +9,7 @@
 #include "../../cache/ImageCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
 #include "../../cache/LibraryCache.hpp"
+#include "../../cache/OfflineLibraryProjection.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -95,10 +96,11 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
     return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" + std::to_string(POSTER_H);
 }
 
-SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads)
+SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool offline)
     : m_session(session)
     , m_series(series)
     , m_downloads(std::move(downloads))
+    , m_offline(offline)
 {
 }
 
@@ -106,9 +108,9 @@ void SeriesScreen::enter()
 {
     printf("[SeriesScreen] enter series=%s\n", m_series.title.c_str());
     if (m_seasons.empty()) {
-        m_seasons=OfflineCatalog::seasons(OfflineCatalog::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series.id);
+        OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_seasons=m_offline?projection.seasons(m_series.id):OfflineCatalog::seasons(OfflineCatalog::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series.id);
         m_loadState=LoadState::Ready;
-        fetchSeasons();
+        if(!m_offline) fetchSeasons();
     }
     tryLoadSeriesArtwork();
 }
@@ -305,7 +307,7 @@ bool SeriesScreen::handleAction(Action action)
         printf("[SeriesScreen] Select season: %s index=%d\n",
                season.title.c_str(), season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-            m_session, m_series, season, "", m_downloads));
+            m_session, m_series, season, "", m_downloads, m_offline));
         return true;
     }
 

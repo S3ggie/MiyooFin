@@ -1,4 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
+#include "../../cache/OfflineLibraryProjection.hpp"
 #include "../../download/DownloadSupport.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
@@ -124,12 +125,13 @@ static std::string formatEpNum(int indexNumber)
 EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
                                            const MediaItem &season,
-                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads)
+                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads, bool offline)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
     , m_downloads(std::move(downloads))
+    , m_offline(offline)
 {
 }
 
@@ -199,7 +201,7 @@ void EpisodeBrowserScreen::enter()
 {
     printf("[EpisodeBrowserScreen] enter series=%s season=%s\n",
            m_series.title.c_str(), m_season.title.c_str());
-    if (m_episodes.empty() && m_loadState != LoadState::Error) {m_episodes=OfflineCatalog::episodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_season.id);m_loadState=LoadState::Ready;fetchEpisodes();}
+    if (m_episodes.empty() && m_loadState != LoadState::Error) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_episodes=m_offline?projection.episodes(m_season.id):OfflineCatalog::episodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_season.id);m_loadState=LoadState::Ready;if(!m_offline)fetchEpisodes();}
     else if (m_loadState == LoadState::Ready) {
         m_prefetchResumePending = false;
         m_prefetchResumeDelayUpdates = 0;

@@ -711,7 +711,6 @@ std::vector<TabData> JellyfinApi::buildTabs(
     if (shows.rows.empty()) shows.rows.push_back({"No shows found", {}});
     tabs.push_back(std::move(shows));
 
-    tabs.push_back({"Search",    {{"", {}}}});
     tabs.push_back({"Downloads", {{"", {}}}});
     return tabs;
 }

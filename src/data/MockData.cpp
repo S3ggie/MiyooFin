@@ -137,9 +137,6 @@ const std::vector<TabData>& getMockTabs()
         }},
         {"Movies", makeMovieRows()},
         {"Shows",  makeShowRows()},
-        {"Search", {
-            {"", {}} // empty -- placeholder
-        }},
         {"Downloads", {
             {"", {}} // empty -- placeholder
         }},

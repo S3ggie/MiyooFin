@@ -24,6 +24,7 @@
 #include "../src/cache/LibraryCache.hpp"
 #include "../src/cache/SyncState.hpp"
 #include "../src/cache/OfflineCatalog.hpp"
+#include "../src/cache/OfflineLibraryProjection.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/MovieTitle.hpp"
@@ -426,7 +427,7 @@ static void testBuildTabs()
         {{"TV", {{"s1","S1","",2019,9.0f,"S","show"}}}};
 
     auto tabs = JellyfinApi::buildTabs(views, cw, ra, mbv, sbv);
-    CHECK(tabs.size() == 5);
+    CHECK(tabs.size() == 4);
     CHECK_EQ(tabs[0].name, "Home");
     CHECK_EQ(tabs[1].name, "Movies");
     CHECK_EQ(tabs[2].name, "Shows");
@@ -435,14 +436,14 @@ static void testBuildTabs()
     CHECK(tabs[0].rows[0].items.size() == 1);
     CHECK(tabs[1].rows[0].items.size() == 2);
     CHECK(tabs[2].rows[0].items.size() == 1);
-    CHECK(tabs[3].rows[0].items.empty());  // Search placeholder
-    CHECK(tabs[4].rows[0].items.empty());  // Downloads placeholder
+    CHECK_EQ(tabs[3].name, "Downloads");
+    CHECK(tabs[3].rows[0].items.empty());  // Downloads placeholder
 
     // Empty case
     std::vector<MediaItem> e;
     std::vector<std::pair<std::string, std::vector<MediaItem>>> ep;
     auto t2 = JellyfinApi::buildTabs({}, e, e, ep, ep);
-    CHECK(t2.size() == 5);
+    CHECK(t2.size() == 4);
     CHECK(t2[0].rows.size() == 1);
     CHECK(t2[0].rows[0].items.empty());
     std::printf("[test] buildTabs OK\n");
@@ -1790,6 +1791,40 @@ static void testSeasonPosterScheduling(){
     CHECK(HomeScreen::collectSeasonPosterJobs({episode}).empty());
     ImageCache::removeCached(season.id,ImageType::Primary,season.imageTags["Primary"],74,111); ImageCache::setCacheDir(old);
 }
+
+static void testOfflineLibraryProjection(){
+    LibrarySnapshot l; MediaItem movie=cacheItem("movie"),partial=cacheItem("partial"),show=cacheItem("show"),anime=cacheItem("anime"),season=cacheItem("s1"),empty=cacheItem("s2"),ep1=cacheItem("e1"),ep3=cacheItem("e3"),remote=cacheItem("remote");
+    movie.type=partial.type="movie"; movie.playbackPositionTicks=50; show.type=anime.type="show"; show.title="Show"; anime.title="Anime"; season.seriesId=show.id; empty.seriesId=show.id;
+    ep1.type=ep3.type=remote.type="episode"; ep1.seriesId=ep3.seriesId=remote.seriesId=show.id; ep1.seasonId=ep3.seasonId=remote.seasonId=season.id; ep1.indexNumber=1; ep3.indexNumber=3; ep1.playbackPositionTicks=25;
+    l.movies={{"m","Movies","movies",{movie,partial}}}; l.shows={{"tv","Shows","tvshows",{show}},{"a","Anime","tvshows",{anime}}}; l.continueWatching={remote,movie,ep1,partial}; l.recentlyAdded={remote};
+    OfflineCatalogSnapshot c; c.series[show.id]=show; c.series[anime.id]=anime; c.seasonsBySeries[show.id]={season,empty}; c.episodesBySeason[season.id]={ep1,ep3,remote};
+    DownloadSnapshot d; DownloadItem dm; dm.itemId=movie.id; dm.itemType="movie"; dm.state=DownloadState::Complete; dm.updatedAt=20;
+    DownloadItem de1; de1.itemId=ep1.id; de1.itemType="episode"; de1.state=DownloadState::Complete; de1.updatedAt=30; de1.seriesId=show.id; de1.seasonId=season.id;
+    DownloadItem de3=de1; de3.itemId=ep3.id; de3.updatedAt=10;
+    DownloadItem failed=dm; failed.itemId=partial.id; failed.state=DownloadState::Failed;
+    DownloadItem queued=dm; queued.itemId="queued"; queued.state=DownloadState::Queued;
+    DownloadItem paused=dm; paused.itemId="partial"; paused.state=DownloadState::Paused;
+    d.items={dm,de1,de3,failed,queued,paused};
+    for(int n=0;n<8;++n) { DownloadItem extra=dm; extra.itemId="extra-"+std::to_string(n); extra.title="Extra"; extra.updatedAt=40+n; d.items.push_back(extra); }
+    OfflineLibraryProjection p(l,c,d);
+    CHECK(p.movies().size()==1&&p.movies()[0].id==movie.id); CHECK(p.series().size()==1&&p.series()[0].id==show.id); CHECK(p.seasons(show.id).size()==1&&p.seasons(show.id)[0].id==season.id); CHECK(p.episodes(season.id).size()==2&&p.episodes(season.id)[1].id==ep3.id); CHECK(!p.playable(partial.id));
+    // Online retains Home; offline has no Home projection or curation surface.
+    auto online=HomeScreen::tabsFromSnapshot(l);
+    auto offline=HomeScreen::offlineTabsFromSnapshot(l);
+    const auto onlineNames=HomeScreen::tabNames(online), offlineNames=HomeScreen::tabNames(offline);
+    CHECK((onlineNames==std::vector<std::string>{"Home","Movies","Shows","Downloads"}));
+    CHECK((offlineNames==std::vector<std::string>{"Movies","Shows","Downloads"}));
+    CHECK(std::find(offlineNames.begin(),offlineNames.end(),"Home")==offlineNames.end());
+    // Cold offline startup and a selected Home both use the Movies fallback.
+    CHECK(HomeScreen::transitionTabIndex({},0,offline)==0);
+    CHECK(HomeScreen::transitionTabIndex(online,0,offline)==0);
+    // Other named tabs survive layout changes where possible.
+    CHECK(HomeScreen::transitionTabIndex(online,2,offline)==1);
+    CHECK(HomeScreen::transitionTabIndex(online,3,offline)==2);
+    CHECK(HomeScreen::transitionTabIndex(offline,0,online)==1);
+    CHECK(HomeScreen::transitionTabIndex(offline,1,online)==2);
+    CHECK(HomeScreen::transitionTabIndex(offline,2,online)==3);
+}
 static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);
     // A successful sync is fresh for fifteen minutes, and tab requests while
     // in flight coalesce instead of spawning another worker.
@@ -1982,7 +2017,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 

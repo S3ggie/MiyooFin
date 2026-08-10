@@ -5,10 +5,13 @@
 #include <memory>
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include "ScreenStack.hpp"
 #include "../input/InputManager.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/Session.hpp"
+#include "../download/DownloadManager.hpp"
 
 namespace miyoofin {
 
@@ -67,9 +70,16 @@ private:
     ServerInfo      m_serverInfo;  // connected server info
     std::string     m_deviceId;    // persistent device identifier
     Session         m_session;     // saved session (token + user)
+    std::shared_ptr<DownloadManager> m_downloadManager;
     std::thread     m_savedValidationThread;
-    std::atomic<int> m_savedValidation{0}; // 0 pending, 1 valid/unavailable, 2 unauthorized
+    std::atomic<int> m_savedValidation{0}; // 0 pending, 1 unavailable, 2 unauthorized, 3 valid
     bool            m_savedFastPath = false;
+    std::thread     m_journalSyncThread;
+    std::mutex      m_journalMutex;
+    std::condition_variable m_journalCv;
+    bool            m_journalStop = false;
+    bool            m_journalWake = false;
+    unsigned        m_journalFailures = 0;
 
     /// Load saved server URL from server.txt.
     void loadSavedUrl();
@@ -87,6 +97,11 @@ private:
     void logout();
     void startSavedSessionValidation();
     void finishSavedSessionValidation();
+    bool ingestPlaybackResult(bool removeAfterIngest);
+    void recoverPlaybackResult();
+    void scheduleJournalSync();
+    void journalSyncLoop();
+    void syncPlaybackJournal();
 
     /// Handle an external playback request: suspend platform, fork
     /// playback_runner.sh, wait for child, resume platform.

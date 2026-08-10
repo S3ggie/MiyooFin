@@ -40,6 +40,12 @@ SRCS        := \
     $(SRC_DIR)/net/DeviceIdentity.cpp \
     $(SRC_DIR)/cache/ImageCache.cpp \
     $(SRC_DIR)/cache/LibraryCache.cpp \
+    $(SRC_DIR)/cache/OfflineCatalog.cpp \
+    $(SRC_DIR)/download/DownloadStore.cpp \
+    $(SRC_DIR)/download/DownloadManager.cpp \
+    $(SRC_DIR)/download/DownloadReconcile.cpp \
+    $(SRC_DIR)/download/DownloadSupport.cpp \
+    $(SRC_DIR)/download/HlsPlaylist.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
@@ -51,11 +57,13 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
-    $(SRC_DIR)/playback/PlaybackRequest.cpp
+    $(SRC_DIR)/playback/PlaybackRequest.cpp \
+    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
+               output/build/download \
                output/build/ui output/build/ui/screens \
                output/build/playback
 
@@ -96,10 +104,17 @@ TEST_SRCS   := tests/test_main.cpp \
                src/image/ImageDecoder.cpp \
                src/cache/ImageCache.cpp \
                src/cache/LibraryCache.cpp \
+               src/cache/OfflineCatalog.cpp \
+               src/download/DownloadStore.cpp \
+               src/download/DownloadManager.cpp \
+               src/download/DownloadReconcile.cpp \
+               src/download/DownloadSupport.cpp \
+               src/download/HlsPlaylist.cpp \
                src/ui/BitmapFont.cpp \
                src/app/ScreenStack.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
-               src/playback/PlaybackRequest.cpp
+               src/playback/PlaybackRequest.cpp \
+               src/playback/OfflinePlaybackJournal.cpp
 
 .PHONY: test
 test: $(TEST_TARGET)
@@ -205,6 +220,8 @@ BRIDGE_SRC     := tools/https_bridge.cpp
 BRIDGE_HOST    := output/build/miyoofin-https-bridge
 BRIDGE_TEST    := output/test/test_bridge_parse
 BRIDGE_TEST_SRC := tests/test_bridge_parse.cpp
+BRIDGE_LOCAL_TEST := output/test/test_bridge_local
+BRIDGE_LOCAL_TEST_SRC := tests/test_bridge_local.cpp
 
 .PHONY: bridge
 bridge: $(BRIDGE_HOST)
@@ -214,11 +231,16 @@ $(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp | output/build
 	@echo "  [LINK] $@"
 
 .PHONY: bridge-test
-bridge-test: $(BRIDGE_TEST)
+bridge-test: $(BRIDGE_TEST) $(BRIDGE_LOCAL_TEST) bridge
 	@$(BRIDGE_TEST)
+	@$(BRIDGE_LOCAL_TEST)
 
 $(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | output/test
 	$(CXX) $(CXXFLAGS) -I. -o $@ $< $(CURL_LIBS)
+	@echo "  [LINK] $@"
+
+$(BRIDGE_LOCAL_TEST): $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/DownloadStore.hpp | output/test
+	$(CXX) $(CXXFLAGS) -I. -o $@ $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp
 	@echo "  [LINK] $@"
 
 # -------------------------------------------------------------------

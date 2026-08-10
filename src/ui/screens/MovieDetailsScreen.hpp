@@ -5,6 +5,8 @@
 #include "../../data/MediaItem.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
+#include "../../download/DownloadManager.hpp"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,7 @@ namespace miyoofin {
 /// genres, scrollable overview, and Play/Download action buttons.
 class MovieDetailsScreen : public Screen {
 public:
-    MovieDetailsScreen(const Session &session, const MediaItem &movie);
+    MovieDetailsScreen(const Session &session, const MediaItem &movie, std::shared_ptr<DownloadManager> downloads={});
     ~MovieDetailsScreen() override = default;
 
     void enter() override;
@@ -34,6 +36,7 @@ private:
     // ----- Data -----
     Session   m_session;
     MediaItem m_movie;
+    std::shared_ptr<DownloadManager> m_downloads; std::uint64_t m_planId=0; bool m_confirmDownload=false;
 
     // ----- Movie poster artwork -----
     DecodedImage m_movieArtwork;

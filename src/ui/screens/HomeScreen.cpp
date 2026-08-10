@@ -12,6 +12,8 @@
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/ScreenStack.hpp"
+#include "../../playback/PlaybackRequest.hpp"
+#include "../../download/DownloadSupport.hpp"
 #include "miyoofin/version.hpp"
 #include <cstdio>
 #include <cstring>
@@ -77,10 +79,11 @@ static void blitDecoded(SDL_Surface *fb, const DecodedImage &img, int x, int y, 
 }
 // Width and height are now computed per-item via artworkBoxSize()
 
-HomeScreen::HomeScreen(const Session &session)
+HomeScreen::HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_session(session)
+    , m_downloads(std::move(downloads))
     , m_userName(session.userName)
 {
     // Placeholder tabs until fetch completes
@@ -291,6 +294,7 @@ bool HomeScreen::handleAction(Action action)
     }
 
     // Ready: normal navigation
+    if (m_activeTab == 4 && handleDownloadsAction(action)) return true;
     switch (action) {
     case Action::Up:
         if(m_activeTab==2){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);clampShowsNavigation();return true;}
@@ -326,14 +330,14 @@ bool HomeScreen::handleAction(Action action)
         m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
+        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); if(m_activeTab==4&&m_downloads)m_downloads->requestReconcile(); return true;
     case Action::PrevTab:
         m_activeTab--;
         if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
         m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); return true;
+        clampNavigation(); if (m_activeTab==1 || m_activeTab==2) requestFetch(SDL_GetTicks()); if(m_activeTab==4&&m_downloads)m_downloads->requestReconcile(); return true;
     case Action::Search:
         m_activeTab = 3; m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0; m_movieRailFocused = false; return true;
@@ -342,7 +346,7 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(m_activeTab==2){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i));return true;}return true;}
+        if(m_activeTab==2){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads));return true;}return true;}
         if (m_activeTab == 1 && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             refreshMovieFilter();
@@ -354,11 +358,11 @@ bool HomeScreen::handleAction(Action action)
             printf("[HomeScreen] Select: %s (%s)\n",
                    item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
-                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item));
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads));
                 return true;
             }
             if (item->type == "movie") {
-                m_stack->push(std::make_unique<MovieDetailsScreen>(m_session, *item));
+                m_stack->push(std::make_unique<MovieDetailsScreen>(m_session, *item,m_downloads));
                 return true;
             }
             if (item->type == "episode") {
@@ -383,7 +387,7 @@ bool HomeScreen::handleAction(Action action)
                     }
 
                     m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-                        m_session, series, season, item->id));
+                        m_session, series, season, item->id,m_downloads));
                     return true;
                 }
                 printf("[HomeScreen] Cannot open episode browser: "
@@ -403,6 +407,91 @@ bool HomeScreen::handleAction(Action action)
     }
 }
 
+void HomeScreen::refreshDownloads()
+{
+    if (!m_downloads) { m_downloadSnapshot = {}; return; }
+    m_downloadSnapshot = m_downloads->snapshot();
+    const auto &items = m_downloadSnapshot.items;
+    if (!m_downloadSelectedId.empty()) {
+        for (int i=0; i<(int)items.size(); ++i)
+            if (items[i].itemId == m_downloadSelectedId) { m_downloadSelected=i; break; }
+    }
+    m_downloadSelected = clampDownloadSelection(m_downloadSelected, (int)items.size());
+    m_downloadScroll = clampDownloadScroll(m_downloadSelected, (int)items.size(), m_downloadScroll, 5);
+    m_downloadSelectedId = items.empty() ? "" : items[m_downloadSelected].itemId;
+    if (!m_downloadConfirmId.empty() && m_downloadConfirmId != m_downloadSelectedId)
+        m_downloadConfirmId.clear();
+    m_missingJournalEntries.clear();
+    if (m_session.valid()) {
+        std::vector<OfflinePlaybackEntry> journal;
+        const std::string path=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+        if (OfflinePlaybackJournal::load(path,journal,nullptr))
+            for (const auto &entry : journal) if (entry.serverMissing && !entry.conflict) m_missingJournalEntries.push_back(entry);
+    }
+    if (!m_journalDiscardConfirmId.empty() && (m_missingJournalEntries.empty() || m_missingJournalEntries.front().itemId != m_journalDiscardConfirmId))
+        m_journalDiscardConfirmId.clear();
+}
+
+bool HomeScreen::handleDownloadsAction(Action action)
+{
+    const auto &items = m_downloadSnapshot.items;
+    if (action == Action::Up || action == Action::Down) {
+        m_downloadSelected += action == Action::Up ? -1 : 1;
+        m_downloadSelected = clampDownloadSelection(m_downloadSelected, (int)items.size());
+        m_downloadScroll = clampDownloadScroll(m_downloadSelected, (int)items.size(), m_downloadScroll, 5);
+        m_downloadSelectedId = items.empty() ? "" : items[m_downloadSelected].itemId;
+        m_downloadConfirmId.clear();
+        return true;
+    }
+    if (items.empty()) {
+        if (action == Action::Search && !m_missingJournalEntries.empty()) {
+            const std::string &id=m_missingJournalEntries.front().itemId;
+            if (m_journalDiscardConfirmId == id) {
+                const std::string path=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+                OfflinePlaybackJournal::discardMissing(path,id,nullptr);
+                m_journalDiscardConfirmId.clear(); refreshDownloads();
+            } else m_journalDiscardConfirmId=id;
+            return true;
+        }
+        return action == Action::Confirm || action == Action::ActionsMenu;
+    }
+    const DownloadItem &item = items[m_downloadSelected];
+    if (action == Action::Back && !m_downloadConfirmId.empty()) { m_downloadConfirmId.clear(); return true; }
+    if (action == Action::ActionsMenu && downloadCanRemove(item)) {
+        if (downloadRemovalConfirmed(m_downloadConfirmId, item)) {
+            m_downloads->erase(item.itemId, nullptr);
+            m_downloadConfirmId.clear();
+        } else m_downloadConfirmId = item.itemId;
+        return true;
+    }
+    if (action == Action::Search && item.state == DownloadState::UpdateAvailable) { m_downloads->redownload(item.itemId); return true; }
+    if (action == Action::Search && !m_missingJournalEntries.empty()) {
+        const std::string &id=m_missingJournalEntries.front().itemId;
+        if (m_journalDiscardConfirmId == id) {
+            const std::string path=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+            OfflinePlaybackJournal::discardMissing(path,id,nullptr);
+            m_journalDiscardConfirmId.clear();
+            refreshDownloads();
+        } else m_journalDiscardConfirmId=id;
+        return true;
+    }
+    if (action != Action::Confirm) return false;
+    switch (downloadPrimaryControl(item.state)) {
+    case DownloadPrimaryControl::Pause: m_downloads->pause(item.itemId); return true;
+    case DownloadPrimaryControl::Resume: m_downloads->resume(item.itemId); return true;
+    case DownloadPrimaryControl::Retry: m_downloads->retry(item.itemId); return true;
+    case DownloadPrimaryControl::Play: {
+        std::string error;
+        const char *type = item.itemType == "episode" ? "episode" : "movie";
+        if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(), item.itemId, type,
+                item.playbackPositionTicks, "local", m_downloads->scope(), error))
+            m_stack->requestExternalPlayback();
+        return true;
+    }
+    default: return true;
+    }
+}
+
 void HomeScreen::update(Uint32 dt)
 {
     if (m_logoutArmed && !m_logoutRequested) {
@@ -413,6 +502,7 @@ void HomeScreen::update(Uint32 dt)
         finishFetch();
     if (m_loadState == LoadState::Ready && m_resumeRefreshDone)
         finishResumeRefresh();
+    if (m_loadState == LoadState::Ready) refreshDownloads();
     // Reconcile before draining: an in-flight decode can complete between a
     // directional input and this update, so it must see the new viewport.
     if (m_loadState == LoadState::Ready)
@@ -445,10 +535,10 @@ void HomeScreen::render(SDL_Surface *fb)
 
     // Ready
     const TabData &tab = currentTab();
-    if (m_activeTab == 3 || m_activeTab == 4) {
-        drawPlaceholderTab(fb, m_activeTab == 3 ?
-            "Search - not yet implemented" :
-            "Downloads - not yet implemented");
+    if (m_activeTab == 3) {
+        drawPlaceholderTab(fb, "Search - not yet implemented");
+    } else if (m_activeTab == 4) {
+        drawDownloadsTab(fb);
     } else if (tab.rows.size() == 1 && tab.rows[0].items.empty()
                && tab.rows[0].label.empty()) {
         drawPlaceholderTab(fb, "No content");
@@ -1363,6 +1453,50 @@ void HomeScreen::drawPlaceholderTab(SDL_Surface *fb, const char *message)
         Theme::BG_R,Theme::BG_G,Theme::BG_B);
 }
 
+void HomeScreen::drawDownloadsTab(SDL_Surface *fb)
+{
+    BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
+    char summary[128];
+    std::snprintf(summary, sizeof(summary), "Free %s | Local %s | Queue %s",
+        formatBytes(m_downloadSnapshot.freeBytes).c_str(),
+        formatBytes(m_downloadSnapshot.localBytes).c_str(),
+        formatBytes(m_downloadSnapshot.reservedBytes).c_str());
+    BitmapFont::drawString(fb, 8, 32, summary, Theme::ACCENT_R, Theme::ACCENT_G,
+        Theme::ACCENT_B, 24, 24, 32);
+    BitmapFont::fillRect(fb, 8, 49, 624, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
+    const auto &items = m_downloadSnapshot.items;
+    if (items.empty()) {
+        BitmapFont::drawString(fb, 8, 210, "No downloads", Theme::TEXT_R, Theme::TEXT_G,
+            Theme::TEXT_B, 24, 24, 32);
+        if (!m_missingJournalEntries.empty()) BitmapFont::drawString(fb,8,230,"Missing offline progress: X=Discard",Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,24,24,32);
+        return;
+    }
+    for (int row=0; row<5; ++row) {
+        int index=m_downloadScroll+row; if(index >= (int)items.size()) break;
+        const DownloadItem &item=items[index]; int y=58+row*76; bool selected=index==m_downloadSelected;
+        if(selected) BitmapFont::fillRect(fb, 6, y-2, 628, 70, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 80);
+        std::string title=item.itemType=="episode" && !item.seriesName.empty()?item.seriesName:item.title;
+        if(title.size()>72) title.resize(72);
+        BitmapFont::drawString(fb, 12, y, title.c_str(), selected?Theme::ACCENT_R:Theme::TEXT_R,
+            selected?Theme::ACCENT_G:Theme::TEXT_G, selected?Theme::ACCENT_B:Theme::TEXT_B,24,24,32);
+        std::string detail;
+        const bool completedHls=item.hlsStorage && (item.state==DownloadState::Complete || item.state==DownloadState::LocalOnly || item.state==DownloadState::UpdateAvailable);
+        const std::string sizeLabel=(item.hlsStorage&&!completedHls?"~":"")+formatBytes(displayDownloadBytes(item));
+        if(item.itemType=="episode") detail=episodeDownloadLabel(item);
+        else detail=std::string(downloadStateLabel(item.state))+" | "+sizeLabel;
+        if(item.state==DownloadState::Downloading) {
+            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s/s",downloadPercent(item),formatBytes(item.recentBytesPerSec).c_str()); detail=active;
+        } else if(item.itemType=="episode") detail += " | "+std::string(downloadStateLabel(item.state))+" | "+sizeLabel;
+        if(!item.lastError.empty() && (item.state==DownloadState::Failed || item.state==DownloadState::WaitingForNetwork || item.state==DownloadState::Unauthorized))
+            detail=std::string(downloadStateLabel(item.state))+" | "+item.lastError;
+        if(detail.size()>74) detail.resize(74);
+        BitmapFont::drawString(fb, 12, y+18, detail.c_str(), Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+        BitmapFont::fillRect(fb, 12, y+39, 600, 3, 48,48,58,255);
+        int fill=(int)(600*downloadPercent(item)/100);
+        if(fill) BitmapFont::fillRect(fb,12,y+39,fill,3,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,255);
+    }
+}
+
 void HomeScreen::drawBottomHints(SDL_Surface *fb)
 {
     int y = 480 - BOTTOM_H;
@@ -1386,6 +1520,24 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     } else {
         const char *hints = "A=Select  B=Back  L/R=Tabs  X=Search  Y=Logout";
+        if (m_activeTab == 4) {
+            if (!m_journalDiscardConfirmId.empty()) {
+                BitmapFont::drawString(fb,8,y+2,"Press X again to discard missing progress",Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+                return;
+            }
+            if (!m_downloadConfirmId.empty() && m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size()) {
+                const DownloadItem &item=m_downloadSnapshot.items[m_downloadSelected]; char confirm[96];
+                std::snprintf(confirm,sizeof(confirm),"Press Y again to %s %s",downloadRemoveIsDelete(item)?"delete":"cancel",formatBytes(displayDownloadBytes(item)).c_str());
+                BitmapFont::drawString(fb,8,y+2,confirm,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+                return;
+            }
+            const char *primary="";
+            if (m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size()) primary=downloadPrimaryControlLabel(downloadPrimaryControl(m_downloadSnapshot.items[m_downloadSelected].state));
+            bool update=m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size() && m_downloadSnapshot.items[m_downloadSelected].state==DownloadState::UpdateAvailable;
+            char downloadHints[96]; std::snprintf(downloadHints,sizeof(downloadHints),update?"A=Play  X=Update  Y=Delete  B=Back":(!m_missingJournalEntries.empty()?"A=%s  X=Discard missing progress  Y=Cancel/Delete":"A=%s  Y=Cancel/Delete  B=Back"),primary[0]?primary:"Select"); hints=downloadHints;
+            BitmapFont::drawString(fb,8,y+2,hints,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+            return;
+        }
         if (m_activeTab == 1) {
             hints = m_movieRailFocused
                 ? "A=Filter  Right=Movies  B=Back"

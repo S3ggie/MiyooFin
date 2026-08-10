@@ -9,6 +9,7 @@
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
+#include <curl/curl.h>
 #include <string>
 #include "miyoofin/version.hpp"
 #include "../src/net/JellyfinApi.hpp"
@@ -21,6 +22,7 @@
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/cache/LibraryCache.hpp"
+#include "../src/cache/OfflineCatalog.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/MovieTitle.hpp"
@@ -28,6 +30,12 @@
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
+#include "../src/playback/OfflinePlaybackJournal.hpp"
+#include "../src/download/DownloadTypes.hpp"
+#include "../src/download/DownloadManager.hpp"
+#include "../src/download/DownloadSupport.hpp"
+#include "../src/download/DownloadReconcile.hpp"
+#include "../src/download/DownloadUi.hpp"
 #include "../src/input/InputManager.hpp"
 #include <unistd.h>
 #include <sys/stat.h>
@@ -52,6 +60,15 @@ static int g_failures = 0;
             ++g_failures; \
         } \
     } while (0)
+
+static void testDownloadInterruptStates()
+{
+    std::printf("[test] download interrupt state mapping\n");
+    CHECK(stateAfterInterrupt(DownloadInterrupt::Playback) == DownloadState::PausedForPlayback);
+    CHECK(stateAfterInterrupt(DownloadInterrupt::UserPause) == DownloadState::Paused);
+    CHECK(stateAfterInterrupt(DownloadInterrupt::Cancel) == DownloadState::Failed);
+    CHECK(stateAfterInterrupt(DownloadInterrupt::Shutdown) == DownloadState::Failed);
+}
 
 static MediaItem titledMovie(const std::string &id, const std::string &title)
 {
@@ -1576,6 +1593,7 @@ static void testPlaybackResultDelay()
     CHECK(!PlaybackRequest::advanceResultConsumption(pending, delayUpdates));
     std::printf("[test] playback result one-update delay OK\n");
 }
+static void testOfflinePlaybackJournal(){std::string p="/tmp/miyoofin-journal-"+std::to_string((long long)getpid());OfflinePlaybackEntry a;a.itemId="a";a.itemType="movie";a.baseServerTicks=10;a.finalTicks=30;a.localTimestamp=1;CHECK(OfflinePlaybackJournal::upsert(p,a));a.finalTicks=40;CHECK(OfflinePlaybackJournal::upsert(p,a));std::vector<OfflinePlaybackEntry> got;CHECK(OfflinePlaybackJournal::load(p,got));CHECK(got.size()==(size_t)1&&got[0].finalTicks==40);CHECK(decideOfflineSync(10,10,true)==OfflineSyncDecision::Push);CHECK(decideOfflineSync(10,20,true)==OfflineSyncDecision::Conflict);CHECK(decideOfflineSync(10,0,false)==OfflineSyncDecision::Retry);PlaybackResult r;std::string e;CHECK(PlaybackRequest::parseResult("item_id=a\nposition_ticks=5\n",r,e)&&r.serverReported);CHECK(PlaybackRequest::parseResult("item_id=a\nitem_type=movie\nposition_ticks=5\nbase_resume_ticks=2\nsource_mode=local\nserver_reported=0\n",r,e)&&!r.serverReported&&r.baseResumeTicks==2);std::vector<OfflinePlaybackEntry> v(1,a);int submitted=0;auto pushed=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&t){t=10;return OfflineJournalRequestStatus::Success;},[&](const OfflinePlaybackEntry&){++submitted;return OfflineJournalRequestStatus::Success;});CHECK(pushed.pushed==1&&v.empty()&&submitted==1);v.assign(1,a);auto transient=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&){return OfflineJournalRequestStatus::Transient;},[](const OfflinePlaybackEntry&){return OfflineJournalRequestStatus::Success;});CHECK(transient.retry&&v.size()==(size_t)1);v.assign(1,a);auto conflict=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&t){t=11;return OfflineJournalRequestStatus::Success;},[](const OfflinePlaybackEntry&){return OfflineJournalRequestStatus::Success;});CHECK(conflict.conflicts==1&&v[0].conflict);submitted=0;auto skipped=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&t){t=10;return OfflineJournalRequestStatus::Success;},[&](const OfflinePlaybackEntry&){++submitted;return OfflineJournalRequestStatus::Success;});CHECK(submitted==0&&v.size()==(size_t)1);v.assign(1,a);auto missing=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&){return OfflineJournalRequestStatus::Missing;},[](const OfflinePlaybackEntry&){return OfflineJournalRequestStatus::Success;});CHECK(missing.changed&&!missing.retry&&v.size()==(size_t)1&&v[0].serverMissing);CHECK(OfflinePlaybackJournal::save(p,v));CHECK(OfflinePlaybackJournal::discardMissing(p,"a"));got.clear();CHECK(OfflinePlaybackJournal::load(p,got)&&got.empty());v.assign(1,a);auto unauthorized=syncOfflinePlaybackEntries(v,[](const OfflinePlaybackEntry&,std::int64_t&){return OfflineJournalRequestStatus::Unauthorized;},[](const OfflinePlaybackEntry&){return OfflineJournalRequestStatus::Success;});CHECK(unauthorized.retry&&unauthorized.unauthorized&&v.size()==(size_t)1);}
 
 // -------------------------------------------------------------------
 // B5f3a: In-process external playback handoff tests
@@ -1723,8 +1741,205 @@ static void testDpadHoldRepeatTiming()
 static MediaItem cacheItem(const std::string &id) { MediaItem i; i.id=id;i.title="\xCE\xA9 \"title\"";i.overview="line one\nline two";i.year=2024;i.rating=8.5f;i.genre="Drama";i.type="movie";i.etag="etag-"+id;i.genres={"Drama","Sci-Fi"};i.played=true;i.progress=.5f;i.playbackPositionTicks=987654;i.imageTags["Primary"]="tag-"+id;i.indexNumber=2;i.parentIndexNumber=3;i.runTimeTicks=10000000;i.seriesName="series";i.seriesId="sid";i.seasonId="seid";i.artR=1;i.artG=2;i.artB=3;return i; }
 static bool sameItem(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.etag==b.etag&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId&&a.artR==b.artR&&a.artG==b.artG&&a.artB==b.artB;}
 static void testLibraryCacheNew(){std::string d="/tmp/miyoofin-cache-test";mkdir(d.c_str(),0755);std::string p=d+"/x.bin";LibrarySnapshot s;CachedLibraryView v;v.id="v";v.name="Movies";v.collectionType="movies";for(int i=0;i<500;i++)v.items.push_back(cacheItem(std::to_string(i)));s.movies.push_back(v);s.shows.push_back({"s","Shows","tvshows",{cacheItem("show")}});CHECK(LibraryCache::save(p,s));LibrarySnapshot got;CHECK(LibraryCache::load(p,got));CHECK(got.movies.size()==1&&got.movies[0].items.size()==500&&sameItem(got.movies[0].items[0],s.movies[0].items[0]));FILE*f=fopen(p.c_str(),"r+b");fputc('X',f);fclose(f);LibrarySnapshot keep=s;CHECK(!LibraryCache::load(p,keep));CHECK(keep.movies[0].items.size()==500);}
+static std::string readFixture(const std::string &path){std::string out;FILE*f=fopen(path.c_str(),"rb");if(!f)return out;char b[128];size_t n;while((n=fread(b,1,sizeof(b),f)))out.append(b,n);fclose(f);return out;}
+static void writeFixture(const std::string &path,const char *data,size_t size){FILE *f=fopen(path.c_str(),"wb");CHECK(f!=nullptr);if(f){CHECK(fwrite(data,1,size,f)==size);fclose(f);}}
+static void testHlsDownloadStore(){
+    std::printf("[test] HLS manifest and segment storage\n");
+    std::string root="/tmp/miyoofin-hls-"+std::to_string((long long)getpid()); DownloadStore store(root); DownloadItem h;
+    h.itemId="hls-item";h.mediaSourceId="source";h.expectedSize=999;h.chunkSize=1;h.hlsStorage=true;h.hlsSegmentCount=0;h.hlsProfile="test-profile";h.state=DownloadState::Downloading;
+    // Playlist discovery is durable before segment zero has completed.
+    h.hlsSegmentCount=3;
+    CHECK(store.ensureHlsDirectories("scope",h.itemId)); CHECK(store.saveManifest("scope",h)); DownloadItem loaded; CHECK(store.loadManifest("scope",h.itemId,loaded));
+    CHECK(loaded.hlsStorage&&loaded.itemId==h.itemId&&loaded.mediaSourceId=="source"&&loaded.hlsSegmentCount==3&&loaded.hlsProfile=="test-profile");
+    DownloadItem legacy=h;legacy.itemId="legacy";legacy.hlsStorage=false;legacy.expectedSize=1; CHECK(store.saveManifest("scope",legacy)); CHECK(readFixture(store.manifestPath("scope",h.itemId)).rfind("MFDM=2\n",0)==0); CHECK(readFixture(store.manifestPath("scope",legacy.itemId)).rfind("MFDM=1\n",0)==0);
+    writeFixture(store.segmentPath("scope",h.itemId,0),"abc",3); writeFixture(store.segmentPath("scope",h.itemId,1),"de",2); writeFixture(store.segmentPath("scope",h.itemId,2,true),"x",1);
+    CHECK(store.isCompleteSegment("scope",h.itemId,0)); CHECK(!store.isCompleteSegment("scope",h.itemId,2)); CHECK(store.firstIncompleteSegment("scope",h)==2); CHECK(::access(store.segmentPath("scope",h.itemId,2,true).c_str(),F_OK)==0); // interrupted part is retained
+    // A retry starts the same incomplete segment from a fresh .part and must
+    // not alter media that was already completed before the failed attempt.
+    writeFixture(store.segmentPath("scope",h.itemId,2,true),"proxy error body",16);
+    writeFixture(store.segmentPath("scope",h.itemId,2,true),"retry-media",11);
+    CHECK(readFixture(store.segmentPath("scope",h.itemId,2,true))=="retry-media");
+    CHECK(readFixture(store.segmentPath("scope",h.itemId,0))=="abc");
+    store.reconcile("scope",h); CHECK(h.downloadedBytes==5); CHECK(!store.validateCompletedDownload("scope",h)); // missing segment prevents completion
+    writeFixture(store.segmentPath("scope",h.itemId,2),"fghi",4); CHECK(store.firstIncompleteSegment("scope",h)==3); store.reconcile("scope",h); CHECK(h.downloadedBytes==9); CHECK(store.validateCompletedDownload("scope",h)); CHECK(h.state==DownloadState::Complete);
+    std::printf("[test] HLS manifest and segment storage OK\n");
+}
+static void testOfflineCatalog(){std::string root="/tmp/miyoofin-offline-catalog-test-"+std::to_string((long long)getpid()),p=root+"/catalog";MediaItem s=cacheItem("series");s.title="Séries 世界";MediaItem season=cacheItem("season");season.seriesId=s.id;MediaItem ep=cacheItem("episode");ep.seriesId=s.id;ep.seasonId=season.id;ep.indexNumber=2;ep.parentIndexNumber=1;
+    // Season planning stores its series, season and episodes without requiring a screen visit.
+    CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{season},{{season.id,{ep}}}));OfflineCatalogSnapshot x;CHECK(OfflineCatalog::load(p,x));CHECK(x.series[s.id].title==s.title&&x.seasonsBySeries[s.id][0].id==season.id);auto &got=x.episodesBySeason[season.id][0];CHECK(got.id==ep.id&&got.indexNumber==2&&got.parentIndexNumber==1&&got.runTimeTicks==ep.runTimeTicks&&got.playbackPositionTicks==ep.playbackPositionTicks);
+    // Series planning merges all fetched seasons/episodes, retains other cached series, and de-duplicates IDs.
+    MediaItem other=cacheItem("other-series"),season2=cacheItem("season-2"),ep2=cacheItem("episode-2");season2.seriesId=s.id;ep2.seriesId=s.id;ep2.seasonId=season2.id;CHECK(OfflineCatalog::storeSeasons(p,other,{cacheItem("other-season")}));CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{season,season2,season2},{{season.id,{ep,ep}},{season2.id,{ep2,ep2}}}));CHECK(OfflineCatalog::load(p,x));CHECK(x.series.count(other.id)==1&&x.seasonsBySeries[s.id].size()==(size_t)2&&x.episodesBySeason[season.id].size()==(size_t)1&&x.episodesBySeason[season2.id].size()==(size_t)1);
+    // An incomplete planner result is a no-op and cannot erase valid cached hierarchy.
+    CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{},{{season.id,{}}},false));CHECK(OfflineCatalog::load(p,x));CHECK(x.seasonsBySeries[s.id].size()==(size_t)2&&x.episodesBySeason[season.id].size()==(size_t)1);
+    // Corrupting metadata never rewrites it or touches a real downloaded-item fixture.
+    DownloadStore store(root+"/downloads");std::string scope="fixture",itemId="downloaded-item";DownloadItem downloaded;downloaded.itemId=itemId;downloaded.expectedSize=5;downloaded.chunkSize=5;downloaded.state=DownloadState::Complete;downloaded.downloadedBytes=5;CHECK(store.saveManifest(scope,downloaded));CHECK(store.saveIndex(scope,{downloaded}));std::string chunks=store.itemPath(scope,itemId)+"/chunks";CHECK(mkdir(chunks.c_str(),0755)==0);FILE*chunk=fopen(store.chunkPath(scope,itemId,0).c_str(),"wb");fwrite("hello",1,5,chunk);fclose(chunk);std::string manifestBefore=readFixture(store.manifestPath(scope,itemId)),chunkBefore=readFixture(store.chunkPath(scope,itemId,0));FILE*f=fopen(p.c_str(),"wb");fputs("bad",f);fclose(f);std::string catalogBefore=readFixture(p);OfflineCatalogSnapshot keep=x;CHECK(!OfflineCatalog::load(p,keep));CHECK(!OfflineCatalog::storeDiscoveredHierarchy(p,s,{season},{{season.id,{ep}}}));CHECK(readFixture(p)==catalogBefore);CHECK(readFixture(store.manifestPath(scope,itemId))==manifestBefore);CHECK(readFixture(store.chunkPath(scope,itemId,0))==chunkBefore);DownloadItem loaded;CHECK(store.loadManifest(scope,itemId,loaded));CHECK(store.validateCompletedDownload(scope,loaded));std::vector<DownloadItem> index;CHECK(store.loadIndex(scope,index));CHECK(index.size()==(size_t)1&&index[0].itemId==itemId);}
 static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);LibrarySyncSchedule q;CHECK(q.request(0));CHECK(!q.request(1000));CHECK(q.pending);CHECK(!q.complete(1000));CHECK(q.complete(60000));}
 static void testCacheRemoveNew(){std::string old=ImageCache::cacheDir();ImageCache::setCacheDir("/tmp/miyoofin-images/");unsigned char b[2]={1,2};CHECK(ImageCache::writeToCache("a",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::writeToCache("b",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::removeCached("a",ImageType::Primary,"x",64,96));CHECK(!ImageCache::isCached("a",ImageType::Primary,"x",64,96));CHECK(ImageCache::isCached("b",ImageType::Primary,"x",64,96));ImageCache::setCacheDir(old);}
+
+static DownloadItem planItem(const std::string &id, std::uint64_t size, std::uint64_t done=0) {
+    DownloadItem i; i.itemId=id; i.expectedSize=size; i.downloadedBytes=done; return i;
+}
+
+static void testDownloadsUiHelpers()
+{
+    std::printf("[test] Downloads UI helpers\n");
+    CHECK(std::string(downloadStateLabel(DownloadState::Queued)) == "Queued");
+    CHECK(std::string(downloadStateLabel(DownloadState::PausedForPlayback)) == "Paused for playback");
+    CHECK(std::string(downloadStateLabel(DownloadState::NoSpace)) == "No space");
+    DownloadItem episode; episode.itemType="episode"; episode.title="Slumber Party Panic"; episode.seasonNumber=1; episode.episodeNumber=1;
+    CHECK(episodeDownloadLabel(episode) == "S01E01 Slumber Party Panic");
+    episode.expectedSize=200; episode.downloadedBytes=87; CHECK(downloadPercent(episode)==43);
+    DownloadItem hls; hls.hlsStorage=true; hls.hlsSegmentCount=4; hls.expectedSize=1000000; // storage estimate must not affect active percentage
+    hls.hlsCompletedSegments=2; hls.downloadedBytes=1; CHECK(downloadPercent(hls)==50);
+    hls.hlsCurrentSegmentBytes=25; hls.hlsCurrentSegmentSize=100; CHECK(downloadPercent(hls)==56); hls.hlsActivePercent=56;
+    hls.hlsCurrentSegmentBytes=1; hls.hlsCurrentSegmentSize=0; CHECK(downloadPercent(hls)==56); // monotonic when a retry has no length
+    hls.hlsCompletedSegments=4; hls.hlsActivePercent=99; CHECK(downloadPercent(hls)==99); // validation owns 100%
+    hls.state=DownloadState::Complete; CHECK(downloadPercent(hls)==100);
+    CHECK(downloadPrimaryControl(DownloadState::Complete)==DownloadPrimaryControl::Play);
+    CHECK(downloadPrimaryControl(DownloadState::Downloading)==DownloadPrimaryControl::Pause);
+    CHECK(downloadPrimaryControl(DownloadState::Paused)==DownloadPrimaryControl::Resume);
+    CHECK(downloadPrimaryControl(DownloadState::WaitingForNetwork)==DownloadPrimaryControl::Retry);
+    CHECK(downloadPrimaryControl(DownloadState::Unauthorized)==DownloadPrimaryControl::None);
+    CHECK(clampDownloadSelection(4, 2)==1); CHECK(clampDownloadSelection(0, 0)==0);
+    CHECK(clampDownloadScroll(6, 7, 0, 5)==2); CHECK(clampDownloadScroll(0, 0, 3, 5)==0);
+    DownloadItem complete; complete.itemId="done"; complete.state=DownloadState::Complete;
+    DownloadItem incomplete; incomplete.itemId="later"; incomplete.state=DownloadState::Queued;
+    CHECK(downloadCanRemove(complete)); CHECK(downloadRemoveIsDelete(complete));
+    CHECK(downloadCanRemove(incomplete)); CHECK(!downloadRemoveIsDelete(incomplete));
+    CHECK(!downloadCanRemove(DownloadItem{}));
+    CHECK(!downloadRemovalConfirmed("", incomplete));
+    CHECK(!downloadRemovalConfirmed("other", incomplete));
+    CHECK(downloadRemovalConfirmed("later", incomplete));
+    std::printf("[test] Downloads UI helpers OK\n");
+}
+
+static void testDownloadSourceReconciliation()
+{
+    std::printf("[test] download source reconciliation\n");
+    DownloadItem item; item.itemId="item"; item.mediaSourceId="source-a"; item.sourceEtag="etag-a"; item.expectedSize=100; item.downloadedBytes=100; item.state=DownloadState::Complete;
+    DownloadMediaSource source; source.id="source-a"; source.etag="etag-a"; source.size=100;
+    CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.state==DownloadState::Complete);
+    source.etag="etag-b"; CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.state==DownloadState::UpdateAvailable&&item.sourceEtag=="etag-a");
+    item.state=DownloadState::Complete; item.updateAvailable=false; source.etag="etag-a"; source.size=101; CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.state==DownloadState::UpdateAvailable);
+    item.state=DownloadState::Complete; item.updateAvailable=false; source.size=100; source.id="source-b"; CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.state==DownloadState::UpdateAvailable);
+    item.state=DownloadState::Complete; CHECK(!reconcileSource(item,SourceCheck::Missing)); CHECK(item.state==DownloadState::LocalOnly);
+    CHECK(!reconcileSource(item,SourceCheck::Transient)); CHECK(item.state==DownloadState::LocalOnly); CHECK(!reconcileSource(item,SourceCheck::Unauthorized)); CHECK(item.state==DownloadState::LocalOnly);
+    item.state=DownloadState::Paused; item.mediaSourceId="source-a"; item.sourceEtag="etag-a"; item.expectedSize=100; item.downloadedBytes=45; source.id="source-b"; source.etag="etag-b"; source.size=120;
+    CHECK(reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.downloadedBytes==0&&item.expectedSize==120&&item.state==DownloadState::Queued);
+    item.state=DownloadState::Complete; item.downloadedBytes=100; item.mediaSourceId="source-a"; item.sourceEtag="etag-a"; item.expectedSize=100; CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.downloadedBytes==100&&item.expectedSize==100);
+    std::string root="output/test/download-source-fixture-"+std::to_string((long long)getpid()); Session session; session.serverUrl="http://server"; session.userId="user"; session.accessToken="token"; session.deviceId="device";
+    DownloadStore store(root); std::string scope=DownloadStore::scopeKey(session.serverUrl,session.userId); DownloadItem local; local.itemId="item"; local.expectedSize=4; local.chunkSize=4; local.downloadedBytes=4; local.state=DownloadState::UpdateAvailable; CHECK(store.saveManifest(scope,local)); CHECK(::mkdir((store.itemPath(scope,"item")+"/chunks").c_str(),0755)==0); FILE *f=std::fopen(store.chunkPath(scope,"item",0).c_str(),"wb"); CHECK(f!=nullptr); std::fwrite("data",1,4,f); std::fclose(f); CHECK(store.saveIndex(scope,{local}));
+    DownloadManager d(session,root); MediaItem media; media.id="item"; CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local); local.state=DownloadState::LocalOnly; CHECK(store.saveManifest(scope,local)); d.configure(session); CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local);
+    DownloadItem updated; updated.state=DownloadState::UpdateAvailable; CHECK(downloadIsLocal(local)); CHECK(downloadIsLocal(updated));
+    DownloadItem partial; partial.itemId="partial"; partial.expectedSize=4; partial.chunkSize=4; CHECK(store.saveManifest(scope,partial)); CHECK(::mkdir((store.itemPath(scope,"partial")+"/chunks").c_str(),0755)==0); f=std::fopen(store.chunkPath(scope,"partial",0,true).c_str(),"wb"); CHECK(f!=nullptr); std::fwrite("xx",1,2,f); std::fclose(f); CHECK(store.removePartialBytes(scope,"partial")); CHECK(::access(store.chunkPath(scope,"partial",0,true).c_str(),F_OK)!=0);
+    std::printf("[test] download source reconciliation OK\n");
+}
+
+static void testDownloadPlanBatchAccounting()
+{
+    // A manager with an invalid session never performs HTTP; makePlan is pure
+    // with respect to its input and the manager's local queue.
+    DownloadManager d({}, "output/test/download-plan-fixture-"+std::to_string((long long)getpid()));
+    d.setPlaybackActive(true); // preserve fixture queue state; no transfer worker races
+    // enqueue is called by the SDL confirmation handler.  With the worker
+    // paused, no manifest or item directory may exist until that worker runs.
+    DownloadItem deferred=planItem("deferred",100);
+    d.enqueue(std::vector<DownloadItem>{deferred,planItem("deferred-two",100)});
+    DownloadStore deferredStore("output/test/download-plan-fixture-"+std::to_string((long long)getpid()));
+    CHECK(::access(deferredStore.manifestPath(d.scope(),"deferred").c_str(),F_OK)!=0);
+    CHECK(::access(deferredStore.itemPath(d.scope(),"deferred").c_str(),F_OK)!=0);
+    auto duplicate=d.makePlan({planItem("a",100),planItem("a",100),planItem("b",200)});
+    CHECK(duplicate.items.size() == (size_t)2); // season / cross-season dedupe
+    CHECK(duplicate.additionalRequiredBytes == (std::uint64_t)300);
+    auto unknown=d.makePlan({planItem("unknown",0)});
+    CHECK(!unknown.sizeKnown); CHECK(!unknown.error.empty());
+    CHECK(!DownloadManager::acceptsPlanResult(7,8)); // stale planner generation is ignored
+    CHECK(DownloadManager::acceptsPlanResult(8,8));
+    std::vector<DownloadItem> large; for(int n=0;n<128;++n) large.push_back(planItem("episode"+std::to_string(n),1));
+    CHECK(d.makePlan(large).items.size() == (size_t)128); // large series stays one plan
+    d.enqueue(planItem("partial",100,40));
+    auto partial=d.makePlan({planItem("partial",100)});
+    CHECK(partial.alreadyPresentBytes == (std::uint64_t)40);
+    CHECK(partial.additionalRequiredBytes == (std::uint64_t)0); // its remaining 60 is reserved once
+    d.enqueue(planItem("complete",100,100));
+    CHECK(d.makePlan({planItem("complete",100)}).additionalRequiredBytes == (std::uint64_t)0);
+    auto queued=d.makePlan({planItem("partial",100),planItem("new",10)});
+    CHECK(queued.additionalRequiredBytes == (std::uint64_t)10); // queued partial is not double-reserved
+}
+
+static void testHlsSizeEstimates()
+{
+    CHECK(EpisodeBrowserScreen::hasSeparateDownloadActions()); // Episode and Season controls coexist.
+    std::uint64_t bytes=0;
+    CHECK(estimateHlsBytes(22LL*60*HLS_TICKS_PER_SECOND,bytes)); CHECK(bytes == 224597536ULL);
+    CHECK(estimateHlsBytes(45LL*60*HLS_TICKS_PER_SECOND,bytes)); CHECK(bytes == 459335536ULL);
+    CHECK(estimateHlsBytes(2LL*60*60*HLS_TICKS_PER_SECOND,bytes)); CHECK(bytes == 1224785536ULL);
+    CHECK(!estimateHlsBytes(0,bytes)); CHECK(estimateHlsBytes((std::numeric_limits<std::int64_t>::max)(),bytes)); CHECK(bytes > 100000000000000ULL);
+    DownloadManager d({}, "output/test/hls-plan-fixture-"+std::to_string((long long)getpid())); d.setPlaybackActive(true);
+    auto hls=[](const std::string&id,std::int64_t ticks){DownloadItem i;i.itemId=id;i.hlsStorage=true;i.runtimeTicks=ticks;i.expectedSize=9999999999ULL;return i;};
+    auto season=d.makePlan({hls("one",22LL*60*HLS_TICKS_PER_SECOND),hls("two",45LL*60*HLS_TICKS_PER_SECOND)});
+    CHECK(season.sizeKnown&&season.additionalRequiredBytes == 683933072ULL); // season total
+    auto series=d.makePlan({hls("one",22LL*60*HLS_TICKS_PER_SECOND),hls("two",45LL*60*HLS_TICKS_PER_SECOND),hls("three",2LL*60*60*HLS_TICKS_PER_SECOND)});
+    CHECK(series.sizeKnown&&series.additionalRequiredBytes == 1908718608ULL); // series total
+    CHECK(!d.makePlan({hls("unknown",0)}).sizeKnown);
+    // Cached metadata produces an HLS estimate before PlaybackInfo is fetched.
+    DownloadItem metadataOnly=hls("metadata-only",22LL*60*HLS_TICKS_PER_SECOND);
+    CHECK(d.makePlan({metadataOnly}).sizeKnown);
+    DownloadItem complete=hls("actual",22LL*60*HLS_TICKS_PER_SECOND); complete.state=DownloadState::Complete; complete.downloadedBytes=12345;
+    CHECK(displayDownloadBytes(complete)==12345);
+    // Queue accounting switches from the conservative estimate to actual HLS
+    // segment progress as soon as the active playlist is known.
+    DownloadItem active=hls("active",22LL*60*HLS_TICKS_PER_SECOND); active.state=DownloadState::Downloading; active.hlsSegmentCount=4; active.hlsCompletedSegments=2; active.downloadedBytes=20ULL*1024*1024;
+    CHECK(queueRemainingBytes(active)==20ULL*1024*1024);
+    active.state=DownloadState::Complete;
+    CHECK(queueRemainingBytes(active)==0);
+    DownloadItem queued=hls("queued",22LL*60*HLS_TICKS_PER_SECOND); queued.state=DownloadState::Queued;
+    CHECK(queueRemainingBytes(queued)==queued.expectedSize); // no playlist: retain reservation estimate
+}
+
+static void testHlsFailureClassification()
+{
+    std::printf("[test] recent transfer speed\n");
+    RecentSpeedSample speed; std::uint64_t bytesPerSec=0;
+    CHECK(!DownloadManager::updateRecentSpeed(speed,100,1000,bytesPerSec));
+    CHECK(DownloadManager::updateRecentSpeed(speed,600,1500,bytesPerSec));
+    CHECK(bytesPerSec==1000);
+    // A short HLS segment gap retains the rolling rate.
+    CHECK(!DownloadManager::updateRecentSpeed(speed,600,2900,bytesPerSec));
+    CHECK(bytesPerSec==1000);
+    CHECK(DownloadManager::updateRecentSpeed(speed,600,3001,bytesPerSec));
+    CHECK(bytesPerSec==0);
+    // A new download (a lower byte count) resets rather than carrying speed.
+    CHECK(!DownloadManager::updateRecentSpeed(speed,0,3100,bytesPerSec));
+    CHECK(bytesPerSec==0);
+    std::printf("[test] recent transfer speed OK\n");
+
+    CHECK(DownloadManager::hlsSegmentRetryable(520, CURLE_OK));
+    CHECK(DownloadManager::hlsSegmentRetryable(502, CURLE_OK));
+    CHECK(DownloadManager::hlsSegmentRetryable(503, CURLE_OK));
+    CHECK(DownloadManager::hlsSegmentRetryable(504, CURLE_OK));
+    CHECK(DownloadManager::hlsSegmentRetryable(0, CURLE_OPERATION_TIMEDOUT));
+    CHECK(DownloadManager::hlsSegmentRetryable(0, CURLE_RECV_ERROR));
+    CHECK(!DownloadManager::hlsSegmentRetryable(401, CURLE_OK));
+    CHECK(!DownloadManager::hlsSegmentRetryable(403, CURLE_OK));
+    CHECK(!DownloadManager::hlsSegmentRetryable(404, CURLE_OK));
+    CHECK(!DownloadManager::hlsSegmentRetryable(0, CURLE_ABORTED_BY_CALLBACK));
+    CHECK(DownloadManager::hlsSegmentShouldRetry(520, CURLE_OK, 1)); // a later attempt can succeed
+    CHECK(DownloadManager::hlsSegmentShouldRetry(520, CURLE_OK, 4));
+    CHECK(!DownloadManager::hlsSegmentShouldRetry(520, CURLE_OK, DownloadManager::HLS_SEGMENT_ATTEMPTS)); // exhausted
+    CHECK(JellyfinApi::classifyHlsFailure(0, CURLE_OPERATION_TIMEDOUT) == JellyfinApi::HlsFailure::Timeout);
+    CHECK(JellyfinApi::classifyHlsFailure(0, CURLE_COULDNT_CONNECT) == JellyfinApi::HlsFailure::Network);
+    CHECK(JellyfinApi::classifyHlsFailure(401, CURLE_OK) == JellyfinApi::HlsFailure::Unauthorized);
+    CHECK(JellyfinApi::classifyHlsFailure(403, CURLE_OK) == JellyfinApi::HlsFailure::Unauthorized);
+    CHECK(JellyfinApi::classifyHlsFailure(500, CURLE_OK) == JellyfinApi::HlsFailure::Http);
+    CHECK(JellyfinApi::classifyHlsFailure(404, CURLE_OK) == JellyfinApi::HlsFailure::Http);
+    CHECK(DownloadManager::hlsSegmentFailureState(0, CURLE_OPERATION_TIMEDOUT) == DownloadState::WaitingForNetwork);
+    CHECK(DownloadManager::hlsSegmentFailureState(0, CURLE_COULDNT_CONNECT) == DownloadState::WaitingForNetwork);
+    CHECK(DownloadManager::hlsSegmentFailureState(0, CURLE_COULDNT_RESOLVE_HOST) == DownloadState::WaitingForNetwork);
+    CHECK(DownloadManager::hlsSegmentFailureState(401, CURLE_OK) == DownloadState::Unauthorized);
+    CHECK(DownloadManager::hlsSegmentFailureState(500, CURLE_OK) == DownloadState::Failed);
+    CHECK(DownloadManager::hlsSegmentFailureState(404, CURLE_OK) == DownloadState::Failed);
+}
 
 int main()
 {
@@ -1736,7 +1951,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testOfflineCatalog(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 
@@ -1842,6 +2057,15 @@ int main()
     testPlaybackRequestRemove();
     testPlaybackResultParsing();
     testPlaybackResultDelay();
+    testOfflinePlaybackJournal();
+
+    std::printf("\n--- Download manager state tests ---\n");
+    testHlsDownloadStore();
+    testDownloadInterruptStates();
+    testDownloadPlanBatchAccounting();
+    testHlsSizeEstimates(); testHlsFailureClassification();
+    testDownloadsUiHelpers();
+    testDownloadSourceReconciliation();
 
     // B5f3a tests — In-process external playback handoff
     std::printf("\n--- B5f3a external playback handoff tests ---\n");

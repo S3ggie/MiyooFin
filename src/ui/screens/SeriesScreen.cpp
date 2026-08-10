@@ -7,6 +7,8 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../cache/OfflineCatalog.hpp"
+#include "../../cache/LibraryCache.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -93,52 +95,41 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
     return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" + std::to_string(POSTER_H);
 }
 
-SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series)
+SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads)
     : m_session(session)
     , m_series(series)
+    , m_downloads(std::move(downloads))
 {
 }
 
 void SeriesScreen::enter()
 {
     printf("[SeriesScreen] enter series=%s\n", m_series.title.c_str());
-    if (m_seasons.empty())
+    if (m_seasons.empty()) {
+        m_seasons=OfflineCatalog::seasons(OfflineCatalog::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series.id);
+        m_loadState=LoadState::Ready;
         fetchSeasons();
+    }
     tryLoadSeriesArtwork();
 }
+SeriesScreen::~SeriesScreen(){ leave(); if(m_fetchThread.joinable())m_fetchThread.join(); if(m_artworkThread.joinable())m_artworkThread.join(); }
 
 void SeriesScreen::leave()
 {
     printf("[SeriesScreen] leave series=%s\n", m_series.title.c_str());
+    m_fetchCancelled.store(true, std::memory_order_release);
+    m_artworkCancelled.store(true, std::memory_order_release);
+    { std::lock_guard<std::mutex> g(m_artworkMutex); m_artworkStop=true; }
+    m_artworkCv.notify_one();
 }
 
 void SeriesScreen::fetchSeasons()
 {
-    m_loadState = LoadState::Loading;
+    if(m_fetchThread.joinable()) { std::lock_guard<std::mutex>g(m_fetchMutex); if(!m_fetchDone)return; m_fetchThread.join(); }
+    if(m_seasons.empty()) m_loadState = LoadState::Loading;
     m_error.clear();
-
-    std::string error;
-    bool ok = JellyfinApi::getSeasons(
-        m_session.serverUrl,
-        m_session.accessToken,
-        m_session.userId,
-        m_session.deviceId,
-        m_series.id,
-        m_seasons,
-        error);
-
-    if (ok) {
-        m_loadState = LoadState::Ready;
-        m_selectedSeason = 0;
-        m_seasonScroll = 0;
-        m_gridScroll = 0;
-        m_overviewScroll = 0;
-        printf("[SeriesScreen] Loaded %d seasons\n", (int)m_seasons.size());
-    } else {
-        m_loadState = LoadState::Error;
-        m_error = error.empty() ? "Unknown error" : error;
-        printf("[SeriesScreen] Failed to load seasons: %s\n", m_error.c_str());
-    }
+    {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;} m_fetchCancelled.store(false, std::memory_order_release); Session s=m_session; std::string id=m_series.id;
+    m_fetchThread=std::thread([this,s,id](){std::vector<MediaItem> v;std::string e;bool ok=JellyfinApi::getSeasons(s.serverUrl,s.accessToken,s.userId,s.deviceId,id,v,e,&m_fetchCancelled);std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchSeasons=std::move(v);m_fetchError=e;m_fetchDone=true;});
 }
 
 void SeriesScreen::tryLoadSeriesArtwork()
@@ -161,49 +152,30 @@ void SeriesScreen::tryLoadSeriesArtwork()
     printf("[SeriesScreen] Artwork: loading %s tag=%s (%dx%d)\n",
            m_series.id.c_str(), tag.c_str(), w, h);
 
-    // 1. Check disk cache
-    std::vector<unsigned char> jpegData;
-    if (ImageCache::isCached(m_series.id, ImageType::Primary, tag, w, h)) {
-        jpegData = ImageCache::readCached(m_series.id, ImageType::Primary, tag, w, h);
-        printf("[SeriesScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
+    queueArtwork("series:" + m_series.id + ":" + tag, m_series, w, h, true);
+}
+
+void SeriesScreen::queueArtwork(const std::string &key, const MediaItem &item, int width, int height, bool series)
+{
+    {
+        std::lock_guard<std::mutex> g(m_artworkMutex);
+        m_artworkJobs.push_back({key, item, width, height, series});
+        if (!m_artworkThread.joinable()) m_artworkThread=std::thread(&SeriesScreen::artworkWorkerLoop, this);
     }
+    m_artworkCv.notify_one();
+}
 
-    // 2. If not cached, synchronous HTTP request
-    if (jpegData.empty()) {
-        std::string url = buildImageUrl(
-            m_session.serverUrl, m_series.id, ImageType::Primary, tag, w, h);
-
-        HttpClient client;
-        client.setTimeoutSec(8);
-        auto headers = JellyfinApi::buildAuthHeaders(
-            m_session.accessToken, m_session.deviceId);
-
-        BinaryHttpResponse response;
-        std::string error;
-        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
-            printf("[SeriesScreen] Artwork fetch failed: %s\n", error.c_str());
-            return;
-        }
-        if (!response.ok()) {
-            printf("[SeriesScreen] Artwork fetch failed: HTTP %ld\n", response.status);
-            return;
-        }
-
-        jpegData = std::move(response.data);
-        printf("[SeriesScreen] Artwork: downloaded %zu bytes\n", jpegData.size());
-
-        // Cache to disk (best-effort)
-        ImageCache::writeToCache(m_series.id, ImageType::Primary, tag, w, h,
-                                 jpegData.data(), jpegData.size());
-    }
-
-    // 3. Decode JPEG
-    m_seriesArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
-    if (m_seriesArtwork.empty()) {
-        printf("[SeriesScreen] Artwork: decode failed\n");
-    } else {
-        printf("[SeriesScreen] Artwork: decoded %dx%d\n",
-               m_seriesArtwork.width, m_seriesArtwork.height);
+void SeriesScreen::artworkWorkerLoop()
+{
+    for (;;) {
+        ArtworkJob job;
+        { std::unique_lock<std::mutex> l(m_artworkMutex); m_artworkCv.wait(l,[&]{return m_artworkStop || !m_artworkJobs.empty();}); if(m_artworkStop)return; job=std::move(m_artworkJobs.front());m_artworkJobs.erase(m_artworkJobs.begin()); }
+        auto tag=job.item.imageTags.find("Primary"); if(tag==job.item.imageTags.end()) continue;
+        std::vector<unsigned char> data;
+        if(ImageCache::isCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height)) data=ImageCache::readCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height);
+        if(data.empty() && !m_artworkCancelled.load(std::memory_order_acquire)) { HttpClient c;c.setTimeoutSec(8);BinaryHttpResponse r;std::string e;if(c.getBinary(buildImageUrl(m_session.serverUrl,job.item.id,ImageType::Primary,tag->second,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),r,e,512*1024,&m_artworkCancelled)&&r.ok()){data=std::move(r.data);ImageCache::writeToCache(job.item.id,ImageType::Primary,tag->second,job.width,job.height,data.data(),data.size());} }
+        DecodedImage image; if(!data.empty()&&!m_artworkCancelled.load(std::memory_order_acquire)) image=ImageDecoder::decodeJpeg(data.data(),data.size());
+        {std::lock_guard<std::mutex>g(m_artworkMutex);if(!m_artworkStop)m_artworkCompleted[job.key]=std::move(image);}
     }
 }
 
@@ -243,51 +215,8 @@ void SeriesScreen::tryLoadOneVisibleSeasonArtwork()
         printf("[SeriesScreen] SeasonArtwork: loading %s tag=%s (%dx%d)\n",
                season.id.c_str(), tag.c_str(), POSTER_W, POSTER_H);
 
-        // 1. Check disk cache
-        std::vector<unsigned char> jpegData;
-        if (ImageCache::isCached(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H)) {
-            jpegData = ImageCache::readCached(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H);
-            printf("[SeriesScreen] SeasonArtwork: cache hit (%zu bytes)\n", jpegData.size());
-        }
-
-        // 2. If not cached, synchronous HTTP request
-        if (jpegData.empty()) {
-            std::string url = buildImageUrl(
-                m_session.serverUrl, season.id, ImageType::Primary, tag, POSTER_W, POSTER_H);
-
-            HttpClient client;
-            client.setTimeoutSec(8);
-            auto headers = JellyfinApi::buildAuthHeaders(
-                m_session.accessToken, m_session.deviceId);
-
-            BinaryHttpResponse response;
-            std::string error;
-            if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
-                printf("[SeriesScreen] SeasonArtwork fetch failed: %s\n", error.c_str());
-                return;  // stop for this cycle
-            }
-            if (!response.ok()) {
-                printf("[SeriesScreen] SeasonArtwork fetch failed: HTTP %ld\n", response.status);
-                return;
-            }
-
-            jpegData = std::move(response.data);
-            printf("[SeriesScreen] SeasonArtwork: downloaded %zu bytes\n", jpegData.size());
-
-            ImageCache::writeToCache(season.id, ImageType::Primary, tag, POSTER_W, POSTER_H,
-                                     jpegData.data(), jpegData.size());
-        }
-
-        // 3. Decode JPEG
-        DecodedImage img = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
-        if (img.empty()) {
-            printf("[SeriesScreen] SeasonArtwork: decode failed\n");
-            return;  // failed decode — leave empty entry, won't retry
-        }
-
-        printf("[SeriesScreen] SeasonArtwork: decoded %dx%d\n", img.width, img.height);
-        m_seasonArtwork[key] = std::move(img);
-        return;  // loaded one this cycle
+        queueArtwork(key, season, POSTER_W, POSTER_H, false);
+        return;
     }
 }
 
@@ -317,6 +246,20 @@ bool SeriesScreen::handleAction(Action action)
     // Ready — 2-column grid navigation
     int total = (int)m_seasons.size();
     int col   = m_selectedSeason % GRID_COLS;
+
+    if (m_confirmDownload) {
+        if(action==Action::Back){m_confirmDownload=false;return true;}
+        if(action==Action::Confirm && m_downloads && m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);m_confirmDownload=false;}
+        return true;
+    }
+    // Y downloads the highlighted season; X expands and downloads the series.
+    // Both requests are fully expanded and preflighted by DownloadManager.
+    if ((action==Action::ActionsMenu || action==Action::Search) && m_downloads && total>0) {
+        bool whole=action==Action::Search;
+        if(m_planId && m_planWholeSeries==whole && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
+        else {m_planWholeSeries=whole;m_planId=whole?m_downloads->requestSeriesPlan(m_series):m_downloads->requestSeasonPlan(m_series,m_seasons[m_selectedSeason]);}
+        return true;
+    }
 
     switch (action) {
     case Action::Left:
@@ -362,7 +305,7 @@ bool SeriesScreen::handleAction(Action action)
         printf("[SeriesScreen] Select season: %s index=%d\n",
                season.title.c_str(), season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-            m_session, m_series, season));
+            m_session, m_series, season, "", m_downloads));
         return true;
     }
 
@@ -397,6 +340,9 @@ bool SeriesScreen::handleAction(Action action)
 
 void SeriesScreen::update(Uint32 /*dt*/)
 {
+    bool fetchDone; {std::lock_guard<std::mutex>g(m_fetchMutex);fetchDone=m_fetchDone;}
+    if(fetchDone){std::vector<MediaItem> fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchSeasons);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){std::string selected=m_seasons.empty()?"":m_seasons[m_selectedSeason].id;m_seasons=std::move(fresh);int n=0;for(;n<(int)m_seasons.size()&&m_seasons[n].id!=selected;n++);m_selectedSeason=n<(int)m_seasons.size()?n:0;m_loadState=LoadState::Ready;OfflineCatalog::storeSeasons(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series,m_seasons,nullptr);}else if(m_seasons.empty()){m_loadState=LoadState::Error;m_error=err;}}
+    {std::lock_guard<std::mutex>g(m_artworkMutex);for(auto &entry:m_artworkCompleted){if(entry.first.rfind("series:",0)==0)m_seriesArtwork=std::move(entry.second);else m_seasonArtwork[entry.first]=std::move(entry.second);}m_artworkCompleted.clear();}
     tryLoadOneVisibleSeasonArtwork();
 }
 
@@ -571,6 +517,17 @@ void SeriesScreen::render(SDL_Surface *fb)
         Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
         Theme::BG_R, Theme::BG_G, Theme::BG_B);
 
+    if (m_downloads && m_planId) {
+        auto p=m_downloads->planSnapshot(m_planId); std::string status;
+        const char *what=m_planWholeSeries?"Series":"Season";
+        if(m_confirmDownload) status=std::string("Download ")+what+"?";
+        else if(p.state==DownloadPlanState::Planning) status=p.plan.sizeKnown?std::to_string(p.itemCount)+" episodes  ~"+formatBytes(p.plan.additionalRequiredBytes)+" estimated":std::string("Planning ")+what+" download...";
+        else if(p.state==DownloadPlanState::Ready) status=std::to_string(p.itemCount)+" episodes  ~"+formatBytes(p.plan.additionalRequiredBytes)+" needed  "+formatBytes(p.plan.usableFreeBytes)+" free";
+        else if(p.state==DownloadPlanState::Error) status=p.plan.error;
+        if(!status.empty()) BitmapFont::drawString(fb,HEAD_X,HEAD_Y+14,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+        if(m_confirmDownload) BitmapFont::drawString(fb,HEAD_X,HEAD_Y+28,"A=Confirm  B=Cancel",Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+    }
+
     // 2. Season poster grid (left side, 2 columns × 3 rows)
     int totalSeasons = (int)m_seasons.size();
     for (int vis = 0; vis < GRID_VISIBLE; ++vis) {
@@ -694,7 +651,7 @@ void SeriesScreen::render(SDL_Surface *fb)
 
     // 5. Bottom hint bar
     renderBottomHints(fb, overviewScrollable
-        ? "A=Open  B=Back  L/R=Bio" : "A=Open  B=Back");
+        ? "A=Open B=Back Y=Season X=Series L/R=Bio" : "A=Open B=Back Y=Season X=Series");
 }
 
 } // namespace miyoofin

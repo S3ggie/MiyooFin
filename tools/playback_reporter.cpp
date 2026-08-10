@@ -118,13 +118,12 @@ static bool file_exists(const std::string &path)
 
 static bool write_playback_result(const std::string &path,
                                   const std::string &itemId,
-                                  int64_t positionTicks)
+                                  const std::string &itemType, int64_t positionTicks, int64_t baseTicks,
+                                  const std::string &sourceMode, bool serverReported)
 {
     FILE *f = std::fopen(path.c_str(), "w");
     if (!f) return false;
-    const bool wrote = std::fprintf(f, "item_id=%s\nposition_ticks=%lld\n",
-                                    itemId.c_str(),
-                                    (long long)positionTicks) >= 0;
+    const bool wrote = std::fprintf(f, "item_id=%s\nitem_type=%s\nposition_ticks=%lld\nbase_resume_ticks=%lld\nsource_mode=%s\nserver_reported=%d\n", itemId.c_str(), itemType.c_str(), (long long)positionTicks, (long long)baseTicks, sourceMode.c_str(), serverReported?1:0) >= 0;
     const bool closed = std::fclose(f) == 0;
     return wrote && closed;
 }
@@ -285,7 +284,7 @@ static void report_progress(const std::string &serverUrl,
                  (long long)positionTicks, status);
 }
 
-static void report_stopped(const std::string &serverUrl,
+static bool report_stopped(const std::string &serverUrl,
                            const std::string &itemId,
                            int64_t positionTicks,
                            bool failed,
@@ -301,6 +300,7 @@ static void report_stopped(const std::string &serverUrl,
     long status = post_json(url, headers, body, cacertPath);
     reporter_log("stopped %lld ticks HTTP %ld",
                  (long long)positionTicks, status);
+    return status >= 200 && status < 300;
 }
 
 // ===================================================================
@@ -355,6 +355,8 @@ int main(int argc, char *argv[])
         std::fclose(g_logFile); return 1;
     }
     std::string itemId = read_kv_from_content(reqContent, "item_id");
+    std::string itemType = read_kv_from_content(reqContent, "item_type");
+    std::string sourceMode = read_kv_from_content(reqContent, "source_mode");
     if (itemId.empty()) {
         reporter_log("ERROR: missing item_id");
         std::fclose(g_logFile); return 1;
@@ -493,15 +495,16 @@ int main(int argc, char *argv[])
     // behaviour.
     static const char *POS_CFG_PATH =
         "/mnt/SDCARD/.tmp_update/pos.cfg";
-    static const char *STREAM_KEY =
-        "http://127.0.0.1:18080/stream";
+    const char *streamKey = sourceMode == "local"
+        ? "http://127.0.0.1:18080/local.m3u8"
+        : "http://127.0.0.1:18080/stream";
 
     bool usedPosCfg = false;
     if (hasPts) {
         std::string posData = read_file_binary(POS_CFG_PATH);
         if (!posData.empty()) {
             uint32_t posSec = 0;
-            if (parse_pos_cfg_position(posData, STREAM_KEY, posSec)) {
+            if (parse_pos_cfg_position(posData, streamKey, posSec)) {
                 reporter_log("pos.cfg final position=%us", (unsigned)posSec);
                 lastPts = static_cast<double>(posSec);
                 usedPosCfg = true;
@@ -520,13 +523,12 @@ int main(int argc, char *argv[])
         const int64_t finalTicks =
             absolute_position_ticks(resumeTicks, lastPts);
         const std::string resultPath = appDir + "/playback-result.txt";
-        if (write_playback_result(resultPath, itemId, finalTicks))
+        const bool serverReported=report_stopped(serverUrl, itemId, finalTicks, failed, accessToken, deviceId, cacertPath);
+        if (write_playback_result(resultPath, itemId, itemType, finalTicks, resumeTicks, sourceMode, serverReported))
             reporter_log("playback result position=%lld",
                          (long long)finalTicks);
         else
             reporter_log("ERROR: failed to write playback result");
-        report_stopped(serverUrl, itemId, finalTicks,
-                       failed, accessToken, deviceId, cacertPath);
     } else {
         reporter_log("no pts observed, nothing to report");
     }

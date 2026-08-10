@@ -14,10 +14,14 @@
 #include <csignal>
 #include <cerrno>
 #include <string>
+#include <vector>
+#include <limits>
+#include <cstdint>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include <curl/curl.h>
 
 #include "https_bridge_parse.hpp"
@@ -334,10 +338,24 @@ static void handle_client(int client_fd, const std::string &upstream_url,
     curl_easy_cleanup(curl);
 }
 
+// Local mode deliberately accepts only a manifest path supplied by the runner.
+// No request-derived filesystem path is ever opened.
+enum class LocalMediaKind { LegacyBytes, Hls };
+struct LocalMedia { std::string itemDir; std::uint64_t size=0, chunk=0, segments=0; LocalMediaKind kind=LocalMediaKind::LegacyBytes; bool valid=false; };
+static std::string manifest_value(const std::string &body, const char *key) { std::string p=std::string(key)+"="; size_t x=body.find(p); while(x!=std::string::npos&&x&&body[x-1]!='\n')x=body.find(p,x+1); if(x==std::string::npos)return {}; x+=p.size(); size_t e=body.find('\n',x); return body.substr(x,e==std::string::npos?std::string::npos:e-x); }
+static bool local_number(const std::string &text, std::uint64_t &value) { if(text.empty())return false; for(char c:text)if(c<'0'||c>'9')return false; errno=0; char *end=nullptr; value=std::strtoull(text.c_str(),&end,10); return !errno&&end&&!*end; }
+static bool local_manifest(const std::string &path, LocalMedia &m) { FILE*f=std::fopen(path.c_str(),"rb"); if(!f)return false; std::string b; char q[1024]; size_t n; while(b.size()<=65536&&(n=std::fread(q,1,sizeof q,f)))b.append(q,n); std::fclose(f); if(b.size()>65536)return false; size_t slash=path.find_last_of('/'); if(slash==std::string::npos)return false; m={};m.itemDir=path.substr(0,slash); if(b.rfind("MFDM=2\n",0)==0){m.kind=LocalMediaKind::Hls; if(!local_number(manifest_value(b,"segments"),m.segments)||!m.segments)return false; m.valid=true;return true;} if(b.rfind("MFDM=1\n",0))return false; if(!local_number(manifest_value(b,"size"),m.size)||!local_number(manifest_value(b,"chunk"),m.chunk)||!m.size||!m.chunk)return false;std::uint64_t count=1+(m.size-1)/m.chunk;for(std::uint64_t i=0;i<count;i++){std::string name=m.itemDir+"/chunks/chunk-";char number[32];std::snprintf(number,sizeof number,"%06llu.bin",(unsigned long long)i);name+=number;struct stat st{};std::uint64_t want=(i+1==count?m.size-i*m.chunk:m.chunk);if(::stat(name.c_str(),&st)||st.st_size<0||(std::uint64_t)st.st_size!=want)return false;}m.valid=true;return true; }
+static bool parse_local_range(const std::string &raw,std::uint64_t total,std::uint64_t &start,std::uint64_t &end) { if(raw.empty()){start=0;end=total-1;return true;} std::string s=parse_range_spec(raw); if(s.empty()||s.find(',')!=std::string::npos)return false;size_t dash=s.find('-');if(dash==std::string::npos)return false;std::string a=s.substr(0,dash),b=s.substr(dash+1);if(a.empty())return false;char*e=nullptr;start=std::strtoull(a.c_str(),&e,10);if(!e||*e||start>=total)return false;if(b.empty())end=total-1;else{e=nullptr;end=std::strtoull(b.c_str(),&e,10);if(!e||*e)return false;end=std::min(end,total-1);}return end>=start; }
+static bool local_segment_index(const std::string &path,const LocalMedia&m,std::uint64_t &index) { const std::string prefix="/segments/"; if(path.compare(0,prefix.size(),prefix)!=0||path.size()!=prefix.size()+6)return false; return local_number(path.substr(prefix.size()),index)&&index<m.segments; }
+static void send_local_error(int fd,long code) { std::string h="HTTP/1.1 "+std::to_string(code)+" "+status_reason(code)+"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";send_all(fd,h.c_str(),h.size()); }
+static void send_local_body(int fd,const std::string &type,const std::string &data,bool head) { std::string h="HTTP/1.1 200 OK\r\nContent-Type: "+type+"\r\nContent-Length: "+std::to_string(data.size())+"\r\nConnection: close\r\n\r\n";if(send_all(fd,h.c_str(),h.size())&&!head)send_all(fd,data.data(),data.size()); }
+static void serve_local_segment(int fd,const LocalMedia&m,std::uint64_t index,bool head) { char number[32];std::snprintf(number,sizeof number,"%06llu.bin",(unsigned long long)index);std::string name=m.itemDir+"/segments/"+number;struct stat st{};if(::lstat(name.c_str(),&st)||!S_ISREG(st.st_mode)||st.st_size<=0){send_local_error(fd,404);return;}std::uint64_t length=(std::uint64_t)st.st_size;std::string h="HTTP/1.1 200 OK\r\nContent-Type: video/MP2T\r\nContent-Length: "+std::to_string(length)+"\r\nConnection: close\r\n\r\n";if(!send_all(fd,h.c_str(),h.size())||head)return;FILE*f=std::fopen(name.c_str(),"rb");if(!f)return;char buf[32768];std::uint64_t left=length;while(left){size_t want=(size_t)std::min<std::uint64_t>(left,sizeof buf),got=std::fread(buf,1,want,f);if(got!=want||!send_all(fd,buf,got))break;left-=got;}std::fclose(f); }
+static void handle_local_client(int fd,const LocalMedia&m){std::string d;char q[1024];while(d.size()<HTTPS_BRIDGE_MAX_HEADER_SIZE){ssize_t n=recv(fd,q,sizeof q,0);if(n<=0)return;d.append(q,n);if(d.find("\r\n\r\n")!=std::string::npos)break;}HttpRequest r=parse_request(d.data(),d.size());if(!r.valid||(r.method!="GET"&&r.method!="HEAD")){send_local_error(fd,404);return;}if(m.kind==LocalMediaKind::Hls){if(r.path=="/local.m3u8"){std::string p="#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n";for(std::uint64_t i=0;i<m.segments;i++){char number[32];std::snprintf(number,sizeof number,"%06llu",(unsigned long long)i);p+="#EXTINF:10.0,\n/segments/"+std::string(number)+"\n";}p+="#EXT-X-ENDLIST\n";send_local_body(fd,"application/vnd.apple.mpegurl",p,r.method=="HEAD");return;}std::uint64_t index=0;if(local_segment_index(r.path,m,index)){serve_local_segment(fd,m,index,r.method=="HEAD");return;}send_local_error(fd,404);return;}if(r.path!="/stream"){send_local_error(fd,404);return;}std::uint64_t a=0,b=0;if(!parse_local_range(r.range,m.size,a,b)){std::string x="HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */"+std::to_string(m.size)+"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";send_all(fd,x.c_str(),x.size());return;}std::uint64_t len=b-a+1;std::string h="HTTP/1.1 "+std::string(r.range.empty()?"200 OK":"206 Partial Content")+"\r\nAccept-Ranges: bytes\r\nContent-Length: "+std::to_string(len)+"\r\n";if(!r.range.empty())h+="Content-Range: bytes "+std::to_string(a)+"-"+std::to_string(b)+"/"+std::to_string(m.size)+"\r\n";h+="Connection: close\r\n\r\n";if(!send_all(fd,h.c_str(),h.size())||r.method=="HEAD")return;char buf[32768];std::uint64_t p=a,left=len;while(left){std::uint64_t ci=p/m.chunk,off=p%m.chunk;char number[32];std::snprintf(number,sizeof number,"%06llu.bin",(unsigned long long)ci);std::string name=m.itemDir+"/chunks/chunk-"+number;FILE*f=std::fopen(name.c_str(),"rb");if(!f)return;std::fseek(f,(long)off,SEEK_SET);size_t want=(size_t)std::min<std::uint64_t>(left,std::min<std::uint64_t>(sizeof buf,m.chunk-off));size_t got=std::fread(buf,1,want,f);std::fclose(f);if(got!=want||!send_all(fd,buf,got))return;p+=got;left-=got;}}
+
 static void usage(const char *argv0)
 {
     std::fprintf(stderr,
-        "Usage: %s <upstream-url> <cacert-path> [port]\n"
+        "Usage: %s <upstream-url> <cacert-path> [port]\n       %s --local-manifest <manifest> [port]\n"
         "\n"
         "HTTPS-to-HTTP streaming bridge for MiyooFin.\n"
         "\n"
@@ -347,15 +365,18 @@ static void usage(const char *argv0)
         "  port          local port to listen on (default: 18080)\n"
         "\n"
         "The server binds to 127.0.0.1 only.\n",
-        argv0);
+        argv0, argv0);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc < 3 || argc > 4) { usage(argv[0]); return 1; }
+    bool local = argc >= 3 && std::string(argv[1]) == "--local-manifest";
+    if ((!local && (argc < 3 || argc > 4)) || (local && (argc < 3 || argc > 4))) { usage(argv[0]); return 1; }
 
-    std::string upstream_url = argv[1];
-    std::string cacert_path  = argv[2];
+    std::string upstream_url = local ? "" : argv[1];
+    std::string cacert_path  = local ? "" : argv[2];
+    LocalMedia media;
+    if (local && !local_manifest(argv[2], media)) { std::fprintf(stderr,"Error: invalid local manifest\n"); return 1; }
     int port = 18080;
     if (argc == 4) {
         port = std::atoi(argv[3]);
@@ -405,7 +426,7 @@ int main(int argc, char *argv[])
         socklen_t cl = sizeof(ca);
         int cfd = ::accept(g_listen_fd, (struct sockaddr *)&ca, &cl);
         if (cfd < 0) { if (!g_running) break; continue; }
-        handle_client(cfd, upstream_url, cacert_path);
+        if (local) handle_local_client(cfd, media); else handle_client(cfd, upstream_url, cacert_path);
         ::close(cfd);
     }
 

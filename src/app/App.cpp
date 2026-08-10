@@ -1,4 +1,7 @@
 #include "App.hpp"
+#include "../playback/PlaybackRequest.hpp"
+#include "../playback/OfflinePlaybackJournal.hpp"
+#include "../cache/LibraryCache.hpp"
 #include "../ui/Theme.hpp"
 #include "../ui/BitmapFont.hpp"
 #include "../ui/screens/StartupScreen.hpp"
@@ -16,6 +19,7 @@
 #include <sys/wait.h>
 #include <cerrno>
 #include <string>
+#include <chrono>
 
 namespace miyoofin {
 
@@ -57,11 +61,20 @@ App::App()
 App::~App()
 {
     if (m_savedValidationThread.joinable()) m_savedValidationThread.join();
+    { std::lock_guard<std::mutex> lock(m_journalMutex); m_journalStop = true; m_journalWake = true; }
+    m_journalCv.notify_one();
+    if (m_journalSyncThread.joinable()) m_journalSyncThread.join();
+    if (m_downloadManager) {
+        printf("[App] Stopping download manager\n");
+        m_downloadManager.reset();
+        printf("[App] Download manager stopped\n");
+    }
     if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
     if (m_fb)     SDL_FreeSurface(m_fb);
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
     if (m_window) SDL_DestroyWindow(m_window);
     SDL_Quit();
+    printf("[App] curl global cleanup\n");
     curl_global_cleanup();
 }
 
@@ -131,6 +144,8 @@ bool App::init()
 
     loadSavedUrl();
     loadSavedSession();
+    recoverPlaybackResult();
+    m_downloadManager = std::make_shared<DownloadManager>(m_session);
     m_deviceId = DeviceIdentity::loadOrCreate();
     printf("[App] Device ID: %s\n", m_deviceId.c_str());
 
@@ -140,6 +155,7 @@ bool App::init()
         m_savedFastPath = true;
         goToHome();
         startSavedSessionValidation();
+        scheduleJournalSync();
     } else if (!m_serverUrl.empty()) {
         printf("[App] Saved server URL: %s\n", m_serverUrl.c_str());
         m_stack.push(std::make_unique<ConnectScreen>(m_serverUrl));
@@ -162,7 +178,8 @@ void App::startSavedSessionValidation()
         std::string error;
         TokenValidation result = JellyfinApi::validateTokenStatus(session.serverUrl, session.accessToken,
             session.userId, session.deviceId, error);
-        m_savedValidation = result == TokenValidation::Unauthorized ? 2 : 1;
+        m_savedValidation = result == TokenValidation::Unauthorized ? 2 :
+            (result == TokenValidation::Valid ? 3 : 1);
     });
 }
 
@@ -176,7 +193,7 @@ void App::finishSavedSessionValidation()
         printf("[App] Saved session rejected; returning to login\n");
         logout();
         goToLogin("Session expired. Please log in again.");
-    }
+    } else if (m_savedValidation.load() == 3) scheduleJournalSync();
 }
 
 void App::loadSavedUrl()
@@ -209,13 +226,75 @@ void App::loadSavedSession()
         printf("[App] No valid saved session\n");
     }
 }
+bool App::ingestPlaybackResult(bool removeAfterIngest)
+{
+    if (!m_session.valid()) return false;
+    PlaybackResult r; std::string error;
+    if (!PlaybackRequest::readResultFrom("playback-result.txt", r, error)) return false;
+    bool pending = false;
+    if (!r.serverReported) {
+        OfflinePlaybackEntry entry;
+        entry.itemId=r.itemId; entry.itemType=r.itemType; entry.baseServerTicks=r.baseResumeTicks;
+        entry.finalTicks=r.positionTicks; entry.localTimestamp=(std::uint64_t)time(nullptr);
+        const std::string journal=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+        std::lock_guard<std::mutex> lock(m_journalMutex);
+        pending=OfflinePlaybackJournal::upsert(journal, entry, nullptr);
+    }
+    if (removeAfterIngest) PlaybackRequest::removeAt("playback-result.txt");
+    return pending;
+}
+void App::recoverPlaybackResult(){ if (ingestPlaybackResult(true)) scheduleJournalSync(); }
+
+void App::scheduleJournalSync()
+{
+    if (!m_session.valid()) return;
+    if (!m_journalSyncThread.joinable()) m_journalSyncThread=std::thread(&App::journalSyncLoop, this);
+    { std::lock_guard<std::mutex> lock(m_journalMutex); m_journalWake=true; }
+    m_journalCv.notify_one();
+}
+
+void App::journalSyncLoop()
+{
+    std::unique_lock<std::mutex> lock(m_journalMutex);
+    while (!m_journalStop) {
+        m_journalCv.wait(lock, [this]{ return m_journalStop || m_journalWake; });
+        if (m_journalStop) break;
+        m_journalWake=false;
+        const unsigned failures=m_journalFailures;
+        if (failures) {
+            const unsigned seconds=failures > 5 ? 30 : (1u << failures);
+            m_journalCv.wait_for(lock, std::chrono::seconds(seconds), [this]{ return m_journalStop || m_journalWake; });
+            if (m_journalStop) break;
+            m_journalWake=false;
+        }
+        lock.unlock();
+        syncPlaybackJournal();
+        lock.lock();
+    }
+}
+
+void App::syncPlaybackJournal()
+{
+    const Session session=m_session;
+    if (!session.valid()) return;
+    const std::string journal=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(session.serverUrl,session.userId));
+    std::lock_guard<std::mutex> lock(m_journalMutex);
+    std::vector<OfflinePlaybackEntry> entries;
+    if (!OfflinePlaybackJournal::load(journal, entries, nullptr)) return;
+    auto map=[](PlaybackSyncStatus value){ switch(value){case PlaybackSyncStatus::Success:return OfflineJournalRequestStatus::Success;case PlaybackSyncStatus::Unauthorized:return OfflineJournalRequestStatus::Unauthorized;case PlaybackSyncStatus::Missing:return OfflineJournalRequestStatus::Missing;default:return OfflineJournalRequestStatus::Transient;} };
+    OfflineJournalSyncStats stats=syncOfflinePlaybackEntries(entries,
+        [&](const OfflinePlaybackEntry &entry,std::int64_t &ticks){std::string error;return map(JellyfinApi::getPlaybackPositionTicks(session.serverUrl,session.accessToken,session.userId,session.deviceId,entry.itemId,ticks,error));},
+        [&](const OfflinePlaybackEntry &entry){std::string error;return map(JellyfinApi::reportPlaybackStopped(session.serverUrl,session.accessToken,session.deviceId,entry.itemId,entry.finalTicks,error));});
+    if (stats.changed) OfflinePlaybackJournal::save(journal, entries, nullptr);
+    m_journalFailures=stats.retry ? m_journalFailures+1 : 0;
+}
 
 void App::goToHome()
 {
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
-    m_stack.push(std::make_unique<HomeScreen>(m_session));
+    m_stack.push(std::make_unique<HomeScreen>(m_session, m_downloadManager));
 }
 
 void App::goToLogin(const std::string &initialMessage)
@@ -228,13 +307,15 @@ void App::goToLogin(const std::string &initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
-    m_session.clear();
+    if (m_downloadManager) m_downloadManager->configure(Session{});
+    { std::lock_guard<std::mutex> lock(m_journalMutex); m_session.clear(); }
     Session::remove();
 }
 
 bool App::suspendPlatform()
 {
     printf("[App] Suspending platform resources\n");
+    if (m_downloadManager) m_downloadManager->setPlaybackActive(true);
 
     // Destroy SDL resources in reverse order of creation
     if (m_fbTex)    { SDL_DestroyTexture(m_fbTex);      m_fbTex = nullptr; }
@@ -255,6 +336,7 @@ bool App::suspendPlatform()
 bool App::resumePlatform()
 {
     printf("[App] Resuming platform resources\n");
+    if (m_downloadManager) m_downloadManager->setPlaybackActive(false);
 
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_InitSubSystem failed: %s\n", SDL_GetError());
@@ -381,6 +463,9 @@ void App::handleExternalPlayback()
         m_running = false;
         return;
     }
+
+    // Read (but leave for the active screen to consume) before its next update.
+    if (ingestPlaybackResult(false)) scheduleJournalSync();
 
     printf("[App] External playback handoff complete, resuming UI\n");
 }
@@ -512,6 +597,7 @@ int App::run()
                         m_session.userName    = login->result().userName;
                         m_session.deviceId    = m_deviceId;
                         m_session.save();
+                        if (m_downloadManager) m_downloadManager->configure(m_session);
 
                         // Also save server URL for standalone use
                         FILE *sf = fopen("server.txt", "w");

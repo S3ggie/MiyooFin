@@ -58,6 +58,9 @@ fi
 REQUEST_ITEM_ID=$(read_kv playback-request.txt item_id)
 REQUEST_ITEM_TYPE=$(read_kv playback-request.txt item_type)
 REQUEST_RESUME_TICKS=$(read_kv playback-request.txt resume_ticks)
+REQUEST_SOURCE_MODE=$(read_kv playback-request.txt source_mode)
+REQUEST_DOWNLOAD_SCOPE=$(read_kv playback-request.txt download_scope)
+[ -z "$REQUEST_SOURCE_MODE" ] && REQUEST_SOURCE_MODE=jellyfin
 
 # Keep ticks as a validated decimal string.  Shell arithmetic may not be
 # 64-bit on the target device.
@@ -72,24 +75,34 @@ if [ -z "$REQUEST_ITEM_ID" ]; then
 fi
 [ -z "$REQUEST_ITEM_TYPE" ] && REQUEST_ITEM_TYPE="movie"
 
+case "$REQUEST_ITEM_ID" in *[!A-Za-z0-9_.-]*|'') playback_log "ERROR: Unsafe item id"; exit 1;; esac
+case "$REQUEST_SOURCE_MODE" in jellyfin|local) ;; *) playback_log "ERROR: Invalid source mode"; exit 1;; esac
+if [ "$REQUEST_SOURCE_MODE" = local ]; then
+    case "$REQUEST_DOWNLOAD_SCOPE" in *[!A-Za-z0-9_.-]*|'') playback_log "ERROR: Unsafe download scope"; exit 1;; esac
+fi
+
 SERVER_URL=$(read_kv session.txt server_url)
 ACCESS_TOKEN=$(read_kv session.txt access_token)
 
-if [ -z "$SERVER_URL" ] || [ -z "$ACCESS_TOKEN" ]; then
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && { [ -z "$SERVER_URL" ] || [ -z "$ACCESS_TOKEN" ]; }; then
     playback_log "ERROR: Missing server_url or access_token in session.txt"
     rm -f playback-request.txt
     exit 1
 fi
 
-for _f in miyoofin-https-bridge cacert.pem; do
+for _f in miyoofin-https-bridge; do
     if [ ! -f "$_f" ]; then
         playback_log "ERROR: $_f not found"
         rm -f playback-request.txt
         exit 1
     fi
 done
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ ! -f cacert.pem ]; then
+    playback_log "ERROR: cacert.pem not found"
+    exit 1
+fi
 
-playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}) ==="
+playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}, source_mode=${REQUEST_SOURCE_MODE}) ==="
 
 # -------------------------------------------------------------------
 # Construct the EXACT proven forced-transcode URL.
@@ -125,13 +138,23 @@ echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/
 # -------------------------------------------------------------------
 # Start the HTTPS bridge
 # -------------------------------------------------------------------
-playback_log "Starting HTTPS bridge..."
-"$APP_DIR/miyoofin-https-bridge" \
-    "$TURL" \
-    "$APP_DIR/cacert.pem" \
-    18080 \
+playback_log "Starting media bridge..."
+if [ "$REQUEST_SOURCE_MODE" = local ]; then
+    LOCAL_MANIFEST="$APP_DIR/downloads/$REQUEST_DOWNLOAD_SCOPE/items/$REQUEST_ITEM_ID/manifest.v2"
+    [ -f "$LOCAL_MANIFEST" ] || { playback_log "ERROR: Local manifest missing"; exit 1; }
+    "$APP_DIR/miyoofin-https-bridge" --local-manifest "$LOCAL_MANIFEST" 18080 \
     > "$APP_DIR/playback-bridge.log" 2>&1 &
+else
+    "$APP_DIR/miyoofin-https-bridge" "$TURL" "$APP_DIR/cacert.pem" 18080 \
+    > "$APP_DIR/playback-bridge.log" 2>&1 &
+fi
 BRIDGE_PID=$!
+
+if [ "$REQUEST_SOURCE_MODE" = local ]; then
+    PLAY_URL="http://127.0.0.1:18080/local.m3u8"
+else
+    PLAY_URL="http://127.0.0.1:18080/stream"
+fi
 
 # Brief wait for bridge startup
 sleep 1
@@ -186,7 +209,7 @@ cd "$SYS" || {
     -stats \
     -autoexit \
     -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
-    -i "http://127.0.0.1:18080/stream" \
+    -i "$PLAY_URL" \
     >> "$APP_DIR/playback-ffplay.log" 2>&1
 
 FFPLAY_EXIT=$?

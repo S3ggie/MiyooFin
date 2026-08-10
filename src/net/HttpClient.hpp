@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 
 namespace miyoofin {
 
@@ -11,6 +12,7 @@ namespace miyoofin {
 /// transport failures from HTTP-level failures (401, 403, 500, ...).
 struct HttpResponse {
     long         status = 0;   ///< HTTP status code (0 if transport error)
+    int          transportCode = 0; ///< CURLcode when status is unavailable
     std::string  body;         ///< Response body (may be empty)
     bool         ok() const { return status >= 200 && status < 300; }
 };
@@ -62,7 +64,8 @@ public:
                    const std::vector<std::string> &headers,
                    BinaryHttpResponse &response,
                    std::string &error,
-                   size_t maxSize = 2 * 1024 * 1024);
+                   size_t maxSize = 2 * 1024 * 1024,
+                   const std::atomic<bool> *cancelled = nullptr);
 
     /// Low-level request. Performs the given HTTP method with optional
     /// headers and body. On success (HTTP request completed) returns true
@@ -73,13 +76,16 @@ public:
                  const std::vector<std::string> &headers,
                  const std::string &postBody,
                  HttpResponse &response,
-                 std::string &error);
+                 std::string &error,
+                 const std::atomic<bool> *cancelled = nullptr);
 
     /// Set request timeout in seconds (default 5).
     void setTimeoutSec(long sec) { m_timeoutSec = sec; }
+    void setConnectTimeoutSec(long sec) { m_connectTimeoutSec = sec; }
 
 private:
     long m_timeoutSec = 5;
+    long m_connectTimeoutSec = 5;
 };
 
 } // namespace miyoofin

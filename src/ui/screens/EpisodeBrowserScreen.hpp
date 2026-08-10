@@ -5,6 +5,8 @@
 #include "../../data/MediaItem.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
+#include "../../download/DownloadManager.hpp"
+#include <memory>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -12,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 namespace miyoofin {
 
@@ -23,7 +26,7 @@ public:
     EpisodeBrowserScreen(const Session &session,
                          const MediaItem &series,
                          const MediaItem &season,
-                         const std::string &initialEpisodeId = "");
+                         const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={});
     ~EpisodeBrowserScreen() override;
 
     void enter() override;
@@ -48,6 +51,7 @@ public:
     /// Advance the deterministic post-playback resume countdown.
     /// Returns true exactly when the caller should resume prefetching.
     static bool advancePrefetchResume(bool &pending, int &delayUpdates);
+    static constexpr bool hasSeparateDownloadActions() { return true; }
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -57,7 +61,7 @@ private:
 
     /// Which action button is focused (only meaningful when
     /// focus == ActionButtons).
-    enum class ActionButton { Play, Download };
+    enum class ActionButton { Play, DownloadEpisode, DownloadSeason };
 
     /// Fetch episodes from the server.  Called on first enter() and
     /// on retry from Error state.
@@ -99,8 +103,10 @@ private:
     MediaItem     m_season;
     std::string   m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
+    std::shared_ptr<DownloadManager> m_downloads; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
+    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false; std::vector<MediaItem> m_fetchEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
 
     // ----- Navigation state -----
     int           m_selectedEpisode = 0;
@@ -120,6 +126,7 @@ private:
     std::mutex               m_workerMutex;
     std::condition_variable  m_workerCv;
     bool                     m_workerStop = false;
+    std::atomic<bool>        m_workerCancelled{false};
 
     /// Immutable per-episode job data, rebuilt after fetchEpisodes().
     std::vector<ArtworkJob>  m_artworkJobs;

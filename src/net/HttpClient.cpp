@@ -16,6 +16,11 @@ static size_t writeCallback(void *contents, size_t size, size_t nmemb, void *use
     s->append(static_cast<const char *>(contents), total);
     return total;
 }
+static int cancelCallback(void *userp, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+{
+    const auto *cancelled = static_cast<const std::atomic<bool> *>(userp);
+    return cancelled && cancelled->load(std::memory_order_acquire);
+}
 
 // -------------------------------------------------------------------
 // libcurl write callback for binary data — appends to a vector,
@@ -88,7 +93,7 @@ bool HttpClient::getBinary(const std::string &url,
                            const std::vector<std::string> &headers,
                            BinaryHttpResponse &response,
                            std::string &error,
-                           size_t maxSize)
+                           size_t maxSize, const std::atomic<bool> *cancelled)
 {
     response.status = 0;
     response.data.clear();
@@ -110,12 +115,14 @@ bool HttpClient::getBinary(const std::string &url,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, binaryWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeoutSec);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_timeoutSec);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_connectTimeoutSec);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
+    if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
@@ -155,9 +162,10 @@ bool HttpClient::perform(const std::string &method,
                          const std::vector<std::string> &headers,
                          const std::string &postBody,
                          HttpResponse &response,
-                         std::string &error)
+                         std::string &error, const std::atomic<bool> *cancelled)
 {
     response.status = 0;
+    response.transportCode = 0;
     response.body.clear();
     error.clear();
 
@@ -172,12 +180,14 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeoutSec);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_timeoutSec);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_connectTimeoutSec);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);   // no cert validation
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);   // for embedded simplicity
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
+    if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
@@ -201,6 +211,7 @@ bool HttpClient::perform(const std::string &method,
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
     CURLcode res = curl_easy_perform(curl);
+    response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
         error = curl_easy_strerror(res);

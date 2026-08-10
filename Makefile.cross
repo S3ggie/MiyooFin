@@ -30,6 +30,12 @@ SRCS := \
     src/net/DeviceIdentity.cpp \
     src/cache/ImageCache.cpp \
     src/cache/LibraryCache.cpp \
+    src/cache/OfflineCatalog.cpp \
+    src/download/DownloadStore.cpp \
+    src/download/DownloadManager.cpp \
+    src/download/DownloadReconcile.cpp \
+    src/download/DownloadSupport.cpp \
+    src/download/HlsPlaylist.cpp \
     src/ui/BitmapFont.cpp \
     src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \
@@ -41,6 +47,7 @@ SRCS := \
     src/ui/screens/SeriesScreen.cpp \
     src/ui/screens/EpisodeBrowserScreen.cpp \
     src/ui/screens/MovieDetailsScreen.cpp \
+    src/playback/OfflinePlaybackJournal.cpp \
     src/playback/PlaybackRequest.cpp
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
@@ -50,6 +57,7 @@ DEPS      := $(OBJS:.o=.d)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
+             output/build-arm/download \
              output/build-arm/ui/screens output/build-arm/playback
 
 .PHONY: all

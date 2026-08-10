@@ -6,6 +6,10 @@
 #include "../../net/Session.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
+#include "../../download/DownloadManager.hpp"
+#include "../../download/DownloadUi.hpp"
+#include "../../playback/OfflinePlaybackJournal.hpp"
+#include <memory>
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
 #include <atomic>
@@ -32,7 +36,7 @@ struct LibrarySyncSchedule {
 class HomeScreen : public Screen {
 public:
     struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
-    explicit HomeScreen(const Session &session);
+    explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
 
     void enter() override;
@@ -114,12 +118,21 @@ private:
 
     // Session info for API calls
     Session m_session;
+    std::shared_ptr<DownloadManager> m_downloads;
     std::string m_userName;
 
     // Logout (two-step confirm on Y)
     bool m_logoutArmed = false;
     Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
+
+    // Downloads is rendered only from this copied manager snapshot.  It is
+    // refreshed in update(), never while rendering or handling input.
+    DownloadSnapshot m_downloadSnapshot;
+    int m_downloadSelected = 0, m_downloadScroll = 0;
+    std::string m_downloadSelectedId, m_downloadConfirmId;
+    std::vector<OfflinePlaybackEntry> m_missingJournalEntries;
+    std::string m_journalDiscardConfirmId;
 
     // Background fetch
     std::thread m_fetchThread;
@@ -185,6 +198,9 @@ private:
     void drawBottomHints(SDL_Surface *fb);
     void drawLoadingState(SDL_Surface *fb);
     void drawErrorState(SDL_Surface *fb);
+    void refreshDownloads();
+    bool handleDownloadsAction(Action action);
+    void drawDownloadsTab(SDL_Surface *fb);
 
     // Selected artwork state (B5b)
     DecodedImage m_selectedArtwork;

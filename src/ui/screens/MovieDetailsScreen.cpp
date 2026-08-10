@@ -1,4 +1,5 @@
 #include "MovieDetailsScreen.hpp"
+#include "../../download/DownloadSupport.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -104,9 +105,10 @@ static void renderBottomHints(SDL_Surface *fb, const char *hint)
 // Constructor
 // -------------------------------------------------------------------
 MovieDetailsScreen::MovieDetailsScreen(const Session &session,
-                                       const MediaItem &movie)
+                                       const MediaItem &movie, std::shared_ptr<DownloadManager> downloads)
     : m_session(session)
     , m_movie(movie)
+    , m_downloads(std::move(downloads))
 {
 }
 
@@ -117,6 +119,7 @@ void MovieDetailsScreen::enter()
 {
     printf("[MovieDetailsScreen] enter: %s\n", m_movie.title.c_str());
     tryLoadMovieArtwork();
+    if (m_downloads) m_planId=m_downloads->requestPlan({m_movie});
 }
 
 // -------------------------------------------------------------------
@@ -160,12 +163,15 @@ bool MovieDetailsScreen::handleAction(Action action)
 
     // Confirm
     case Action::Confirm:
+        if (m_confirmDownload) { if (m_downloads && m_planId) { auto p=m_downloads->planSnapshot(m_planId); if(p.state==DownloadPlanState::Ready&&p.plan.canFit) m_downloads->enqueue(p.plan.items); } m_confirmDownload=false; return true; }
         if (m_actionBtn == ActionButton::Play) {
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());
             std::string error;
-            if (PlaybackRequest::write(m_movie.id, "movie",
-                                       m_movie.playbackPositionTicks, error)) {
+            PlaybackSource source=m_downloads?resolvePlayback(m_movie,*m_downloads):PlaybackSource::Jellyfin; if(source==PlaybackSource::UnavailableOffline)return true;
+            const std::string mode=source==PlaybackSource::Local?"local":"jellyfin";
+            if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(),m_movie.id, "movie",
+                                       m_movie.playbackPositionTicks, mode, mode=="local"?m_downloads->scope():"", error)) {
                 m_playbackResultPending = true;
                 m_playbackResultDelayUpdates = 1;
                 printf("[MovieDetailsScreen] Playback request written, "
@@ -176,8 +182,7 @@ bool MovieDetailsScreen::handleAction(Action action)
                        error.c_str());
             }
         } else {
-            printf("[MovieDetailsScreen] Download selected: %s\n",
-                   m_movie.title.c_str());
+            if(m_downloads && m_planId && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
         }
         return true;
 
@@ -415,6 +420,14 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
     }
 
     // 6. Action buttons [PLAY] [DOWNLOAD]
+    if (m_downloads && m_planId) {
+        auto p=m_downloads->planSnapshot(m_planId); std::string status;
+        if(m_confirmDownload) status="Download ~"+formatBytes(p.plan.additionalRequiredBytes)+"? A=Confirm B=Cancel";
+        else if(p.state==DownloadPlanState::Planning) status=p.plan.sizeKnown?"Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Preparing...":"Checking size...";
+        else if(p.state==DownloadPlanState::Ready) status="Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Free: "+formatBytes(p.plan.usableFreeBytes);
+        else if(p.state==DownloadPlanState::Error) status=p.plan.error;
+        if(!status.empty()) BitmapFont::drawString(fb,rx,BTN_Y-14,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+    }
     auto drawBtn = [&](int bx, const char *label, bool focused) {
         if (focused) {
             BitmapFont::fillRect(fb, bx - 1, BTN_Y - 1,

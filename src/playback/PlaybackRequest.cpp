@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
+#include <cctype>
 
 namespace miyoofin {
 
@@ -50,14 +51,35 @@ bool PlaybackRequest::writeTo(const std::string &path,
                               long long resumeTicks,
                               std::string &error)
 {
-    if (itemId.empty()) {
-        error = "item_id is empty";
+    return writeWithSourceTo(path, itemId, itemType, resumeTicks, "jellyfin", "", error);
+}
+
+static bool safePlaybackField(const std::string &value)
+{
+    if (value.empty() || value.size() > 255) return false;
+    for (unsigned char c : value)
+        if (!(std::isalnum(c) || c == '-' || c == '_' || c == '.')) return false;
+    return true;
+}
+
+bool PlaybackRequest::writeWithSourceTo(const std::string &path,
+                                        const std::string &itemId,
+                                        const std::string &itemType,
+                                        long long resumeTicks,
+                                        const std::string &sourceMode,
+                                        const std::string &scope,
+                                        std::string &error)
+{
+    if (!safePlaybackField(itemId)) {
+        error = "item_id is unsafe";
         return false;
     }
     if (itemType.empty()) {
         error = "item_type is empty";
         return false;
     }
+    if (sourceMode != "jellyfin" && sourceMode != "local") { error="invalid source_mode"; return false; }
+    if (sourceMode == "local" && !safePlaybackField(scope)) { error="download_scope is unsafe"; return false; }
 
     FILE *f = std::fopen(path.c_str(), "w");
     if (!f) {
@@ -69,6 +91,8 @@ bool PlaybackRequest::writeTo(const std::string &path,
     fprintf(f, "item_id=%s\n", itemId.c_str());
     fprintf(f, "item_type=%s\n", itemType.c_str());
     fprintf(f, "resume_ticks=%lld\n", resumeTicks < 0 ? 0LL : resumeTicks);
+    fprintf(f, "source_mode=%s\n", sourceMode.c_str());
+    if (sourceMode == "local") fprintf(f, "download_scope=%s\n", scope.c_str());
 
     std::fclose(f);
     return true;
@@ -165,6 +189,9 @@ bool PlaybackRequest::consumeResultFrom(const std::string &path,
     positionTicks = static_cast<std::int64_t>(parsed);
     return true;
 }
+
+bool PlaybackRequest::parseResult(const std::string &content, PlaybackResult &r, std::string &error){error.clear();r={};r.itemId=readValue(content,"item_id");std::string ticks=readValue(content,"position_ticks");if(r.itemId.empty()||ticks.empty()){error="missing playback result fields";return false;}char*end=nullptr;errno=0;long long n=strtoll(ticks.c_str(),&end,10);if(errno||end==ticks.c_str()||*end||n<0){error="invalid position_ticks";return false;}r.positionTicks=n;r.itemType=readValue(content,"item_type");r.sourceMode=readValue(content,"source_mode");std::string base=readValue(content,"base_resume_ticks");if(!base.empty())r.baseResumeTicks=strtoll(base.c_str(),nullptr,10);std::string reported=readValue(content,"server_reported");if(!reported.empty())r.serverReported=reported=="1";return true;}
+bool PlaybackRequest::readResultFrom(const std::string&p,PlaybackResult&r,std::string&e){FILE*f=fopen(p.c_str(),"r");if(!f){e="playback result not found";return false;}std::string b;char q[256];size_t n;while((n=fread(q,1,sizeof q,f)))b.append(q,n);bool ok=!ferror(f);fclose(f);return ok&&parseResult(b,r,e);}
 
 bool PlaybackRequest::advanceResultConsumption(bool &pending,
                                                int &delayUpdates)

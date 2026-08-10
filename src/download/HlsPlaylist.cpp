@@ -1,0 +1,5 @@
+#include "HlsPlaylist.hpp"
+#include <sstream>
+namespace miyoofin { namespace { std::vector<std::string> lines(const std::string&b,const std::string&u,bool variants){std::vector<std::string>o;std::istringstream in(b);std::string s;bool expect=false;while(std::getline(in,s)){if(!s.empty()&&s.back()=='\r')s.pop_back();if(s.empty())continue;if(s[0]=='#'){expect=variants&&s.rfind("#EXT-X-STREAM-INF",0)==0;continue;}if(!variants||expect)o.push_back(HlsPlaylist::resolve(u,s));expect=false;}return o;} }
+std::string HlsPlaylist::resolve(const std::string&u,const std::string&e){if(e.find("://")!=std::string::npos)return e;auto p=u.find("://"),slash=u.find('/',p==std::string::npos?0:p+3);std::string origin=slash==std::string::npos?u:u.substr(0,slash);if(!e.empty()&&e[0]=='/')return origin+e;auto b=u.find_last_of('/');return (b==std::string::npos?origin:u.substr(0,b+1))+e;}
+std::vector<std::string> HlsPlaylist::variants(const std::string&b,const std::string&u){return lines(b,u,true);} std::vector<std::string> HlsPlaylist::segments(const std::string&b,const std::string&u){return lines(b,u,false);} }

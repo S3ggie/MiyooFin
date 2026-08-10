@@ -5,6 +5,7 @@
 #include <cstdint>
 
 namespace miyoofin {
+struct PlaybackResult { std::string itemId,itemType,sourceMode; std::int64_t positionTicks=0,baseResumeTicks=0; bool serverReported=true; };
 
 /// Write a playback-request.txt file so that launch.sh can orchestrate
 /// bridged FFplay playback after MiyooFin exits cleanly.
@@ -45,6 +46,12 @@ public:
                         long long resumeTicks,
                         std::string &error);
 
+    /// Write an explicit source selection.  Legacy callers remain Jellyfin.
+    static bool writeWithSourceTo(const std::string &path, const std::string &itemId,
+                                  const std::string &itemType, long long resumeTicks,
+                                  const std::string &sourceMode, const std::string &scope,
+                                  std::string &error);
+
     /// Check whether a playback request file exists at an explicit path.
     static bool existsAt(const std::string &path);
 
@@ -62,6 +69,8 @@ public:
                                   const std::string &expectedItemId,
                                   std::int64_t &positionTicks,
                                   std::string &error);
+    static bool parseResult(const std::string &content, PlaybackResult &result, std::string &error);
+    static bool readResultFrom(const std::string &path, PlaybackResult &result, std::string &error);
 
     /// Advance the one-update delay used around blocking external playback.
     /// Returns true once, on the first update eligible to consume a result.

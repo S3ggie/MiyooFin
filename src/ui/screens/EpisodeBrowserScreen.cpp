@@ -1,4 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
+#include "../../download/DownloadSupport.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -6,6 +7,8 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../cache/OfflineCatalog.hpp"
+#include "../../cache/LibraryCache.hpp"
 #include "../../playback/PlaybackRequest.hpp"
 #include <cstdio>
 #include <cstring>
@@ -37,11 +40,12 @@ static constexpr int META_Y         = THUMB_Y + THUMB_H + 6;
 static constexpr int META_WRAP      = 34;
 
 // Action buttons
-static constexpr int BTN_W          = 80;
+static constexpr int BTN_W          = 78;
 static constexpr int BTN_H          = 20;
 static constexpr int BTN_Y          = FB_H - BOTTOM_H - BTN_H - 6;
-static constexpr int BTN_PLAY_X     = 370;
-static constexpr int BTN_DL_X       = 470;
+static constexpr int BTN_PLAY_X     = 326;
+static constexpr int BTN_EP_X       = 410;
+static constexpr int BTN_SEASON_X   = 494;
 
 // Yellow double-border focus colours
 static constexpr Uint8 FOCUS_OR = 255, FOCUS_OG = 220, FOCUS_OB = 40;
@@ -120,11 +124,12 @@ static std::string formatEpNum(int indexNumber)
 EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
                                            const MediaItem &season,
-                                           const std::string &initialEpisodeId)
+                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
+    , m_downloads(std::move(downloads))
 {
 }
 
@@ -133,6 +138,8 @@ EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
 // -------------------------------------------------------------------
 EpisodeBrowserScreen::~EpisodeBrowserScreen()
 {
+    leave();
+    if(m_fetchThread.joinable()) m_fetchThread.join();
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
         m_workerStop = true;
@@ -192,8 +199,7 @@ void EpisodeBrowserScreen::enter()
 {
     printf("[EpisodeBrowserScreen] enter series=%s season=%s\n",
            m_series.title.c_str(), m_season.title.c_str());
-    if (m_episodes.empty() && m_loadState != LoadState::Error)
-        fetchEpisodes();
+    if (m_episodes.empty() && m_loadState != LoadState::Error) {m_episodes=OfflineCatalog::episodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_season.id);m_loadState=LoadState::Ready;fetchEpisodes();}
     else if (m_loadState == LoadState::Ready) {
         m_prefetchResumePending = false;
         m_prefetchResumeDelayUpdates = 0;
@@ -208,6 +214,13 @@ void EpisodeBrowserScreen::enter()
 void EpisodeBrowserScreen::leave()
 {
     printf("[EpisodeBrowserScreen] leave\n");
+    m_fetchCancelled.store(true, std::memory_order_release);
+    m_workerCancelled.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerStop = true;
+    }
+    m_workerCv.notify_one();
 }
 
 // -------------------------------------------------------------------
@@ -215,8 +228,11 @@ void EpisodeBrowserScreen::leave()
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::fetchEpisodes()
 {
-    m_loadState = LoadState::Loading;
+    if(m_fetchThread.joinable()){std::lock_guard<std::mutex>g(m_fetchMutex);if(!m_fetchDone)return; m_fetchThread.join();} if(m_episodes.empty())m_loadState = LoadState::Loading;
     m_error.clear();
+    {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;} m_fetchCancelled.store(false, std::memory_order_release); Session s=m_session;std::string sid=m_series.id,season=m_season.id;
+    m_fetchThread=std::thread([this,s,sid,season](){std::vector<MediaItem>v;std::string e;bool ok=JellyfinApi::getEpisodes(s.serverUrl,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;});
+    return;
     std::string error;
     bool ok = JellyfinApi::getEpisodes(
         m_session.serverUrl, m_session.accessToken,
@@ -343,7 +359,17 @@ bool EpisodeBrowserScreen::handleAction(Action action)
         return true;
     }
 
-    if (action == Action::Back) { m_stack->pop(); return true; }
+    if (action == Action::Back) { if(m_confirmDownload){m_confirmDownload=false;return true;} m_stack->pop(); return true; }
+    if (m_confirmDownload) {
+        if(action==Action::Confirm && m_downloads && m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);m_confirmDownload=false;}
+        return true;
+    }
+    // Y plans the whole displayed season.  Episodes have already been fetched,
+    // so only the manager-owned planner performs network work from here.
+    if (action == Action::ActionsMenu && m_downloads && !m_episodes.empty()) {
+        if(m_planId && m_planIsSeason && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
+        else {m_confirmDownload=false; m_planIsSeason=true; m_planId=m_downloads->requestPlan(m_episodes);} return true;
+    }
 
     // ----- EpisodeList focus -----
     if (m_focus == FocusArea::EpisodeList) {
@@ -380,14 +406,18 @@ bool EpisodeBrowserScreen::handleAction(Action action)
     if (m_focus == FocusArea::ActionButtons) {
         switch (action) {
         case Action::Left:
-            if (m_actionBtn == ActionButton::Download)
+            if (m_actionBtn == ActionButton::DownloadSeason)
+                m_actionBtn = ActionButton::DownloadEpisode;
+            else if (m_actionBtn == ActionButton::DownloadEpisode)
                 m_actionBtn = ActionButton::Play;
             else
                 m_focus = FocusArea::EpisodeList;
             return true;
         case Action::Right:
             if (m_actionBtn == ActionButton::Play)
-                m_actionBtn = ActionButton::Download;
+                m_actionBtn = ActionButton::DownloadEpisode;
+            else if (m_actionBtn == ActionButton::DownloadEpisode)
+                m_actionBtn = ActionButton::DownloadSeason;
             return true;
         case Action::Confirm:
             if (m_actionBtn == ActionButton::Play) {
@@ -395,10 +425,12 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                     printf("[EpisodeBrowserScreen] Play selected: %s\n",
                            m_episodes[m_selectedEpisode].title.c_str());
                     std::string error;
-                    if (PlaybackRequest::write(
+                    PlaybackSource source=m_downloads?resolvePlayback(m_episodes[m_selectedEpisode],*m_downloads):PlaybackSource::Jellyfin;
+                    if (source==PlaybackSource::UnavailableOffline) return true;
+                    if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(),
                             m_episodes[m_selectedEpisode].id,
                             "episode",
-                            m_episodes[m_selectedEpisode].playbackPositionTicks,
+                            m_episodes[m_selectedEpisode].playbackPositionTicks, source==PlaybackSource::Local?"local":"jellyfin", source==PlaybackSource::Local?m_downloads->scope():"",
                             error))
                     {
                         {
@@ -418,9 +450,8 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                     }
                 }
             } else {
-                if (m_selectedEpisode >= 0 && m_selectedEpisode < total)
-                    printf("[EpisodeBrowserScreen] Download selected: %s\n",
-                           m_episodes[m_selectedEpisode].title.c_str());
+                if (m_confirmDownload) { if(m_downloads&&m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);}m_confirmDownload=false; }
+                else if(m_downloads && m_selectedEpisode>=0 && m_selectedEpisode<total) { bool season=m_actionBtn==ActionButton::DownloadSeason; if(m_planId && m_planIsSeason==season && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true; else {m_planIsSeason=season;m_planId=m_downloads->requestPlan(season?m_episodes:std::vector<MediaItem>{m_episodes[m_selectedEpisode]});} }
             }
             return true;
         case Action::Up:
@@ -437,6 +468,8 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 {
+    bool fetchDone; { std::lock_guard<std::mutex> g(m_fetchMutex); fetchDone=m_fetchDone; }
+    if(fetchDone){std::vector<MediaItem>fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchEpisodes);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){std::string selected=m_episodes.empty()?"":m_episodes[m_selectedEpisode].id;m_episodes=std::move(fresh);int n=findEpisodeIndex(m_episodes,selected);m_selectedEpisode=n>=0?n:0;m_loadState=LoadState::Ready;m_listScroll=0;m_episodeArtwork={};m_episodeArtworkKey.clear();std::vector<ArtworkJob> jobs;for(const auto&ep:m_episodes){ArtworkJob j;j.itemId=ep.id;auto t=ep.imageTags.find("Primary");if(t!=ep.imageTags.end()&&!t->second.empty()){j.imageTag=t->second;j.artworkKey=ep.id+":Primary:"+t->second+":288x162";}jobs.push_back(j);} {std::lock_guard<std::mutex>g(m_workerMutex);m_artworkJobs=std::move(jobs);m_failedKeys.clear();m_workerPaused=false;}clampListScroll();OfflineCatalog::storeEpisodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series,m_season,m_episodes,nullptr);wakeArtworkWorker();}else if(m_episodes.empty()){m_loadState=LoadState::Error;m_error=err;}}
     if (advancePrefetchResume(m_prefetchResumePending,
                               m_prefetchResumeDelayUpdates)) {
         {
@@ -659,7 +692,7 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             BinaryHttpResponse response;
             std::string error;
             if (client.getBinary(url, headers, response, error,
-                                 512 * 1024))
+                                 512 * 1024, &m_workerCancelled))
             {
                 if (response.ok()) {
                     const bool cacheWriteSucceeded = ImageCache::writeToCache(
@@ -817,6 +850,16 @@ void EpisodeBrowserScreen::render(SDL_Surface *fb)
 
     const auto &ep = m_episodes[m_selectedEpisode];
 
+    if (m_downloads && m_planId) {
+        auto p=m_downloads->planSnapshot(m_planId); std::string status;
+        if(m_confirmDownload) status=std::string("Download ")+(m_planIsSeason?"Season "+std::to_string(m_season.indexNumber):"Episode")+"?";
+        else if(p.state==DownloadPlanState::Planning) status=(p.plan.sizeKnown?"~"+formatBytes(p.plan.additionalRequiredBytes)+"  Preparing download...":"Preparing download...");
+        else if(p.state==DownloadPlanState::Ready) status=std::to_string(p.itemCount)+" episodes  ~"+formatBytes(p.plan.additionalRequiredBytes)+" needed  "+formatBytes(p.plan.usableFreeBytes)+" free";
+        else if(p.state==DownloadPlanState::Error) status=p.plan.error;
+        if(!status.empty()) BitmapFont::drawString(fb,META_X,BTN_Y-28,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+        if(m_confirmDownload) BitmapFont::drawString(fb,META_X,BTN_Y-14,"A=Confirm  B=Cancel",Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+    }
+
     // Placeholder thumbnail (coloured box as fallback/background)
     BitmapFont::fillRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H,
         ep.artR, ep.artG, ep.artB, 255);
@@ -962,13 +1005,16 @@ void EpisodeBrowserScreen::render(SDL_Surface *fb)
     bool playFocused = (m_focus == FocusArea::ActionButtons
                         && m_actionBtn == ActionButton::Play);
     bool dlFocused = (m_focus == FocusArea::ActionButtons
-                      && m_actionBtn == ActionButton::Download);
+                      && m_actionBtn == ActionButton::DownloadEpisode);
+    bool seasonFocused = (m_focus == FocusArea::ActionButtons
+                      && m_actionBtn == ActionButton::DownloadSeason);
     drawBtn(BTN_PLAY_X, "PLAY", playFocused);
-    drawBtn(BTN_DL_X, "DOWNLOAD", dlFocused);
+    drawBtn(BTN_EP_X, "EPISODE", dlFocused);
+    drawBtn(BTN_SEASON_X, "SEASON", seasonFocused);
 
     // Bottom hint bar
     renderBottomHints(fb, overviewScrollable
-        ? "A=Select  B=Back  L/R=Bio" : "A=Select  B=Back");
+        ? "A=Select B=Back Y=Season L/R=Bio" : "A=Select B=Back Y=Season");
 }
 
 } // namespace miyoofin

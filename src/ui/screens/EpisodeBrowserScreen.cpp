@@ -4,6 +4,7 @@
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
+#include "../../app/UiDiagnostics.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
@@ -199,9 +200,16 @@ bool EpisodeBrowserScreen::advancePrefetchResume(
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::enter()
 {
+    UiDiagnostics::Scope scope("EpisodeBrowserScreen::enter");
     printf("[EpisodeBrowserScreen] enter series=%s season=%s\n",
            m_series.title.c_str(), m_season.title.c_str());
-    if (m_episodes.empty() && m_loadState != LoadState::Error) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_episodes=m_offline?projection.episodes(m_season.id):OfflineCatalog::episodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_season.id);m_loadState=LoadState::Ready;if(!m_offline)fetchEpisodes();}
+    if (m_episodes.empty() && m_loadState != LoadState::Error) {
+        // ScreenStack::push invokes enter() on the SDL thread.  Catalog
+        // parsing, download projection and persistence all belong to the
+        // existing fetch worker; the loading screen is immediately usable.
+        m_loadState = LoadState::Loading;
+        fetchEpisodes(true);
+    }
     else if (m_loadState == LoadState::Ready) {
         m_prefetchResumePending = false;
         m_prefetchResumeDelayUpdates = 0;
@@ -215,6 +223,8 @@ void EpisodeBrowserScreen::enter()
 
 void EpisodeBrowserScreen::leave()
 {
+    if(m_shutdownSignalled.exchange(true,std::memory_order_acq_rel))return;
+    UiDiagnostics::Scope scope("EpisodeBrowserScreen::workerShutdown");
     printf("[EpisodeBrowserScreen] leave\n");
     m_fetchCancelled.store(true, std::memory_order_release);
     m_workerCancelled.store(true, std::memory_order_release);
@@ -228,75 +238,72 @@ void EpisodeBrowserScreen::leave()
 // -------------------------------------------------------------------
 // fetchEpisodes — synchronous fetch via JellyfinApi
 // -------------------------------------------------------------------
-void EpisodeBrowserScreen::fetchEpisodes()
+void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
 {
     if(m_fetchThread.joinable()){std::lock_guard<std::mutex>g(m_fetchMutex);if(!m_fetchDone)return; m_fetchThread.join();} if(m_episodes.empty())m_loadState = LoadState::Loading;
     m_error.clear();
-    {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;} m_fetchCancelled.store(false, std::memory_order_release); Session s=m_session;std::string sid=m_series.id,season=m_season.id;
-    m_fetchThread=std::thread([this,s,sid,season](){std::vector<MediaItem>v;std::string e;bool ok=JellyfinApi::getEpisodes(s.serverUrl,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;});
-    return;
-    std::string error;
-    bool ok = JellyfinApi::getEpisodes(
-        m_session.serverUrl, m_session.accessToken,
-        m_session.userId, m_session.deviceId,
-        m_series.id, m_season.id, m_episodes, error);
-    if (ok) {
-        m_loadState = LoadState::Ready;
-        m_selectedEpisode = 0;
-        m_listScroll = 0;
-        m_overviewScroll = 0;
-        m_focus = FocusArea::EpisodeList;
-        m_actionBtn = ActionButton::Play;
-        m_episodeArtwork = {};
-        m_episodeArtworkKey.clear();
-
-        std::vector<ArtworkJob> artworkJobs;
-        artworkJobs.reserve(m_episodes.size());
-        for (const auto &ep : m_episodes) {
-            ArtworkJob job;
-            auto tag = ep.imageTags.find("Primary");
-            if (tag != ep.imageTags.end() && !tag->second.empty()) {
-                job.itemId = ep.id;
-                job.imageTag = tag->second;
-                job.artworkKey = ep.id + ":Primary:" + tag->second + ":288x162";
-            }
-            artworkJobs.push_back(job);
-        }
-
-        // Publish immutable scheduling data for the fresh episode list.
-        {
-            std::lock_guard<std::mutex> lock(m_workerMutex);
-            m_workerHasCompletion = false;
-            m_artworkJobs = std::move(artworkJobs);
-            m_failedKeys.clear();
-            m_workerPaused = false;
-        }
-
-        // B5e3b: Apply initial episode focus if requested
-        if (!m_initialEpisodeId.empty() && !m_initialSelectionApplied) {
-            int idx = findEpisodeIndex(m_episodes, m_initialEpisodeId);
-            if (idx >= 0) {
-                m_selectedEpisode = idx;
-                printf("[EpisodeBrowserScreen] Initial focus: episode %d (id=%s)\n",
-                       idx, m_initialEpisodeId.c_str());
+    {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;m_cachedEpisodesDone=false;}
+    m_fetchCancelled.store(false, std::memory_order_release);
+    const Session s=m_session; const MediaItem seriesItem=m_series, seasonItem=m_season;
+    const std::string sid=m_series.id, season=m_season.id;
+    const bool offline=m_offline, loadCached=loadCachedEpisodes;
+    const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
+    std::shared_ptr<DownloadManager> downloads=m_downloads;
+    m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,offline,loadCached,catalogPath,downloads](){
+        std::vector<MediaItem> cached;
+        if(loadCached) {
+            OfflineCatalogSnapshot catalog;
+            OfflineCatalog::load(catalogPath,catalog,nullptr);
+            if(m_fetchCancelled.load(std::memory_order_acquire)) return;
+            if(offline) {
+                LibrarySnapshot library;
+                OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
+                cached=projection.episodes(season);
             } else {
-                printf("[EpisodeBrowserScreen] Initial focus: id '%s' not found, "
-                       "using default\n", m_initialEpisodeId.c_str());
+                auto it=catalog.episodesBySeason.find(season);
+                if(it!=catalog.episodesBySeason.end()) cached=it->second;
             }
-            m_initialSelectionApplied = true;
+            {
+                std::lock_guard<std::mutex>g(m_fetchMutex);
+                m_cachedEpisodes=cached;
+                m_cachedEpisodesDone=true;
+            }
+            if(offline) {
+                std::lock_guard<std::mutex>g(m_fetchMutex);
+                m_fetchOk=true;m_fetchEpisodes=std::move(cached);m_fetchDone=true;
+                return;
+            }
         }
+        if(m_fetchCancelled.load(std::memory_order_acquire)) return;
+        std::vector<MediaItem>v;std::string e;
+        bool ok=JellyfinApi::getEpisodes(s.serverUrl,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);
+        // storeEpisodes reads, merges, serializes, fsyncs and renames the full
+        // catalog.  Complete it here before publishing a cheap UI result.
+        if(ok&&!m_fetchCancelled.load(std::memory_order_acquire))
+            OfflineCatalog::storeEpisodes(catalogPath,seriesItem,seasonItem,v,nullptr);
+        std::lock_guard<std::mutex>g(m_fetchMutex);
+        m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;
+    });
+}
 
-        clampListScroll();
-
-        printf("[EpisodeBrowserScreen] Loaded %d episodes\n",
-               (int)m_episodes.size());
-        wakeArtworkWorker();
-    } else {
-        m_loadState = LoadState::Error;
-        m_error = error.empty() ? "Unknown error" : error;
-        printf("[EpisodeBrowserScreen] Failed to load episodes: %s\n",
-               m_error.c_str());
+void EpisodeBrowserScreen::publishEpisodes(std::vector<MediaItem> episodes)
+{
+    UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishEpisodes");
+    std::string selected=m_episodes.empty()?"":m_episodes[m_selectedEpisode].id;
+    m_episodes=std::move(episodes);
+    int index=findEpisodeIndex(m_episodes,selected);
+    if(!m_initialSelectionApplied && !m_initialEpisodeId.empty()) {
+        const int initial=findEpisodeIndex(m_episodes,m_initialEpisodeId);
+        if(initial>=0) index=initial;
+        m_initialSelectionApplied=true;
     }
+    m_selectedEpisode=index>=0?index:0;
+    m_loadState=LoadState::Ready;m_listScroll=0;m_overviewScroll=0;
+    m_episodeArtwork={};m_episodeArtworkKey.clear();
+    std::vector<ArtworkJob> jobs;jobs.reserve(m_episodes.size());
+    for(const auto&ep:m_episodes){ArtworkJob j;j.itemId=ep.id;auto t=ep.imageTags.find("Primary");if(t!=ep.imageTags.end()&&!t->second.empty()){j.imageTag=t->second;j.artworkKey=ep.id+":Primary:"+t->second+":288x162";}jobs.push_back(std::move(j));}
+    {std::lock_guard<std::mutex>g(m_workerMutex);m_artworkJobs=std::move(jobs);m_failedKeys.clear();m_workerPaused=false;m_workerDecodedKey.clear();}
+    clampListScroll();wakeArtworkWorker();
 }
 
 // -------------------------------------------------------------------
@@ -470,8 +477,14 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 {
+    std::vector<MediaItem> cached; bool cachedDone=false;
+    {std::lock_guard<std::mutex>g(m_fetchMutex);if(m_cachedEpisodesDone){cached=std::move(m_cachedEpisodes);m_cachedEpisodesDone=false;cachedDone=true;}}
+    if(cachedDone && (m_offline || !cached.empty())) {
+        UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishCachedEpisodes");
+        publishEpisodes(std::move(cached));
+    }
     bool fetchDone; { std::lock_guard<std::mutex> g(m_fetchMutex); fetchDone=m_fetchDone; }
-    if(fetchDone){std::vector<MediaItem>fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchEpisodes);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){std::string selected=m_episodes.empty()?"":m_episodes[m_selectedEpisode].id;m_episodes=std::move(fresh);int n=findEpisodeIndex(m_episodes,selected);m_selectedEpisode=n>=0?n:0;m_loadState=LoadState::Ready;m_listScroll=0;m_episodeArtwork={};m_episodeArtworkKey.clear();std::vector<ArtworkJob> jobs;for(const auto&ep:m_episodes){ArtworkJob j;j.itemId=ep.id;auto t=ep.imageTags.find("Primary");if(t!=ep.imageTags.end()&&!t->second.empty()){j.imageTag=t->second;j.artworkKey=ep.id+":Primary:"+t->second+":288x162";}jobs.push_back(j);} {std::lock_guard<std::mutex>g(m_workerMutex);m_artworkJobs=std::move(jobs);m_failedKeys.clear();m_workerPaused=false;}clampListScroll();OfflineCatalog::storeEpisodes(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_series,m_season,m_episodes,nullptr);wakeArtworkWorker();}else if(m_episodes.empty()){m_loadState=LoadState::Error;m_error=err;}}
+    if(fetchDone){UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishFetchResult");std::vector<MediaItem>fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchEpisodes);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok)publishEpisodes(std::move(fresh));else if(m_episodes.empty()){m_loadState=LoadState::Error;m_error=err;}}
     if (advancePrefetchResume(m_prefetchResumePending,
                               m_prefetchResumeDelayUpdates)) {
         {
@@ -507,6 +520,7 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
 {
+    UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishArtworkResult");
     int total = (int)m_episodes.size();
     if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
         m_episodeArtwork = {};
@@ -524,8 +538,6 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
         return;
     }
 
-    constexpr int w = 288;
-    constexpr int h = 162;
     const std::string &tag = it->second;
 
     // Build stable identity key: episodeId:Primary:imageTag:288x162
@@ -535,27 +547,14 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     if (m_episodeArtworkKey == key && !m_episodeArtwork.empty())
         return;
 
-    // 2. Check worker completion signal (consumed once per frame max)
+    // 2. Publish the worker-decoded image (consumed once per frame max).
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
         if (m_workerHasCompletion) {
-            ArtworkCompletion comp = m_workerCompletion;
+            ArtworkCompletion comp = std::move(m_workerCompletion);
             m_workerHasCompletion = false;
             if (comp.artworkKey == key) {
-                if (comp.success) {
-                    auto jpegData = ImageCache::readCached(
-                        ep.id, ImageType::Primary, tag, w, h);
-                    if (!jpegData.empty()) {
-                        m_episodeArtwork = ImageDecoder::decodeJpeg(
-                            jpegData.data(), jpegData.size());
-                        if (!m_episodeArtwork.empty()) {
-                            m_episodeArtworkKey = key;
-                            printf("[EpisodeBrowserScreen] Artwork:"
-                                   " decoded selected %s\n",
-                                   ep.id.c_str());
-                        }
-                    }
-                }
+                if (comp.success) m_episodeArtwork=std::move(comp.image);
                 return;
             }
             // Stale completion (old selection) — fall through
@@ -575,23 +574,7 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
             return;
     }
 
-    // 6. Check disk cache (fast filesystem-only, no network)
-    if (ImageCache::isCached(ep.id, ImageType::Primary, tag, w, h)) {
-        auto jpegData = ImageCache::readCached(
-            ep.id, ImageType::Primary, tag, w, h);
-        if (!jpegData.empty()) {
-            m_episodeArtwork = ImageDecoder::decodeJpeg(
-                jpegData.data(), jpegData.size());
-            if (!m_episodeArtwork.empty()) {
-                m_episodeArtworkKey = key;
-                printf("[EpisodeBrowserScreen] Artwork:"
-                       " cache hit, decoded %s\n", ep.id.c_str());
-                return;
-            }
-        }
-    }
-
-    // 6. The worker owns all network scheduling; make sure it is awake.
+    // Disk cache reads and JPEG decode also belong to the worker.
     wakeArtworkWorker();
 }
 
@@ -600,6 +583,8 @@ void EpisodeBrowserScreen::wakeArtworkWorker()
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
         m_workerSelected = m_selectedEpisode;
+        const std::string selectedKey=(m_workerSelected>=0&&m_workerSelected<(int)m_artworkJobs.size())?m_artworkJobs[m_workerSelected].artworkKey:"";
+        if(selectedKey!=m_workerDecodedKey)m_workerDecodedKey.clear();
         ++m_workerGeneration;
         if (!m_workerThread.joinable())
             m_workerThread = std::thread(
@@ -651,8 +636,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                     continue;
                 }
             }
-            if (ImageCache::isCached(job.itemId, ImageType::Primary,
-                                     job.imageTag, job.width, job.height)) {
+            const bool cached=ImageCache::isCached(job.itemId, ImageType::Primary,
+                                                   job.imageTag, job.width, job.height);
+            if (cached && (candidate != selected || m_workerDecodedKey == job.artworkKey)) {
                 unavailable.insert(candidate);
                 continue;
             }
@@ -676,6 +662,7 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
 
         // --- Execute job (no lock held) ---
         bool success = false;
+        DecodedImage decoded;
 
         if (ImageCache::isCached(job.itemId, ImageType::Primary,
                                  job.imageTag, job.width, job.height))
@@ -719,14 +706,30 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             }
         }
 
+        // Only the selected job needs a RAM image; prefetch candidates merely
+        // warm the disk cache.  Both read/decode operations stay off SDL.
+        int currentSelected=-1;
+        {std::lock_guard<std::mutex> lock(m_workerMutex);currentSelected=m_workerSelected;}
+        if(success && candidate==currentSelected) {
+            auto bytes=ImageCache::readCached(job.itemId,ImageType::Primary,
+                                              job.imageTag,job.width,job.height);
+            if(!bytes.empty()) decoded=ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
+            success=!decoded.empty();
+        }
+
         // --- Publish completion signal (under lock) ---
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerInProgressKey.clear();
             if (!m_workerStop) {
                 if (!success) m_failedKeys.insert(job.artworkKey);
-                m_workerCompletion = {job.artworkKey, success};
-                m_workerHasCompletion = true;
+                if(candidate==m_workerSelected) {
+                    if(success)m_workerDecodedKey=job.artworkKey;
+                    m_workerCompletion.artworkKey=job.artworkKey;
+                    m_workerCompletion.image=std::move(decoded);
+                    m_workerCompletion.success=success;
+                    m_workerHasCompletion=true;
+                }
             }
         }
         // Recompute from the current selection after every request.

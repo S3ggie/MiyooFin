@@ -9,6 +9,8 @@
 // All tests are pure logic (no network calls).
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <chrono>
 #include <curl/curl.h>
 #include <string>
 #include "miyoofin/version.hpp"
@@ -31,6 +33,7 @@
 #include "../src/ui/ShowsBrowser.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
+#include "../src/app/UiDiagnostics.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
 #include "../src/playback/OfflinePlaybackJournal.hpp"
 #include "../src/download/DownloadTypes.hpp"
@@ -62,6 +65,22 @@ static int g_failures = 0;
             ++g_failures; \
         } \
     } while (0)
+
+static void testUiDiagnostics()
+{
+    std::printf("[test] UI diagnostics watchdog/ring\n");
+    UiDiagnostics::Watchdog w; uint64_t duration=0; w.seen=1000;
+    CHECK(w.poll(1100,1200,false,duration)==0);
+    w.seen=1000; CHECK(w.poll(1000,1501,false,duration)==1);
+    CHECK(w.poll(1000,1700,false,duration)==0);
+    CHECK(w.poll(1800,1850,false,duration)==2 && duration==850);
+    w.seen=1000; CHECK(w.poll(1000,1600,true,duration)==0);
+    UiDiagnostics d; for(size_t i=0;i<UiDiagnostics::EVENT_CAPACITY+2;i++) d.event(("event"+std::to_string(i)).c_str());
+    const auto events=d.recentEvents();
+    CHECK(events.size()==UiDiagnostics::EVENT_CAPACITY && events.front()=="event2");
+    { UiDiagnostics::Scope scope("test-fast-scope"); }
+    std::printf("[test] UI diagnostics watchdog/ring OK\n");
+}
 
 static void testDownloadInterruptStates()
 {
@@ -1688,6 +1707,46 @@ static void testScreenStackPreservedDuringExternalPlayback()
     std::printf("[test] B5f3a: ScreenStack preserved during external playback OK\n");
 }
 
+class RetirementTestScreen : public Screen {
+public:
+    RetirementTestScreen(bool deferred, std::atomic<bool> *left=nullptr,
+                         std::atomic<bool> *destroyed=nullptr)
+        : m_deferred(deferred), m_left(left), m_destroyed(destroyed) {}
+    ~RetirementTestScreen() override {
+        if (m_deferred) usleep(200000);
+        if (m_destroyed) m_destroyed->store(true);
+    }
+    void enter() override {}
+    void leave() override { if (m_left) m_left->store(true); }
+    bool handleAction(Action) override { return false; }
+    void update(Uint32) override {}
+    void render(SDL_Surface *) override {}
+    bool deferDestruction() const override { return m_deferred; }
+private:
+    bool m_deferred;
+    std::atomic<bool> *m_left;
+    std::atomic<bool> *m_destroyed;
+};
+
+static void testScreenRetirementDoesNotBlockPop()
+{
+    std::printf("[test] ScreenStack deferred worker retirement\n");
+    std::atomic<bool> left{false}, destroyed{false};
+    ScreenStack stack;
+    stack.push(std::unique_ptr<Screen>(new RetirementTestScreen(false)));
+    stack.push(std::unique_ptr<Screen>(new RetirementTestScreen(true,&left,&destroyed)));
+    const auto start=std::chrono::steady_clock::now();
+    CHECK(stack.pop());
+    const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-start).count();
+    CHECK(left.load());
+    CHECK(elapsed < 100);
+    CHECK(stack.size()==1);
+    for(int i=0;i<50&&!destroyed.load();++i)usleep(10000);
+    CHECK(destroyed.load());
+    std::printf("[test] ScreenStack deferred worker retirement OK\n");
+}
+
 static void testDpadHoldRepeatTiming()
 {
     std::printf("[test] D-pad hold repeat timing\n");
@@ -2009,6 +2068,7 @@ static void testHlsFailureClassification()
 
 int main()
 {
+    testUiDiagnostics();
     std::printf("\n--- Movie title organization tests ---\n");
     testMovieOrganizationalTitles();
     testMovieAlphabetOrganization();
@@ -2140,6 +2200,7 @@ int main()
     testExternalPlaybackFlagMultipleSet();
     testPlaybackRequestStillWorks();
     testScreenStackPreservedDuringExternalPlayback();
+    testScreenRetirementDoesNotBlockPop();
 
     // Central D-pad hold-to-repeat input timing
     std::printf("\n--- D-pad hold-to-repeat tests ---\n");

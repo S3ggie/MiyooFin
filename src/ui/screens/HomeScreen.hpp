@@ -83,6 +83,9 @@ public:
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
+    const char *diagnosticName() const override { return "HomeScreen"; }
+    bool deferDestruction() const override { return true; }
+    int diagnosticActiveTab() const { return m_activeTab; }
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
@@ -193,6 +196,10 @@ private:
     LibrarySnapshot m_remoteSnapshot;
     ReconcileStats m_fetchStats;
     bool m_fetchCacheSaved = false;
+    bool m_fetchOfflinePrepared = false;
+    std::vector<TabData> m_fetchOfflineTabs;
+    std::vector<MediaItem> m_fetchOfflineMovies;
+    LibrarySnapshot m_fetchOfflineSnapshot;
     bool m_haveCachedSnapshot = false;
     SyncState m_syncState;
     bool m_forceHierarchyReconcile = false;
@@ -219,7 +226,7 @@ private:
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeWake;
     struct DecodeJob { std::string key; PosterJob artwork; bool shows = false; };
-    struct DecodeResult { std::string key; DecodedImage image; bool shows = false; };
+    struct DecodeResult { std::string key; DecodedImage image; bool shows = false; bool cachePresent = false; };
     std::deque<DecodeJob> m_decodeJobs;
     std::deque<DecodeResult> m_decodeResults;
     std::set<std::string> m_decodeOutstanding;
@@ -232,6 +239,7 @@ private:
     void requestFetch(Uint32 now);
     void finishFetch();
     void applyOfflineProjection();
+    void prepareOfflineProjection();
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs);
     void posterWorker();
@@ -252,9 +260,22 @@ private:
     bool m_resumeRefreshSucceeded = false;
     std::string m_resumeRefreshError;
     std::vector<MediaItem> m_resumeRefreshResult;
+    bool m_resumeRefreshCacheSaved = false;
 
     void startResumeRefresh();
     void finishResumeRefresh();
+
+    // DownloadManager may hold its mutex while reconciling/persisting on slow
+    // SD storage.  Snapshot and playback-journal reads are therefore published
+    // by this bounded worker only while the Downloads tab is visible.
+    std::thread m_downloadRefreshThread;
+    std::atomic<bool> m_downloadRefreshDone{false};
+    std::atomic<bool> m_downloadRefreshInFlight{false};
+    DownloadSnapshot m_downloadRefreshResult;
+    std::vector<OfflinePlaybackEntry> m_downloadJournalResult;
+    Uint32 m_downloadRefreshTimer = 0;
+    void startDownloadRefresh();
+    void finishDownloadRefresh();
 
     // Helpers
     const TabData &currentTab() const;

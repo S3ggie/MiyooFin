@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
 #include "../playback/OfflinePlaybackJournal.hpp"
 #include "../cache/LibraryCache.hpp"
@@ -60,6 +61,8 @@ App::App()
 
 App::~App()
 {
+    uiDiagnostics().setSuspended(true);
+    uiDiagnostics().stop();
     if (m_savedValidationThread.joinable()) m_savedValidationThread.join();
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_journalStop = true; m_journalWake = true; }
     m_journalCv.notify_one();
@@ -83,6 +86,7 @@ bool App::init()
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    uiDiagnostics().start();
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_Init failed: %s\n", SDL_GetError());
@@ -493,6 +497,8 @@ void App::drawPlaybackStartingOverlay(Uint32 elapsedMs)
 int App::run()
 {
     while (m_running) {
+        uiDiagnostics().heartbeat();
+        uiDiagnostics().setPhase("event/input");
         Uint32 now = SDL_GetTicks();
         Uint32 dt = now - m_lastTick;
         m_lastTick = now;
@@ -503,12 +509,15 @@ int App::run()
         std::vector<Action> actions = m_input.poll();
         if (!m_playbackStarting) {
             for (Action a : actions) {
+                uiDiagnostics().setLastAction(actionName(a));
                 if (a == Action::Exit) {
                     m_running = false;
                     break;
                 }
                 Screen *active = m_stack.top();
                 if (active) {
+                    uiDiagnostics().setScreen(active->diagnosticName());
+                    UiDiagnostics::Scope scope("Screen::handleAction");
                     active->handleAction(a);
                 }
             }
@@ -516,10 +525,20 @@ int App::run()
 
         // --- Update ---
         Screen *active = m_stack.top();
+        uiDiagnostics().setPhase("update");
         if (active) {
+            uiDiagnostics().setScreen(active->diagnosticName());
+            if (auto *home = dynamic_cast<HomeScreen *>(active)) {
+                static const char *const tabs[] = {"Home", "Movies", "Shows"};
+                const int tab = home->diagnosticActiveTab();
+                uiDiagnostics().setTab(tab >= 0 && tab < 3 ? tabs[tab] : "other");
+            } else {
+                uiDiagnostics().setTab("n/a");
+            }
+            UiDiagnostics::Scope scope("Screen::update");
             active->update(dt);
         }
-        finishSavedSessionValidation();
+        { UiDiagnostics::Scope scope("App::finishSavedSessionValidation"); finishSavedSessionValidation(); }
 
         // --- Check if a screen requested external playback ---
         if (!m_playbackStarting && m_stack.pollExternalPlayback()) {
@@ -530,6 +549,7 @@ int App::run()
 
         // --- Startup flow transitions ---
         Screen *top = m_stack.top();
+        uiDiagnostics().setPhase("screen transition");
         if (top) {
             if (auto *conn = dynamic_cast<ConnectScreen *>(top)) {
                 if (conn->finished()) {
@@ -625,6 +645,7 @@ int App::run()
         }
 
         // --- Render ---
+        uiDiagnostics().setPhase("render");
         SDL_FillRect(m_fb, nullptr,
                      SDL_MapRGBA(m_fb->format,
                                  Theme::BG_R, Theme::BG_G,
@@ -632,6 +653,8 @@ int App::run()
 
         Screen *renderTop = m_stack.top();
         if (renderTop) {
+            uiDiagnostics().setScreen(renderTop->diagnosticName());
+            UiDiagnostics::Scope scope("Screen::render");
             renderTop->render(m_fb);
         }
 
@@ -652,13 +675,18 @@ int App::run()
         // The terminal Loading... frame above has now reached the Miyoo
         // framebuffer, so it can remain visible while SDL is suspended.
         if (handoffAfterPresent) {
+            uiDiagnostics().setSuspended(true);
+            uiDiagnostics().event("external playback handoff");
             handleExternalPlayback();
+            uiDiagnostics().setSuspended(false);
             m_playbackStarting = false;
             // Reset timing so dt doesn't include playback duration.
             m_lastTick = SDL_GetTicks();
         }
+        uiDiagnostics().setPhase("idle/frame boundary");
     }
 
+    uiDiagnostics().setSuspended(true);
     printf("[App] Exiting cleanly\n");
     return 0;
 }

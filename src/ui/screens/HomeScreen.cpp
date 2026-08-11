@@ -12,6 +12,7 @@
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/ScreenStack.hpp"
+#include "../../app/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
 #include "../../download/DownloadSupport.hpp"
 #include "miyoofin/version.hpp"
@@ -108,6 +109,8 @@ HomeScreen::~HomeScreen()
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
         m_resumeRefreshThread.join();
+    if (m_downloadRefreshThread.joinable())
+        m_downloadRefreshThread.join();
     { std::lock_guard<std::mutex> lock(m_hierarchyMutex); m_stopHierarchyWorker = true; }
     m_hierarchyWake.notify_one();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
@@ -175,7 +178,8 @@ void HomeScreen::refreshMovieFilter()
 }
 
 void HomeScreen::rebuildShowsPresentation() { ShowsPresentation p=makeShowsPresentation((m_libraryOffline?m_offlineSnapshot:m_cachedSnapshot).shows); m_showMaster=std::move(p.shows); m_animeMaster=std::move(p.anime); refreshShowsFilter(); }
-void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab; OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_tabs=offlineTabsFromSnapshot(m_cachedSnapshot); m_activeTab=transitionTabIndex(previous,selected,m_tabs); m_movieMaster=p.movies(); refreshMovieFilter(); m_offlineSnapshot=m_cachedSnapshot; for(auto &view:m_offlineSnapshot.shows){std::vector<MediaItem> filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);} rebuildShowsPresentation();clampNavigation(); }
+void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
+void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
 void HomeScreen::refreshShowsFilter() { m_filteredShows.clear();m_filteredAnime.clear();for(const auto&i:m_showMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredShows.push_back(i);for(const auto&i:m_animeMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredAnime.push_back(i);m_showSelected=m_animeSelected=m_showScroll=m_animeScroll=0;m_showsFocus=!m_filteredShows.empty()?ShowsFocus::ShowsGrid:!m_filteredAnime.empty()?ShowsFocus::AnimeGrid:ShowsFocus::AlphabetRail;if(const MediaItem*i=showsSelectedItem())m_showsPreviewId=i->id; }
 const MediaItem *HomeScreen::showsSelectedItem() const { const std::vector<MediaItem>*v=m_showsFocus==ShowsFocus::AnimeGrid?&m_filteredAnime:&m_filteredShows;int n=m_showsFocus==ShowsFocus::AnimeGrid?m_animeSelected:m_showSelected;if(n>=0&&n<(int)v->size())return &(*v)[n];for(const auto&i:m_filteredShows)if(i.id==m_showsPreviewId)return &i;for(const auto&i:m_filteredAnime)if(i.id==m_showsPreviewId)return &i;return nullptr; }
 void HomeScreen::clampShowsNavigation() { if(!m_filteredShows.empty()){m_showSelected=std::max(0,std::min(m_showSelected,(int)m_filteredShows.size()-1));m_showScroll=clampShowsGridScroll(m_showSelected,m_filteredShows.size(),m_showScroll);}else m_showSelected=m_showScroll=0;if(!m_filteredAnime.empty()){m_animeSelected=std::max(0,std::min(m_animeSelected,(int)m_filteredAnime.size()-1));m_animeScroll=clampShowsGridScroll(m_animeSelected,m_filteredAnime.size(),m_animeScroll);}else m_animeSelected=m_animeScroll=0; }
@@ -449,8 +453,42 @@ bool HomeScreen::handleAction(Action action)
 
 void HomeScreen::refreshDownloads()
 {
+    if (m_downloadRefreshDone) finishDownloadRefresh();
+    if (!m_downloadRefreshInFlight && m_downloadRefreshTimer == 0)
+        startDownloadRefresh();
+}
+
+void HomeScreen::startDownloadRefresh()
+{
     if (!m_downloads) { m_downloadSnapshot = {}; return; }
-    m_downloadSnapshot = m_downloads->snapshot();
+    if (m_downloadRefreshInFlight) return;
+    if (m_downloadRefreshThread.joinable()) m_downloadRefreshThread.join();
+    m_downloadRefreshDone=false;m_downloadRefreshInFlight=true;
+    std::shared_ptr<DownloadManager> downloads=m_downloads;
+    const std::string journalPath=OfflinePlaybackJournal::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+    const bool valid=m_session.valid();
+    m_downloadRefreshThread=std::thread([this,downloads,journalPath,valid] {
+        DownloadSnapshot snapshot=downloads->snapshot();
+        std::vector<OfflinePlaybackEntry> missing;
+        if(valid) {
+            std::vector<OfflinePlaybackEntry> journal;
+            if(OfflinePlaybackJournal::load(journalPath,journal,nullptr))
+                for(const auto &entry:journal)if(entry.serverMissing&&!entry.conflict)missing.push_back(entry);
+        }
+        m_downloadRefreshResult=std::move(snapshot);
+        m_downloadJournalResult=std::move(missing);
+        m_downloadRefreshDone=true;
+    });
+}
+
+void HomeScreen::finishDownloadRefresh()
+{
+    UiDiagnostics::Scope scope("HomeScreen::publishDownloadSnapshot");
+    if(m_downloadRefreshThread.joinable())m_downloadRefreshThread.join();
+    m_downloadRefreshDone=false;m_downloadRefreshInFlight=false;
+    m_downloadSnapshot=std::move(m_downloadRefreshResult);
+    m_missingJournalEntries=std::move(m_downloadJournalResult);
+    m_downloadRefreshTimer=500;
     const auto &items = m_downloadSnapshot.items;
     if (!m_downloadSelectedId.empty()) {
         for (int i=0; i<(int)items.size(); ++i)
@@ -461,13 +499,6 @@ void HomeScreen::refreshDownloads()
     m_downloadSelectedId = items.empty() ? "" : items[m_downloadSelected].itemId;
     if (!m_downloadConfirmId.empty() && m_downloadConfirmId != m_downloadSelectedId)
         m_downloadConfirmId.clear();
-    m_missingJournalEntries.clear();
-    if (m_session.valid()) {
-        std::vector<OfflinePlaybackEntry> journal;
-        const std::string path=OfflinePlaybackJournal::path("cache", LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
-        if (OfflinePlaybackJournal::load(path,journal,nullptr))
-            for (const auto &entry : journal) if (entry.serverMissing && !entry.conflict) m_missingJournalEntries.push_back(entry);
-    }
     if (!m_journalDiscardConfirmId.empty() && (m_missingJournalEntries.empty() || m_missingJournalEntries.front().itemId != m_journalDiscardConfirmId))
         m_journalDiscardConfirmId.clear();
 }
@@ -538,24 +569,29 @@ void HomeScreen::update(Uint32 dt)
         if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
         else m_logoutTimer -= dt;
     }
-    if (m_fetchDone)
+    if (m_fetchDone) {
+        UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();
-    if (m_loadState == LoadState::Ready && m_resumeRefreshDone)
+    }
+    if (m_loadState == LoadState::Ready && m_resumeRefreshDone) {
+        UiDiagnostics::Scope scope("HomeScreen::publishResumeResult");
         finishResumeRefresh();
-    if (m_loadState == LoadState::Ready) refreshDownloads();
+    }
+    if (m_downloadRefreshTimer > dt) m_downloadRefreshTimer-=dt; else m_downloadRefreshTimer=0;
+    if (m_loadState == LoadState::Ready && activeTabNamed("Downloads")) refreshDownloads();
     // Reconcile before draining: an in-flight decode can complete between a
     // directional input and this update, so it must see the new viewport.
     if (m_loadState == LoadState::Ready)
-        updateShowsDecodeWorkingSet();
-    drainDecodedArtwork();
+        { UiDiagnostics::Scope scope("HomeScreen::updateArtworkWorkingSet"); updateShowsDecodeWorkingSet(); }
+    { UiDiagnostics::Scope scope("HomeScreen::publishDecodedArtwork"); drainDecodedArtwork(); }
 
     // Attempt selected artwork load (identity guard prevents repeats)
     if (m_loadState == LoadState::Ready)
-        tryLoadSelectedArtwork();
+        { UiDiagnostics::Scope scope("HomeScreen::queueSelectedArtwork"); tryLoadSelectedArtwork(); }
 
     // B5d2a: load at most one new row artwork per update cycle
     if (m_loadState == LoadState::Ready)
-        tryLoadOneRowArtwork();
+        { UiDiagnostics::Scope scope("HomeScreen::queueVisibleArtwork"); tryLoadOneRowArtwork(); }
 }
 
 void HomeScreen::render(SDL_Surface *fb)
@@ -607,6 +643,7 @@ void HomeScreen::startFetch()
     m_fetchError.clear();
     m_fetchResult.clear();
     m_fetchCacheSaved = false;
+    m_fetchOfflinePrepared = false;
 
     std::string url   = m_session.serverUrl;
     std::string token = m_session.accessToken;
@@ -615,12 +652,16 @@ void HomeScreen::startFetch()
 
     m_fetchThread = std::thread([this, url, token, uid, devId]() {
         std::string err;
+        auto fail=[&](const std::string &error) {
+            m_fetchError=error;
+            if(m_haveCachedSnapshot)prepareOfflineProjection();
+            m_fetchDone=true;
+        };
 
         // 1. Get library views
         std::vector<LibraryView> views;
         if (!JellyfinApi::getViews(url, token, uid, devId, views, err)) {
-            m_fetchError = err;
-            m_fetchDone = true;
+            fail(err);
             return;
         }
         printf("[HomeScreen] Got %zu library views\n", views.size());
@@ -650,14 +691,14 @@ void HomeScreen::startFetch()
                         v.id, "Movie", 50, items, ie)) {
                     moviesByView.push_back({v.name, std::move(items)});
                     snapshot.movies.push_back({v.id, v.name, v.collectionType, moviesByView.back().second});
-                } else { m_fetchError=ie; m_fetchDone=true; return; }
+                } else { fail(ie); return; }
             } else if (v.collectionType == "tvshows") {
                 std::vector<MediaItem> items; std::string ie;
                 if (JellyfinApi::getLibraryItems(url, token, uid, devId,
                         v.id, "Series", 50, items, ie)) {
                     showsByView.push_back({v.name, std::move(items)});
                     snapshot.shows.push_back({v.id, v.name, v.collectionType, showsByView.back().second});
-                } else { m_fetchError=ie; m_fetchDone=true; return; }
+                } else { fail(ie); return; }
             }
         }
 
@@ -670,7 +711,7 @@ void HomeScreen::startFetch()
         if (m_syncState.lastSuccessfulMs > 0 && !m_forceHierarchyReconcile) {
             std::vector<MediaItem> changed; std::string changedError;
             if (!JellyfinApi::getChangedHierarchyItems(url,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError)) {
-                m_fetchError=changedError; m_fetchDone=true; return;
+                fail(changedError); return;
             }
             for(const auto&i:changed) {
                 if(i.type=="show") changedSeries.insert(i.id);
@@ -887,6 +928,7 @@ void HomeScreen::startResumeRefresh()
     m_resumeRefreshDone = false;
     m_resumeRefreshInFlight = true;
     m_resumeRefreshSucceeded = false;
+    m_resumeRefreshCacheSaved = false;
     m_resumeRefreshError.clear();
     m_resumeRefreshResult.clear();
 
@@ -895,13 +937,18 @@ void HomeScreen::startResumeRefresh()
     std::string uid = m_session.userId;
     std::string devId = m_session.deviceId;
 
-    m_resumeRefreshThread = std::thread([this, url, token, uid, devId]() {
+    LibrarySnapshot snapshot=m_cachedSnapshot;
+    const std::string cachePath=LibraryCache::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
+    m_resumeRefreshThread = std::thread([this, url, token, uid, devId, snapshot, cachePath]() mutable {
         std::vector<MediaItem> items;
         std::string error;
         if (JellyfinApi::getResumeItems(url, token, uid, devId, 12,
                                         items, error)) {
             m_resumeRefreshResult = std::move(items);
             m_resumeRefreshSucceeded = true;
+            snapshot.continueWatching=m_resumeRefreshResult;
+            m_resumeRefreshCacheSaved=LibraryCache::save(cachePath,snapshot);
+            startPosterSync(snapshot);
         } else {
             m_resumeRefreshError = error;
         }
@@ -922,11 +969,9 @@ void HomeScreen::finishResumeRefresh()
     } else {
         updateContinueWatchingRow(m_tabs, m_resumeRefreshResult);
         m_cachedSnapshot.continueWatching = m_resumeRefreshResult;
-        const std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-        if (!LibraryCache::save(path, m_cachedSnapshot))
+        if (!m_resumeRefreshCacheSaved)
             printf("[HomeScreen] Continue Watching cache save failed\n");
         clampNavigation();
-        startPosterSync(m_cachedSnapshot);
         printf("[HomeScreen] Continue Watching refreshed: %zu items\n",
                m_resumeRefreshResult.size());
     }
@@ -979,29 +1024,9 @@ void HomeScreen::tryLoadSelectedArtwork()
     // it; Home retains its historical one-shot network behavior below.
     m_selectedArtworkAttempted = false;
 
-    printf("[HomeScreen] Artwork: loading %s tag=%s (%dx%d)\n",
-           item->id.c_str(), artwork.tag.c_str(), artwork.width, artwork.height);
-
-    // 1. Check disk cache
-    std::vector<unsigned char> jpegData;
-    if (ImageCache::isCached(item->id, artwork.imageType, artwork.tag, artwork.width, artwork.height)) {
-        jpegData = ImageCache::readCached(item->id, artwork.imageType, artwork.tag, artwork.width, artwork.height);
-        printf("[HomeScreen] Artwork: cache hit (%zu bytes)\n", jpegData.size());
-    }
-
-    // All browsing artwork is deliberately local-first: poster workers fill
-    // the disk cache, while rendering and navigation never issue HTTP.
-    if (jpegData.empty()) return;
-    m_selectedArtworkAttempted = true;
-
-    // Decode cached JPEG only; poster workers perform all HTTP.
-    m_selectedArtwork = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
-    if (m_selectedArtwork.empty()) {
-        printf("[HomeScreen] Artwork: decode failed\n");
-    } else {
-        printf("[HomeScreen] Artwork: decoded %dx%d\n",
-               m_selectedArtwork.width, m_selectedArtwork.height);
-    }
+    // Cache probing, reads and JPEG decode run on the existing bounded decode
+    // worker.  A missing poster remains retryable after poster sync completes.
+    submitDecode(*item,true,false);
 }
 
 // -------------------------------------------------------------------
@@ -1049,7 +1074,7 @@ void HomeScreen::storeDecodedRowArtwork(const std::string &key, DecodedImage ima
 void HomeScreen::submitDecode(const MediaItem &item, bool highPriority, bool shows)
 {
     std::string key=rowArtworkKey(item); DisplayArtwork a=displayArtworkForItem(item);
-    if(key.empty() || !a.valid() || !ImageCache::isCached(item.id,a.imageType,a.tag,a.width,a.height)) return;
+    if(key.empty() || !a.valid()) return;
     std::lock_guard<std::mutex> lock(m_decodeMutex);
     if(!m_decodeOutstanding.insert(key).second) return;
     if(m_decodeJobs.size() >= 32) { m_decodeOutstanding.erase(key); return; }
@@ -1063,7 +1088,7 @@ void HomeScreen::decodeWorker()
     for (;;) { DecodeJob job; { std::unique_lock<std::mutex> lock(m_decodeMutex); m_decodeWake.wait(lock,[&]{return m_stopDecodeWorker||!m_decodeJobs.empty();}); if(m_stopDecodeWorker) return; job=std::move(m_decodeJobs.front());m_decodeJobs.pop_front(); }
         auto bytes=ImageCache::readCached(job.artwork.itemId,job.artwork.imageType,job.artwork.imageTag,job.artwork.width,job.artwork.height);
         DecodedImage image=bytes.empty()?DecodedImage{}:ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
-        std::lock_guard<std::mutex> lock(m_decodeMutex); m_decodeResults.push_back({std::move(job.key),std::move(image),job.shows});
+        std::lock_guard<std::mutex> lock(m_decodeMutex); m_decodeResults.push_back({std::move(job.key),std::move(image),job.shows,!bytes.empty()});
     }
 }
 
@@ -1082,9 +1107,18 @@ void HomeScreen::drainDecodedArtwork()
         if (result.shows
             && m_activeShowsDecodeKeys.find(result.key) == m_activeShowsDecodeKeys.end()
             && protectedKeys.find(result.key) == protectedKeys.end()) continue;
+        if (!result.cachePresent) {
+            // Poster sync may populate this key later; do not make a cache miss
+            // a permanent failure.
+            continue;
+        }
         if (result.image.empty()) {
             m_rowArtwork[result.key].status = RowArtworkStatus::Failed;
         } else {
+            if(result.key==m_selectedArtworkId) {
+                m_selectedArtwork=result.image;
+                m_selectedArtworkAttempted=true;
+            }
             storeDecodedRowArtwork(result.key, std::move(result.image));
         }
     }
@@ -1204,13 +1238,8 @@ void HomeScreen::tryLoadOneRowArtwork()
         for (int i=first; i<last && attempts<MOVIE_ARTWORK_DECODE_BUDGET; ++i) {
             const MediaItem &item=row.items[i]; std::string key=rowArtworkKey(item);
             if (key.empty() || m_rowArtwork.find(key)!=m_rowArtwork.end()) continue;
-            auto tag=item.imageTags.find("Primary");
-            if (tag==item.imageTags.end() || !ImageCache::isCached(item.id,ImageType::Primary,tag->second,64,96)) continue;
             ++attempts;
-            auto data=ImageCache::readCached(item.id,ImageType::Primary,tag->second,64,96);
-            DecodedImage image=ImageDecoder::decodeJpeg(data.data(),data.size());
-            if (image.empty()) { m_rowArtwork[key].status=RowArtworkStatus::Failed; continue; }
-            storeDecodedRowArtwork(key, std::move(image));
+            submitDecode(item,i==first,false);
         }
         return;
     }
@@ -1257,60 +1286,7 @@ void HomeScreen::tryLoadOneRowArtwork()
     }
     if (!matchItem) return;
 
-    ArtworkBox box = artworkBoxSize(*matchItem);
-    auto tagIt = matchItem->imageTags.find("Primary");
-    if (tagIt == matchItem->imageTags.end()) return;
-    const std::string &tag = tagIt->second;
-    const std::string &itemId = matchItem->id;
-
-    printf("[HomeScreen] RowArtwork: loading %s (%dx%d)\n",
-           candidate.c_str(), box.w, box.h);
-
-    // 1. Check disk cache
-    std::vector<unsigned char> jpegData;
-    if (ImageCache::isCached(itemId, ImageType::Primary, tag, box.w, box.h))
-        jpegData = ImageCache::readCached(itemId, ImageType::Primary, tag, box.w, box.h);
-
-    if (jpegData.empty()) return;
-    // A real read/decode failure is the only permanent failure state.
-    m_rowArtwork[candidate].status = RowArtworkStatus::Failed;
-    // 2. Dynamic Home artwork may still use its existing request path.
-    if (jpegData.empty()) {
-        std::string url = buildImageUrl(
-            m_session.serverUrl, itemId, ImageType::Primary, tag, box.w, box.h);
-
-        HttpClient client;
-        client.setTimeoutSec(5);
-        auto headers = JellyfinApi::buildAuthHeaders(
-            m_session.accessToken, m_session.deviceId);
-
-        BinaryHttpResponse response;
-        std::string error;
-        if (!client.getBinary(url, headers, response, error, 256 * 1024)) {
-            printf("[HomeScreen] RowArtwork fetch failed: %s\n", error.c_str());
-            return;
-        }
-        if (!response.ok()) {
-            printf("[HomeScreen] RowArtwork HTTP %ld\n", response.status);
-            return;
-        }
-        jpegData = std::move(response.data);
-        ImageCache::writeToCache(itemId, ImageType::Primary, tag, box.w, box.h,
-                                 jpegData.data(), jpegData.size());
-    }
-
-    // 3. Decode JPEG
-    DecodedImage img = ImageDecoder::decodeJpeg(jpegData.data(), jpegData.size());
-    if (img.empty()) {
-        printf("[HomeScreen] RowArtwork: decode failed\n");
-        return;  // status already Failed
-    }
-
-    printf("[HomeScreen] RowArtwork: decoded %s (%dx%d)\n",
-           candidate.c_str(), img.width, img.height);
-
-    // Store decoded image
-    storeDecodedRowArtwork(candidate, std::move(img));
+    submitDecode(*matchItem,true,false);
 }
 
 void HomeScreen::drawTabBar(SDL_Surface *fb)

@@ -34,6 +34,8 @@ public:
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
+    const char *diagnosticName() const override { return "EpisodeBrowserScreen"; }
+    bool deferDestruction() const override { return true; }
 
     /// Find the index of an episode by its ID in a list.
     /// Returns -1 if not found.  (Public for testing.)
@@ -65,7 +67,8 @@ private:
 
     /// Fetch episodes from the server.  Called on first enter() and
     /// on retry from Error state.
-    void fetchEpisodes();
+    void fetchEpisodes(bool loadCachedEpisodes = false);
+    void publishEpisodes(std::vector<MediaItem> episodes);
 
     /// Ensure the selected episode is visible in the scrolled list.
     void clampListScroll();
@@ -88,6 +91,7 @@ private:
     /// Completion signal published by the artwork worker.
     struct ArtworkCompletion {
         std::string artworkKey;
+        DecodedImage image;
         bool        success = false;
     };
 
@@ -106,7 +110,7 @@ private:
     std::shared_ptr<DownloadManager> m_downloads; bool m_offline=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
-    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false; std::vector<MediaItem> m_fetchEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
+    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedEpisodesDone=false; std::vector<MediaItem> m_fetchEpisodes, m_cachedEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
 
     // ----- Navigation state -----
     int           m_selectedEpisode = 0;
@@ -127,6 +131,7 @@ private:
     std::condition_variable  m_workerCv;
     bool                     m_workerStop = false;
     std::atomic<bool>        m_workerCancelled{false};
+    std::atomic<bool>        m_shutdownSignalled{false};
 
     /// Immutable per-episode job data, rebuilt after fetchEpisodes().
     std::vector<ArtworkJob>  m_artworkJobs;
@@ -147,6 +152,7 @@ private:
     /// Latest completion signal (consumed once by main thread).
     ArtworkCompletion        m_workerCompletion;
     bool                     m_workerHasCompletion = false;
+    std::string              m_workerDecodedKey;
 
     /// Artwork keys that failed download; guarded by m_workerMutex.
     std::set<std::string>    m_failedKeys;

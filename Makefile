@@ -28,6 +28,7 @@ SRC_DIR     := src
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
+    $(SRC_DIR)/app/UiDiagnostics.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
     $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/input/InputManager.cpp \
@@ -116,6 +117,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/download/HlsPlaylist.cpp \
                src/ui/BitmapFont.cpp \
                src/app/ScreenStack.cpp \
+               src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \

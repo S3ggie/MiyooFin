@@ -18,6 +18,7 @@ INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
 SRCS := \
     src/main.cpp \
     src/app/App.cpp \
+    src/app/UiDiagnostics.cpp \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \
     src/input/InputManager.cpp \

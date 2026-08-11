@@ -29,11 +29,15 @@ public:
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
+    const char *diagnosticName() const override { return "SeriesScreen"; }
+    bool deferDestruction() const override { return true; }
 
 private:
     enum class LoadState { Loading, Ready, Error };
 
-    void fetchSeasons();
+    // Performs catalog/projection work and network fetching on the existing
+    // bounded fetch worker.  enter() must not read the catalog on the UI thread.
+    void fetchSeasons(bool loadCachedSeasons = false);
     void clampGridScroll();
     void tryLoadSeriesArtwork();
     void tryLoadOneVisibleSeasonArtwork();
@@ -52,7 +56,7 @@ private:
     int           m_selectedSeason = 0;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
-    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false; std::vector<MediaItem> m_fetchSeasons; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
+    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedSeasonsDone=false; std::vector<MediaItem> m_fetchSeasons, m_cachedSeasons; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
 
     // Grid scroll state (row offset, not item index)
     int           m_seasonScroll = 0;  // kept for reset compatibility
@@ -70,6 +74,7 @@ private:
     std::vector<ArtworkJob> m_artworkJobs;
     std::map<std::string, DecodedImage> m_artworkCompleted;
     bool m_artworkStop=false; std::atomic<bool> m_artworkCancelled{false};
+    std::atomic<bool> m_shutdownSignalled{false};
 };
 
 } // namespace miyoofin

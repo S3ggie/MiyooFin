@@ -11,7 +11,8 @@ namespace miyoofin {
 /// Only the topmost screen receives events, updates, and renders.
 class ScreenStack {
 public:
-    ScreenStack() = default;
+    ScreenStack();
+    ~ScreenStack();
 
     /// Push a new screen onto the stack (it becomes active).
     void push(std::unique_ptr<Screen> screen);
@@ -46,7 +47,11 @@ public:
     }
 
 private:
+    struct RetirementQueue;
+    void retire(std::unique_ptr<Screen> screen);
+
     std::vector<std::unique_ptr<Screen>> m_stack;
+    std::unique_ptr<RetirementQueue> m_retirement;
     bool m_externalPlayback = false;
 };
 

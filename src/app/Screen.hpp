@@ -31,6 +31,12 @@ public:
     /// The framebuffer is 640x480 RGBA32, already cleared to the
     /// background colour before this call.
     virtual void render(SDL_Surface *fb) = 0;
+    virtual const char *diagnosticName() const { return "Screen"; }
+
+    /// Screens with cancellable, screen-owned workers can ask ScreenStack to
+    /// retire them on its bounded cleanup worker.  leave() is still called on
+    /// the UI thread first, so cancellation is signalled before destruction.
+    virtual bool deferDestruction() const { return false; }
 
     /// Set the owning screen stack (called automatically on push).
     /// Screens can use this to push/pop screens from the stack.

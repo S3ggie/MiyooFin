@@ -42,12 +42,11 @@ public:
     static int findEpisodeIndex(const std::vector<MediaItem> &episodes,
                                 const std::string &episodeId);
 
-    static constexpr int PREFETCH_AHEAD = 8;
-    static constexpr int PREFETCH_BEHIND = 3;
+    static constexpr int LIST_VISIBLE = 22;
 
-    /// Return the next index in selected/ahead/behind priority order,
-    /// excluding unavailable indices.  Examines at most 12 indices.
-    static int nextPrefetchIndex(int selected, int total,
+    /// Return the selected index first, then the visible viewport nearest to
+    /// it, excluding unavailable indices.
+    static int nextPrefetchIndex(int selected, int listScroll, int total,
                                  const std::set<int> &unavailable);
 
     /// A request invalidated by a newer selection must not be treated as a
@@ -83,6 +82,9 @@ private:
     /// Load the Primary artwork for the currently selected episode.
     /// Never performs HTTP on the main thread (B5g1a).
     void tryLoadSelectedEpisodeArtwork();
+
+    /// Discard artwork belonging to the previously selected episode.
+    void clearSelectedEpisodeArtwork();
 
     // ----- Artwork worker types -----
 
@@ -152,6 +154,7 @@ private:
     /// Immutable per-episode job data, rebuilt after fetchEpisodes().
     std::vector<ArtworkJob>  m_artworkJobs;
     int                      m_workerSelected = 0;
+    int                      m_workerListScroll = 0;
     std::uint64_t            m_workerGeneration = 0;
     bool                     m_workerPaused = false;
 

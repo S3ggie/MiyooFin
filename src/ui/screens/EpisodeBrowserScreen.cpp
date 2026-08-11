@@ -30,7 +30,6 @@ static constexpr int HEAD_Y         = 16;
 static constexpr int LIST_Y         = 46;
 static constexpr int LIST_W         = 285;
 static constexpr int LIST_ROW_H     = 18;
-static constexpr int LIST_VISIBLE   = 22;
 
 // Right panel — placeholder thumbnail + metadata + buttons
 static constexpr int THUMB_X        = 326;
@@ -52,7 +51,6 @@ static constexpr int BTN_SEASON_X   = 494;
 // Yellow double-border focus colours
 static constexpr Uint8 FOCUS_OR = 255, FOCUS_OG = 220, FOCUS_OB = 40;
 static constexpr Uint8 FOCUS_IR = 255, FOCUS_IG = 255, FOCUS_IB = 120;
-
 // -------------------------------------------------------------------
 // Word-wrap helper (same algorithm as SeriesScreen)
 // -------------------------------------------------------------------
@@ -169,17 +167,17 @@ int EpisodeBrowserScreen::findEpisodeIndex(
 }
 
 int EpisodeBrowserScreen::nextPrefetchIndex(
-    int selected, int total, const std::set<int> &unavailable)
+    int selected, int listScroll, int total, const std::set<int> &unavailable)
 {
     if (selected < 0 || selected >= total) return -1;
     if (!unavailable.count(selected)) return selected;
-    for (int offset = 1; offset <= PREFETCH_AHEAD; ++offset) {
-        const int index = selected + offset;
-        if (index < total && !unavailable.count(index)) return index;
-    }
-    for (int offset = 1; offset <= PREFETCH_BEHIND; ++offset) {
-        const int index = selected - offset;
-        if (index >= 0 && !unavailable.count(index)) return index;
+    const int first = std::max(0, listScroll);
+    const int last = std::min(total, first + LIST_VISIBLE);
+    for (int distance = 1; distance < LIST_VISIBLE; ++distance) {
+        const int ahead = selected + distance;
+        if (ahead < last && !unavailable.count(ahead)) return ahead;
+        const int behind = selected - distance;
+        if (behind >= first && !unavailable.count(behind)) return behind;
     }
     return -1;
 }
@@ -403,6 +401,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                 m_selectedEpisode--;
                 clampListScroll();
                 m_overviewScroll = 0;
+                clearSelectedEpisodeArtwork();
                 wakeArtworkWorker();
             }
             return true;
@@ -411,6 +410,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                 m_selectedEpisode++;
                 clampListScroll();
                 m_overviewScroll = 0;
+                clearSelectedEpisodeArtwork();
                 wakeArtworkWorker();
             }
             return true;
@@ -533,6 +533,13 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 // Main thread NEVER performs HTTP.  Selection changes are immediate
 // for metadata.  Artwork uses cache-first + background worker.
 // -------------------------------------------------------------------
+void EpisodeBrowserScreen::clearSelectedEpisodeArtwork()
+{
+    m_episodeArtwork = {};
+    m_episodeArtworkKey.clear();
+    freePreparedArtwork(m_episodeArtworkSurface);
+}
+
 void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
 {
     UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishArtworkResult");
@@ -575,6 +582,7 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
                     m_episodeArtwork=std::move(comp.image);
                     freePreparedArtwork(m_episodeArtworkSurface);
                     m_episodeArtworkSurface=prepareArtworkSurface(m_episodeArtwork);
+                    m_episodeArtworkKey = key;
                 }
                 return;
             }
@@ -605,6 +613,7 @@ void EpisodeBrowserScreen::wakeArtworkWorker()
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
         m_workerSelected = m_selectedEpisode;
+        m_workerListScroll = m_listScroll;
         const std::string selectedKey=(m_workerSelected>=0&&m_workerSelected<(int)m_artworkJobs.size())?m_artworkJobs[m_workerSelected].artworkKey:"";
         if(selectedKey!=m_workerDecodedKey)m_workerDecodedKey.clear();
         ++m_workerGeneration;
@@ -668,7 +677,7 @@ void EpisodeBrowserScreen::freePreparedArtwork(PreparedArtwork &artwork)
 // -------------------------------------------------------------------
 // artworkWorkerLoop — background thread (B5g1a)
 //
-// Chooses one artwork job at a time from a freshly computed bounded window.
+// Chooses one artwork job at a time from the freshly computed visible window.
 // Never accesses SDL, rendering, or m_episodeArtwork.
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::artworkWorkerLoop()
@@ -700,8 +709,8 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                 if (m_workerStop) return;
                 if (m_workerPaused || generation != m_workerGeneration) break;
                 selected = m_workerSelected;
-                candidate = nextPrefetchIndex(
-                    selected, (int)m_artworkJobs.size(), unavailable);
+                candidate = nextPrefetchIndex(selected, m_workerListScroll,
+                    (int)m_artworkJobs.size(), unavailable);
                 if (candidate < 0) break;
                 job = m_artworkJobs[candidate];
                 if (job.artworkKey.empty() ||
@@ -738,9 +747,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         // --- Execute job (no lock held) ---
         bool success = false;
         DecodedImage decoded;
-
-        if (ImageCache::isCached(job.itemId, ImageType::Primary,
-                                 job.imageTag, job.width, job.height))
+        const bool cacheHit = ImageCache::isCached(job.itemId, ImageType::Primary,
+                                                   job.imageTag, job.width, job.height);
+        if (cacheHit)
         {
             success = true;
         } else {
@@ -755,8 +764,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
 
             BinaryHttpResponse response;
             std::string error;
-            if (client.getBinary(url, headers, response, error,
-                                 512 * 1024, &m_workerCancelled))
+            const bool fetched = client.getBinary(url, headers, response, error,
+                                                  512 * 1024, &m_workerCancelled);
+            if (fetched)
             {
                 if (response.ok()) {
                     const bool cacheWriteSucceeded = ImageCache::writeToCache(
@@ -802,7 +812,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         if(success && !cancelled && candidate==currentSelected) {
             auto bytes=ImageCache::readCached(job.itemId,ImageType::Primary,
                                               job.imageTag,job.width,job.height);
-            if(!bytes.empty()) decoded=ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
+            if(!bytes.empty()) {
+                decoded=ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
+            }
             success=!decoded.empty();
         }
 

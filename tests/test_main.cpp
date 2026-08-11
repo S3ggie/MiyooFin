@@ -1389,49 +1389,43 @@ static void testFindEpisodeIndexEmptyList()
     std::printf("[test] B5e3b: findEpisodeIndex empty list OK\n");
 }
 
-// B5g1b: bounded predictive episode-artwork scheduling
+// B5g1b: visible episode-artwork scheduling
 static void testEpisodePrefetchScheduler()
 {
-    std::printf("[test] B5g1b: bounded prefetch scheduler\n");
+    std::printf("[test] B5g1b: visible prefetch scheduler\n");
     std::set<int> unavailable;
 
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 5);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 0, 20, unavailable) == 5);
     unavailable.insert(5);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 6);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 0, 20, unavailable) == 6);
     unavailable.insert(6);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 7);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 0, 20, unavailable) == 4);
 
     unavailable.clear();
-    for (int i = 5; i <= 13; ++i) unavailable.insert(i);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 4);
+    unavailable.insert(5);
+    unavailable.insert(6);
+    unavailable.insert(4);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 0, 30, unavailable) == 7);
 
     unavailable.clear();
-    unavailable.insert(0);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(0, 20, unavailable) == 1);
+    unavailable.insert(12);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(12, 10, 40, unavailable) == 13);
+    unavailable.insert(13);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(12, 10, 40, unavailable) == 11);
 
     unavailable.clear();
-    unavailable.insert(19);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(19, 20, unavailable) == 18);
+    for (int i = 10; i < 32; ++i) unavailable.insert(i);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(12, 10, 40, unavailable) == -1);
 
-    unavailable.clear();
-    unavailable.insert(5); // failed candidate
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 6);
-    unavailable.insert(6); // in-progress candidate
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(5, 20, unavailable) == 7);
-
-    // Even for 1000 episodes, nothing outside selected,+8,-3 is considered.
     unavailable.clear();
     unavailable.insert(500);
-    for (int i = 501; i <= 508; ++i) unavailable.insert(i);
-    unavailable.insert(499);
-    unavailable.insert(498);
-    unavailable.insert(497);
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(500, 1000, unavailable) == -1);
+    for (int i = 489; i < 511; ++i) unavailable.insert(i);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(500, 489, 1000, unavailable) == -1);
 
-    // A drastic selection change recomputes directly; there is no backlog.
+    // A distant selected episode is not pulled into the old viewport.
     unavailable.clear();
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(900, 1000, unavailable) == 900);
-    std::printf("[test] B5g1b: bounded prefetch scheduler OK\n");
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(900, 889, 1000, unavailable) == 900);
+    std::printf("[test] B5g1b: visible prefetch scheduler OK\n");
 }
 
 static void testEpisodeArtworkPreemption()
@@ -1449,7 +1443,7 @@ static void testEpisodeArtworkPreemption()
     // Once the stale request is dropped, recomputing from the latest
     // selection puts its cached/selected thumbnail ahead of any prefetch.
     std::set<int> unavailable;
-    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(14, 30, unavailable) == 14);
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(14, 4, 30, unavailable) == 14);
     std::printf("[test] episode artwork request preemption OK\n");
 }
 

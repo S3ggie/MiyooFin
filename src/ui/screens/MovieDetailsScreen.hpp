@@ -20,7 +20,8 @@ namespace miyoofin {
 /// genres, scrollable overview, and Play/Download action buttons.
 class MovieDetailsScreen : public Screen {
 public:
-    MovieDetailsScreen(const Session &session, const MediaItem &movie, std::shared_ptr<DownloadManager> downloads={});
+    MovieDetailsScreen(const Session &session, const MediaItem &movie, std::shared_ptr<DownloadManager> downloads={},
+                       std::shared_ptr<const DecodedImage> gridArtwork={});
     ~MovieDetailsScreen() override;
 
     void enter() override;
@@ -48,6 +49,8 @@ private:
     // ----- Movie poster artwork -----
     DecodedImage m_movieArtwork;
     SDL_Surface *m_movieArtworkSurface = nullptr;
+    std::shared_ptr<const DecodedImage> m_gridArtwork;
+    SDL_Surface *m_gridArtworkSurface = nullptr;
     std::thread m_prepareThread;
     std::mutex m_prepareMutex;
     DecodedImage m_preparedArtwork;

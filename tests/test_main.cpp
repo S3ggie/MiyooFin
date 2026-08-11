@@ -1783,6 +1783,35 @@ static void testMovieDetailsOpensBeforeArtworkPreparation()
     std::printf("[test] MovieDetailsScreen asynchronous first state OK\n");
 }
 
+static void testMovieDetailsUsesGridArtworkImmediately()
+{
+    std::printf("[test] MovieDetailsScreen grid artwork fallback\n");
+    Session session;
+    MediaItem movie=titledMovie("movie-grid-art","Grid Artwork");
+    auto artwork=std::make_shared<DecodedImage>();
+    artwork->width=64;
+    artwork->height=96;
+    artwork->pixels.assign(64*96*4,0);
+    for(size_t i=0;i<artwork->pixels.size();i+=4){
+        artwork->pixels[i]=17; artwork->pixels[i+1]=34;
+        artwork->pixels[i+2]=51; artwork->pixels[i+3]=255;
+    }
+    MovieDetailsScreen screen(session,movie,{},artwork);
+    SDL_Surface *fb=SDL_CreateRGBSurface(0,640,480,32,
+        0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+    CHECK(fb!=nullptr);
+    if(fb){
+        screen.render(fb);
+        Uint8 r=0,g=0,b=0,a=0;
+        const Uint32 pixel=*reinterpret_cast<Uint32*>(
+            static_cast<Uint8*>(fb->pixels) + 50*fb->pitch + 30*4);
+        SDL_GetRGBA(pixel,fb->format,&r,&g,&b,&a);
+        CHECK(r==17 && g==34 && b==51 && a==255);
+        SDL_FreeSurface(fb);
+    }
+    std::printf("[test] MovieDetailsScreen grid artwork fallback OK\n");
+}
+
 static void testDpadHoldRepeatTiming()
 {
     std::printf("[test] D-pad hold repeat timing\n");
@@ -2238,6 +2267,7 @@ int main()
     testScreenStackPreservedDuringExternalPlayback();
     testScreenRetirementDoesNotBlockPop();
     testMovieDetailsOpensBeforeArtworkPreparation();
+    testMovieDetailsUsesGridArtworkImmediately();
 
     // Central D-pad hold-to-repeat input timing
     std::printf("\n--- D-pad hold-to-repeat tests ---\n");

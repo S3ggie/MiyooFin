@@ -106,11 +106,19 @@ static void renderBottomHints(SDL_Surface *fb, const char *hint)
 // Constructor
 // -------------------------------------------------------------------
 MovieDetailsScreen::MovieDetailsScreen(const Session &session,
-                                       const MediaItem &movie, std::shared_ptr<DownloadManager> downloads)
+                                       const MediaItem &movie, std::shared_ptr<DownloadManager> downloads,
+                                       std::shared_ptr<const DecodedImage> gridArtwork)
     : m_session(session)
     , m_movie(movie)
     , m_downloads(std::move(downloads))
+    , m_gridArtwork(std::move(gridArtwork))
 {
+    if(m_gridArtwork&&!m_gridArtwork->empty()){
+        m_gridArtworkSurface=SDL_CreateRGBSurfaceFrom(
+            (void*)m_gridArtwork->pixels.data(),m_gridArtwork->width,m_gridArtwork->height,
+            32,m_gridArtwork->width*4,
+            0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+    }
 }
 
 // -------------------------------------------------------------------
@@ -151,6 +159,11 @@ void MovieDetailsScreen::leave()
         SDL_FreeSurface(m_movieArtworkSurface);
         m_movieArtworkSurface=nullptr;
     }
+    if(m_gridArtworkSurface){
+        SDL_FreeSurface(m_gridArtworkSurface);
+        m_gridArtworkSurface=nullptr;
+    }
+    m_gridArtwork.reset();
 }
 
 // -------------------------------------------------------------------
@@ -227,17 +240,24 @@ void MovieDetailsScreen::update(Uint32 /*dt*/)
             m_planId=m_preparedPlanId;
             m_preparedPlanReady=false;
         }
-        // The first frame is deliberately a cheap placeholder even when a
-        // cache hit completes unusually quickly between enter() and update().
+        // Keep the first frame cheap: it uses the handed-off grid image when
+        // available, otherwise the placeholder, even if the worker wins.
         if(m_preparedArtworkReady&&!m_firstRender){
-            m_movieArtwork=std::move(m_preparedArtwork);
             m_preparedArtworkReady=false;
-            if(!m_movieArtwork.empty()){
+            if(!m_preparedArtwork.empty()){
+                m_movieArtwork=std::move(m_preparedArtwork);
                 UiDiagnostics::Scope imageScope("MovieDetailsScreen::publish image surface preparation");
                 m_movieArtworkSurface=SDL_CreateRGBSurfaceFrom(
                     (void*)m_movieArtwork.pixels.data(),m_movieArtwork.width,m_movieArtwork.height,
                     32,m_movieArtwork.width*4,
                     0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+                if(m_movieArtworkSurface){
+                    if(m_gridArtworkSurface){
+                        SDL_FreeSurface(m_gridArtworkSurface);
+                        m_gridArtworkSurface=nullptr;
+                    }
+                    m_gridArtwork.reset();
+                }
             }
         }
         if(m_preparedOverviewReady){
@@ -431,10 +451,12 @@ void MovieDetailsScreen::renderContent(SDL_Surface *fb)
         m_movie.artR, m_movie.artG, m_movie.artB, 255);
 
     // 2. Draw decoded artwork (aspect-fit, centered, no crop/stretch)
-    if (m_movieArtworkSurface) {
+    SDL_Surface *artworkSurface=m_movieArtworkSurface?m_movieArtworkSurface:m_gridArtworkSurface;
+    const DecodedImage *artwork=m_movieArtworkSurface?&m_movieArtwork:m_gridArtwork.get();
+    if (artworkSurface&&artwork) {
         UiDiagnostics::Scope imageScope("MovieDetailsScreen::render image blit");
-        int imgW = m_movieArtwork.width;
-        int imgH = m_movieArtwork.height;
+        int imgW = artwork->width;
+        int imgH = artwork->height;
         float imgAspect = (float)imgW / (float)imgH;
         float boxAspect = (float)POSTER_W / (float)POSTER_H;
 
@@ -453,7 +475,7 @@ void MovieDetailsScreen::renderContent(SDL_Surface *fb)
 
         SDL_Rect srcRect = {0, 0, imgW, imgH};
         SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-        SDL_BlitScaled(m_movieArtworkSurface,&srcRect,fb,&dstRect);
+        SDL_BlitScaled(artworkSurface,&srcRect,fb,&dstRect);
     }
 
     // 3. Poster border (drawn after artwork)

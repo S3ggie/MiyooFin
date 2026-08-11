@@ -412,7 +412,12 @@ bool HomeScreen::handleAction(Action action)
                     // This outer construction scope includes Session/MediaItem
                     // copies performed before the constructor body starts.
                     UiDiagnostics::Scope constructionScope("MovieDetailsScreen::construction");
-                    movieScreen=std::make_unique<MovieDetailsScreen>(m_session,*item,m_downloads);
+                    std::shared_ptr<const DecodedImage> gridArtwork;
+                    const auto artwork=m_rowArtwork.find(rowArtworkKey(*item));
+                    if(artwork!=m_rowArtwork.end() && artwork->second.status==RowArtworkStatus::Loaded
+                        && artwork->second.image && !artwork->second.image->empty())
+                        gridArtwork=artwork->second.image;
+                    movieScreen=std::make_unique<MovieDetailsScreen>(m_session,*item,m_downloads,std::move(gridArtwork));
                 }
                 m_stack->push(std::move(movieScreen));
                 return true;
@@ -1074,7 +1079,7 @@ void HomeScreen::storeDecodedRowArtwork(const std::string &key, DecodedImage ima
 {
     RowArtworkEntry &entry = m_rowArtwork[key];
     entry.status = RowArtworkStatus::Loaded;
-    entry.image = std::move(image);
+    entry.image = std::make_shared<DecodedImage>(std::move(image));
     touchRowArtwork(key);
     evictRowArtworkIfNeeded();
 }
@@ -1510,7 +1515,7 @@ void HomeScreen::drawShowsAlphabetRail(SDL_Surface *fb) {
     for(int i=0;i<26;++i){int y=27+i*16;bool f=m_showsFocus==ShowsFocus::AlphabetRail&&i==m_showsAlphabetFocus,a=i==m_showsActiveLetter;if(f)BitmapFont::fillRect(fb,2,y-1,31,BitmapFont::GLYPH_H+2,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,120);char c[2]={char('A'+i),0};BitmapFont::drawString(fb,14,y,c,a?Theme::HIGHLIGHT_R:f?Theme::BG_R:Theme::TEXT_R,a?Theme::HIGHLIGHT_G:f?Theme::BG_G:Theme::TEXT_G,a?Theme::HIGHLIGHT_B:f?Theme::BG_B:Theme::TEXT_B,f?Theme::ACCENT_R:24,f?Theme::ACCENT_G:24,f?Theme::ACCENT_B:32);}
 }
 void HomeScreen::drawShowsPreview(SDL_Surface *fb) {
-    BitmapFont::fillRect(fb,36,25,604,SHOWS_PREVIEW_H,24,24,32,255); BitmapFont::fillRect(fb,36,129,604,1,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70); const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;BitmapFont::fillRect(fb,px,py,64,96,item->artR,item->artG,item->artB,255); std::string key=rowArtworkKey(*item);auto it=m_rowArtwork.find(key);if(it!=m_rowArtwork.end()&&it->second.status==RowArtworkStatus::Loaded)blitDecoded(fb,it->second.image,px,py,64,96);else blitDecoded(fb,m_selectedArtwork,px,py,64,96);BitmapFont::drawRect(fb,px,py,64,96,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);BitmapFont::drawString(fb,114,33,item->title.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);char meta[96]={};int n=0;if(item->year)n+=std::snprintf(meta+n,sizeof(meta)-n,"%d",item->year);if(item->rating>0)std::snprintf(meta+n,sizeof(meta)-n,"%s%.1f",n?" * ":"",(double)item->rating);BitmapFont::drawString(fb,114,51,meta,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);char state[96];std::snprintf(state,sizeof(state),"%s%s",item->genre.c_str(),item->played?" * Watched":item->progress>0?" * In progress":"");BitmapFont::drawString(fb,114,69,state,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+    BitmapFont::fillRect(fb,36,25,604,SHOWS_PREVIEW_H,24,24,32,255); BitmapFont::fillRect(fb,36,129,604,1,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70); const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;BitmapFont::fillRect(fb,px,py,64,96,item->artR,item->artG,item->artB,255); std::string key=rowArtworkKey(*item);auto it=m_rowArtwork.find(key);if(it!=m_rowArtwork.end()&&it->second.status==RowArtworkStatus::Loaded&&it->second.image)blitDecoded(fb,*it->second.image,px,py,64,96);else blitDecoded(fb,m_selectedArtwork,px,py,64,96);BitmapFont::drawRect(fb,px,py,64,96,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);BitmapFont::drawString(fb,114,33,item->title.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);char meta[96]={};int n=0;if(item->year)n+=std::snprintf(meta+n,sizeof(meta)-n,"%d",item->year);if(item->rating>0)std::snprintf(meta+n,sizeof(meta)-n,"%s%.1f",n?" * ":"",(double)item->rating);BitmapFont::drawString(fb,114,51,meta,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);char state[96];std::snprintf(state,sizeof(state),"%s%s",item->genre.c_str(),item->played?" * Watched":item->progress>0?" * In progress":"");BitmapFont::drawString(fb,114,69,state,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
 }
 void HomeScreen::drawShowsGrid(SDL_Surface *fb) {
     BitmapFont::drawString(fb,44,137,"SHOWS",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);BitmapFont::drawString(fb,346,137,"ANIME",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);BitmapFont::fillRect(fb,337,135,1,327,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,100);auto draw=[&](const std::vector<MediaItem>&v,int scroll,int sel,bool focused,int base){for(int i=0;i<(int)v.size();++i){int r=i/4;if(r<scroll||r>=scroll+3)continue;drawCard(fb,base+14+(i%4)*70,SHOWS_GRID_TOP+(r-scroll)*102,64,96,v[i],focused&&i==sel);}};draw(m_filteredShows,m_showScroll,m_showSelected,m_showsFocus==ShowsFocus::ShowsGrid,SHOWS_LEFT_X);draw(m_filteredAnime,m_animeScroll,m_animeSelected,m_showsFocus==ShowsFocus::AnimeGrid,SHOWS_RIGHT_X);if(m_filteredShows.empty()&&m_filteredAnime.empty()){char b[64];if(m_showsActiveLetter>=0)std::snprintf(b,sizeof(b),"No shows or anime starting with %c",'A'+m_showsActiveLetter);else std::snprintf(b,sizeof(b),"No shows on this server");BitmapFont::drawString(fb,48,230,b,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);}
@@ -1528,9 +1533,10 @@ void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
             auto it = m_rowArtwork.find(key);
             if (it != m_rowArtwork.end()
                 && it->second.status == RowArtworkStatus::Loaded
-                && !it->second.image.empty())
+                && it->second.image
+                && !it->second.image->empty())
             {
-                const DecodedImage &img = it->second.image;
+                const DecodedImage &img = *it->second.image;
                 int imgW = img.width;
                 int imgH = img.height;
                 float imgAspect = (float)imgW / (float)imgH;

@@ -5,6 +5,7 @@
 #include "../image/ImageDecoder.hpp"
 #include "../cache/ImageCache.hpp"
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -94,7 +95,7 @@ enum class RowArtworkStatus {
 /// Per-key row-artwork tracking entry (B5d2a).
 struct RowArtworkEntry {
     RowArtworkStatus status = RowArtworkStatus::NotAttempted;
-    DecodedImage     image;               ///< Valid only when status == Loaded
+    std::shared_ptr<DecodedImage> image;  ///< Valid only when status == Loaded
 };
 
 /// Return the selected-top-artwork box dimensions for a given media item.

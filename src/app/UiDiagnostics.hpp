@@ -20,7 +20,19 @@ public:
         // Returns 1 for begin, 2 for end, 0 otherwise.  `suspended` suppresses and resets a pending stall.
         int poll(uint64_t heartbeat, uint64_t now, bool suspended, uint64_t &duration);
     };
-    class Scope { public: Scope(const char *name); ~Scope(); private: const char *m_name; const char *m_previous; uint64_t m_start; };
+    class Scope {
+    public:
+        // Worker scopes still emit slow-operation timing, but must not replace
+        // the UI scope watched by the stall detector.
+        explicit Scope(const char *name);
+        Scope(const char *name, bool trackUiScope);
+        ~Scope();
+    private:
+        const char *m_name;
+        const char *m_previous;
+        uint64_t m_start;
+        bool m_trackUiScope;
+    };
 
     UiDiagnostics();
     ~UiDiagnostics();

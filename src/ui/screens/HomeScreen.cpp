@@ -406,7 +406,15 @@ bool HomeScreen::handleAction(Action action)
                 return true;
             }
             if (item->type == "movie") {
-                m_stack->push(std::make_unique<MovieDetailsScreen>(m_session, *item,m_downloads));
+                UiDiagnostics::Scope openScope("HomeScreen::open MovieDetailsScreen");
+                std::unique_ptr<Screen> movieScreen;
+                {
+                    // This outer construction scope includes Session/MediaItem
+                    // copies performed before the constructor body starts.
+                    UiDiagnostics::Scope constructionScope("MovieDetailsScreen::construction");
+                    movieScreen=std::make_unique<MovieDetailsScreen>(m_session,*item,m_downloads);
+                }
+                m_stack->push(std::move(movieScreen));
                 return true;
             }
             if (item->type == "episode") {
@@ -589,7 +597,7 @@ void HomeScreen::update(Uint32 dt)
     if (m_loadState == LoadState::Ready)
         { UiDiagnostics::Scope scope("HomeScreen::queueSelectedArtwork"); tryLoadSelectedArtwork(); }
 
-    // B5d2a: load at most one new row artwork per update cycle
+    // Queue missing visible row artwork for background decode.
     if (m_loadState == LoadState::Ready)
         { UiDiagnostics::Scope scope("HomeScreen::queueVisibleArtwork"); tryLoadOneRowArtwork(); }
 }
@@ -1234,19 +1242,18 @@ void HomeScreen::tryLoadOneRowArtwork()
         const MediaRow &row = rows[0];
         int first = m_rowScroll * MOVIE_GRID_COLUMNS;
         int last = std::min((int)row.items.size(), first + MOVIE_GRID_COLUMNS * MOVIE_GRID_ROWS);
-        int attempts = 0;
-        for (int i=first; i<last && attempts<MOVIE_ARTWORK_DECODE_BUDGET; ++i) {
+        for (int i=first; i<last; ++i) {
             const MediaItem &item=row.items[i]; std::string key=rowArtworkKey(item);
             if (key.empty() || m_rowArtwork.find(key)!=m_rowArtwork.end()) continue;
-            ++attempts;
             submitDecode(item,i==first,false);
         }
         return;
     }
 
-    // Scan horizontally visible cards and find ONE not-yet-attempted candidate
+    // Submit every horizontally visible card that is not already in the RAM
+    // cache. submitDecode preserves outstanding-job de-duplication and the
+    // bounded queue, while selected artwork was already queued at priority.
     static constexpr int HMARGIN = 4;
-    std::string candidate;
     for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
         int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size()) break;
@@ -1261,32 +1268,11 @@ void HomeScreen::tryLoadOneRowArtwork()
             }
             if (screenX > 640 - HMARGIN) break;
             std::string key = rowArtworkKey(row.items[ci]);
-            if (!key.empty() && m_rowArtwork.find(key) == m_rowArtwork.end()) {
-                if (candidate.empty())
-                    candidate = key;
-            }
+            if (!key.empty() && m_rowArtwork.find(key) == m_rowArtwork.end())
+                submitDecode(row.items[ci], false, false);
             cardAccumX += sz.w + CARD_GAP;
         }
     }
-
-    if (candidate.empty()) return;
-
-    // Find the matching item to get dimensions and tag
-    const MediaItem *matchItem = nullptr;
-    for (int ri = 0; ri < VISIBLE_ROWS && !matchItem; ++ri) {
-        int rowIdx = m_rowScroll + ri;
-        if (rowIdx >= (int)rows.size()) break;
-        const MediaRow &row = rows[rowIdx];
-        for (int ci = 0; ci < (int)row.items.size(); ++ci) {
-            if (rowArtworkKey(row.items[ci]) == candidate) {
-                matchItem = &row.items[ci];
-                break;
-            }
-        }
-    }
-    if (!matchItem) return;
-
-    submitDecode(*matchItem,true,false);
 }
 
 void HomeScreen::drawTabBar(SDL_Surface *fb)

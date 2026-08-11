@@ -32,6 +32,7 @@
 #include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
+#include "../src/ui/screens/MovieDetailsScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
 #include "../src/app/UiDiagnostics.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
@@ -1133,18 +1134,19 @@ static void testScrollIsPixelNotIndex()
 
 #include <map>
 
-// Helper: simulate candidate selection (same logic as tryLoadOneRowArtwork)
-static std::string pickCandidate(
+// Helper: simulate visible scheduling (same RAM-cache filtering as Home).
+static std::vector<std::string> pickCandidates(
     const std::vector<MediaItem> &items,
     const std::map<std::string, RowArtworkStatus> &statusMap)
 {
+    std::vector<std::string> candidates;
     for (const auto &item : items) {
         std::string key = buildRowArtworkKey(item);
         if (key.empty()) continue;
         if (statusMap.find(key) == statusMap.end())
-            return key;
+            candidates.push_back(std::move(key));
     }
-    return {};
+    return candidates;
 }
 
 // B5d2a: Movie row artwork uses Primary at 64x96
@@ -1202,18 +1204,18 @@ static void testSameKeyNotLoadedTwice()
     sm[key] = RowArtworkStatus::Loaded;
 
     std::vector<MediaItem> items = {m};
-    CHECK(pickCandidate(items, sm).empty());
+    CHECK(pickCandidates(items, sm).empty());
 
     sm[key] = RowArtworkStatus::Failed;
-    CHECK(pickCandidate(items, sm).empty());
+    CHECK(pickCandidates(items, sm).empty());
 
     std::printf("[test] B5d2a: same key not loaded twice OK\n");
 }
 
-// B5d2a: At most one candidate selected per cycle
-static void testOneCandidatePerCycle()
+// All visible RAM misses are scheduled in the same update.
+static void testAllVisibleCandidatesScheduledPerCycle()
 {
-    std::printf("[test] B5d2a: one candidate per cycle\n");
+    std::printf("[test] B5d2a: all visible candidates per cycle\n");
     std::vector<MediaItem> items;
     for (int i = 0; i < 5; ++i) {
         MediaItem m;
@@ -1225,18 +1227,17 @@ static void testOneCandidatePerCycle()
     }
     std::map<std::string, RowArtworkStatus> sm;
 
-    std::string c1 = pickCandidate(items, sm);
-    CHECK(!c1.empty());
-    sm[c1] = RowArtworkStatus::Failed;
-    std::string c2 = pickCandidate(items, sm);
-    CHECK(!c2.empty());
-    CHECK(c1 != c2);
-    sm[c2] = RowArtworkStatus::Loaded;
-    std::string c3 = pickCandidate(items, sm);
-    CHECK(!c3.empty());
-    CHECK(c3 != c1 && c3 != c2);
+    auto candidates = pickCandidates(items, sm);
+    CHECK(candidates.size() == items.size());
+    sm[candidates[1]] = RowArtworkStatus::Loaded;
+    sm[candidates[3]] = RowArtworkStatus::Failed;
+    candidates = pickCandidates(items, sm);
+    CHECK(candidates.size() == items.size() - 2);
+    CHECK(candidates[0] == "item-0:Primary:t0:64x96");
+    CHECK(candidates[1] == "item-2:Primary:t2:64x96");
+    CHECK(candidates[2] == "item-4:Primary:t4:64x96");
 
-    std::printf("[test] B5d2a: one candidate per cycle OK\n");
+    std::printf("[test] B5d2a: all visible candidates per cycle OK\n");
 }
 
 // B5e1a: Season item with IndexNumber
@@ -1747,6 +1748,41 @@ static void testScreenRetirementDoesNotBlockPop()
     std::printf("[test] ScreenStack deferred worker retirement OK\n");
 }
 
+static void testMovieDetailsOpensBeforeArtworkPreparation()
+{
+    std::printf("[test] MovieDetailsScreen asynchronous first state\n");
+    Session session;
+    session.serverUrl="http://127.0.0.1:1";
+    session.accessToken="test-token";
+    session.deviceId="test-device";
+    MediaItem movie=titledMovie("movie-async","Async Movie");
+    movie.imageTags["Primary"]="uncached-artwork";
+    MovieDetailsScreen screen(session,movie);
+    CHECK(std::string(screen.diagnosticName())=="MovieDetailsScreen");
+    CHECK(screen.deferDestruction());
+    const auto start=std::chrono::steady_clock::now();
+    screen.enter();
+    const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-start).count();
+    // enter() only owns/starts the cancellable worker. Cache I/O, HTTP and
+    // JPEG decode cannot delay the first interactive state.
+    CHECK(elapsed < 100);
+    CHECK(screen.handleAction(Action::Right));
+    SDL_Surface *fb=SDL_CreateRGBSurface(0,640,480,32,
+        0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+    CHECK(fb!=nullptr);
+    if(fb){
+        const auto renderStart=std::chrono::steady_clock::now();
+        screen.render(fb);
+        const auto renderElapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now()-renderStart).count();
+        CHECK(renderElapsed < 100);
+        SDL_FreeSurface(fb);
+    }
+    screen.leave();
+    std::printf("[test] MovieDetailsScreen asynchronous first state OK\n");
+}
+
 static void testDpadHoldRepeatTiming()
 {
     std::printf("[test] D-pad hold repeat timing\n");
@@ -2148,7 +2184,7 @@ int main()
     testEpisodeRowKeyPrimary();
     testNoPrimaryTagEmptyKey();
     testSameKeyNotLoadedTwice();
-    testOneCandidatePerCycle();
+    testAllVisibleCandidatesScheduledPerCycle();
 
     // B5e1a tests — Season parsing groundwork
     std::printf("\n--- B5e1a season parsing tests ---\n");
@@ -2201,6 +2237,7 @@ int main()
     testPlaybackRequestStillWorks();
     testScreenStackPreservedDuringExternalPlayback();
     testScreenRetirementDoesNotBlockPop();
+    testMovieDetailsOpensBeforeArtworkPreparation();
 
     // Central D-pad hold-to-repeat input timing
     std::printf("\n--- D-pad hold-to-repeat tests ---\n");

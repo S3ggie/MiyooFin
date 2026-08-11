@@ -8,6 +8,9 @@
 #include "../../download/DownloadManager.hpp"
 #include <memory>
 #include <string>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace miyoofin {
@@ -18,20 +21,24 @@ namespace miyoofin {
 class MovieDetailsScreen : public Screen {
 public:
     MovieDetailsScreen(const Session &session, const MediaItem &movie, std::shared_ptr<DownloadManager> downloads={});
-    ~MovieDetailsScreen() override = default;
+    ~MovieDetailsScreen() override;
 
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
+    const char *diagnosticName() const override { return "MovieDetailsScreen"; }
+    bool deferDestruction() const override { return true; }
 
 private:
     /// Which action button is focused.
     enum class ActionButton { Play, Download };
 
-    /// Load the Primary artwork for the movie.
-    void tryLoadMovieArtwork();
+    /// Prepare download state and artwork without touching the SDL thread.
+    void prepareWorker();
+    DecodedImage loadMovieArtwork();
+    void renderContent(SDL_Surface *fb);
 
     // ----- Data -----
     Session   m_session;
@@ -40,10 +47,24 @@ private:
 
     // ----- Movie poster artwork -----
     DecodedImage m_movieArtwork;
-    bool         m_movieArtworkAttempted = false;
+    SDL_Surface *m_movieArtworkSurface = nullptr;
+    std::thread m_prepareThread;
+    std::mutex m_prepareMutex;
+    DecodedImage m_preparedArtwork;
+    std::vector<std::string> m_preparedOverviewLines;
+    std::uint64_t m_preparedPlanId = 0;
+    bool m_preparedPlanReady = false;
+    bool m_preparedArtworkReady = false;
+    bool m_preparedOverviewReady = false;
+    bool m_prepareStarted = false;
+    std::atomic<bool> m_prepareCancelled{false};
+    std::atomic<bool> m_shutdownSignalled{false};
 
     // ----- Overview scroll -----
     int m_overviewScroll = 0;
+    std::vector<std::string> m_overviewLines;
+    bool m_firstRender = true;
+    DownloadPlanSnapshot m_planSnapshot;
 
     // ----- Focus state -----
     ActionButton m_actionBtn = ActionButton::Play;

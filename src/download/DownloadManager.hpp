@@ -34,6 +34,9 @@ public:
     std::uint64_t requestSeriesPlan(const MediaItem &series);
     std::uint64_t requestSeasonPlan(const MediaItem &series, const MediaItem &season);
     DownloadPlanSnapshot planSnapshot(std::uint64_t id) const;
+    /// UI-safe non-blocking snapshot.  A busy manager leaves the caller's
+    /// previously published state intact instead of stalling a frame.
+    bool tryPlanSnapshot(std::uint64_t id, DownloadPlanSnapshot &snapshot) const;
     static bool acceptsPlanResult(std::uint64_t jobGeneration, std::uint64_t currentGeneration) { return jobGeneration==currentGeneration; }
     // HLS segments are generated on demand: only actual reachability failures
     // wait for a network retry.  Timeouts and HTTP errors are actionable failures.

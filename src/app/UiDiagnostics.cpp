@@ -17,7 +17,13 @@ void UiDiagnostics::setWorker(const char *worker,const char *state){std::atomic<
 std::vector<std::string> UiDiagnostics::recentEvents()const{std::lock_guard<std::mutex>l(m_eventsMutex);return m_events;}
 void UiDiagnostics::writeLine(const std::string &line){ struct stat st{}; if(stat(m_path.c_str(),&st)==0 && st.st_size>65536){ FILE*f=fopen(m_path.c_str(),"w");if(f)fclose(f); } FILE*f=fopen(m_path.c_str(),"a"); if(!f && m_path!="ui-stall.log") { m_path="ui-stall.log"; f=fopen(m_path.c_str(),"a"); } if(f){fprintf(f,"%s\n",line.c_str());fclose(f);} }
 void UiDiagnostics::slow(const char *name,uint64_t elapsed){if(elapsed<SLOW_MS)return; char b[256];snprintf(b,sizeof b,"[UISLOW] %llums %s",(unsigned long long)elapsed,name);event(b);std::lock_guard<std::mutex>l(m_pendingMutex);m_pendingLogs.emplace_back(b);}
-UiDiagnostics::Scope::Scope(const char *name):m_name(name),m_previous(uiDiagnostics().exchangeScope(name)),m_start(UiDiagnostics::monotonicMs()){} UiDiagnostics::Scope::~Scope(){auto&e=uiDiagnostics(); e.setScope(m_previous); e.slow(m_name,UiDiagnostics::monotonicMs()-m_start);}
+UiDiagnostics::Scope::Scope(const char *name):Scope(name,true){}
+UiDiagnostics::Scope::Scope(const char *name, bool trackUiScope)
+    :m_name(name),m_previous(nullptr),m_start(UiDiagnostics::monotonicMs()),m_trackUiScope(trackUiScope)
+{
+    if(m_trackUiScope)m_previous=uiDiagnostics().exchangeScope(name);
+}
+UiDiagnostics::Scope::~Scope(){auto&e=uiDiagnostics(); if(m_trackUiScope)e.setScope(m_previous); e.slow(m_name,UiDiagnostics::monotonicMs()-m_start);}
 void UiDiagnostics::watchdogLoop(){Watchdog w;w.seen=m_heartbeat.load(); while(!m_stop.load()){ {std::vector<std::string> logs;{std::lock_guard<std::mutex>l(m_pendingMutex);logs.swap(m_pendingLogs);}for(const auto &line:logs)writeLine(line);} const uint64_t now=monotonicMs();uint64_t d=0;int r=w.poll(m_heartbeat.load(),now,m_suspended.load(),d);if(r){char b[768];if(r==1)snprintf(b,sizeof b,"[UISTALL] begin stalled=%llums phase=%s screen=%s tab=%s action=%s scope=%s library=%s hierarchy=%s artwork=%s download=%s",(unsigned long long)(now-w.seen),m_phase.load(),m_screen.load(),m_tab.load(),m_action.load(),m_scope.load(),m_library.load(),m_hierarchy.load(),m_artwork.load(),m_download.load());else snprintf(b,sizeof b,"[UISTALL] end duration=%llums",(unsigned long long)d);event(b);writeLine(b);if(r==1){for(const auto&e:recentEvents())writeLine("[UISTALL] recent "+e);}} usleep(100000);}}
 UiDiagnostics &uiDiagnostics(){static UiDiagnostics d;return d;}
 }

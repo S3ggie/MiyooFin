@@ -1,11 +1,25 @@
 #include "ScreenStack.hpp"
 #include "UiDiagnostics.hpp"
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <thread>
 
 namespace miyoofin {
+
+namespace {
+const char *pushDiagnosticName(const Screen *screen)
+{
+    if(!screen)return "ScreenStack::push -> null";
+    const char *name=screen->diagnosticName();
+    if(!std::strcmp(name,"MovieDetailsScreen"))return "ScreenStack::push -> MovieDetailsScreen";
+    if(!std::strcmp(name,"SeriesScreen"))return "ScreenStack::push -> SeriesScreen";
+    if(!std::strcmp(name,"EpisodeBrowserScreen"))return "ScreenStack::push -> EpisodeBrowserScreen";
+    if(!std::strcmp(name,"HomeScreen"))return "ScreenStack::push -> HomeScreen";
+    return "ScreenStack::push -> Screen";
+}
+}
 
 struct ScreenStack::RetirementQueue {
     RetirementQueue() : worker(&RetirementQueue::run, this) {}
@@ -67,8 +81,9 @@ void ScreenStack::retire(std::unique_ptr<Screen> screen)
 
 void ScreenStack::push(std::unique_ptr<Screen> screen)
 {
-    UiDiagnostics::Scope scope("ScreenStack::push");
+    UiDiagnostics::Scope scope(pushDiagnosticName(screen.get()));
     if (screen) {
+        uiDiagnostics().setScreen(screen->diagnosticName());
         screen->setStack(this);
         screen->enter();
         m_stack.push_back(std::move(screen));

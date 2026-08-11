@@ -7,6 +7,7 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../app/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
 #include <cstdio>
 #include <cstring>
@@ -117,9 +118,25 @@ MovieDetailsScreen::MovieDetailsScreen(const Session &session,
 // -------------------------------------------------------------------
 void MovieDetailsScreen::enter()
 {
+    UiDiagnostics::Scope scope("MovieDetailsScreen::enter");
     printf("[MovieDetailsScreen] enter: %s\n", m_movie.title.c_str());
-    tryLoadMovieArtwork();
-    if (m_downloads) m_planId=m_downloads->requestPlan({m_movie});
+    if(!m_prepareStarted){
+        uiDiagnostics().event("MovieDetailsScreen: cached item; no LibraryCache/OfflineCatalog/offline projection on open");
+        UiDiagnostics::Scope createScope("MovieDetailsScreen::owned worker creation");
+        m_prepareStarted=true;
+        m_prepareThread=std::thread(&MovieDetailsScreen::prepareWorker,this);
+    }
+}
+
+MovieDetailsScreen::~MovieDetailsScreen()
+{
+    leave();
+    if(m_prepareThread.joinable()){
+        // Popped Movie screens are destroyed by ScreenStack's retirement
+        // worker, so this join can never delay SDL input/render.
+        UiDiagnostics::Scope scope("MovieDetailsScreen::owned worker join",false);
+        m_prepareThread.join();
+    }
 }
 
 // -------------------------------------------------------------------
@@ -127,6 +144,13 @@ void MovieDetailsScreen::enter()
 // -------------------------------------------------------------------
 void MovieDetailsScreen::leave()
 {
+    if(m_shutdownSignalled.exchange(true,std::memory_order_acq_rel))return;
+    UiDiagnostics::Scope scope("MovieDetailsScreen::worker cancellation");
+    m_prepareCancelled.store(true,std::memory_order_release);
+    if(m_movieArtworkSurface){
+        SDL_FreeSurface(m_movieArtworkSurface);
+        m_movieArtworkSurface=nullptr;
+    }
 }
 
 // -------------------------------------------------------------------
@@ -163,7 +187,7 @@ bool MovieDetailsScreen::handleAction(Action action)
 
     // Confirm
     case Action::Confirm:
-        if (m_confirmDownload) { if (m_downloads && m_planId) { auto p=m_downloads->planSnapshot(m_planId); if(p.state==DownloadPlanState::Ready&&p.plan.canFit) m_downloads->enqueue(p.plan.items); } m_confirmDownload=false; return true; }
+        if (m_confirmDownload) { if (m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready&&m_planSnapshot.plan.canFit) m_downloads->enqueue(m_planSnapshot.plan.items); m_confirmDownload=false; return true; }
         if (m_actionBtn == ActionButton::Play) {
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());
@@ -182,7 +206,7 @@ bool MovieDetailsScreen::handleAction(Action action)
                        error.c_str());
             }
         } else {
-            if(m_downloads && m_planId && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
+            if(m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready) m_confirmDownload=true;
         }
         return true;
 
@@ -196,6 +220,36 @@ bool MovieDetailsScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 void MovieDetailsScreen::update(Uint32 /*dt*/)
 {
+    {
+        UiDiagnostics::Scope scope("MovieDetailsScreen::publish async preparation");
+        std::lock_guard<std::mutex> lock(m_prepareMutex);
+        if(m_preparedPlanReady){
+            m_planId=m_preparedPlanId;
+            m_preparedPlanReady=false;
+        }
+        // The first frame is deliberately a cheap placeholder even when a
+        // cache hit completes unusually quickly between enter() and update().
+        if(m_preparedArtworkReady&&!m_firstRender){
+            m_movieArtwork=std::move(m_preparedArtwork);
+            m_preparedArtworkReady=false;
+            if(!m_movieArtwork.empty()){
+                UiDiagnostics::Scope imageScope("MovieDetailsScreen::publish image surface preparation");
+                m_movieArtworkSurface=SDL_CreateRGBSurfaceFrom(
+                    (void*)m_movieArtwork.pixels.data(),m_movieArtwork.width,m_movieArtwork.height,
+                    32,m_movieArtwork.width*4,
+                    0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+            }
+        }
+        if(m_preparedOverviewReady){
+            m_overviewLines=std::move(m_preparedOverviewLines);
+            m_preparedOverviewReady=false;
+        }
+    }
+    if(m_downloads&&m_planId){
+        UiDiagnostics::Scope scope("MovieDetailsScreen::publish playback/download state");
+        DownloadPlanSnapshot snapshot;
+        if(m_downloads->tryPlanSnapshot(m_planId,snapshot))m_planSnapshot=std::move(snapshot);
+    }
     if (PlaybackRequest::advanceResultConsumption(
             m_playbackResultPending, m_playbackResultDelayUpdates)) {
         std::int64_t resultTicks = 0;
@@ -209,18 +263,66 @@ void MovieDetailsScreen::update(Uint32 /*dt*/)
 }
 
 // -------------------------------------------------------------------
-// tryLoadMovieArtwork — synchronous artwork fetch/cache/decode
+// prepareWorker — all potentially blocking first-state work
 // -------------------------------------------------------------------
-void MovieDetailsScreen::tryLoadMovieArtwork()
+void MovieDetailsScreen::prepareWorker()
 {
-    if (m_movieArtworkAttempted) return;
-    m_movieArtworkAttempted = true;
+    // The selected MediaItem already contains the detail metadata. There is
+    // deliberately no LibraryCache/OfflineCatalog read or offline projection
+    // in this open path; downloaded-only Movies keep the item projected by
+    // HomeScreen and local playback is still resolved when Play is pressed.
+    std::vector<std::string> overviewLines;
+    {
+        UiDiagnostics::Scope scope("MovieDetailsScreen::metadata preparation",false);
+        overviewLines=wrapText(m_movie.overview.c_str(),META_WRAP);
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_prepareMutex);
+        if(!m_prepareCancelled.load(std::memory_order_acquire)){
+            m_preparedOverviewLines=std::move(overviewLines);
+            m_preparedOverviewReady=true;
+        }
+    }
+
+    uiDiagnostics().setWorker("artwork","movie download state");
+    if(m_downloads&&!m_prepareCancelled.load(std::memory_order_acquire)){
+        std::uint64_t planId=0;
+        {
+            // requestPlan includes DownloadManager mutex acquisition, its
+            // snapshot/local-state estimate, and filesystem free-space lookup.
+            UiDiagnostics::Scope scope("MovieDetailsScreen::DownloadManager snapshot/free-space preparation",false);
+            planId=m_downloads->requestPlan({m_movie});
+        }
+        std::lock_guard<std::mutex> lock(m_prepareMutex);
+        if(!m_prepareCancelled.load(std::memory_order_acquire)){
+            m_preparedPlanId=planId;
+            m_preparedPlanReady=true;
+        }
+    }
+
+    DecodedImage artwork;
+    if(!m_prepareCancelled.load(std::memory_order_acquire))artwork=loadMovieArtwork();
+    {
+        std::lock_guard<std::mutex> lock(m_prepareMutex);
+        if(!m_prepareCancelled.load(std::memory_order_acquire)){
+            m_preparedArtwork=std::move(artwork);
+            m_preparedArtworkReady=true;
+        }
+    }
+    uiDiagnostics().setWorker("artwork","idle");
+}
+
+// -------------------------------------------------------------------
+// loadMovieArtwork — worker-only cache/network/decode path
+// -------------------------------------------------------------------
+DecodedImage MovieDetailsScreen::loadMovieArtwork()
+{
 
     auto it = m_movie.imageTags.find("Primary");
     if (it == m_movie.imageTags.end() || it->second.empty()) {
         printf("[MovieDetailsScreen] No Primary artwork tag for %s\n",
                m_movie.title.c_str());
-        return;
+        return {};
     }
 
     const std::string &tag = it->second;
@@ -229,16 +331,25 @@ void MovieDetailsScreen::tryLoadMovieArtwork()
 
     // 1. Check disk cache
     std::vector<unsigned char> jpegData;
-    if (ImageCache::isCached(m_movie.id, ImageType::Primary, tag,
-                             POSTER_W, POSTER_H)) {
-        jpegData = ImageCache::readCached(m_movie.id, ImageType::Primary,
-                                          tag, POSTER_W, POSTER_H);
+    bool cached=false;
+    {
+        uiDiagnostics().setWorker("artwork","movie ImageCache lookup");
+        UiDiagnostics::Scope scope("MovieDetailsScreen::ImageCache lookup/filesystem stat",false);
+        cached=ImageCache::isCached(m_movie.id,ImageType::Primary,tag,POSTER_W,POSTER_H);
+    }
+    if(cached){
+        uiDiagnostics().setWorker("artwork","movie ImageCache read");
+        {
+            UiDiagnostics::Scope scope("MovieDetailsScreen::ImageCache filesystem read",false);
+            jpegData=ImageCache::readCached(m_movie.id,ImageType::Primary,tag,POSTER_W,POSTER_H);
+        }
         printf("[MovieDetailsScreen] Artwork: cache hit (%zu bytes)\n",
                jpegData.size());
     }
 
     // 2. If not cached, synchronous HTTP request
     if (jpegData.empty()) {
+        if(m_prepareCancelled.load(std::memory_order_acquire))return {};
         std::string url = buildImageUrl(
             m_session.serverUrl, m_movie.id, ImageType::Primary,
             tag, POSTER_W, POSTER_H);
@@ -250,15 +361,23 @@ void MovieDetailsScreen::tryLoadMovieArtwork()
 
         BinaryHttpResponse response;
         std::string error;
-        if (!client.getBinary(url, headers, response, error, 512 * 1024)) {
+        bool fetched=false;
+        {
+            // This curl transfer was the synchronous operation in enter()
+            // responsible for the hardware-proven multi-second push stall.
+            uiDiagnostics().setWorker("artwork","movie Jellyfin artwork HTTP");
+            UiDiagnostics::Scope scope("MovieDetailsScreen::Jellyfin artwork HTTP/curl",false);
+            fetched=client.getBinary(url,headers,response,error,512*1024,&m_prepareCancelled);
+        }
+        if(!fetched){
             printf("[MovieDetailsScreen] Artwork fetch failed: %s\n",
                    error.c_str());
-            return;
+            return {};
         }
         if (!response.ok()) {
             printf("[MovieDetailsScreen] Artwork fetch failed: HTTP %ld\n",
                    response.status);
-            return;
+            return {};
         }
 
         jpegData = std::move(response.data);
@@ -266,20 +385,29 @@ void MovieDetailsScreen::tryLoadMovieArtwork()
                jpegData.size());
 
         // Cache to disk (best-effort)
-        ImageCache::writeToCache(m_movie.id, ImageType::Primary, tag,
-                                 POSTER_W, POSTER_H,
-                                 jpegData.data(), jpegData.size());
+        if(!m_prepareCancelled.load(std::memory_order_acquire)){
+            uiDiagnostics().setWorker("artwork","movie ImageCache write");
+            UiDiagnostics::Scope scope("MovieDetailsScreen::ImageCache filesystem write",false);
+            ImageCache::writeToCache(m_movie.id,ImageType::Primary,tag,
+                                     POSTER_W,POSTER_H,jpegData.data(),jpegData.size());
+        }
     }
 
     // 3. Decode JPEG
-    m_movieArtwork = ImageDecoder::decodeJpeg(jpegData.data(),
-                                              jpegData.size());
-    if (m_movieArtwork.empty()) {
+    if(m_prepareCancelled.load(std::memory_order_acquire))return {};
+    uiDiagnostics().setWorker("artwork","movie JPEG decode");
+    DecodedImage artwork;
+    {
+        UiDiagnostics::Scope scope("MovieDetailsScreen::JPEG/image decode",false);
+        artwork=ImageDecoder::decodeJpeg(jpegData.data(),jpegData.size());
+    }
+    if (artwork.empty()) {
         printf("[MovieDetailsScreen] Artwork: decode failed\n");
     } else {
         printf("[MovieDetailsScreen] Artwork: decoded %dx%d\n",
-               m_movieArtwork.width, m_movieArtwork.height);
+               artwork.width, artwork.height);
     }
+    return artwork;
 }
 
 // -------------------------------------------------------------------
@@ -287,12 +415,24 @@ void MovieDetailsScreen::tryLoadMovieArtwork()
 // -------------------------------------------------------------------
 void MovieDetailsScreen::render(SDL_Surface *fb)
 {
+    if(m_firstRender){
+        m_firstRender=false;
+        UiDiagnostics::Scope scope("MovieDetailsScreen::first render");
+        renderContent(fb);
+        return;
+    }
+    renderContent(fb);
+}
+
+void MovieDetailsScreen::renderContent(SDL_Surface *fb)
+{
     // 1. Draw movie poster placeholder (artR/artG/artB tint)
     BitmapFont::fillRect(fb, POSTER_X, POSTER_Y, POSTER_W, POSTER_H,
         m_movie.artR, m_movie.artG, m_movie.artB, 255);
 
     // 2. Draw decoded artwork (aspect-fit, centered, no crop/stretch)
-    if (!m_movieArtwork.empty()) {
+    if (m_movieArtworkSurface) {
+        UiDiagnostics::Scope imageScope("MovieDetailsScreen::render image blit");
         int imgW = m_movieArtwork.width;
         int imgH = m_movieArtwork.height;
         float imgAspect = (float)imgW / (float)imgH;
@@ -311,16 +451,9 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
         int drawX = POSTER_X + (POSTER_W - drawW) / 2;
         int drawY = POSTER_Y + (POSTER_H - drawH) / 2;
 
-        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
-            (void *)m_movieArtwork.pixels.data(),
-            imgW, imgH, 32, imgW * 4,
-            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-        if (imgSurface) {
-            SDL_Rect srcRect = {0, 0, imgW, imgH};
-            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-            SDL_FreeSurface(imgSurface);
-        }
+        SDL_Rect srcRect = {0, 0, imgW, imgH};
+        SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
+        SDL_BlitScaled(m_movieArtworkSurface,&srcRect,fb,&dstRect);
     }
 
     // 3. Poster border (drawn after artwork)
@@ -396,12 +529,11 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
     // 5. Overview (word-wrapped, scrollable)
     bool overviewScrollable = false;
     if (!m_movie.overview.empty()) {
-        auto lines = wrapText(m_movie.overview.c_str(), META_WRAP);
         int overviewEndY = BTN_Y - 4;
         int visibleLines = (overviewEndY - ry) / BitmapFont::GLYPH_H;
         if (visibleLines < 1) visibleLines = 1;
 
-        int maxScroll = (int)lines.size() - visibleLines;
+        int maxScroll = (int)m_overviewLines.size() - visibleLines;
         if (maxScroll < 0) maxScroll = 0;
         if (m_overviewScroll > maxScroll) m_overviewScroll = maxScroll;
         if (m_overviewScroll < 0) m_overviewScroll = 0;
@@ -410,9 +542,9 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
 
         int drawY = ry;
         for (int i = m_overviewScroll;
-             i < m_overviewScroll + visibleLines && i < (int)lines.size();
+             i < m_overviewScroll + visibleLines && i < (int)m_overviewLines.size();
              ++i) {
-            BitmapFont::drawString(fb, rx, drawY, lines[i].c_str(),
+            BitmapFont::drawString(fb, rx, drawY, m_overviewLines[i].c_str(),
                 Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
                 Theme::BG_R, Theme::BG_G, Theme::BG_B);
             drawY += BitmapFont::GLYPH_H;
@@ -421,7 +553,8 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
 
     // 6. Action buttons [PLAY] [DOWNLOAD]
     if (m_downloads && m_planId) {
-        auto p=m_downloads->planSnapshot(m_planId); std::string status;
+        UiDiagnostics::Scope stateScope("MovieDetailsScreen::render playback/download state preparation");
+        const auto &p=m_planSnapshot; std::string status;
         if(m_confirmDownload) status="Download ~"+formatBytes(p.plan.additionalRequiredBytes)+"? A=Confirm B=Cancel";
         else if(p.state==DownloadPlanState::Planning) status=p.plan.sizeKnown?"Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Preparing...":"Checking size...";
         else if(p.state==DownloadPlanState::Ready) status="Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Free: "+formatBytes(p.plan.usableFreeBytes);

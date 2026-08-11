@@ -528,32 +528,31 @@ void HomeScreen::finishDownloadRefresh()
     m_downloadSnapshot=std::move(m_downloadRefreshResult);
     m_missingJournalEntries=std::move(m_downloadJournalResult);
     m_downloadRefreshTimer=500;
-    const auto &items = m_downloadSnapshot.items;
-    if (!m_downloadSelectedId.empty()) {
-        for (int i=0; i<(int)items.size(); ++i)
-            if (items[i].itemId == m_downloadSelectedId) { m_downloadSelected=i; break; }
-    }
-    m_downloadSelected = clampDownloadSelection(m_downloadSelected, (int)items.size());
-    m_downloadScroll = clampDownloadScroll(m_downloadSelected, (int)items.size(), m_downloadScroll, 5);
-    m_downloadSelectedId = items.empty() ? "" : items[m_downloadSelected].itemId;
-    if (!m_downloadConfirmId.empty() && m_downloadConfirmId != m_downloadSelectedId)
+    m_downloadHierarchy=buildDownloadHierarchy(m_downloadSnapshot,m_downloadExpanded);
+    const auto &rows=m_downloadHierarchy.visible;
+    m_downloadSelected=downloadHierarchySelection(rows,m_downloadSelectedId,m_downloadSelected);
+    m_downloadScroll=clampDownloadScroll(m_downloadSelected,(int)rows.size(),m_downloadScroll,5);
+    m_downloadSelectedId=rows.empty()?"":rows[m_downloadSelected].id;
+    if (!m_downloadConfirmId.empty() && m_downloadConfirmId != m_downloadSelectedId) {
         m_downloadConfirmId.clear();
+        m_downloadConfirmItemIds.clear();
+    }
     if (!m_journalDiscardConfirmId.empty() && (m_missingJournalEntries.empty() || m_missingJournalEntries.front().itemId != m_journalDiscardConfirmId))
         m_journalDiscardConfirmId.clear();
 }
 
 bool HomeScreen::handleDownloadsAction(Action action)
 {
-    const auto &items = m_downloadSnapshot.items;
+    const auto &rows=m_downloadHierarchy.visible;
     if (action == Action::Up || action == Action::Down) {
         m_downloadSelected += action == Action::Up ? -1 : 1;
-        m_downloadSelected = clampDownloadSelection(m_downloadSelected, (int)items.size());
-        m_downloadScroll = clampDownloadScroll(m_downloadSelected, (int)items.size(), m_downloadScroll, 5);
-        m_downloadSelectedId = items.empty() ? "" : items[m_downloadSelected].itemId;
-        m_downloadConfirmId.clear();
+        m_downloadSelected = clampDownloadSelection(m_downloadSelected, (int)rows.size());
+        m_downloadScroll = clampDownloadScroll(m_downloadSelected, (int)rows.size(), m_downloadScroll, 5);
+        m_downloadSelectedId = rows.empty() ? "" : rows[m_downloadSelected].id;
+        m_downloadConfirmId.clear(); m_downloadConfirmItemIds.clear();
         return true;
     }
-    if (items.empty()) {
+    if (rows.empty()) {
         if (action == Action::Search && !m_missingJournalEntries.empty()) {
             const std::string &id=m_missingJournalEntries.front().itemId;
             if (m_journalDiscardConfirmId == id) {
@@ -565,15 +564,43 @@ bool HomeScreen::handleDownloadsAction(Action action)
         }
         return action == Action::Confirm || action == Action::ActionsMenu;
     }
-    const DownloadItem &item = items[m_downloadSelected];
-    if (action == Action::Back && !m_downloadConfirmId.empty()) { m_downloadConfirmId.clear(); return true; }
-    if (action == Action::ActionsMenu && downloadCanRemove(item)) {
-        if (downloadRemovalConfirmed(m_downloadConfirmId, item)) {
-            m_downloads->erase(item.itemId, nullptr);
-            m_downloadConfirmId.clear();
-        } else m_downloadConfirmId = item.itemId;
+    const DownloadHierarchyRow &row=rows[m_downloadSelected];
+    if (action == Action::Back && !m_downloadConfirmId.empty()) {
+        m_downloadConfirmId.clear(); m_downloadConfirmItemIds.clear(); return true;
+    }
+    if ((row.kind==DownloadHierarchyRowKind::Series || row.kind==DownloadHierarchyRowKind::Season) && action==Action::Confirm) {
+        if(row.expanded) m_downloadExpanded.erase(row.id); else m_downloadExpanded.insert(row.id);
+        m_downloadHierarchy=buildDownloadHierarchy(m_downloadSnapshot,m_downloadExpanded);
+        m_downloadSelected=downloadHierarchySelection(m_downloadHierarchy.visible,row.id,m_downloadSelected);
+        m_downloadScroll=clampDownloadScroll(m_downloadSelected,(int)m_downloadHierarchy.visible.size(),m_downloadScroll,5);
+        m_downloadSelectedId=row.id; m_downloadConfirmId.clear(); m_downloadConfirmItemIds.clear(); return true;
+    }
+    // Y belongs to Downloads even when the selected row has no removal
+    // operation (such as Series/Season parents or malformed leaves).  Letting
+    // it fall through would trigger Home's global logout action.
+    if (action == Action::ActionsMenu && downloadHierarchyConsumesActionsMenu(row)) {
+        if (row.item && downloadCanRemove(*row.item)) {
+            const DownloadItem &item=*row.item;
+            if (m_downloadConfirmId == row.id) {
+                m_downloads->erase(item.itemId, nullptr);
+                m_downloadConfirmId.clear(); m_downloadConfirmItemIds.clear();
+            } else { m_downloadConfirmId = row.id; m_downloadConfirmItemIds={item.itemId}; }
+        } else if (downloadHierarchyIsBulkRemovalParent(row)) {
+            if (downloadHierarchyBulkRemovalConfirmed(m_downloadConfirmId,row)) {
+                // DownloadManager::erase cancels an active transfer before it
+                // removes its local manifest/segments and store entry.
+                for (const std::string &itemId : m_downloadConfirmItemIds)
+                    m_downloads->erase(itemId, nullptr);
+                m_downloadConfirmId.clear(); m_downloadConfirmItemIds.clear();
+            } else {
+                m_downloadConfirmItemIds=downloadHierarchyBulkRemovalItemIds(row,m_downloadSnapshot);
+                if (!m_downloadConfirmItemIds.empty()) m_downloadConfirmId=row.id;
+            }
+        }
         return true;
     }
+    if (!row.item) return action==Action::Confirm;
+    const DownloadItem &item=*row.item;
     if (action == Action::Search && item.state == DownloadState::UpdateAvailable) { m_downloads->redownload(item.itemId); return true; }
     if (action == Action::Search && !m_missingJournalEntries.empty()) {
         const std::string &id=m_missingJournalEntries.front().itemId;
@@ -1650,36 +1677,50 @@ void HomeScreen::drawDownloadsTab(SDL_Surface *fb)
     BitmapFont::drawString(fb, 8, 32, summary, Theme::ACCENT_R, Theme::ACCENT_G,
         Theme::ACCENT_B, 24, 24, 32);
     BitmapFont::fillRect(fb, 8, 49, 624, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
-    const auto &items = m_downloadSnapshot.items;
-    if (items.empty()) {
+    const auto &rows=m_downloadHierarchy.visible;
+    if (rows.empty()) {
         BitmapFont::drawString(fb, 8, 210, "No downloads", Theme::TEXT_R, Theme::TEXT_G,
             Theme::TEXT_B, 24, 24, 32);
         if (!m_missingJournalEntries.empty()) BitmapFont::drawString(fb,8,230,"Missing offline progress: X=Discard",Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,24,24,32);
         return;
     }
-    for (int row=0; row<5; ++row) {
-        int index=m_downloadScroll+row; if(index >= (int)items.size()) break;
-        const DownloadItem &item=items[index]; int y=58+row*76; bool selected=index==m_downloadSelected;
-        if(selected) BitmapFont::fillRect(fb, 6, y-2, 628, 70, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 80);
-        std::string title=item.itemType=="episode" && !item.seriesName.empty()?item.seriesName:item.title;
-        if(title.size()>72) title.resize(72);
-        BitmapFont::drawString(fb, 12, y, title.c_str(), selected?Theme::ACCENT_R:Theme::TEXT_R,
+    bool moviesLabel=false, showsLabel=false;
+    for (int visible=0; visible<5; ++visible) {
+        int index=m_downloadScroll+visible; if(index >= (int)rows.size()) break;
+        const DownloadHierarchyRow &row=rows[index]; const DownloadItem *item=row.item;
+        int y=58+visible*76; bool selected=index==m_downloadSelected;
+        const bool movie=row.kind==DownloadHierarchyRowKind::Movie;
+        if(movie&&!moviesLabel) { BitmapFont::drawString(fb,8,y,"Movies",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32); y+=11; moviesLabel=true; }
+        if(!movie&&!showsLabel) { BitmapFont::drawString(fb,8,y,"Shows",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32); y+=11; showsLabel=true; }
+        if(selected) BitmapFont::fillRect(fb, 6+row.indent*14, y-2, 628-row.indent*14, 58, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 80);
+        const int x=12+row.indent*14;
+        std::string title=row.title;
+        if(row.kind==DownloadHierarchyRowKind::Series || row.kind==DownloadHierarchyRowKind::Season) title+=(row.expanded?"  v":"  >");
+        if(title.size()>68-(size_t)row.indent*2) title.resize(68-(size_t)row.indent*2);
+        BitmapFont::drawString(fb, x, y, title.c_str(), selected?Theme::ACCENT_R:Theme::TEXT_R,
             selected?Theme::ACCENT_G:Theme::TEXT_G, selected?Theme::ACCENT_B:Theme::TEXT_B,24,24,32);
         std::string detail;
-        const bool completedHls=item.hlsStorage && (item.state==DownloadState::Complete || item.state==DownloadState::LocalOnly || item.state==DownloadState::UpdateAvailable);
-        const std::string sizeLabel=(item.hlsStorage&&!completedHls?"~":"")+formatBytes(displayDownloadBytes(item));
-        if(item.itemType=="episode") detail=episodeDownloadLabel(item);
-        else detail=std::string(downloadStateLabel(item.state))+" | "+sizeLabel;
-        if(item.state==DownloadState::Downloading) {
-            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s/s",downloadPercent(item),formatBytes(item.recentBytesPerSec).c_str()); detail=active;
-        } else if(item.itemType=="episode") detail += " | "+std::string(downloadStateLabel(item.state))+" | "+sizeLabel;
-        if(!item.lastError.empty() && (item.state==DownloadState::Failed || item.state==DownloadState::WaitingForNetwork || item.state==DownloadState::Unauthorized))
-            detail=std::string(downloadStateLabel(item.state))+" | "+item.lastError;
+        if(!item) {
+            detail=std::to_string(row.aggregate.episodes)+" episodes";
+            if(row.aggregate.active) detail+=" | "+std::to_string(row.aggregate.progress)+"%";
+            else if(row.aggregate.complete) detail+=" | "+std::to_string(row.aggregate.complete)+" complete";
+            if(row.aggregate.bytesKnown) detail+=" | "+formatBytes(row.aggregate.bytes)+"/"+formatBytes(row.aggregate.totalBytes);
+        } else {
+        const bool completedHls=item->hlsStorage && downloadHierarchyComplete(*item);
+        const std::string sizeLabel=(item->hlsStorage&&!completedHls?"~":"")+formatBytes(displayDownloadBytes(*item));
+        if(item->itemType=="episode") detail=episodeDownloadLabel(*item);
+        else detail=std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
+        if(item->state==DownloadState::Downloading) {
+            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s/s",downloadPercent(*item),formatBytes(item->recentBytesPerSec).c_str()); detail=active;
+        } else if(item->itemType=="episode") detail += " | "+std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
+        if(!item->lastError.empty() && (item->state==DownloadState::Failed || item->state==DownloadState::WaitingForNetwork || item->state==DownloadState::Unauthorized))
+            detail=std::string(downloadStateLabel(item->state))+" | "+item->lastError;
+        }
         if(detail.size()>74) detail.resize(74);
-        BitmapFont::drawString(fb, 12, y+18, detail.c_str(), Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
-        BitmapFont::fillRect(fb, 12, y+39, 600, 3, 48,48,58,255);
-        int fill=(int)(600*downloadPercent(item)/100);
-        if(fill) BitmapFont::fillRect(fb,12,y+39,fill,3,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,255);
+        BitmapFont::drawString(fb, x, y+18, detail.c_str(), Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+        BitmapFont::fillRect(fb, x, y+39, 600-row.indent*14, 3, 48,48,58,255);
+        int fill=(int)((600-row.indent*14)*(item?downloadPercent(*item):(row.aggregate.progressKnown?row.aggregate.progress:0))/100);
+        if(fill) BitmapFont::fillRect(fb,x,y+39,fill,3,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,255);
     }
 }
 
@@ -1711,16 +1752,25 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
                 BitmapFont::drawString(fb,8,y+2,"Press X again to discard missing progress",Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
                 return;
             }
-            if (!m_downloadConfirmId.empty() && m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size()) {
-                const DownloadItem &item=m_downloadSnapshot.items[m_downloadSelected]; char confirm[96];
-                std::snprintf(confirm,sizeof(confirm),"Press Y again to %s %s",downloadRemoveIsDelete(item)?"delete":"cancel",formatBytes(displayDownloadBytes(item)).c_str());
+            const DownloadHierarchyRow *selectedRow=m_downloadSelected>=0&&m_downloadSelected<(int)m_downloadHierarchy.visible.size()?&m_downloadHierarchy.visible[m_downloadSelected]:nullptr;
+            const DownloadItem *selectedItem=selectedRow?selectedRow->item:nullptr;
+            if (!m_downloadConfirmId.empty() && selectedRow && m_downloadConfirmId==selectedRow->id) {
+                char confirm[96];
+                if (selectedItem) {
+                    const DownloadItem &item=*selectedItem;
+                    std::snprintf(confirm,sizeof(confirm),"Press Y again to %s %s",downloadRemoveIsDelete(item)?"delete":"cancel",formatBytes(displayDownloadBytes(item)).c_str());
+                } else {
+                    std::snprintf(confirm,sizeof(confirm),"Press Y again to delete %s (%u local)",selectedRow->kind==DownloadHierarchyRowKind::Season?"Season":"entire Series",(unsigned)m_downloadConfirmItemIds.size());
+                }
                 BitmapFont::drawString(fb,8,y+2,confirm,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
                 return;
             }
             const char *primary="";
-            if (m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size()) primary=downloadPrimaryControlLabel(downloadPrimaryControl(m_downloadSnapshot.items[m_downloadSelected].state));
-            bool update=m_downloadSelected >= 0 && m_downloadSelected < (int)m_downloadSnapshot.items.size() && m_downloadSnapshot.items[m_downloadSelected].state==DownloadState::UpdateAvailable;
-            char downloadHints[96]; std::snprintf(downloadHints,sizeof(downloadHints),update?"A=Play  X=Update  Y=Delete  B=Back":(!m_missingJournalEntries.empty()?"A=%s  X=Discard missing progress  Y=Cancel/Delete":"A=%s  Y=Cancel/Delete  B=Back"),primary[0]?primary:"Select"); hints=downloadHints;
+            if (selectedItem) primary=downloadPrimaryControlLabel(downloadPrimaryControl(selectedItem->state));
+            bool update=selectedItem && selectedItem->state==DownloadState::UpdateAvailable;
+            if(selectedRow && !selectedItem) primary=selectedRow->expanded?"Collapse":"Expand";
+            const bool parent=selectedRow && !selectedItem;
+            char downloadHints[96]; std::snprintf(downloadHints,sizeof(downloadHints),update?"A=Play  X=Update  Y=Delete  B=Back":(parent?"A=%s  Y=Delete all  B=Back":(!m_missingJournalEntries.empty()?"A=%s  X=Discard missing progress  Y=Cancel/Delete":"A=%s  Y=Cancel/Delete  B=Back")),primary[0]?primary:"Select"); hints=downloadHints;
             BitmapFont::drawString(fb,8,y+2,hints,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
             return;
         }

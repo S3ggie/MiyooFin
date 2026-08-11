@@ -11,6 +11,7 @@
 #include "../../cache/SyncState.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../download/DownloadUi.hpp"
+#include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include <memory>
 #include "../ArtworkLayout.hpp"
@@ -183,6 +184,9 @@ private:
     DownloadSnapshot m_downloadSnapshot;
     int m_downloadSelected = 0, m_downloadScroll = 0;
     std::string m_downloadSelectedId, m_downloadConfirmId;
+    std::vector<std::string> m_downloadConfirmItemIds;
+    std::set<std::string> m_downloadExpanded;
+    DownloadHierarchy m_downloadHierarchy;
     std::vector<OfflinePlaybackEntry> m_missingJournalEntries;
     std::string m_journalDiscardConfirmId;
 

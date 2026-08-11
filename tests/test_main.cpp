@@ -1932,9 +1932,11 @@ static void testSeasonPosterScheduling(){
 
 static void testOfflineLibraryProjection(){
     LibrarySnapshot l; MediaItem movie=cacheItem("movie"),partial=cacheItem("partial"),show=cacheItem("show"),anime=cacheItem("anime"),season=cacheItem("s1"),empty=cacheItem("s2"),ep1=cacheItem("e1"),ep3=cacheItem("e3"),remote=cacheItem("remote");
-    movie.type=partial.type="movie"; movie.playbackPositionTicks=50; show.type=anime.type="show"; show.title="Show"; anime.title="Anime"; season.seriesId=show.id; empty.seriesId=show.id;
+    movie.type=partial.type="movie"; movie.playbackPositionTicks=50; show.type=anime.type="show"; show.title="Show"; anime.title="Anime"; season.seriesId="stale-series"; empty.seriesId.clear();
     ep1.type=ep3.type=remote.type="episode"; ep1.seriesId=ep3.seriesId=remote.seriesId=show.id; ep1.seasonId=ep3.seasonId=remote.seasonId=season.id; ep1.indexNumber=1; ep3.indexNumber=3; ep1.playbackPositionTicks=25;
     l.movies={{"m","Movies","movies",{movie,partial}}}; l.shows={{"tv","Shows","tvshows",{show}},{"a","Anime","tvshows",{anime}}}; l.continueWatching={remote,movie,ep1,partial}; l.recentlyAdded={remote};
+    // The map key is authoritative: stale and missing season parents are
+    // normalized before applying the complete-download visibility filter.
     OfflineCatalogSnapshot c; c.series[show.id]=show; c.series[anime.id]=anime; c.seasonsBySeries[show.id]={season,empty}; c.episodesBySeason[season.id]={ep1,ep3,remote};
     DownloadSnapshot d; DownloadItem dm; dm.itemId=movie.id; dm.itemType="movie"; dm.state=DownloadState::Complete; dm.updatedAt=20;
     DownloadItem de1; de1.itemId=ep1.id; de1.itemType="episode"; de1.state=DownloadState::Complete; de1.updatedAt=30; de1.seriesId=show.id; de1.seasonId=season.id;
@@ -2027,6 +2029,67 @@ static void testDownloadsUiHelpers()
     CHECK(!downloadRemovalConfirmed("other", incomplete));
     CHECK(downloadRemovalConfirmed("later", incomplete));
     std::printf("[test] Downloads UI helpers OK\n");
+}
+
+static void testDownloadHierarchy()
+{
+    std::printf("[test] download hierarchy\n");
+    DownloadSnapshot snapshot;
+    DownloadItem movie=planItem("movie",100,50); movie.itemType="movie"; movie.title="A Movie";
+    DownloadItem a1=planItem("a1",100,100); a1.itemType="episode"; a1.title="Second"; a1.seriesId="a"; a1.seriesName="The Alpha Show"; a1.seasonId="a2"; a1.seasonName="Season 2"; a1.seasonNumber=2; a1.episodeNumber=2; a1.state=DownloadState::Complete;
+    DownloadItem a0=planItem("a0",100,25); a0.itemType="episode"; a0.title="First"; a0.seriesId="a"; a0.seriesName="The Alpha Show"; a0.seasonId="a1"; a0.seasonName="Season 1"; a0.seasonNumber=1; a0.episodeNumber=1; a0.state=DownloadState::Downloading;
+    DownloadItem b=planItem("b",200,200); b.itemType="episode"; b.title="Only"; b.seriesId="b"; b.seriesName="Breaking Bad"; b.seasonId="b1"; b.seasonNumber=1; b.episodeNumber=1; b.state=DownloadState::Complete;
+    snapshot.items={movie,a1,a0,b};
+    auto collapsed=buildDownloadHierarchy(snapshot,{});
+    CHECK(collapsed.movies.size()==(size_t)1); CHECK(collapsed.shows.size()==(size_t)2); // movies separated; multiple series
+    CHECK(collapsed.shows[0].title=="The Alpha Show"); // article-aware ordering
+    CHECK(collapsed.shows[0].aggregate.episodes==2 && collapsed.shows[0].aggregate.active==1);
+    CHECK(collapsed.shows[0].aggregate.progress==62); // (25 + complete 100) / 2
+    std::set<std::string> expanded{"series:a","series:a/season:a1","series:a/season:a2"};
+    auto open=buildDownloadHierarchy(snapshot,expanded);
+    CHECK(open.visible.size()==(size_t)7); // movie, 2 series, 2 seasons, 2 episodes
+    CHECK(open.shows[1].kind==DownloadHierarchyRowKind::Season && open.shows[1].title=="Season 1");
+    CHECK(open.shows[2].kind==DownloadHierarchyRowKind::Episode && open.shows[2].item->itemId=="a0");
+    CHECK(open.shows[3].kind==DownloadHierarchyRowKind::Season && open.shows[3].title=="Season 2");
+    // Rebuild preserves expansion by stable IDs and selection by logical row.
+    DownloadSnapshot refreshed=snapshot;
+    auto after=buildDownloadHierarchy(refreshed,expanded);
+    int selected=downloadHierarchySelection(after.visible,"series:a/season:a1",4);
+    CHECK(after.shows[0].expanded && after.shows[1].expanded); CHECK(after.visible[selected].id=="series:a/season:a1");
+    // A deleted selected leaf clamps safely; an empty category does not create a section.
+    CHECK(downloadHierarchySelection(after.visible,"episode:deleted",99)==(int)after.visible.size()-1);
+    DownloadSnapshot episodesOnly; episodesOnly.items={a0}; CHECK(buildDownloadHierarchy(episodesOnly,{}).movies.empty());
+    DownloadSnapshot moviesOnly; moviesOnly.items={movie}; CHECK(buildDownloadHierarchy(moviesOnly,{}).shows.empty());
+    CHECK(downloadPrimaryControl(a0.state)==DownloadPrimaryControl::Pause); // leaf controls remain unchanged
+    // Y is handled by Downloads for hierarchy parents, so it cannot reach
+    // HomeScreen's global ActionsMenu/logout path.
+    DownloadHierarchyRow seriesRow; seriesRow.kind=DownloadHierarchyRowKind::Series;
+    DownloadHierarchyRow seasonRow; seasonRow.kind=DownloadHierarchyRowKind::Season;
+    CHECK(downloadHierarchyConsumesActionsMenu(seriesRow));
+    CHECK(downloadHierarchyConsumesActionsMenu(seasonRow));
+    // Parent Y plans only matching local DownloadManager IDs.  The plan is
+    // later executed solely through DownloadManager::erase, never a server API.
+    const DownloadHierarchyRow &alphaSeries=open.shows[0];
+    const DownloadHierarchyRow &alphaSeason=open.shows[1];
+    auto seasonDelete=downloadHierarchyBulkRemovalItemIds(alphaSeason,snapshot);
+    CHECK(seasonDelete.size()==(size_t)1 && seasonDelete[0]=="a0");
+    auto seriesDelete=downloadHierarchyBulkRemovalItemIds(alphaSeries,snapshot);
+    CHECK(seriesDelete.size()==(size_t)2);
+    CHECK(std::find(seriesDelete.begin(),seriesDelete.end(),"a0")!=seriesDelete.end());
+    CHECK(std::find(seriesDelete.begin(),seriesDelete.end(),"a1")!=seriesDelete.end());
+    CHECK(std::find(seriesDelete.begin(),seriesDelete.end(),"b")==seriesDelete.end());
+    CHECK(downloadHierarchyBulkRemovalConfirmed(alphaSeason.id,alphaSeason));
+    CHECK(!downloadHierarchyBulkRemovalConfirmed(alphaSeries.id,alphaSeason));
+    DownloadSnapshot afterSeason=snapshot;
+    afterSeason.items.erase(afterSeason.items.begin()+2);
+    auto afterSeasonHierarchy=buildDownloadHierarchy(afterSeason,expanded);
+    CHECK(std::none_of(afterSeasonHierarchy.shows.begin(),afterSeasonHierarchy.shows.end(),[](const DownloadHierarchyRow &row){ return row.id=="series:a/season:a1"; }));
+    CHECK(std::any_of(afterSeasonHierarchy.shows.begin(),afterSeasonHierarchy.shows.end(),[](const DownloadHierarchyRow &row){ return row.id=="series:b"; }));
+    DownloadSnapshot afterSeries=snapshot;
+    afterSeries.items.erase(afterSeries.items.begin()+1,afterSeries.items.begin()+3);
+    auto afterSeriesHierarchy=buildDownloadHierarchy(afterSeries,expanded);
+    CHECK(afterSeriesHierarchy.shows.size()==(size_t)1 && afterSeriesHierarchy.shows[0].title=="Breaking Bad");
+    std::printf("[test] download hierarchy OK\n");
 }
 
 static void testDownloadSourceReconciliation()
@@ -2283,6 +2346,7 @@ int main()
     testDownloadPlanBatchAccounting();
     testHlsSizeEstimates(); testHlsFailureClassification();
     testDownloadsUiHelpers();
+    testDownloadHierarchy();
     testDownloadSourceReconciliation();
 
     // B5f3a tests — In-process external playback handoff

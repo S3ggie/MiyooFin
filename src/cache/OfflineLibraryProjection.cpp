@@ -14,7 +14,7 @@ OfflineLibraryProjection::OfflineLibraryProjection(const LibrarySnapshot &librar
     for(const auto &i:library.recentlyAdded) if(!i.id.empty()) m_media[i.id]=i;
     m_series=catalog.series;
     for(const auto &v:library.shows) for(const auto &s:v.items) if(!s.id.empty()) { m_series[s.id]=s; m_media[s.id]=s; }
-    for(const auto &a:catalog.seasonsBySeries) for(const auto &s:a.second) m_seasons[s.id]=s;
+    for(const auto &a:catalog.seasonsBySeries) for(auto s:a.second) { s.seriesId=a.first; m_seasons[s.id]=std::move(s); }
     m_episodes=catalog.episodesBySeason;
     for(const auto &a:m_episodes) for(const auto &i:a.second) if(!i.id.empty()) m_media[i.id]=i;
     // Download metadata is a durable fallback for a complete episode whose

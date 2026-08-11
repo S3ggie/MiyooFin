@@ -32,6 +32,7 @@
 #include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"
+#include "../src/ui/screens/SeriesScreen.hpp"
 #include "../src/ui/screens/MovieDetailsScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
 #include "../src/app/UiDiagnostics.hpp"
@@ -1433,6 +1434,25 @@ static void testEpisodePrefetchScheduler()
     std::printf("[test] B5g1b: bounded prefetch scheduler OK\n");
 }
 
+static void testEpisodeArtworkPreemption()
+{
+    std::printf("[test] episode artwork request preemption\n");
+
+    // A selection change invalidates an in-flight prefetch request.
+    CHECK(EpisodeBrowserScreen::artworkRequestCancelled(false, 10, 11));
+    // libcurl cancellation is also an intentional cancellation, never a
+    // cache-key failure.
+    CHECK(EpisodeBrowserScreen::artworkRequestCancelled(true, 10, 10));
+    CHECK(!EpisodeBrowserScreen::shouldMarkArtworkFailed(false, true));
+    CHECK(EpisodeBrowserScreen::shouldMarkArtworkFailed(false, false));
+
+    // Once the stale request is dropped, recomputing from the latest
+    // selection puts its cached/selected thumbnail ahead of any prefetch.
+    std::set<int> unavailable;
+    CHECK(EpisodeBrowserScreen::nextPrefetchIndex(14, 30, unavailable) == 14);
+    std::printf("[test] episode artwork request preemption OK\n");
+}
+
 static void testEpisodePrefetchPlaybackResume()
 {
     std::printf("[test] B5g1b: playback resume countdown\n");
@@ -1949,6 +1969,18 @@ static void testOfflineLibraryProjection(){
     CHECK(HomeScreen::transitionTabIndex(offline,1,online)==2);
     CHECK(HomeScreen::transitionTabIndex(offline,2,online)==3);
 }
+static void testSeriesCachedSeasonHandoff(){
+    Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
+    // A nonempty RAM handoff is ready before enter(), so push has no catalog I/O.
+    SeriesScreen warm(session,show,{},false,{cached}); CHECK(warm.diagnosticSeasonsReady()); CHECK(warm.diagnosticSeasons().size()==(size_t)1&&warm.diagnosticSeasons()[0].id==cached.id);
+    // With no handoff, the constructor preserves the existing Loading state.
+    SeriesScreen cold(session,show); CHECK(!cold.diagnosticSeasonsReady());
+    // The later network completion still replaces the handed-off hierarchy.
+    int selected=0; auto replaced=SeriesScreen::replaceSeasonsKeepingSelection({cached},{fresh},selected); CHECK(replaced.size()==(size_t)1&&replaced[0].id==fresh.id&&selected==0);
+    // Offline callers hand over the existing downloaded-only projection, never
+    // its raw catalog seasons.
+    MediaItem remote=cacheItem("remote"); remote.type="season"; OfflineCatalogSnapshot catalog; catalog.seasonsBySeries[show.id]={cached,remote}; MediaItem episode=cacheItem("episode"); episode.type="episode"; episode.seriesId=show.id; episode.seasonId=cached.id; catalog.episodesBySeason[cached.id]={episode}; DownloadItem download; download.itemId=episode.id; download.state=DownloadState::Complete; DownloadSnapshot downloads; downloads.items={download}; LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads); SeriesScreen offline(session,show,{},true,projection.seasons(show.id)); CHECK(offline.diagnosticSeasonsReady()&&offline.diagnosticSeasons().size()==(size_t)1&&offline.diagnosticSeasons()[0].id==cached.id);
+}
 static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);
     // A successful sync is fresh for fifteen minutes, and tab requests while
     // in flight coalesce instead of spawning another worker.
@@ -2142,7 +2174,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 
@@ -2237,6 +2269,7 @@ int main()
     // B5g1b tests — bounded predictive episode thumbnail prefetch
     std::printf("\n--- B5g1b bounded prefetch scheduler tests ---\n");
     testEpisodePrefetchScheduler();
+    testEpisodeArtworkPreemption();
     testEpisodePrefetchPlaybackResume();
 
     // B5f2 tests — Playback request

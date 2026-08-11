@@ -97,12 +97,15 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
     return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" + std::to_string(POSTER_H);
 }
 
-SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool offline)
+SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool offline,
+                           std::vector<MediaItem> cachedSeasons)
     : m_session(session)
     , m_series(series)
     , m_downloads(std::move(downloads))
     , m_offline(offline)
+    , m_seasons(std::move(cachedSeasons))
 {
+    if (!m_seasons.empty()) m_loadState=LoadState::Ready;
 }
 
 void SeriesScreen::enter()
@@ -116,10 +119,32 @@ void SeriesScreen::enter()
         // and let the existing fetch worker provide cached seasons afterwards.
         m_loadState=LoadState::Loading;
         fetchSeasons(true);
+    } else {
+        // The Home hierarchy worker already supplied a filtered in-memory
+        // cache.  Keep it interactive while the normal network refresh runs.
+        fetchSeasons();
     }
     tryLoadSeriesArtwork();
 }
-SeriesScreen::~SeriesScreen(){ leave(); if(m_fetchThread.joinable())m_fetchThread.join(); if(m_artworkThread.joinable())m_artworkThread.join(); }
+SeriesScreen::~SeriesScreen()
+{
+    leave();
+    if(m_fetchThread.joinable())m_fetchThread.join();
+    if(m_artworkThread.joinable())m_artworkThread.join();
+    freePreparedArtwork(m_seriesArtworkSurface);
+    for (auto &entry : m_seasonArtworkSurfaces)
+        freePreparedArtwork(entry.second);
+}
+
+std::vector<MediaItem> SeriesScreen::replaceSeasonsKeepingSelection(const std::vector<MediaItem> &current,
+                                                                      std::vector<MediaItem> fresh, int &selected)
+{
+    std::string selectedId=current.empty()?"":current[std::min(std::max(selected,0),(int)current.size()-1)].id;
+    int n=0;
+    for(;n<(int)fresh.size()&&fresh[n].id!=selectedId;n++);
+    selected=n<(int)fresh.size()?n:0;
+    return fresh;
+}
 
 void SeriesScreen::leave()
 {
@@ -388,8 +413,24 @@ void SeriesScreen::update(Uint32 /*dt*/)
         if(m_offline || !m_seasons.empty()) m_loadState=LoadState::Ready;
     }
     bool fetchDone; {std::lock_guard<std::mutex>g(m_fetchMutex);fetchDone=m_fetchDone;}
-    if(fetchDone){UiDiagnostics::Scope scope("SeriesScreen::publishSeasonResult");std::vector<MediaItem> fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchSeasons);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){if(!m_offline){std::string selected=m_seasons.empty()?"":m_seasons[m_selectedSeason].id;m_seasons=std::move(fresh);int n=0;for(;n<(int)m_seasons.size()&&m_seasons[n].id!=selected;n++);m_selectedSeason=n<(int)m_seasons.size()?n:0;}m_loadState=LoadState::Ready;}else if(m_seasons.empty()){m_loadState=LoadState::Error;m_error=err;}}
-    {UiDiagnostics::Scope scope("SeriesScreen::publishArtworkResult");std::lock_guard<std::mutex>g(m_artworkMutex);for(auto &entry:m_artworkCompleted){if(entry.first.rfind("series:",0)==0)m_seriesArtwork=std::move(entry.second);else m_seasonArtwork[entry.first]=std::move(entry.second);}m_artworkCompleted.clear();}
+    if(fetchDone){UiDiagnostics::Scope scope("SeriesScreen::publishSeasonResult");std::vector<MediaItem> fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchSeasons);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){if(!m_offline)m_seasons=replaceSeasonsKeepingSelection(m_seasons,std::move(fresh),m_selectedSeason);m_loadState=LoadState::Ready;}else if(m_seasons.empty()){m_loadState=LoadState::Error;m_error=err;}}
+    {
+        UiDiagnostics::Scope scope("SeriesScreen::publishArtworkResult");
+        std::lock_guard<std::mutex> g(m_artworkMutex);
+        for (auto &entry : m_artworkCompleted) {
+            if (entry.first.rfind("series:", 0) == 0) {
+                m_seriesArtwork = std::move(entry.second);
+                freePreparedArtwork(m_seriesArtworkSurface);
+                m_seriesArtworkSurface = prepareArtworkSurface(m_seriesArtwork, SHOW_X, SHOW_Y, SHOW_W, SHOW_H);
+            } else {
+                m_seasonArtwork[entry.first] = std::move(entry.second);
+                PreparedArtwork &prepared = m_seasonArtworkSurfaces[entry.first];
+                freePreparedArtwork(prepared);
+                prepared = prepareArtworkSurface(m_seasonArtwork[entry.first], 0, 0, POSTER_W, POSTER_H);
+            }
+        }
+        m_artworkCompleted.clear();
+    }
     {UiDiagnostics::Scope scope("SeriesScreen::queueVisibleArtwork");tryLoadOneVisibleSeasonArtwork();}
 }
 
@@ -438,49 +479,62 @@ static void renderBottomHints(SDL_Surface *fb, const char *hint)
         Theme::BG_B * 2 / 3);
 }
 
+SeriesScreen::PreparedArtwork SeriesScreen::prepareArtworkSurface(const DecodedImage &image,
+                                                                    int boxX, int boxY, int boxW, int boxH)
+{
+    PreparedArtwork prepared;
+    if (image.empty()) return prepared;
+
+    float imgAspect = (float)image.width / (float)image.height;
+    float boxAspect = (float)boxW / (float)boxH;
+    int drawW, drawH;
+    if (imgAspect > boxAspect) {
+        drawW = boxW;
+        drawH = (int)(boxW / imgAspect + 0.5f);
+        if (drawH > boxH) drawH = boxH;
+    } else {
+        drawH = boxH;
+        drawW = (int)(boxH * imgAspect + 0.5f);
+        if (drawW > boxW) drawW = boxW;
+    }
+
+    SDL_Surface *source = SDL_CreateRGBSurfaceFrom(
+        (void *)image.pixels.data(), image.width, image.height, 32, image.width * 4,
+        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    SDL_Surface *destination = SDL_CreateRGBSurface(
+        0, drawW, drawH, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (source && destination) {
+        SDL_Rect sourceRect = {0, 0, image.width, image.height};
+        SDL_Rect destinationRect = {0, 0, drawW, drawH};
+        SDL_BlitScaled(source, &sourceRect, destination, &destinationRect);
+        prepared.surface = destination;
+        prepared.x = boxX + (boxW - drawW) / 2;
+        prepared.y = boxY + (boxH - drawH) / 2;
+    } else if (destination) {
+        SDL_FreeSurface(destination);
+    }
+    if (source) SDL_FreeSurface(source);
+    return prepared;
+}
+
+void SeriesScreen::freePreparedArtwork(PreparedArtwork &artwork)
+{
+    if (artwork.surface) SDL_FreeSurface(artwork.surface);
+    artwork = {};
+}
+
 /// Draw a season poster card (placeholder colour + optional artwork + title overlay + border).
-static void drawSeasonPoster(SDL_Surface *fb, int x, int y, int w, int h,
-                              const MediaItem &season, bool selected,
-                              const DecodedImage *artwork = nullptr)
+void SeriesScreen::drawSeasonPoster(SDL_Surface *fb, int x, int y, int w, int h,
+                                    const MediaItem &season, bool selected,
+                                    const PreparedArtwork *artwork)
 {
     // Placeholder colour fill (always drawn as fallback)
     BitmapFont::fillRect(fb, x, y, w, h,
         season.artR, season.artG, season.artB, 255);
 
-    // Render decoded artwork if available, aspect-fit centred
-    if (artwork && !artwork->empty()) {
-        int imgW = artwork->width;
-        int imgH = artwork->height;
-        float imgAspect = (float)imgW / (float)imgH;
-        float boxAspect = (float)w / (float)h;
-        int drawW, drawH;
-        if (imgAspect > boxAspect) {
-            drawW = w;
-            drawH = (int)(w / imgAspect + 0.5f);
-            if (drawH > h) drawH = h;
-        } else {
-            drawH = h;
-            drawW = (int)(h * imgAspect + 0.5f);
-            if (drawW > w) drawW = w;
-        }
-        int drawX = x + (w - drawW) / 2;
-        int drawY = y + (h - drawH) / 2;
-
-        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
-            (void *)artwork->pixels.data(),
-            imgW, imgH,
-            32,
-            imgW * 4,
-            0x000000FF,
-            0x0000FF00,
-            0x00FF0000,
-            0xFF000000);
-        if (imgSurface) {
-            SDL_Rect srcRect = {0, 0, imgW, imgH};
-            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-            SDL_FreeSurface(imgSurface);
-        }
+    if (artwork && artwork->surface) {
+        SDL_Rect dstRect = {x + artwork->x, y + artwork->y, 0, 0};
+        SDL_BlitSurface(artwork->surface, nullptr, fb, &dstRect);
     }
 
     // Dark overlay along the bottom for the title
@@ -587,12 +641,12 @@ void SeriesScreen::render(SDL_Surface *fb)
         int py = GRID_TOP_Y + gridRow * GRID_ROW_H;
         bool sel = (itemIdx == m_selectedSeason);
 
-        // Look up decoded season artwork (read-only, no mutation during render)
-        const DecodedImage *artPtr = nullptr;
+        // Look up prepared season artwork (read-only, no mutation during render)
+        const PreparedArtwork *artPtr = nullptr;
         std::string key = seasonArtworkKey(m_seasons[itemIdx]);
         if (!key.empty()) {
-            auto it = m_seasonArtwork.find(key);
-            if (it != m_seasonArtwork.end() && !it->second.empty())
+            auto it = m_seasonArtworkSurfaces.find(key);
+            if (it != m_seasonArtworkSurfaces.end() && it->second.surface)
                 artPtr = &it->second;
         }
 
@@ -604,42 +658,9 @@ void SeriesScreen::render(SDL_Surface *fb)
     BitmapFont::fillRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H,
         m_series.artR, m_series.artG, m_series.artB, 255);
 
-    // Render decoded series artwork if available, aspect-fit centred
-    if (!m_seriesArtwork.empty()) {
-        int imgW = m_seriesArtwork.width;
-        int imgH = m_seriesArtwork.height;
-        float imgAspect = (float)imgW / (float)imgH;
-        float boxAspect = (float)SHOW_W / (float)SHOW_H;
-        int drawW, drawH;
-        if (imgAspect > boxAspect) {
-            // Wider than box — fit to width
-            drawW = SHOW_W;
-            drawH = (int)(SHOW_W / imgAspect + 0.5f);
-            if (drawH > SHOW_H) drawH = SHOW_H;
-        } else {
-            // Taller than box — fit to height
-            drawH = SHOW_H;
-            drawW = (int)(SHOW_H * imgAspect + 0.5f);
-            if (drawW > SHOW_W) drawW = SHOW_W;
-        }
-        int drawX = SHOW_X + (SHOW_W - drawW) / 2;
-        int drawY = SHOW_Y + (SHOW_H - drawH) / 2;
-
-        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
-            (void *)m_seriesArtwork.pixels.data(),
-            imgW, imgH,
-            32,                    // bits per pixel
-            imgW * 4,              // pitch (bytes per row)
-            0x000000FF,            // R mask
-            0x0000FF00,            // G mask
-            0x00FF0000,            // B mask
-            0xFF000000);           // A mask
-        if (imgSurface) {
-            SDL_Rect srcRect = {0, 0, imgW, imgH};
-            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-            SDL_FreeSurface(imgSurface);
-        }
+    if (m_seriesArtworkSurface.surface) {
+        SDL_Rect dstRect = {m_seriesArtworkSurface.x, m_seriesArtworkSurface.y, 0, 0};
+        SDL_BlitSurface(m_seriesArtworkSurface.surface, nullptr, fb, &dstRect);
     }
 
     // Poster border (drawn after artwork)

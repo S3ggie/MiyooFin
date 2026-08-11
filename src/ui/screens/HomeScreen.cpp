@@ -178,9 +178,35 @@ void HomeScreen::refreshMovieFilter()
 }
 
 void HomeScreen::rebuildShowsPresentation() { ShowsPresentation p=makeShowsPresentation((m_libraryOffline?m_offlineSnapshot:m_cachedSnapshot).shows); m_showMaster=std::move(p.shows); m_animeMaster=std::move(p.anime); refreshShowsFilter(); }
-void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
+void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; const bool catalogLoaded=OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); if(catalogLoaded){std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);m_catalogSnapshot=catalog;m_catalogSnapshotReady=true;} OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
 void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
 void HomeScreen::refreshShowsFilter() { m_filteredShows.clear();m_filteredAnime.clear();for(const auto&i:m_showMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredShows.push_back(i);for(const auto&i:m_animeMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredAnime.push_back(i);m_showSelected=m_animeSelected=m_showScroll=m_animeScroll=0;m_showsFocus=!m_filteredShows.empty()?ShowsFocus::ShowsGrid:!m_filteredAnime.empty()?ShowsFocus::AnimeGrid:ShowsFocus::AlphabetRail;if(const MediaItem*i=showsSelectedItem())m_showsPreviewId=i->id; }
+std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &seriesId) const
+{
+    std::vector<MediaItem> seasons;
+    OfflineCatalogSnapshot catalog;
+    {
+        std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
+        if (!m_catalogSnapshotReady) return {};
+        const auto seasonsIt=m_catalogSnapshot.seasonsBySeries.find(seriesId);
+        if (seasonsIt==m_catalogSnapshot.seasonsBySeries.end()) return {};
+        seasons=seasonsIt->second;
+        if (m_libraryOffline) {
+            catalog.seasonsBySeries.emplace(seriesId,seasons);
+            for (const auto &season:seasons) {
+                const auto episodesIt=m_catalogSnapshot.episodesBySeason.find(season.id);
+                if (episodesIt!=m_catalogSnapshot.episodesBySeason.end())
+                    catalog.episodesBySeason.emplace(season.id,episodesIt->second);
+            }
+        }
+    }
+    if (m_libraryOffline) {
+        LibrarySnapshot library;
+        OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
+        return projection.seasons(seriesId);
+    }
+    return seasons;
+}
 const MediaItem *HomeScreen::showsSelectedItem() const { const std::vector<MediaItem>*v=m_showsFocus==ShowsFocus::AnimeGrid?&m_filteredAnime:&m_filteredShows;int n=m_showsFocus==ShowsFocus::AnimeGrid?m_animeSelected:m_showSelected;if(n>=0&&n<(int)v->size())return &(*v)[n];for(const auto&i:m_filteredShows)if(i.id==m_showsPreviewId)return &i;for(const auto&i:m_filteredAnime)if(i.id==m_showsPreviewId)return &i;return nullptr; }
 void HomeScreen::clampShowsNavigation() { if(!m_filteredShows.empty()){m_showSelected=std::max(0,std::min(m_showSelected,(int)m_filteredShows.size()-1));m_showScroll=clampShowsGridScroll(m_showSelected,m_filteredShows.size(),m_showScroll);}else m_showSelected=m_showScroll=0;if(!m_filteredAnime.empty()){m_animeSelected=std::max(0,std::min(m_animeSelected,(int)m_filteredAnime.size()-1));m_animeScroll=clampShowsGridScroll(m_animeSelected,m_filteredAnime.size(),m_animeScroll);}else m_animeSelected=m_animeScroll=0; }
 
@@ -390,7 +416,7 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline));return true;}return true;}
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,cachedSeasonsForSeries(i->id)));return true;}return true;}
         if (activeTabNamed("Movies") && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             refreshMovieFilter();
@@ -402,7 +428,7 @@ bool HomeScreen::handleAction(Action action)
             printf("[HomeScreen] Select: %s (%s)\n",
                    item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
-                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline));
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,cachedSeasonsForSeries(item->id)));
                 return true;
             }
             if (item->type == "movie") {
@@ -863,6 +889,13 @@ void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const Libr
     // An authoritative top-level list also provides deletion reconciliation;
     // this remains background work and never affects download files.
     OfflineCatalog::reconcileSeries(catalog,all,nullptr);
+    // This function runs from the library fetch worker.  Refresh the reusable
+    // RAM catalog after reconciliation, never from Home's SDL-thread push.
+    if (OfflineCatalog::load(catalog,catalogSnapshot,nullptr)) {
+        std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
+        m_catalogSnapshot=std::move(catalogSnapshot);
+        m_catalogSnapshotReady=true;
+    }
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     const std::uint64_t generation=m_hierarchyGeneration.fetch_add(1)+1;
     m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
@@ -902,9 +935,17 @@ void HomeScreen::hierarchyWorker()
             }
             // A show is only complete after every discovered level has been
             // fetched and atomically merged into the offline catalog.
-            if (complete && OfflineCatalog::storeDiscoveredHierarchy(catalog,series,seasons,episodesBySeason,true,nullptr)
-                && generation==m_hierarchyGeneration.load())
-                m_hierarchyCompleted.fetch_add(1);
+            if (complete && OfflineCatalog::storeDiscoveredHierarchy(catalog,series,seasons,episodesBySeason,true,nullptr)) {
+                // Reload on this background worker so the RAM snapshot exactly
+                // follows catalog merge semantics and is ready for handoff.
+                OfflineCatalogSnapshot snapshot;
+                if (OfflineCatalog::load(catalog,snapshot,nullptr)) {
+                    std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
+                    m_catalogSnapshot=std::move(snapshot);
+                    m_catalogSnapshotReady=true;
+                }
+                if (generation==m_hierarchyGeneration.load()) m_hierarchyCompleted.fetch_add(1);
+            }
         }
         if (generation==m_hierarchyGeneration.load()) {
             m_hierarchyActive.store(false);

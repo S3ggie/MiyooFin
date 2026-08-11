@@ -246,11 +246,18 @@ private:
     void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
                              const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
+    std::vector<MediaItem> cachedSeasonsForSeries(const std::string &seriesId) const;
     std::string syncStatusText() const;
     void decodeWorker();
     void drainDecodedArtwork();
     void submitDecode(const MediaItem &item, bool highPriority=false,
                       bool shows=false);
+
+    // Updated only by background catalog/sync work.  The SDL thread copies a
+    // selected vector under this mutex but never reads the catalog file.
+    mutable std::mutex m_catalogSnapshotMutex;
+    OfflineCatalogSnapshot m_catalogSnapshot;
+    bool m_catalogSnapshotReady = false;
 
     // Lightweight refresh used when returning to an already-loaded Home.
     std::thread m_resumeRefreshThread;

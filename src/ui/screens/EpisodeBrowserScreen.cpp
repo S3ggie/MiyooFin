@@ -150,6 +150,7 @@ EpisodeBrowserScreen::~EpisodeBrowserScreen()
     m_workerCv.notify_one();
     if (m_workerThread.joinable())
         m_workerThread.join();
+    freePreparedArtwork(m_episodeArtworkSurface);
 }
 
 // -------------------------------------------------------------------
@@ -181,6 +182,19 @@ int EpisodeBrowserScreen::nextPrefetchIndex(
         if (index >= 0 && !unavailable.count(index)) return index;
     }
     return -1;
+}
+
+bool EpisodeBrowserScreen::artworkRequestCancelled(
+    bool cancellationRequested, std::uint64_t requestGeneration,
+    std::uint64_t currentGeneration)
+{
+    return cancellationRequested || requestGeneration != currentGeneration;
+}
+
+bool EpisodeBrowserScreen::shouldMarkArtworkFailed(bool success,
+                                                    bool cancelled)
+{
+    return !success && !cancelled;
 }
 
 bool EpisodeBrowserScreen::advancePrefetchResume(
@@ -300,6 +314,7 @@ void EpisodeBrowserScreen::publishEpisodes(std::vector<MediaItem> episodes)
     m_selectedEpisode=index>=0?index:0;
     m_loadState=LoadState::Ready;m_listScroll=0;m_overviewScroll=0;
     m_episodeArtwork={};m_episodeArtworkKey.clear();
+    freePreparedArtwork(m_episodeArtworkSurface);
     std::vector<ArtworkJob> jobs;jobs.reserve(m_episodes.size());
     for(const auto&ep:m_episodes){ArtworkJob j;j.itemId=ep.id;auto t=ep.imageTags.find("Primary");if(t!=ep.imageTags.end()&&!t->second.empty()){j.imageTag=t->second;j.artworkKey=ep.id+":Primary:"+t->second+":288x162";}jobs.push_back(std::move(j));}
     {std::lock_guard<std::mutex>g(m_workerMutex);m_artworkJobs=std::move(jobs);m_failedKeys.clear();m_workerPaused=false;m_workerDecodedKey.clear();}
@@ -525,6 +540,7 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
         m_episodeArtwork = {};
         m_episodeArtworkKey.clear();
+        freePreparedArtwork(m_episodeArtworkSurface);
         return;
     }
 
@@ -535,6 +551,7 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     if (it == ep.imageTags.end() || it->second.empty()) {
         m_episodeArtwork = {};
         m_episodeArtworkKey = ep.id + ":none:288x162";
+        freePreparedArtwork(m_episodeArtworkSurface);
         return;
     }
 
@@ -554,7 +571,11 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
             ArtworkCompletion comp = std::move(m_workerCompletion);
             m_workerHasCompletion = false;
             if (comp.artworkKey == key) {
-                if (comp.success) m_episodeArtwork=std::move(comp.image);
+                if (comp.success) {
+                    m_episodeArtwork=std::move(comp.image);
+                    freePreparedArtwork(m_episodeArtworkSurface);
+                    m_episodeArtworkSurface=prepareArtworkSurface(m_episodeArtwork);
+                }
                 return;
             }
             // Stale completion (old selection) — fall through
@@ -565,6 +586,7 @@ void EpisodeBrowserScreen::tryLoadSelectedEpisodeArtwork()
     if (m_episodeArtworkKey != key) {
         m_episodeArtwork = {};
         m_episodeArtworkKey = key;
+        freePreparedArtwork(m_episodeArtworkSurface);
     }
 
     // 4. Failed or already in progress?  Wait.
@@ -586,11 +608,61 @@ void EpisodeBrowserScreen::wakeArtworkWorker()
         const std::string selectedKey=(m_workerSelected>=0&&m_workerSelected<(int)m_artworkJobs.size())?m_artworkJobs[m_workerSelected].artworkKey:"";
         if(selectedKey!=m_workerDecodedKey)m_workerDecodedKey.clear();
         ++m_workerGeneration;
+        // The one worker can be inside a prefetch transfer.  Make libcurl's
+        // progress callback abort it so the latest selected cache hit is not
+        // held behind that stale network timeout.
+        if (!m_workerInProgressKey.empty())
+            m_workerCancelled.store(true, std::memory_order_release);
         if (!m_workerThread.joinable())
             m_workerThread = std::thread(
                 &EpisodeBrowserScreen::artworkWorkerLoop, this);
     }
     m_workerCv.notify_one();
+}
+
+EpisodeBrowserScreen::PreparedArtwork
+EpisodeBrowserScreen::prepareArtworkSurface(const DecodedImage &image)
+{
+    PreparedArtwork prepared;
+    if (image.empty()) return prepared;
+
+    const float imgAspect = (float)image.width / (float)image.height;
+    const float boxAspect = (float)THUMB_W / (float)THUMB_H;
+    int drawW, drawH;
+    if (imgAspect > boxAspect) {
+        drawW = THUMB_W;
+        drawH = (int)(THUMB_W / imgAspect + 0.5f);
+        if (drawH > THUMB_H) drawH = THUMB_H;
+    } else {
+        drawH = THUMB_H;
+        drawW = (int)(THUMB_H * imgAspect + 0.5f);
+        if (drawW > THUMB_W) drawW = THUMB_W;
+    }
+
+    SDL_Surface *source = SDL_CreateRGBSurfaceFrom(
+        (void *)image.pixels.data(), image.width, image.height, 32,
+        image.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    SDL_Surface *destination = SDL_CreateRGBSurface(
+        0, drawW, drawH, 32,
+        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (source && destination) {
+        SDL_Rect sourceRect = {0, 0, image.width, image.height};
+        SDL_Rect destinationRect = {0, 0, drawW, drawH};
+        SDL_BlitScaled(source, &sourceRect, destination, &destinationRect);
+        prepared.surface = destination;
+        prepared.x = THUMB_X + (THUMB_W - drawW) / 2;
+        prepared.y = THUMB_Y + (THUMB_H - drawH) / 2;
+    } else if (destination) {
+        SDL_FreeSurface(destination);
+    }
+    if (source) SDL_FreeSurface(source);
+    return prepared;
+}
+
+void EpisodeBrowserScreen::freePreparedArtwork(PreparedArtwork &artwork)
+{
+    if (artwork.surface) SDL_FreeSurface(artwork.surface);
+    artwork = {};
 }
 
 // -------------------------------------------------------------------
@@ -615,6 +687,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             if (m_workerStop) break;
             generation = m_workerGeneration;
             observedGeneration = generation;
+            // wakeArtworkWorker() and this reset share m_workerMutex.  A
+            // cancellation for a later generation therefore cannot be lost.
+            m_workerCancelled.store(false, std::memory_order_release);
         }
 
         std::set<int> unavailable;
@@ -706,11 +781,25 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             }
         }
 
+        bool cancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(m_workerMutex);
+            cancelled = artworkRequestCancelled(
+                m_workerCancelled.load(std::memory_order_acquire), generation,
+                m_workerGeneration);
+        }
+
+        // A newer selection won while this job was running.  Do not spend
+        // additional time decoding stale bytes; immediately schedule from
+        // that generation instead.
+        if (cancelled)
+            success = false;
+
         // Only the selected job needs a RAM image; prefetch candidates merely
         // warm the disk cache.  Both read/decode operations stay off SDL.
         int currentSelected=-1;
         {std::lock_guard<std::mutex> lock(m_workerMutex);currentSelected=m_workerSelected;}
-        if(success && candidate==currentSelected) {
+        if(success && !cancelled && candidate==currentSelected) {
             auto bytes=ImageCache::readCached(job.itemId,ImageType::Primary,
                                               job.imageTag,job.width,job.height);
             if(!bytes.empty()) decoded=ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
@@ -722,8 +811,12 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerInProgressKey.clear();
             if (!m_workerStop) {
-                if (!success) m_failedKeys.insert(job.artworkKey);
-                if(candidate==m_workerSelected) {
+                const bool stale = artworkRequestCancelled(
+                    m_workerCancelled.load(std::memory_order_acquire),
+                    generation, m_workerGeneration);
+                if (shouldMarkArtworkFailed(success, stale))
+                    m_failedKeys.insert(job.artworkKey);
+                if(!stale && candidate==m_workerSelected) {
                     if(success)m_workerDecodedKey=job.artworkKey;
                     m_workerCompletion.artworkKey=job.artworkKey;
                     m_workerCompletion.image=std::move(decoded);
@@ -869,43 +962,10 @@ void EpisodeBrowserScreen::render(SDL_Surface *fb)
     BitmapFont::fillRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H,
         ep.artR, ep.artG, ep.artB, 255);
 
-    // Render decoded episode artwork if available, aspect-fit centred
-    if (!m_episodeArtwork.empty()) {
-        int imgW = m_episodeArtwork.width;
-        int imgH = m_episodeArtwork.height;
-        float imgAspect = (float)imgW / (float)imgH;
-        float boxAspect = (float)THUMB_W / (float)THUMB_H;
-        int drawW, drawH;
-        if (imgAspect > boxAspect) {
-            // Wider than box — fit to width
-            drawW = THUMB_W;
-            drawH = (int)(THUMB_W / imgAspect + 0.5f);
-            if (drawH > THUMB_H) drawH = THUMB_H;
-        } else {
-            // Taller than box — fit to height
-            drawH = THUMB_H;
-            drawW = (int)(THUMB_H * imgAspect + 0.5f);
-            if (drawW > THUMB_W) drawW = THUMB_W;
-        }
-        int drawX = THUMB_X + (THUMB_W - drawW) / 2;
-        int drawY = THUMB_Y + (THUMB_H - drawH) / 2;
-
-        // Create an SDL surface wrapping the RGBA pixel data
-        SDL_Surface *imgSurface = SDL_CreateRGBSurfaceFrom(
-            (void *)m_episodeArtwork.pixels.data(),
-            imgW, imgH,
-            32,                    // bits per pixel
-            imgW * 4,              // pitch (bytes per row)
-            0x000000FF,            // R mask
-            0x0000FF00,            // G mask
-            0x00FF0000,            // B mask
-            0xFF000000);           // A mask
-        if (imgSurface) {
-            SDL_Rect srcRect = {0, 0, imgW, imgH};
-            SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-            SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-            SDL_FreeSurface(imgSurface);
-        }
+    if (m_episodeArtworkSurface.surface) {
+        SDL_Rect dstRect = {m_episodeArtworkSurface.x,
+                            m_episodeArtworkSurface.y, 0, 0};
+        SDL_BlitSurface(m_episodeArtworkSurface.surface, nullptr, fb, &dstRect);
     }
 
     // Thumbnail border (drawn after artwork)

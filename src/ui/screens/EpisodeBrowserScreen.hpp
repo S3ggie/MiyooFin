@@ -50,6 +50,13 @@ public:
     static int nextPrefetchIndex(int selected, int total,
                                  const std::set<int> &unavailable);
 
+    /// A request invalidated by a newer selection must not be treated as a
+    /// failed artwork key.  Public for focused worker-policy tests.
+    static bool artworkRequestCancelled(bool cancellationRequested,
+                                        std::uint64_t requestGeneration,
+                                        std::uint64_t currentGeneration);
+    static bool shouldMarkArtworkFailed(bool success, bool cancelled);
+
     /// Advance the deterministic post-playback resume countdown.
     /// Returns true exactly when the caller should resume prefetching.
     static bool advancePrefetchResume(bool &pending, int &delayUpdates);
@@ -101,6 +108,14 @@ private:
     /// Publish current selection to the worker and wake it to recompute.
     void wakeArtworkWorker();
 
+    struct PreparedArtwork {
+        SDL_Surface *surface = nullptr;
+        int x = 0;
+        int y = 0;
+    };
+    static PreparedArtwork prepareArtworkSurface(const DecodedImage &image);
+    static void freePreparedArtwork(PreparedArtwork &artwork);
+
     // ----- Data -----
     Session       m_session;
     MediaItem     m_series;
@@ -123,6 +138,7 @@ private:
 
     // ----- Selected-episode artwork (B5g1a: non-blocking) -----
     DecodedImage  m_episodeArtwork;
+    PreparedArtwork m_episodeArtworkSurface;
     std::string   m_episodeArtworkKey;
 
     // ----- Artwork worker state (B5g1b) -----

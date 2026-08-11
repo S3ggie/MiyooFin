@@ -22,8 +22,20 @@ int progressCb(void*u,curl_off_t total,curl_off_t,curl_off_t now,curl_off_t){aut
 namespace miyoofin {
 DownloadManager::DownloadManager(const Session&s,const std::string&r):m_store(r){configure(s);m_thread=std::thread(&DownloadManager::worker,this);m_planThread=std::thread(&DownloadManager::planner,this);m_reconcileThread=std::thread(&DownloadManager::reconciler,this);}
 DownloadManager::~DownloadManager(){{std::lock_guard<std::mutex>l(m_mutex);m_stop=true;persistLocked();}m_wake.notify_all();m_planWake.notify_all();m_reconcileWake.notify_all();if(m_thread.joinable())m_thread.join();if(m_planThread.joinable())m_planThread.join();if(m_reconcileThread.joinable())m_reconcileThread.join();}
-void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_mutex);persistLocked();++m_generation;m_session=s;m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_items.clear();m_deleteRequested.clear();m_progressSamples.clear();if(!m_store.loadIndex(m_scope,m_items,nullptr))m_store.rebuildIndex(m_scope,m_items,nullptr);for(auto&i:m_items)m_store.reconcile(m_scope,i,nullptr);persistLocked();if(s.valid())m_reconcileRequested=true;m_wake.notify_all();m_reconcileWake.notify_one();}
-void DownloadManager::persistLocked(){m_store.saveIndex(m_scope,m_items,nullptr);}
+void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_mutex);persistLocked();++m_generation;m_session=s;m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_deleteRequested.clear();m_progressSamples.clear();m_persistRequested=false;
+    // Never let a failed index load leak its partial result into a rebuild.
+    // Both paths use independent vectors, then publish one complete result.
+    std::vector<DownloadItem> loaded;
+    if(!m_store.loadIndex(m_scope,loaded,nullptr)){
+        loaded.clear();
+        std::vector<DownloadItem> rebuilt;
+        if(m_store.rebuildIndex(m_scope,rebuilt,nullptr)) loaded.swap(rebuilt);
+    }
+    std::set<std::string> seen;
+    loaded.erase(std::remove_if(loaded.begin(),loaded.end(),[&](const DownloadItem&i){return !seen.insert(i.itemId).second;}),loaded.end());
+    for(auto&i:loaded)m_store.reconcile(m_scope,i,nullptr);
+    m_items.swap(loaded); persistLocked();if(s.valid())m_reconcileRequested=true;m_wake.notify_all();m_reconcileWake.notify_one();}
+void DownloadManager::persistLocked(){for(const auto&i:m_items)m_store.saveManifest(m_scope,i,nullptr);m_store.saveIndex(m_scope,m_items,nullptr);}
 DownloadState DownloadManager::hlsSegmentFailureState(long httpStatus,int curlCode){
     if(httpStatus==401||httpStatus==403)return DownloadState::Unauthorized;
     if(httpStatus>=400)return DownloadState::Failed;
@@ -82,6 +94,8 @@ void DownloadManager::enqueue(const std::vector<DownloadItem>&incoming){
             i.recentBytesPerSec=0; i.state=DownloadState::Queued;
             m_progressSamples.erase(i.itemId);
             m_items.push_back(std::move(i));
+            m_persistRequested=true;
+            ++m_persistRevision;
         }
         m_reconcileRequested=true;
     }
@@ -147,11 +161,13 @@ bool DownloadManager::waitForHlsSegmentRetry(const std::string&id,const std::str
         return true;
     });
 }
-void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::string scope;std::uint64_t generation=0;std::vector<DownloadItem> index;{std::unique_lock<std::mutex>l(m_mutex);m_wake.wait(l,[&]{if(m_stop)return true;if(!m_playback)for(auto&i:m_items)if(i.state==DownloadState::Queued){work=i;return true;}return false;});if(m_stop)return;auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==work.itemId;});if(p==m_items.end())continue;p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;index=m_items;}
-    // Persistence may fsync and mkdirs may touch slow removable storage.  Do
-    // it on this worker without holding m_mutex, so UI snapshots and input
-    // cannot queue behind it.
-    m_store.ensureHlsDirectories(scope,work.itemId);m_store.saveManifest(scope,work,nullptr);m_store.saveIndex(scope,index,nullptr);
+void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::string scope;std::uint64_t generation=0,persistRevision=0;std::vector<DownloadItem> snapshot;bool persistOnly=false;{std::unique_lock<std::mutex>l(m_mutex);m_wake.wait(l,[&]{if(m_stop||m_persistRequested)return true;if(!m_playback)for(const auto&i:m_items)if(i.state==DownloadState::Queued)return true;return false;});if(m_stop)return;
+        if(m_persistRequested){snapshot=m_items;scope=m_scope;generation=m_generation;persistRevision=m_persistRevision;persistOnly=true;}
+        else {auto p=std::find_if(m_items.begin(),m_items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;});if(p==m_items.end())continue;p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;snapshot=m_items;}}
+    // All snapshots are written manifest-first, then as one index.  This runs
+    // only on the worker, so enqueue never performs removable-storage I/O.
+    for(const auto&i:snapshot){if(i.hlsStorage)m_store.ensureHlsDirectories(scope,i.itemId);m_store.saveManifest(scope,i,nullptr);}m_store.saveIndex(scope,snapshot,nullptr);
+    if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}
     transfer(work,session,scope,generation);}}
 bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std::string&scope,std::uint64_t generation){
     if(!session.valid()) return false;

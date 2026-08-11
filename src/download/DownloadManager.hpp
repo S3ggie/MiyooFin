@@ -52,7 +52,7 @@ public:
     static bool updateRecentSpeed(RecentSpeedSample &sample, std::uint64_t downloadedBytes, std::uint64_t nowMs, std::uint64_t &bytesPerSec);
 private:
     void worker(); void planner(); void reconciler(); bool transfer(DownloadItem &item, const Session &session, const std::string &scope, std::uint64_t generation); bool waitForHlsSegmentRetry(const std::string &itemId, const std::string &scope, std::uint64_t generation, unsigned seconds); void persistLocked(); std::uint64_t freeBytes() const;
-    DownloadStore m_store; Session m_session; std::string m_scope; mutable std::mutex m_mutex; std::condition_variable m_wake, m_planWake, m_reconcileWake; std::thread m_thread, m_planThread, m_reconcileThread; bool m_stop=false,m_playback=false,m_reconcileRequested=false; std::uint64_t m_generation=0, m_nextPlanId=1; std::set<std::string> m_deleteRequested; std::map<std::string,RecentSpeedSample> m_progressSamples; std::vector<DownloadItem> m_items;
+    DownloadStore m_store; Session m_session; std::string m_scope; mutable std::mutex m_mutex; std::condition_variable m_wake, m_planWake, m_reconcileWake; std::thread m_thread, m_planThread, m_reconcileThread; bool m_stop=false,m_playback=false,m_reconcileRequested=false,m_persistRequested=false; std::uint64_t m_generation=0, m_nextPlanId=1, m_persistRevision=0; std::set<std::string> m_deleteRequested; std::map<std::string,RecentSpeedSample> m_progressSamples; std::vector<DownloadItem> m_items;
     struct PlanJob { std::uint64_t id, generation; Session session; std::vector<MediaItem> items; std::string seriesId, seasonId; MediaItem series, season; };
     std::deque<PlanJob> m_planJobs; std::map<std::uint64_t, DownloadPlanSnapshot> m_plans;
 };

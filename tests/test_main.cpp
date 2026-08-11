@@ -1905,6 +1905,41 @@ static void testHlsDownloadStore(){
     writeFixture(store.segmentPath("scope",h.itemId,2),"fghi",4); CHECK(store.firstIncompleteSegment("scope",h)==3); store.reconcile("scope",h); CHECK(h.downloadedBytes==9); CHECK(store.validateCompletedDownload("scope",h)); CHECK(h.state==DownloadState::Complete);
     std::printf("[test] HLS manifest and segment storage OK\n");
 }
+static DownloadItem restartFixture(const std::string &id, DownloadState state=DownloadState::Queued) {
+    DownloadItem item; item.itemId=id; item.chunkSize=1; item.hlsStorage=true;
+    item.hlsSegmentCount=2; item.hlsProfile="test"; item.state=state; return item;
+}
+static void testDownloadRestartPersistence(){
+    std::printf("[test] download restart persistence\n");
+    const std::string root="/tmp/miyoofin-restart-"+std::to_string((long long)getpid());
+    DownloadStore store(root);
+    // Enqueue is UI-safe, while the worker persists each manifest before the
+    // shared index. Playback holds transfers back so both remain queued.
+    { DownloadManager manager({},root); manager.setPlaybackActive(true);
+      DownloadItem one=restartFixture("queued-one"), two=restartFixture("queued-two");
+      manager.enqueue({one,two});
+      for(unsigned n=0;n<100;n++){std::vector<DownloadItem> saved;if(store.loadIndex("anonymous",saved,nullptr)&&saved.size()==2)break;usleep(10000);}
+      std::vector<DownloadItem> saved; CHECK(store.loadIndex("anonymous",saved)); CHECK(saved.size()==2);
+      for(const auto &item:saved){DownloadItem manifest;CHECK(store.loadManifest("anonymous",item.itemId,manifest));CHECK(manifest.state==DownloadState::Queued);}
+    }
+    { DownloadManager restarted({},root); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
+      CHECK(snapshot.items.size()==2); }
+
+    // A corrupt index which loaded one manifest before finding a missing one
+    // rebuilds from a clean vector; it cannot duplicate the first item.
+    DownloadItem active=restartFixture("active",DownloadState::Downloading), queued=restartFixture("queued",DownloadState::Queued);
+    CHECK(store.ensureHlsDirectories("fixture",active.itemId)); CHECK(store.ensureHlsDirectories("fixture",queued.itemId));
+    writeFixture(store.segmentPath("fixture",active.itemId,0),"partial",7);
+    CHECK(store.saveManifest("fixture",active)); CHECK(store.saveManifest("fixture",queued));
+    DownloadItem recovered, stillQueued; CHECK(store.loadManifest("fixture","active",recovered)); CHECK(store.reconcile("fixture",recovered)); CHECK(recovered.state==DownloadState::Queued);
+    CHECK(store.loadManifest("fixture","queued",stillQueued)); CHECK(store.reconcile("fixture",stillQueued)); CHECK(stillQueued.state==DownloadState::Queued);
+    FILE *bad=fopen((store.scopePath("fixture")+"/index.v1").c_str(),"wb"); CHECK(bad!=nullptr); if(bad){fputs("MFDI=1\nactive\nmissing\n",bad);fclose(bad);}
+    Session session;session.serverUrl="http://fixture";session.userId="user";
+    { DownloadManager restarted(session,root); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
+      CHECK(snapshot.items.size()==2); std::set<std::string> ids; for(const auto&i:snapshot.items)ids.insert(i.itemId); CHECK(ids.size()==2); }
+    CHECK(store.isCompleteSegment("fixture","active",0));
+    std::printf("[test] download restart persistence OK\n");
+}
 static void testOfflineCatalog(){std::string root="/tmp/miyoofin-offline-catalog-test-"+std::to_string((long long)getpid()),p=root+"/catalog";MediaItem s=cacheItem("series");s.title="Séries 世界";MediaItem season=cacheItem("season");season.seriesId=s.id;MediaItem ep=cacheItem("episode");ep.seriesId=s.id;ep.seasonId=season.id;ep.indexNumber=2;ep.parentIndexNumber=1;
     // Season planning stores its series, season and episodes without requiring a screen visit.
     CHECK(OfflineCatalog::storeDiscoveredHierarchy(p,s,{season},{{season.id,{ep}}}));OfflineCatalogSnapshot x;CHECK(OfflineCatalog::load(p,x));CHECK(x.series[s.id].title==s.title&&x.seasonsBySeries[s.id][0].id==season.id);auto &got=x.episodesBySeason[season.id][0];CHECK(got.id==ep.id&&got.indexNumber==2&&got.parentIndexNumber==1&&got.runTimeTicks==ep.runTimeTicks&&got.playbackPositionTicks==ep.playbackPositionTicks);
@@ -2342,6 +2377,7 @@ int main()
 
     std::printf("\n--- Download manager state tests ---\n");
     testHlsDownloadStore();
+    testDownloadRestartPersistence();
     testDownloadInterruptStates();
     testDownloadPlanBatchAccounting();
     testHlsSizeEstimates(); testHlsFailureClassification();

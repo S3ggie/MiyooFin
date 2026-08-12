@@ -117,6 +117,12 @@ static bool file_exists(const std::string &path)
     return stat(path.c_str(), &st) == 0;
 }
 
+static bool nonempty_file(const std::string &path)
+{
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
 static bool write_playback_result(const std::string &path,
                                   const std::string &itemId,
                                   const std::string &itemType, int64_t positionTicks, int64_t baseTicks,
@@ -314,6 +320,7 @@ int main(int argc, char *argv[])
     }
     std::string serverUrl   = read_kv_from_content(sessionContent, "server_url");
     std::string localServerUrl = read_kv_from_content(sessionContent, "local_server_url");
+    std::string publicServerUrl = read_kv_from_content(sessionContent, "public_server_url");
     std::string accessToken = read_kv_from_content(sessionContent, "access_token");
     std::string userId      = read_kv_from_content(sessionContent, "user_id");
     std::string deviceId    = read_kv_from_content(sessionContent, "device_id");
@@ -339,14 +346,22 @@ int main(int argc, char *argv[])
         read_kv_from_content(reqContent, "resume_ticks"));
     // Downloaded/local playback retains its established public-only reporter
     // behavior. LAN route selection belongs only to remote Jellyfin playback.
-    PlaybackRoute route=playback_route(serverUrl, sourceMode == "local" ? "" : localServerUrl);
+    const std::string publicRoute=publicServerUrl.empty() ? serverUrl : publicServerUrl;
+    const std::string lanRoute=localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    PlaybackRoute route=playback_route(publicRoute, sourceMode == "local" ? "" : lanRoute);
     reporter_log("item=%s server=%s", itemId.c_str(), serverUrl.c_str());
     reporter_log("[ReporterRoute] %s", route.usingLan ? "LAN" : "PUBLIC");
     reporter_log("resume ticks=%lld", (long long)resumeTicks);
 
     std::string cacertPath = appDir + "/cacert.pem";
-    if (!file_exists(cacertPath)) {
-        reporter_log("WARNING: cacert.pem not found");
+    const bool reportsHttps=route.primary.compare(0,8,"https://")==0 ||
+                            route.fallback.compare(0,8,"https://")==0;
+    if (!nonempty_file(cacertPath)) {
+        if (reportsHttps) {
+            reporter_log("ERROR: cacert.pem not found for HTTPS reporting");
+            std::fclose(g_logFile); return 1;
+        }
+        // HTTP-only LAN reporting does not use CA verification.
         cacertPath.clear();
     }
 

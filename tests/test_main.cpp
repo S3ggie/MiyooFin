@@ -22,6 +22,7 @@
 #include "../src/ui/BitmapFont.hpp"
 #include "../src/ui/screens/HomeScreen.hpp"
 #include "../src/ui/screens/ServerEntryScreen.hpp"
+#include "../src/ui/screens/LoginScreen.hpp"
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/cache/LibraryCache.hpp"
@@ -30,6 +31,8 @@
 #include "../src/cache/OfflineLibraryProjection.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/net/RouteRequest.hpp"
+#include "../src/net/RouteStatus.hpp"
+#include "../src/net/ServerAddress.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
@@ -73,51 +76,94 @@ static int g_failures = 0;
 static void testRouteRequest()
 {
     std::printf("[test] LAN route selection and fallback\n");
+    RouteStatus::record(ApiRoute::Unknown);
+    CHECK(RouteStatus::latest()==ApiRoute::Unknown);
     Session s; s.serverUrl="https://public";
     std::string error; int calls=0;
     CHECK(RouteRequest(s).run([&](const std::string &base){++calls;return base=="https://public";},error));
+    CHECK(RouteStatus::latest()==ApiRoute::Public);
     CHECK(calls==1 && RouteRequest(s).primary()=="https://public");
     s.localServerUrl="http://lan"; calls=0; error.clear();
     CHECK(RouteRequest(s).run([&](const std::string &base){++calls;return base=="http://lan";},error));
     CHECK(calls==1 && RouteRequest(s).primary()=="http://lan");
+    CHECK(RouteStatus::latest()==ApiRoute::Lan);
     calls=0; error.clear();
     CHECK(RouteRequest(s).run([&](const std::string &base){++calls;if(base=="http://lan"){error="Transport: Couldn't connect";return false;}return base=="https://public";},error));
     CHECK(calls==2);
+    CHECK(RouteStatus::latest()==ApiRoute::Public);
+    calls=0; error.clear();
+    CHECK(!RouteRequest(s).run([&](const std::string &){
+        ++calls;
+        error="Transport: Couldn't connect";
+        return false;
+    },error));
+    CHECK(calls==2);
+    CHECK(RouteStatus::latest()==ApiRoute::Public);
     calls=0; error.clear();
     CHECK(!RouteRequest(s).run([&](const std::string &){++calls;error="Unauthorized";return false;},error));
     CHECK(calls==1);
     calls=0; error.clear();
     CHECK(!RouteRequest(s).run([&](const std::string &){++calls;error="Transport: Callback aborted";return false;},error));
     CHECK(calls==1); // cancellation must never launch a public retry
+    CHECK(RouteStatus::latest()==ApiRoute::Public);
     const std::string scope=LibraryCache::scopeKey(s.serverUrl,"user");
     CHECK_EQ(scope,LibraryCache::scopeKey("https://public","user"));
     CHECK_EQ(RouteRequest::replaceBase("http://lan/a","http://lan","https://public"),"https://public/a");
+
+    Session lanCanonical; lanCanonical.serverUrl="http://192.168.1.212:8096";
+    lanCanonical.publicServerUrl="https://public.example.com";
+    const std::string canonical=lanCanonical.serverUrl;
+    const std::string lanScope=LibraryCache::scopeKey(lanCanonical.serverUrl,"user");
+    calls=0; error.clear();
+    CHECK(RouteRequest(lanCanonical).run([&](const std::string &base){++calls;if(base==canonical){error="Transport: Couldn't connect";return false;}return base=="https://public.example.com";},error));
+    CHECK(calls==2);
+    CHECK_EQ(lanCanonical.serverUrl,canonical);
+    CHECK_EQ(LibraryCache::scopeKey(lanCanonical.serverUrl,"user"),lanScope);
+
+    RouteStatus::record(ApiRoute::Unknown);
+    Session lanOnly; lanOnly.serverUrl="http://192.168.1.212:8096";
+    CHECK(RouteRequest(lanOnly).run([&](const std::string &base){return base=="http://192.168.1.212:8096";},error));
+    CHECK(RouteStatus::latest()==ApiRoute::Lan);
+
+    RouteStatus::record(ApiRoute::Unknown);
+    CHECK_EQ(std::string(HomeScreen::lastApiRouteValue()),"UNKNOWN");
+    RouteStatus::record(ApiRoute::Lan);
+    CHECK_EQ(std::string(HomeScreen::lastApiRouteValue()),"LAN");
+    RouteStatus::record(ApiRoute::Public);
+    CHECK_EQ(std::string(HomeScreen::lastApiRouteValue()),"PUBLIC");
 }
 
 static void testServerEntryKeyboardCaps()
 {
     std::printf("[test] Server Entry keyboard caps and navigation\n");
     ServerEntryScreen screen;
+    CHECK_EQ(screen.entryText(), "");
     CHECK(!screen.capsEnabled());
     CHECK(screen.keyboardSelectionValid());
 
     // Numeric characters remain unchanged in caps mode.
     screen.handleAction(Action::Confirm);
-    CHECK_EQ(screen.entryText(), "https://1");
+    CHECK_EQ(screen.entryText(), "1");
     screen.handleAction(Action::PrevPage);  // L2
     CHECK(screen.capsEnabled());
     screen.handleAction(Action::Confirm);
-    CHECK_EQ(screen.entryText(), "https://11");
+    CHECK_EQ(screen.entryText(), "11");
 
     // The first alphabetic key is q; L2 changes only its case.
     screen.handleAction(Action::Down);
     CHECK(screen.keyboardSelectionValid());
     screen.handleAction(Action::Confirm);
-    CHECK_EQ(screen.entryText(), "https://11Q");
+    CHECK_EQ(screen.entryText(), "11Q");
     screen.handleAction(Action::PrevPage);
     CHECK(!screen.capsEnabled());
     screen.handleAction(Action::Confirm);
-    CHECK_EQ(screen.entryText(), "https://11Qq");
+    CHECK_EQ(screen.entryText(), "11Qq");
+
+    screen.handleAction(Action::Search);
+    CHECK_EQ(screen.entryText(), "");
+    screen.handleAction(Action::Confirm);
+    screen.handleAction(Action::Back);
+    CHECK_EQ(screen.entryText(), "");
 
     // Every navigation transition remains on a key, including the action row.
     for (int i = 0; i < 8; ++i) {
@@ -141,6 +187,84 @@ static void testServerEntryKeyboardCaps()
     ServerEntryScreen reopened;
     CHECK(!reopened.capsEnabled());
     std::printf("[test] Server Entry keyboard caps OK\n");
+}
+
+static void testSettingsAddressEntryCancel()
+{
+    std::printf("[test] Settings address entry cancel\n");
+    Session session;
+    session.serverUrl = "http://192.168.1.212:8096";
+    session.localServerUrl = "http://192.168.1.213:8096";
+    session.publicServerUrl = "https://public.example.com";
+    session.serverId = "server-id";
+    const Session before = session;
+
+    // Cancelling a new Public Address does not begin verification or alter
+    // the transaction's pre-existing Session state.
+    ServerEntryScreen newPublic("", "", session.serverId, false, true);
+    newPublic.handleAction(Action::Back);
+    CHECK(newPublic.addressEntryCancelled());
+    CHECK(!newPublic.connected());
+    CHECK(!newPublic.finished());
+    CHECK_EQ(session.serverUrl, before.serverUrl);
+    CHECK_EQ(session.localServerUrl, before.localServerUrl);
+    CHECK_EQ(session.publicServerUrl, before.publicServerUrl);
+    CHECK_EQ(session.serverId, before.serverId);
+
+    // Editing an existing public address remains equally non-mutating.
+    ServerEntryScreen existingPublic(session.publicServerUrl, "", session.serverId,
+                                     false, true);
+    existingPublic.handleAction(Action::Back);
+    CHECK(existingPublic.addressEntryCancelled());
+    CHECK_EQ(existingPublic.entryText(), before.publicServerUrl);
+    CHECK_EQ(session.publicServerUrl, before.publicServerUrl);
+
+    ServerEntryScreen local(session.localServerUrl, "", session.serverId, true);
+    local.handleAction(Action::Back);
+    CHECK(local.addressEntryCancelled());
+    CHECK_EQ(local.entryText(), before.localServerUrl);
+    CHECK_EQ(session.localServerUrl, before.localServerUrl);
+
+    // On the actual Settings stack B returns to the prior Settings screen.
+    ScreenStack stack;
+    stack.push(std::make_unique<ServerEntryScreen>());
+    stack.push(std::make_unique<ServerEntryScreen>("", "", session.serverId,
+                                                   false, true));
+    CHECK(stack.size() == 2);
+    stack.top()->handleAction(Action::Back);
+    CHECK(stack.size() == 1);
+    CHECK_EQ(session.serverUrl, before.serverUrl);
+    CHECK_EQ(session.localServerUrl, before.localServerUrl);
+    CHECK_EQ(session.publicServerUrl, before.publicServerUrl);
+    CHECK_EQ(session.serverId, before.serverId);
+}
+
+static void testLoginKeyboardCaps()
+{
+    std::printf("[test] Login keyboard caps and fields\n");
+    LoginScreen screen("https://server", "Server", "device");
+    CHECK(!screen.capsEnabled());
+    screen.handleAction(Action::Down);
+    CHECK(screen.keyboardSelectionValid());
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.username(), "1");
+    screen.handleAction(Action::PrevPage);
+    CHECK(screen.capsEnabled());
+    screen.handleAction(Action::Down);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.username(), "1Q");
+    screen.handleAction(Action::Up);
+    screen.handleAction(Action::Up);
+    screen.handleAction(Action::Right);
+    screen.handleAction(Action::Down);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.password(), "1");
+    screen.handleAction(Action::Down);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.password(), "1Q");
+    screen.leave();
+    CHECK(!screen.capsEnabled());
+    std::printf("[test] Login keyboard caps and fields OK\n");
 }
 
 static void testUiDiagnostics()
@@ -248,14 +372,14 @@ static void testNormaliseUrl()
 {
     std::printf("[test] JellyfinApi::normaliseUrl\n");
 
-    CHECK(JellyfinApi::normaliseUrl("http://192.168.1.50:8096")
-          == "http://192.168.1.50:8096");
-    CHECK(JellyfinApi::normaliseUrl("192.168.1.50:8096")
-          == "http://192.168.1.50:8096");
+    CHECK(JellyfinApi::normaliseUrl("http://192.168.1.212:8096")
+          == "http://192.168.1.212:8096");
+    CHECK(JellyfinApi::normaliseUrl("192.168.1.212:8096")
+          == "http://192.168.1.212:8096");
     CHECK(JellyfinApi::normaliseUrl("http://jellyfin.local/")
           == "http://jellyfin.local");
-    CHECK(JellyfinApi::normaliseUrl("https://media.example.com")
-          == "https://media.example.com");
+    CHECK(JellyfinApi::normaliseUrl("https://example.com")
+          == "https://example.com");
     CHECK(JellyfinApi::normaliseUrl("   http://myserver.com  ")
           == "http://myserver.com");
 }
@@ -274,6 +398,7 @@ static void testSession()
     s1.serverUrl   = "http://server:8096";
     s1.serverId    = "server-id-42";
     s1.localServerUrl = "http://192.168.1.212:8096";
+    s1.publicServerUrl = "https://public.example.com";
     s1.accessToken = "abc123token";
     s1.userId      = "user-42";
     s1.userName    = "testuser";
@@ -287,6 +412,7 @@ static void testSession()
     CHECK_EQ(s2.serverUrl,   "http://server:8096");
     CHECK_EQ(s2.serverId,    "server-id-42");
     CHECK_EQ(s2.localServerUrl, "http://192.168.1.212:8096");
+    CHECK_EQ(s2.publicServerUrl, "https://public.example.com");
     CHECK_EQ(s2.accessToken, "abc123token");
     CHECK_EQ(s2.userId,      "user-42");
     CHECK_EQ(s2.userName,    "testuser");
@@ -302,6 +428,7 @@ static void testSession()
     CHECK(s2.serverUrl.empty());
     CHECK(s2.serverId.empty());
     CHECK(s2.localServerUrl.empty());
+    CHECK(s2.publicServerUrl.empty());
     CHECK(s2.accessToken.empty());
 
     std::remove(tmpPath);
@@ -326,6 +453,7 @@ static void testSessionBackwardCompatibility()
     CHECK_EQ(session.serverUrl, "https://public.example.com");
     CHECK(session.serverId.empty());
     CHECK(session.localServerUrl.empty());
+    CHECK(session.publicServerUrl.empty());
     CHECK(!session.manualOfflineMode);
     CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId),
              LibraryCache::scopeKey("https://public.example.com", "user"));
@@ -357,6 +485,18 @@ static void testLocalServerIdentityVerification()
     CHECK_EQ(session.localServerUrl, "http://192.168.1.10:8096");
     CHECK_EQ(session.serverUrl, canonicalUrl);
     CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId), scope);
+
+    Session lanCanonical;
+    lanCanonical.serverUrl = "http://192.168.1.10:8096";
+    lanCanonical.serverId = "canonical-server";
+    lanCanonical.userId = "user";
+    const std::string lanCanonicalUrl=lanCanonical.serverUrl;
+    const std::string lanScope=LibraryCache::scopeKey(lanCanonical.serverUrl,lanCanonical.userId);
+    if (JellyfinApi::serverIdsMatch(lanCanonical.serverId, "canonical-server"))
+        lanCanonical.publicServerUrl = "https://public.example.com";
+    CHECK_EQ(lanCanonical.publicServerUrl, "https://public.example.com");
+    CHECK_EQ(lanCanonical.serverUrl, lanCanonicalUrl);
+    CHECK_EQ(LibraryCache::scopeKey(lanCanonical.serverUrl,lanCanonical.userId),lanScope);
     std::printf("[test] local server identity verification OK\n");
 }
 
@@ -2163,6 +2303,54 @@ static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::Logout);
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
+
+static void testLanServerAddressClassificationAndSettingsLayout(){
+    std::printf("[test] LAN server address classification and Settings layout\n");
+    CHECK(isObviousLanServerUrl("http://10.0.0.1:8096"));
+    CHECK(isObviousLanServerUrl("http://172.16.0.1:8096"));
+    CHECK(isObviousLanServerUrl("http://172.31.255.255:8096"));
+    CHECK(isObviousLanServerUrl("http://192.168.1.212:8096"));
+    CHECK(isObviousLanServerUrl("http://127.0.0.1:8096"));
+    CHECK(isObviousLanServerUrl("http://LOCALHOST:8096"));
+    CHECK(!isObviousLanServerUrl("http://172.15.255.255:8096"));
+    CHECK(!isObviousLanServerUrl("http://172.32.0.1:8096"));
+    CHECK(!isObviousLanServerUrl("http://8.8.8.8:8096"));
+    CHECK(!isObviousLanServerUrl("https://public.example.com"));
+    CHECK(!isObviousLanServerUrl("http://jellyfin.local:8096"));
+    CHECK(!isObviousLanServerUrl("http://192.168.1.212:70000"));
+    CHECK(!isObviousLanServerUrl("not a url"));
+
+    Session lanOnly; lanOnly.serverUrl="http://192.168.1.212:8096";
+    const auto lanRows=HomeScreen::settingsAddressRows(lanOnly);
+    CHECK(lanRows.size()==2);
+    CHECK_EQ(lanRows[0].section,"LAN Server");
+    CHECK_EQ(lanRows[0].value,"http://192.168.1.212:8096");
+    CHECK(lanRows[0].action==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK_EQ(lanRows[1].section,"Public Address");
+    CHECK_EQ(lanRows[1].value,"Not Set");
+    CHECK(lanRows[1].action==HomeScreen::SettingsRowAction::PublicAddress);
+    CHECK(HomeScreen::settingsRowCount(lanOnly)==10);
+    CHECK(HomeScreen::settingsRowAction(1,lanOnly)==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK(HomeScreen::settingsRowAction(2,lanOnly)==HomeScreen::SettingsRowAction::PublicAddress);
+    lanOnly.publicServerUrl="https://public.example.com";
+    CHECK_EQ(HomeScreen::settingsAddressRows(lanOnly)[1].value,"https://public.example.com");
+
+    Session publicOnly; publicOnly.serverUrl="https://public.example.com";
+    const auto publicRows=HomeScreen::settingsAddressRows(publicOnly);
+    CHECK(publicRows.size()==2);
+    CHECK_EQ(publicRows[0].section,"Public Server");
+    CHECK_EQ(publicRows[0].value,"https://public.example.com");
+    CHECK_EQ(publicRows[1].section,"Local Address");
+    CHECK_EQ(publicRows[1].value,"Not Set");
+    CHECK(HomeScreen::settingsRowAction(2,publicOnly)==HomeScreen::SettingsRowAction::LocalAddress);
+
+    Session dualRoute=publicOnly; dualRoute.localServerUrl="http://192.168.1.212:8096";
+    const auto dualRows=HomeScreen::settingsAddressRows(dualRoute);
+    CHECK(dualRows.size()==2);
+    CHECK_EQ(dualRows[0].section,"Public Server");
+    CHECK_EQ(dualRows[1].section,"Local Address");
+    CHECK_EQ(dualRows[1].value,"http://192.168.1.212:8096");
+}
 static void testSeriesCachedSeasonHandoff(){
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
     // A nonempty RAM handoff is ready before enter(), so push has no catalog I/O.
@@ -2422,6 +2610,8 @@ int main()
 {
     testRouteRequest();
     testServerEntryKeyboardCaps();
+    testSettingsAddressEntryCancel();
+    testLoginKeyboardCaps();
     testUiDiagnostics();
     std::printf("\n--- Movie title organization tests ---\n");
     testMovieOrganizationalTitles();
@@ -2431,7 +2621,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSettingsRowActions(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSettingsRowActions(); testLanServerAddressClassificationAndSettingsLayout(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 

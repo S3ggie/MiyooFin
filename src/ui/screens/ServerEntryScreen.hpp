@@ -18,7 +18,8 @@ public:
     ServerEntryScreen();
     ServerEntryScreen(const std::string &initialUrl, const std::string &errorMsg);
     ServerEntryScreen(const std::string &initialUrl, const std::string &errorMsg,
-                      const std::string &expectedServerId, bool localAddressEntry);
+                      const std::string &expectedServerId, bool localAddressEntry,
+                      bool publicAddressEntry=false);
     ~ServerEntryScreen() override;
 
     void enter() override;
@@ -39,6 +40,8 @@ public:
     /// Returns the server info after successful connection.
     const ServerInfo &serverInfo() const { return m_serverInfo; }
     bool localAddressEntry() const { return m_localAddressEntry; }
+    bool publicAddressEntry() const { return m_publicAddressEntry; }
+    bool addressEntryCancelled() const { return m_addressEntryCancelled; }
 
     // Keyboard state accessors support deterministic host tests.
     bool capsEnabled() const { return m_caps; }
@@ -67,6 +70,8 @@ private:
     std::string m_serverUrl;
     std::string m_expectedServerId;
     bool m_localAddressEntry = false;
+    bool m_publicAddressEntry = false;
+    bool m_addressEntryCancelled = false;
 
     // Keyboard navigation
     std::vector<Key> m_keys;
@@ -91,6 +96,7 @@ private:
     std::string keyLabel(const Key &key) const;
     void startConnection();
     void finishConnection();
+    void cancelAddressEntry();
 
     // Drawing helpers
     void drawInputField(SDL_Surface *fb);

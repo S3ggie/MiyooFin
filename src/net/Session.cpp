@@ -38,6 +38,7 @@ bool Session::saveTo(const std::string &path) const
     writeLine(f, "server_url",  serverUrl);
     writeLine(f, "server_id",   serverId);
     writeLine(f, "local_server_url", localServerUrl);
+    writeLine(f, "public_server_url", publicServerUrl);
     writeLine(f, "access_token", accessToken);
     writeLine(f, "user_id",     userId);
     writeLine(f, "user_name",   userName);
@@ -74,6 +75,7 @@ Session Session::loadFrom(const std::string &path)
         if (!(v = readValue(line, "server_url")).empty())    s.serverUrl   = v;
         if (!(v = readValue(line, "server_id")).empty())     s.serverId    = v;
         if (!(v = readValue(line, "local_server_url")).empty()) s.localServerUrl = v;
+        if (!(v = readValue(line, "public_server_url")).empty()) s.publicServerUrl = v;
         if (!(v = readValue(line, "access_token")).empty())  s.accessToken = v;
         if (!(v = readValue(line, "user_id")).empty())       s.userId      = v;
         if (!(v = readValue(line, "user_name")).empty())     s.userName    = v;

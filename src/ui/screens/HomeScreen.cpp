@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "../../net/ServerAddress.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
@@ -11,6 +12,7 @@
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
+#include "../../net/RouteStatus.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../app/UiDiagnostics.hpp"
@@ -183,6 +185,40 @@ HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
     case 8: return SettingsRowAction::Logout;
     default: return SettingsRowAction::None;
     }
+}
+
+std::vector<HomeScreen::SettingsAddressRow> HomeScreen::settingsAddressRows(const Session &session)
+{
+    const bool lanOnly=session.localServerUrl.empty() && isObviousLanServerUrl(session.serverUrl);
+    std::vector<SettingsAddressRow> rows;
+    rows.push_back({lanOnly ? "LAN Server" : "Public Server",
+                    session.serverUrl.empty() ? "Not connected" : session.serverUrl,
+                    SettingsRowAction::ChangeServer});
+    if (lanOnly)
+        rows.push_back({"Public Address", session.publicServerUrl.empty() ? "Not Set" : session.publicServerUrl,
+                        SettingsRowAction::PublicAddress});
+    else
+        rows.push_back({"Local Address", session.localServerUrl.empty() ? "Not Set" : session.localServerUrl,
+                        SettingsRowAction::LocalAddress});
+    return rows;
+}
+
+int HomeScreen::settingsRowCount(const Session &session)
+{
+    return 1+(int)settingsAddressRows(session).size()+7;
+}
+
+HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Session &session)
+{
+    if (row==0) return SettingsRowAction::OfflineMode;
+    const std::vector<SettingsAddressRow> addresses=settingsAddressRows(session);
+    if (row>=1 && row<=static_cast<int>(addresses.size())) return addresses[row-1].action;
+    return row==settingsRowCount(session)-1 ? SettingsRowAction::Logout : SettingsRowAction::None;
+}
+
+const char *HomeScreen::lastApiRouteValue()
+{
+    return RouteStatus::label(RouteStatus::latest());
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
@@ -431,14 +467,14 @@ bool HomeScreen::handleAction(Action action)
         if (action == Action::Up || action == Action::Down) {
             const int previous = m_settingsSelected;
             if (action == Action::Up && m_settingsSelected > 0) --m_settingsSelected;
-            else if (action == Action::Down && m_settingsSelected < settingsRowCount()-1) ++m_settingsSelected;
+            else if (action == Action::Down && m_settingsSelected < settingsRowCount(m_session)-1) ++m_settingsSelected;
             if (m_settingsSelected != previous)
                 m_settingsConfirmation = SettingsConfirmation::None;
-            m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount()-SETTINGS_VISIBLE_ROWS));
+            m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount(m_session)-SETTINGS_VISIBLE_ROWS));
             return true;
         }
         if (action == Action::Confirm) {
-            switch (settingsRowAction(m_settingsSelected)) {
+            switch (settingsRowAction(m_settingsSelected,m_session)) {
             case SettingsRowAction::OfflineMode:
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
                 m_session.save();
@@ -448,9 +484,12 @@ bool HomeScreen::handleAction(Action action)
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;
                 return true;
+            case SettingsRowAction::PublicAddress:
+                m_publicAddressRequested = true;
+                return true;
             case SettingsRowAction::ChangeServer:
             case SettingsRowAction::Logout: {
-                const SettingsConfirmation requested = settingsRowAction(m_settingsSelected) == SettingsRowAction::ChangeServer
+                const SettingsConfirmation requested = settingsRowAction(m_settingsSelected,m_session) == SettingsRowAction::ChangeServer
                     ? SettingsConfirmation::ChangeServer : SettingsConfirmation::Logout;
                 if (m_settingsConfirmation == requested) {
                     if (requested == SettingsConfirmation::ChangeServer)
@@ -470,7 +509,7 @@ bool HomeScreen::handleAction(Action action)
         // Settings owns its account actions; do not let Y or X trigger Home actions.
         if (action == Action::ActionsMenu || action == Action::Search) return true;
         if (action != Action::NextTab && action != Action::PrevTab) return true;
-        m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount()-SETTINGS_VISIBLE_ROWS));
+        m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount(m_session)-SETTINGS_VISIBLE_ROWS));
     }
     switch (action) {
     case Action::Up:
@@ -1775,18 +1814,18 @@ void HomeScreen::drawPlaceholderTab(SDL_Surface *fb, const char *message)
 void HomeScreen::drawSettingsTab(SDL_Surface *fb)
 {
     BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
-    struct SettingRow { const char *section; std::string value; };
-    const std::vector<SettingRow> rows={
-        {"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"},
-        {"Public Server", m_session.serverUrl.empty() ? "Not connected" : m_session.serverUrl},
-        {"Local Address", m_session.localServerUrl.empty() ? "Not Set" : m_session.localServerUrl},
+    struct SettingRow { std::string section; std::string value; };
+    std::vector<SettingRow> rows={{"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"}};
+    for (const SettingsAddressRow &row:settingsAddressRows(m_session)) rows.push_back({row.section,row.value});
+    rows.insert(rows.end(), {
+        {"Last API Route", lastApiRouteValue()},
         {"Account", m_userName.empty() ? "Unknown" : m_userName},
         {"LIBRARY", "Last Sync: " + compactSyncAge(m_syncState.lastSuccessfulMs)},
         {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " + formatBytes(m_downloadSnapshot.freeBytes)},
         {"DIAGNOSTICS", "UI Stall Logger Enabled"},
         {"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
         {"ACCOUNT", "Log Out"}
-    };
+    });
     static constexpr int ROW_H=68, TOP=34;
     for (int visible=0; visible<SETTINGS_VISIBLE_ROWS; ++visible) {
         const int index=m_settingsScroll+visible;
@@ -1795,7 +1834,7 @@ void HomeScreen::drawSettingsTab(SDL_Surface *fb)
         const bool selected=index==m_settingsSelected;
         if (selected)
             BitmapFont::fillRect(fb,8,y-2,624,ROW_H-4,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70);
-        BitmapFont::drawString(fb,16,y,rows[index].section,Theme::ACCENT_R,Theme::ACCENT_G,
+        BitmapFont::drawString(fb,16,y,rows[index].section.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,
             Theme::ACCENT_B,24,24,32);
         std::string value=rows[index].value;
         static constexpr size_t MAX_CHARS=72;

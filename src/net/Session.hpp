@@ -13,6 +13,8 @@ struct Session {
     std::string serverId;
     /// Optional verified local route.  serverUrl remains the canonical identity.
     std::string localServerUrl;
+    /// Optional verified public fallback when the canonical identity is LAN-only.
+    std::string publicServerUrl;
     std::string accessToken;
     std::string userId;
     std::string userName;
@@ -31,6 +33,7 @@ struct Session {
         serverUrl.clear();
         serverId.clear();
         localServerUrl.clear();
+        publicServerUrl.clear();
         accessToken.clear();
         userId.clear();
         userName.clear();

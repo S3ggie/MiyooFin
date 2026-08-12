@@ -39,6 +39,12 @@ public:
     /// The server URL used for this login.
     const std::string &serverUrl() const { return m_serverUrl; }
 
+    // Keyboard state accessors support deterministic host tests.
+    bool capsEnabled() const { return m_caps; }
+    const std::string &username() const { return m_username; }
+    const std::string &password() const { return m_password; }
+    bool keyboardSelectionValid() const { return activeKey() != nullptr; }
+
 private:
     // Keyboard layout (same grid as the server entry screen)
     struct Key {
@@ -47,10 +53,11 @@ private:
         int row, col;
     };
 
-    static constexpr int KEY_W = 32;
-    static constexpr int KEY_H = 22;
-    static constexpr int KEY_GAP = 2;
-    static constexpr int KEYBOARD_TOP = 132;
+    static constexpr int KEY_W = 59;
+    static constexpr int KEY_H = 44;
+    static constexpr int KEY_GAP = 3;
+    static constexpr int KEYBOARD_TOP = 134;
+    static constexpr int KEY_LABEL_SCALE = 2;
 
     // Fields
     std::string m_username;
@@ -68,6 +75,7 @@ private:
     int m_activeKeyRow = 0;
     int m_activeKeyCol = 0;
     int m_maxCols = 0;
+    bool m_caps = false;
 
     // Login attempt state
     bool m_connecting = false;
@@ -84,6 +92,7 @@ private:
     int keyIndex(int row, int col) const;
     const Key *activeKey() const;
     void pressKey(const Key &key);
+    std::string keyLabel(const Key &key) const;
     void submitLogin();
     void finishLogin();
     std::string &activeText();

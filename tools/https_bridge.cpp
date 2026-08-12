@@ -52,6 +52,18 @@ static void log_info(const char *fmt, ...)
     va_end(ap);
 }
 
+static bool uses_https(const std::string &url)
+{
+    return url.size() >= 8 && url.compare(0, 8, "https://") == 0;
+}
+
+static bool nonempty_regular_file(const std::string &path)
+{
+    struct stat st = {};
+    return !path.empty() && ::stat(path.c_str(), &st) == 0 &&
+           S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
 // ===================================================================
 // Upstream response state and streaming helpers
 // ===================================================================
@@ -384,6 +396,11 @@ int main(int argc, char *argv[])
     std::string upstream_url = local ? "" : (fallback ? argv[3] : argv[1]);
     std::string fallback_url = fallback ? argv[2] : "";
     std::string cacert_path  = local ? "" : (fallback ? argv[4] : argv[2]);
+    if (!local && (uses_https(upstream_url) || uses_https(fallback_url)) &&
+        !nonempty_regular_file(cacert_path)) {
+        std::fprintf(stderr, "Error: a nonempty CA bundle is required for HTTPS upstream playback\n");
+        return 1;
+    }
     LocalMedia media;
     if (local && !local_manifest(argv[2], media)) { std::fprintf(stderr,"Error: invalid local manifest\n"); return 1; }
     int port = 18080;

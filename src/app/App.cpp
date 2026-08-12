@@ -602,6 +602,15 @@ int App::run()
                             home->setLocalServerUrl(m_session.localServerUrl);
                         continue;
                     }
+                    if (entry->publicAddressEntry()) {
+                        m_session.publicServerUrl = entry->serverUrl();
+                        m_session.save();
+                        m_stack.pop();
+                        if (m_downloadManager) m_downloadManager->configure(m_session);
+                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
+                            home->setPublicServerUrl(m_session.publicServerUrl);
+                        continue;
+                    }
                     m_serverUrl = entry->serverUrl();
                     m_serverInfo = entry->serverInfo();
                     printf("[App] ServerEntryScreen success -> Login\n");
@@ -658,6 +667,9 @@ int App::run()
                 if (home->takeLocalAddressRequest()) {
                     m_stack.push(std::make_unique<ServerEntryScreen>(
                         m_session.localServerUrl, "", m_session.serverId, true));
+                } else if (home->takePublicAddressRequest()) {
+                    m_stack.push(std::make_unique<ServerEntryScreen>(
+                        m_session.publicServerUrl, "", m_session.serverId, false, true));
                 } else if (home->changeServerRequested()) {
                     logout();
                     m_stack.popToRoot();

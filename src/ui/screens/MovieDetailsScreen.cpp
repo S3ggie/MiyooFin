@@ -578,7 +578,7 @@ void MovieDetailsScreen::renderContent(SDL_Surface *fb)
         else if(p.state==DownloadPlanState::Planning) status=p.plan.sizeKnown?"Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Preparing...":"Checking size...";
         else if(p.state==DownloadPlanState::Ready) status="Download: ~"+formatBytes(p.plan.additionalRequiredBytes)+"  Free: "+formatBytes(p.plan.usableFreeBytes);
         else if(p.state==DownloadPlanState::Error) status=p.plan.error;
-        if(!status.empty()) BitmapFont::drawString(fb,rx,BTN_Y-14,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+        if(!status.empty()) BitmapFont::drawString(fb,rx,BTN_Y-20,status.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
     }
     auto drawBtn = [&](int bx, const char *label, bool focused) {
         if (focused) {

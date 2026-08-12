@@ -207,7 +207,7 @@ check-ca-bundle: $(CA_BUNDLE)
 update-ca-bundle:
 	@sh tools/update-ca-bundle.sh $(CA_BUNDLE)
 
-package: $(ARM_TARGET) $(ARM_BRIDGE) $(ARM_REPORTER) check-ca-bundle
+package: onionos check-ca-bundle
 	@rm -rf $(PACKAGE_DIR)
 	@mkdir -p $(PACKAGE_DIR)/lib
 	@mkdir -p $(PACKAGE_DIR)/assets

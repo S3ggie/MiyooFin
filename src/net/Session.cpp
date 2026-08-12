@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace miyoofin {
 
@@ -28,11 +29,12 @@ static std::string readValue(const std::string &line, const char *key)
 }
 
 // -------------------------------------------------------------------
-// Save to an explicit path.
+// Save to an explicit path (atomic: write-tmp, fsync, chmod, rename).
 // -------------------------------------------------------------------
 bool Session::saveTo(const std::string &path) const
 {
-    FILE *f = std::fopen(path.c_str(), "w");
+    std::string tmp = path + ".tmp";
+    FILE *f = std::fopen(tmp.c_str(), "w");
     if (!f) return false;
 
     writeLine(f, "server_url",  serverUrl);
@@ -45,10 +47,29 @@ bool Session::saveTo(const std::string &path) const
     writeLine(f, "device_id",   deviceId);
     fprintf(f, "manual_offline_mode=%d\n", manualOfflineMode ? 1 : 0);
 
-    std::fclose(f);
+    // Flush buffered data, then sync to durable storage.
+    if (std::fflush(f) != 0 || ::fsync(::fileno(f)) != 0) {
+        std::fclose(f);
+        std::remove(tmp.c_str());
+        return false;
+    }
+    if (std::fclose(f) != 0) {
+        std::remove(tmp.c_str());
+        return false;
+    }
 
-    // Restrict permissions on POSIX systems
-    ::chmod(path.c_str(), 0600);
+    // Restrict permissions before the file becomes the live session.
+    if (::chmod(tmp.c_str(), 0600) != 0) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+
+    // Atomic replace: readers of path see either the old complete file
+    // or the new complete file, never a partial write.
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::remove(tmp.c_str());
+        return false;
+    }
 
     return true;
 }

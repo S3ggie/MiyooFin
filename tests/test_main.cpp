@@ -2684,6 +2684,135 @@ static void testHlsFailureClassification()
     CHECK(DownloadManager::hlsSegmentFailureState(404, CURLE_OK) == DownloadState::Failed);
 }
 
+// --- Playback progress display tests ---
+
+static void testPlaybackPercentFromTicks()
+{
+    std::printf("[test] playbackPercent from ticks (position/runtime)\n");
+    MediaItem item;
+    item.runTimeTicks = 10000000LL * 60 * 60;   // 1 hour
+    item.playbackPositionTicks = 10000000LL * 60 * 37; // 37 minutes
+    item.progress = 0.5f;
+    item.played = false;
+    int pct = playbackPercent(item);
+    CHECK_EQ(std::to_string(pct), std::to_string(62)); // 37/60 ≈ 62%
+    std::printf("[test] playbackPercent from ticks (position/runtime) OK\n");
+}
+
+static void testPlaybackPercentFallbackToProgress()
+{
+    std::printf("[test] playbackPercent fallback to progress field\n");
+    MediaItem item;
+    item.runTimeTicks = 0;          // no runtime
+    item.playbackPositionTicks = 0;
+    item.progress = 0.455f;         // 45.5% from server
+    item.played = false;
+    int pct = playbackPercent(item);
+    CHECK_EQ(std::to_string(pct), std::to_string(46)); // 45.5 rounds to 46
+    std::printf("[test] playbackPercent fallback to progress field OK\n");
+}
+
+static void testPlaybackPercentClamping()
+{
+    std::printf("[test] playbackPercent clamped to 0-100\n");
+    {
+        MediaItem item;
+        item.runTimeTicks = 10000000LL * 60;
+        item.playbackPositionTicks = 10000000LL * 90; // 90 min in 60-min runtime
+        item.progress = 0.0f;
+        item.played = false;
+        int pct = playbackPercent(item);
+        CHECK_EQ(std::to_string(pct), std::to_string(100));
+    }
+    {
+        MediaItem item;
+        item.runTimeTicks = 0;
+        item.playbackPositionTicks = 0;
+        item.progress = 1.5f; // > 1.0 (shouldn't happen but test guard)
+        item.played = false;
+        int pct = playbackPercent(item);
+        CHECK_EQ(std::to_string(pct), std::to_string(100));
+    }
+    std::printf("[test] playbackPercent clamped to 0-100 OK\n");
+}
+
+static void testPlaybackPercentZeroRuntime()
+{
+    std::printf("[test] playbackPercent zero runtime returns 0\n");
+    MediaItem item;
+    item.runTimeTicks = 0;
+    item.playbackPositionTicks = 0;
+    item.progress = 0.0f;
+    item.played = false;
+    int pct = playbackPercent(item);
+    CHECK_EQ(std::to_string(pct), std::to_string(0));
+    std::printf("[test] playbackPercent zero runtime returns 0 OK\n");
+}
+
+static void testPlaybackPercentCompletedItem()
+{
+    std::printf("[test] playbackPercent completed item uses ticks\n");
+    MediaItem item;
+    item.runTimeTicks = 10000000LL * 60 * 45; // 45 min
+    item.playbackPositionTicks = 10000000LL * 60 * 45; // fully watched
+    item.progress = 1.0f;
+    item.played = true;
+    int pct = playbackPercent(item);
+    CHECK_EQ(std::to_string(pct), std::to_string(100));
+    std::printf("[test] playbackPercent completed item uses ticks OK\n");
+}
+
+static void testFormatPlaybackTimeBasic()
+{
+    std::printf("[test] formatPlaybackTime basic minutes\n");
+    // 30 min position in 60 min runtime
+    std::string s = formatPlaybackTime(10000000LL * 60 * 30,
+                                       10000000LL * 60 * 60);
+    CHECK(s.find("30m watched") != std::string::npos);
+    CHECK(s.find("30m remaining") != std::string::npos);
+    std::printf("[test] formatPlaybackTime basic minutes OK\n");
+}
+
+static void testFormatPlaybackTimeHours()
+{
+    std::printf("[test] formatPlaybackTime hours and minutes\n");
+    // 1h24m position in 2h runtime
+    long long pos = 10000000LL * (60*60 + 24*60); // 1h 24m
+    long long tot = 10000000LL * 60 * 120;          // 2h
+    std::string s = formatPlaybackTime(pos, tot);
+    CHECK(s.find("1h 24m watched") != std::string::npos);
+    CHECK(s.find("36m remaining") != std::string::npos);
+    std::printf("[test] formatPlaybackTime hours and minutes OK\n");
+}
+
+static void testFormatPlaybackTimeZeroRuntime()
+{
+    std::printf("[test] formatPlaybackTime zero runtime returns empty\n");
+    std::string s = formatPlaybackTime(50000000LL, 0);
+    CHECK(s.empty());
+    std::printf("[test] formatPlaybackTime zero runtime returns empty OK\n");
+}
+
+static void testFormatPlaybackTimeClampedPosition()
+{
+    std::printf("[test] formatPlaybackTime position clamped to runtime\n");
+    // position exceeds runtime — should clamp
+    std::string s = formatPlaybackTime(10000000LL * 60 * 90,
+                                       10000000LL * 60 * 60);
+    CHECK(s.find("1h 0m watched") != std::string::npos);
+    CHECK(s.find("0m remaining") != std::string::npos);
+    std::printf("[test] formatPlaybackTime position clamped to runtime OK\n");
+}
+
+static void testFormatPlaybackTimeZeroPosition()
+{
+    std::printf("[test] formatPlaybackTime zero position\n");
+    std::string s = formatPlaybackTime(0, 10000000LL * 60 * 90);
+    CHECK(s.find("0m watched") != std::string::npos);
+    CHECK(s.find("1h 30m remaining") != std::string::npos);
+    std::printf("[test] formatPlaybackTime zero position OK\n");
+}
+
 int main()
 {
     testRouteRequest();
@@ -2838,9 +2967,22 @@ int main()
     std::printf("\n--- D-pad hold-to-repeat tests ---\n");
     testDpadHoldRepeatTiming();
 
+    // Playback progress display helpers
+    std::printf("\n--- Playback progress display tests ---\n");
+    testPlaybackPercentFromTicks();
+    testPlaybackPercentFallbackToProgress();
+    testPlaybackPercentClamping();
+    testPlaybackPercentZeroRuntime();
+    testPlaybackPercentCompletedItem();
+    testFormatPlaybackTimeBasic();
+    testFormatPlaybackTimeHours();
+    testFormatPlaybackTimeZeroRuntime();
+    testFormatPlaybackTimeClampedPosition();
+    testFormatPlaybackTimeZeroPosition();
+
     std::printf("\n");
     if (g_failures == 0) {
-        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests passed.\n");
+        std::printf("All B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a+progress tests passed.\n");
         return 0;
     }
 

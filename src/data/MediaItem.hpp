@@ -59,6 +59,52 @@ inline int ticksToMinutes(long long ticks)
     return static_cast<int>((seconds + 30) / 60);          // round to nearest minute
 }
 
+/// Compute playback progress percentage (0–100) from MediaItem fields.
+/// Prefers calculating from playbackPositionTicks / runTimeTicks when
+/// runtime is valid; falls back to the server-provided progress field.
+inline int playbackPercent(const MediaItem &item)
+{
+    if (item.runTimeTicks > 0 && item.playbackPositionTicks > 0) {
+        long long pos = item.playbackPositionTicks;
+        if (pos > item.runTimeTicks) pos = item.runTimeTicks;
+        double pct = static_cast<double>(pos) / static_cast<double>(item.runTimeTicks) * 100.0;
+        if (pct < 0.0) pct = 0.0;
+        if (pct > 100.0) pct = 100.0;
+        return static_cast<int>(pct + 0.5);
+    }
+    // Fall back to server-provided progress (0.0–1.0 from PlayedPercentage).
+    double pct = item.progress * 100.0;
+    if (pct < 0.0) pct = 0.0;
+    if (pct > 100.0) pct = 100.0;
+    return static_cast<int>(pct + 0.5);
+}
+
+/// Format compact playback time strings from tick values.
+/// Returns e.g. "29m watched • 18m remaining" or "1h 24m watched • 32m remaining".
+/// Returns empty string if runtime is unknown or invalid.
+inline std::string formatPlaybackTime(long long positionTicks, long long runTimeTicks)
+{
+    if (runTimeTicks <= 0) return {};
+    if (positionTicks < 0) positionTicks = 0;
+    if (positionTicks > runTimeTicks) positionTicks = runTimeTicks;
+
+    int watchedMins = ticksToMinutes(positionTicks);
+    int totalMins   = ticksToMinutes(runTimeTicks);
+    int remainingMins = totalMins - watchedMins;
+    if (remainingMins < 0) remainingMins = 0;
+
+    auto compactMin = [](int mins) -> std::string {
+        if (mins >= 60) {
+            int h = mins / 60;
+            int m = mins % 60;
+            return std::to_string(h) + "h " + std::to_string(m) + "m";
+        }
+        return std::to_string(mins) + "m";
+    };
+
+    return compactMin(watchedMins) + " watched | " + compactMin(remainingMins) + " remaining";
+}
+
 } // namespace miyoofin
 
 #endif // MIYOOFIN_MEDIA_ITEM_HPP

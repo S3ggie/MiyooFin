@@ -21,8 +21,8 @@ namespace miyoofin {
 /// This is a minimal milestone screen: no episode fetching, no artwork.
 class SeriesScreen : public Screen {
 public:
-    SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads={}, bool offline=false,
-                 std::vector<MediaItem> cachedSeasons={});
+    SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
+                 std::vector<MediaItem> cachedSeasons={}, bool downloadedOnly=false);
     ~SeriesScreen() override;
 
     void enter() override;
@@ -66,7 +66,7 @@ private:
     Session       m_session;
     MediaItem     m_series;
     std::shared_ptr<DownloadManager> m_downloads;
-    bool m_offline=false;
+    bool m_networkOffline=false, m_downloadedOnly=false;
     std::uint64_t m_planId = 0; bool m_confirmDownload = false; bool m_planWholeSeries = false;
     std::vector<MediaItem> m_seasons;
     int           m_selectedSeason = 0;

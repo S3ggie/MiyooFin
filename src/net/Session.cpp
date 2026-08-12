@@ -42,6 +42,7 @@ bool Session::saveTo(const std::string &path) const
     writeLine(f, "user_id",     userId);
     writeLine(f, "user_name",   userName);
     writeLine(f, "device_id",   deviceId);
+    fprintf(f, "manual_offline_mode=%d\n", manualOfflineMode ? 1 : 0);
 
     std::fclose(f);
 
@@ -77,6 +78,7 @@ Session Session::loadFrom(const std::string &path)
         if (!(v = readValue(line, "user_id")).empty())       s.userId      = v;
         if (!(v = readValue(line, "user_name")).empty())     s.userName    = v;
         if (!(v = readValue(line, "device_id")).empty())     s.deviceId    = v;
+        if (!(v = readValue(line, "manual_offline_mode")).empty()) s.manualOfflineMode = v == "1" || v == "true";
     }
 
     std::fclose(f);

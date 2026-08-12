@@ -177,9 +177,10 @@ int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selecte
 HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
 {
     switch (row) {
-    case 0: return SettingsRowAction::ChangeServer;
-    case 1: return SettingsRowAction::LocalAddress;
-    case 7: return SettingsRowAction::Logout;
+    case 0: return SettingsRowAction::OfflineMode;
+    case 1: return SettingsRowAction::ChangeServer;
+    case 2: return SettingsRowAction::LocalAddress;
+    case 8: return SettingsRowAction::Logout;
     default: return SettingsRowAction::None;
     }
 }
@@ -200,9 +201,36 @@ void HomeScreen::refreshMovieFilter()
     m_selectedArtwork = {}; m_selectedArtworkId.clear(); m_selectedArtworkAttempted = false;
 }
 
-void HomeScreen::rebuildShowsPresentation() { ShowsPresentation p=makeShowsPresentation((m_libraryOffline?m_offlineSnapshot:m_cachedSnapshot).shows); m_showMaster=std::move(p.shows); m_animeMaster=std::move(p.anime); refreshShowsFilter(); }
+void HomeScreen::rebuildShowsPresentation() { ShowsPresentation p=makeShowsPresentation((presentationOffline()?m_offlineSnapshot:m_cachedSnapshot).shows); m_showMaster=std::move(p.shows); m_animeMaster=std::move(p.anime); refreshShowsFilter(); }
 void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; const bool catalogLoaded=OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); if(catalogLoaded){std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);m_catalogSnapshot=catalog;m_catalogSnapshotReady=true;} OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
 void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
+void HomeScreen::applyPresentationProjection() {
+    if (!m_haveCachedSnapshot) return;
+    OfflineCatalogSnapshot catalog;
+    { std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex); catalog=m_catalogSnapshot; }
+    OfflineLibraryProjection projection(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
+    m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);
+    m_fetchOfflineMovies=projection.movies();
+    m_fetchOfflineSnapshot=m_cachedSnapshot;
+    for (auto &view : m_fetchOfflineSnapshot.shows) {
+        std::vector<MediaItem> filtered;
+        for (const auto &item : view.items) {
+            if (projection.playable(item.id) || !projection.seasons(item.id).empty())
+                filtered.push_back(item);
+        }
+        view.items=std::move(filtered);
+    }
+    m_fetchOfflinePrepared=true;
+    applyOfflineProjection();
+}
+void HomeScreen::restoreOnlinePresentation() {
+    if (!m_haveCachedSnapshot) return;
+    const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab;
+    m_tabs=tabsFromSnapshot(m_cachedSnapshot);
+    m_activeTab=transitionTabIndex(previous,selected,m_tabs);
+    m_movieMaster=combineMovieViews(m_cachedSnapshot.movies);
+    refreshMovieFilter(); rebuildShowsPresentation(); clampNavigation();
+}
 void HomeScreen::refreshShowsFilter() { m_filteredShows.clear();m_filteredAnime.clear();for(const auto&i:m_showMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredShows.push_back(i);for(const auto&i:m_animeMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredAnime.push_back(i);m_showSelected=m_animeSelected=m_showScroll=m_animeScroll=0;m_showsFocus=!m_filteredShows.empty()?ShowsFocus::ShowsGrid:!m_filteredAnime.empty()?ShowsFocus::AnimeGrid:ShowsFocus::AlphabetRail;if(const MediaItem*i=showsSelectedItem())m_showsPreviewId=i->id; }
 std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &seriesId) const
 {
@@ -214,7 +242,7 @@ std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &ser
         const auto seasonsIt=m_catalogSnapshot.seasonsBySeries.find(seriesId);
         if (seasonsIt==m_catalogSnapshot.seasonsBySeries.end()) return {};
         seasons=seasonsIt->second;
-        if (m_libraryOffline) {
+        if (presentationOffline()) {
             catalog.seasonsBySeries.emplace(seriesId,seasons);
             for (const auto &season:seasons) {
                 const auto episodesIt=m_catalogSnapshot.episodesBySeason.find(season.id);
@@ -223,7 +251,7 @@ std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &ser
             }
         }
     }
-    if (m_libraryOffline) {
+    if (presentationOffline()) {
         LibrarySnapshot library;
         OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
         return projection.seasons(seriesId);
@@ -329,6 +357,7 @@ void HomeScreen::enter()
             m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
             refreshMovieFilter();
             rebuildShowsPresentation();
+            if (m_session.manualOfflineMode) applyPresentationProjection();
             m_loadState = LoadState::Ready; clampNavigation();
             printf("[HomeScreen] Loaded local library cache\n");
         }
@@ -410,6 +439,12 @@ bool HomeScreen::handleAction(Action action)
         }
         if (action == Action::Confirm) {
             switch (settingsRowAction(m_settingsSelected)) {
+            case SettingsRowAction::OfflineMode:
+                m_session.manualOfflineMode = !m_session.manualOfflineMode;
+                m_session.save();
+                if (m_session.manualOfflineMode) applyPresentationProjection();
+                else if (!m_libraryOffline) restoreOnlinePresentation();
+                return true;
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;
                 return true;
@@ -486,7 +521,7 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,cachedSeasonsForSeries(i->id)));return true;}return true;}
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,cachedSeasonsForSeries(i->id),presentationOffline()));return true;}return true;}
         if (activeTabNamed("Movies") && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             refreshMovieFilter();
@@ -498,7 +533,7 @@ bool HomeScreen::handleAction(Action action)
             printf("[HomeScreen] Select: %s (%s)\n",
                    item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
-                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,cachedSeasonsForSeries(item->id)));
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,cachedSeasonsForSeries(item->id),presentationOffline()));
                 return true;
             }
             if (item->type == "movie") {
@@ -540,7 +575,7 @@ bool HomeScreen::handleAction(Action action)
                     }
 
                     m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-                        m_session, series, season, item->id,m_downloads,m_libraryOffline));
+                        m_session, series, season, item->id,m_downloads,m_libraryOffline,presentationOffline()));
                     return true;
                 }
                 printf("[HomeScreen] Cannot open episode browser: "
@@ -923,6 +958,7 @@ void HomeScreen::finishFetch()
     m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
     refreshMovieFilter();
     rebuildShowsPresentation();
+    if (m_session.manualOfflineMode) applyPresentationProjection();
     m_loadState = LoadState::Ready;
     clampNavigation();
     printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n", m_tabs.size(), m_fetchStats.added, m_fetchStats.changed);
@@ -1741,6 +1777,7 @@ void HomeScreen::drawSettingsTab(SDL_Surface *fb)
     BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
     struct SettingRow { const char *section; std::string value; };
     const std::vector<SettingRow> rows={
+        {"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"},
         {"Public Server", m_session.serverUrl.empty() ? "Not connected" : m_session.serverUrl},
         {"Local Address", m_session.localServerUrl.empty() ? "Not Set" : m_session.localServerUrl},
         {"Account", m_userName.empty() ? "Unknown" : m_userName},

@@ -125,13 +125,14 @@ static std::string formatEpNum(int indexNumber)
 EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
                                            const MediaItem &season,
-                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads, bool offline)
+                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads, bool networkOffline, bool downloadedOnly)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
     , m_downloads(std::move(downloads))
-    , m_offline(offline)
+    , m_networkOffline(networkOffline)
+    , m_downloadedOnly(downloadedOnly)
 {
 }
 
@@ -259,16 +260,16 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
     m_fetchCancelled.store(false, std::memory_order_release);
     const Session s=m_session; const MediaItem seriesItem=m_series, seasonItem=m_season;
     const std::string sid=m_series.id, season=m_season.id;
-    const bool offline=m_offline, loadCached=loadCachedEpisodes;
+    const bool networkOffline=m_networkOffline, downloadedOnly=m_downloadedOnly, loadCached=loadCachedEpisodes;
     const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
     std::shared_ptr<DownloadManager> downloads=m_downloads;
-    m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,offline,loadCached,catalogPath,downloads](){
+    m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,networkOffline,downloadedOnly,loadCached,catalogPath,downloads](){
         std::vector<MediaItem> cached;
         if(loadCached) {
             OfflineCatalogSnapshot catalog;
             OfflineCatalog::load(catalogPath,catalog,nullptr);
             if(m_fetchCancelled.load(std::memory_order_acquire)) return;
-            if(offline) {
+            if(downloadedOnly) {
                 LibrarySnapshot library;
                 OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
                 cached=projection.episodes(season);
@@ -281,7 +282,7 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
                 m_cachedEpisodes=cached;
                 m_cachedEpisodesDone=true;
             }
-            if(offline) {
+            if(networkOffline) {
                 std::lock_guard<std::mutex>g(m_fetchMutex);
                 m_fetchOk=true;m_fetchEpisodes=std::move(cached);m_fetchDone=true;
                 return;
@@ -292,8 +293,10 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);},e);
         // storeEpisodes reads, merges, serializes, fsyncs and renames the full
         // catalog.  Complete it here before publishing a cheap UI result.
-        if(ok&&!m_fetchCancelled.load(std::memory_order_acquire))
+        if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
             OfflineCatalog::storeEpisodes(catalogPath,seriesItem,seasonItem,v,nullptr);
+            if (downloadedOnly) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(catalogPath,catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{}); v=projection.episodes(season); }
+        }
         std::lock_guard<std::mutex>g(m_fetchMutex);
         m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;
     });
@@ -495,7 +498,7 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
 {
     std::vector<MediaItem> cached; bool cachedDone=false;
     {std::lock_guard<std::mutex>g(m_fetchMutex);if(m_cachedEpisodesDone){cached=std::move(m_cachedEpisodes);m_cachedEpisodesDone=false;cachedDone=true;}}
-    if(cachedDone && (m_offline || !cached.empty())) {
+    if(cachedDone && (m_networkOffline || !cached.empty())) {
         UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishCachedEpisodes");
         publishEpisodes(std::move(cached));
     }

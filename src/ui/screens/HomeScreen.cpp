@@ -388,21 +388,24 @@ void HomeScreen::enter()
            m_userName.c_str());
     if (m_loadState == LoadState::Loading && !m_fetchDone) {
         std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-        if (LibraryCache::load(path, m_cachedSnapshot)) {
+        bool cacheNeedsRefresh=false;
+        if (LibraryCache::load(path, m_cachedSnapshot, nullptr, &cacheNeedsRefresh)) {
             m_tabs = tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
             m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
             refreshMovieFilter();
             rebuildShowsPresentation();
             if (m_session.manualOfflineMode) applyPresentationProjection();
             m_loadState = LoadState::Ready; clampNavigation();
-            printf("[HomeScreen] Loaded local library cache\n");
+            printf("[HomeScreen] Loaded local library cache%s\n", cacheNeedsRefresh ? " (stale generation)" : "");
         }
         const std::string scope=LibraryCache::scopeKey(m_session.serverUrl,m_session.userId);
         const bool haveState=SyncStateStore::load(SyncStateStore::path("cache",scope),m_syncState);
         m_forceHierarchyReconcile=!haveState || !syncStateFresh(m_syncState,wallClockMs(),HIERARCHY_RECONCILE_MS);
-        if (haveState && syncStateFresh(m_syncState,wallClockMs(),SYNC_FRESH_WALL_MS)) {
-            // Persisted freshness survives process lifetime; cache is already
-            // rendered above, so a relaunch does not begin another crawl.
+        // Skip fetch ONLY when a valid current-generation snapshot exists and
+        // SyncState confirms a recent successful sync.  An old-generation
+        // snapshot (needsRefresh) or missing snapshot must always trigger a
+        // fresh fetch, and a stale SyncState forces one regardless.
+        if (m_haveCachedSnapshot && !cacheNeedsRefresh && haveState && syncStateFresh(m_syncState,wallClockMs(),SYNC_FRESH_WALL_MS)) {
             m_syncSchedule.hasSucceeded=true; m_syncSchedule.lastSuccess=SDL_GetTicks();
         } else requestFetch(SDL_GetTicks());
     }

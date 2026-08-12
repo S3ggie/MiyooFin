@@ -21,7 +21,8 @@ public:
     static std::string scopeKey(const std::string &serverUrl, const std::string &userId);
     static std::string cachePath(const std::string &root, const std::string &scope);
     static bool save(const std::string &path, const LibrarySnapshot &snapshot, std::string *error=nullptr);
-    static bool load(const std::string &path, LibrarySnapshot &snapshot, std::string *error=nullptr);
+    static bool load(const std::string &path, LibrarySnapshot &snapshot, std::string *error=nullptr,
+                     bool *needsRefresh=nullptr);
     static ReconcileStats reconcile(const LibrarySnapshot &oldSnapshot, const LibrarySnapshot &remoteSnapshot,
                                     std::vector<StalePoster> *stale=nullptr);
     static bool itemEquivalent(const MediaItem &a, const MediaItem &b);

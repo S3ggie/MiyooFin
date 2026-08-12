@@ -1595,12 +1595,14 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
         Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);
     int mx=px+pw+10, my=py+2;
 
-    // Title: for episodes show "Episode Name - Show Name"
+    // Title: for episodes show series name on the first line and the
+    // episode title on a second visually-subordinate line.
     if (item->type == "episode" && !item->seriesName.empty()) {
-        char titleBuf[128];
-        std::snprintf(titleBuf,sizeof(titleBuf),"%s - %s",item->title.c_str(),item->seriesName.c_str());
-        BitmapFont::drawString(fb,mx,my,titleBuf,
+        BitmapFont::drawString(fb,mx,my,item->seriesName.c_str(),
             Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);
+        my += BitmapFont::GLYPH_H + 2;
+        BitmapFont::drawString(fb,mx,my,item->title.c_str(),
+            Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
     } else {
         BitmapFont::drawString(fb,mx,my,item->title.c_str(),
             Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);

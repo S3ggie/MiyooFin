@@ -34,12 +34,12 @@ void LoginScreen::buildKeyboard()
     static const KeyDef defs[] = {
         {"1",'1',0},{"2",'2',0},{"3",'3',0},{"4",'4',0},{"5",'5',0},
         {"6",'6',0},{"7",'7',0},{"8",'8',0},{"9",'9',0},{"0",'0',0},
-        {"Q",'Q',1},{"W",'W',1},{"E",'E',1},{"R",'R',1},{"T",'T',1},
-        {"Y",'Y',1},{"U",'U',1},{"I",'I',1},{"O",'O',1},{"P",'P',1},
-        {"A",'A',2},{"S",'S',2},{"D",'D',2},{"F",'F',2},{"G",'G',2},
-        {"H",'H',2},{"J",'J',2},{"K",'K',2},{"L",'L',2},
-        {"Z",'Z',3},{"X",'X',3},{"C",'C',3},{"V",'V',3},{"B",'B',3},
-        {"N",'N',3},{"M",'M',3},
+        {"q",'q',1},{"w",'w',1},{"e",'e',1},{"r",'r',1},{"t",'t',1},
+        {"y",'y',1},{"u",'u',1},{"i",'i',1},{"o",'o',1},{"p",'p',1},
+        {"a",'a',2},{"s",'s',2},{"d",'d',2},{"f",'f',2},{"g",'g',2},
+        {"h",'h',2},{"j",'j',2},{"k",'k',2},{"l",'l',2},
+        {"z",'z',3},{"x",'x',3},{"c",'c',3},{"v",'v',3},{"b",'b',3},
+        {"n",'n',3},{"m",'m',3},
         {".",'.',4},{":",':',4},{"-",'-',4},{"_",'_',4},{"@",'@',4},
         {"!",'!',4},
         {"[DEL]",'\b',5},{"[CLR]",0x7F,5},{"[SIGN IN]",0x01,5},
@@ -56,6 +56,17 @@ void LoginScreen::buildKeyboard()
     }
     m_activeKeyRow = 0;
     m_activeKeyCol = 0;
+}
+
+std::string LoginScreen::keyLabel(const Key &key) const
+{
+    std::string label(key.label);
+    if (m_caps && label.size() == 1 && std::isalpha(
+            static_cast<unsigned char>(label[0]))) {
+        label[0] = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(label[0])));
+    }
+    return label;
 }
 
 int LoginScreen::keyIndex(int row, int col) const
@@ -82,6 +93,8 @@ std::string &LoginScreen::activeText()
 void LoginScreen::pressKey(const Key &key)
 {
     char c = key.ch;
+    if (m_caps && std::isalpha(static_cast<unsigned char>(c)))
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     std::string &field = activeText();
 
     if (c == '\b') {
@@ -167,11 +180,13 @@ void LoginScreen::finishLogin()
 
 void LoginScreen::enter()
 {
+    m_caps = false;
     printf("[LoginScreen] enter server=%s\n", m_serverName.c_str());
 }
 
 void LoginScreen::leave()
 {
+    m_caps = false;
     if (m_loginThread.joinable()) {
         m_loginThread.join();
     }
@@ -185,6 +200,9 @@ bool LoginScreen::handleAction(Action action)
     // --- Field-select mode ---
     if (m_inFields) {
         switch (action) {
+        case Action::PrevPage:
+            m_caps = !m_caps;
+            return true;
         case Action::Up:
         case Action::Down:
         case Action::Confirm:
@@ -211,6 +229,9 @@ bool LoginScreen::handleAction(Action action)
 
     // --- Keyboard mode ---
     switch (action) {
+    case Action::PrevPage:
+        m_caps = !m_caps;
+        return true;
     case Action::Up:
         if (m_activeKeyRow > 0) {
             m_activeKeyRow--;
@@ -359,11 +380,19 @@ void LoginScreen::drawKeyboard(SDL_Surface *fb)
         }
         if (firstCol > lastCol) continue;
         int rkc = lastCol - firstCol + 1;
-        int startX = (640 - (rkc * KEY_W + (rkc - 1) * KEY_GAP)) / 2;
+        int rowW = 0;
+        for (const auto &k : m_keys) {
+            if (k.row != row) continue;
+            const std::string label = keyLabel(k);
+            rowW += (k.ch == '\b' || k.ch == 0x7F || k.ch == 0x01 || k.ch == 0x02)
+                ? (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE + 16
+                : KEY_W;
+        }
+        rowW += (rkc - 1) * KEY_GAP;
+        int x = (640 - rowW) / 2;
 
         for (const auto &k : m_keys) {
             if (k.row != row) continue;
-            int x = startX + k.col * (KEY_W + KEY_GAP);
             int y = KEYBOARD_TOP + row * (KEY_H + KEY_GAP);
             bool sel = !m_inFields && k.row == m_activeKeyRow && k.col == m_activeKeyCol;
             Uint8 bgR = sel ? Theme::ACCENT_R : 40;
@@ -372,16 +401,25 @@ void LoginScreen::drawKeyboard(SDL_Surface *fb)
             Uint8 fgR = sel ? 255 : Theme::TEXT_R;
             Uint8 fgG = sel ? 255 : Theme::TEXT_G;
             Uint8 fgB = sel ? 255 : Theme::TEXT_B;
+            const std::string label = keyLabel(k);
             int keyW = KEY_W;
             if (k.ch == '\b' || k.ch == 0x7F || k.ch == 0x01 || k.ch == 0x02)
-                keyW = (int)::strlen(k.label) * BitmapFont::GLYPH_W + 8;
+                keyW = (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE + 16;
             BitmapFont::fillRect(fb, x, y, keyW, KEY_H, bgR, bgG, bgB, 255);
             BitmapFont::drawRect(fb, x, y, keyW, KEY_H, fgR, fgG, fgB);
-            int lx = x + (keyW - (int)::strlen(k.label) * BitmapFont::GLYPH_W) / 2;
-            int ly = y + (KEY_H - BitmapFont::GLYPH_H) / 2;
-            BitmapFont::drawString(fb, lx, ly, k.label, fgR, fgG, fgB, bgR, bgG, bgB);
+            int labelW = (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE;
+            int lx = x + (keyW - labelW) / 2;
+            int ly = y + (KEY_H - BitmapFont::GLYPH_H * KEY_LABEL_SCALE) / 2;
+            BitmapFont::drawStringScaled(fb, lx, ly, label.c_str(), KEY_LABEL_SCALE,
+                                         fgR, fgG, fgB, bgR, bgG, bgB);
+            x += keyW + KEY_GAP;
         }
     }
+    BitmapFont::drawString(fb, 8, 106, m_caps ? "CAPS ON" : "CAPS OFF",
+        m_caps ? Theme::ACCENT_R : Theme::TEXT_R,
+        m_caps ? Theme::ACCENT_G : Theme::TEXT_G,
+        m_caps ? Theme::ACCENT_B : Theme::TEXT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
 }
 
 void LoginScreen::drawStatus(SDL_Surface *fb)
@@ -413,9 +451,9 @@ void LoginScreen::drawHints(SDL_Surface *fb)
 
     const char *hints;
     if (m_inFields) {
-        hints = "LEFT/RIGHT=Switch Field  DOWN=Keyboard  START=Sign In";
+        hints = "LEFT/RIGHT=Switch Field  L2=Caps  DOWN=Keyboard  START=Sign In";
     } else {
-        hints = "A=Type  B=Delete  X=Clear  UP=Fields  START=Sign In";
+        hints = "A=Type  B=Delete  X=Clear  L2=Caps  START=Sign In";
     }
     BitmapFont::drawString(fb, 8, y + 4, hints,
         Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,

@@ -97,6 +97,8 @@ output/build:
 # Test
 # -------------------------------------------------------------------
 TEST_TARGET := output/test/test_runner
+RUNNER_TEST := tests/test_playback_runner.sh
+CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
                src/net/ArtworkUrl.cpp \
@@ -120,6 +122,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
                src/ui/screens/ServerEntryScreen.cpp \
+               src/ui/screens/LoginScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
@@ -129,6 +132,8 @@ TEST_SRCS   := tests/test_main.cpp \
 .PHONY: test
 test: $(TEST_TARGET)
 	@$(TEST_TARGET)
+	@sh $(RUNNER_TEST)
+	@sh $(CA_BUNDLE_TEST)
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
@@ -147,7 +152,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross
+	    make -f Makefile.cross all bridge reporter
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image
@@ -189,20 +194,30 @@ verify-arm:
 # Package
 # -------------------------------------------------------------------
 PACKAGE_DIR := output/package/MiyooFin
+CA_BUNDLE := cacert.pem
+ARM_BRIDGE := output/build-arm/miyoofin-https-bridge
+ARM_REPORTER := output/build-arm/miyoofin-playback-reporter
 
-.PHONY: package
-package: $(ARM_TARGET)
+.PHONY: package check-ca-bundle update-ca-bundle
+check-ca-bundle: $(CA_BUNDLE)
+	@test -s $(CA_BUNDLE) || { echo "ERROR: $(CA_BUNDLE) is missing or empty. Run 'make update-ca-bundle'."; exit 1; }
+	@grep -q -- 'BEGIN CERTIFICATE' $(CA_BUNDLE) || { echo "ERROR: $(CA_BUNDLE) is not a PEM CA bundle. Run 'make update-ca-bundle'."; exit 1; }
+
+# Deliberately refresh the vendored Mozilla CA bundle from curl's official URL.
+update-ca-bundle:
+	@sh tools/update-ca-bundle.sh $(CA_BUNDLE)
+
+package: $(ARM_TARGET) $(ARM_BRIDGE) $(ARM_REPORTER) check-ca-bundle
 	@rm -rf $(PACKAGE_DIR)
 	@mkdir -p $(PACKAGE_DIR)/lib
 	@mkdir -p $(PACKAGE_DIR)/assets
 	@cp $(ARM_TARGET) $(PACKAGE_DIR)/miyoofin
-	@cp output/build-arm/miyoofin-https-bridge $(PACKAGE_DIR)/miyoofin-https-bridge 2>/dev/null || \
-	    echo "  WARNING: ARM bridge not found (run 'make onionos' with bridge target)"
-	@cp cacert.pem $(PACKAGE_DIR)/cacert.pem 2>/dev/null || \
-	    echo "  WARNING: cacert.pem not found in repo root"
+	@cp $(ARM_BRIDGE) $(PACKAGE_DIR)/miyoofin-https-bridge
+	@cp $(CA_BUNDLE) $(PACKAGE_DIR)/cacert.pem
+	@test -s $(PACKAGE_DIR)/cacert.pem || { echo "ERROR: failed to stage required CA bundle"; exit 1; }
 	@cp distributions/onionos/launch.sh $(PACKAGE_DIR)/
 	@cp distributions/onionos/playback_runner.sh $(PACKAGE_DIR)/
-	@cp output/build-arm/miyoofin-playback-reporter $(PACKAGE_DIR)/ 2>/dev/null || true
+	@cp $(ARM_REPORTER) $(PACKAGE_DIR)/
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
@@ -220,6 +235,7 @@ package: $(ARM_TARGET)
 	@file $(PACKAGE_DIR)/miyoofin | grep -qi 'ARM' || \
 	    { echo "ERROR: $(PACKAGE_DIR)/miyoofin is NOT ARM!"; exit 1; }
 	@echo "  Package uses ARM binary: OK"
+	@echo "  Package CA bundle: OK ($(PACKAGE_DIR)/cacert.pem)"
 	@echo "  Package staged at: $(PACKAGE_DIR)/"
 	@echo "  Bundle as: cd output/package && zip -r MiyooFin.zip MiyooFin/"
 
@@ -310,5 +326,6 @@ help:
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"
+	@echo "  make update-ca-bundle — Refresh cacert.pem from curl's Mozilla CA bundle"
 	@echo "  make clean   — Remove output/"
 	@echo "  make help    — This message"

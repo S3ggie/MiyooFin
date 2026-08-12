@@ -6,7 +6,7 @@
 #
 # Reads:
 #   playback-request.txt  — item_id, item_type, and resume_ticks
-#   session.txt           — canonical server_url, optional local_server_url, access_token
+#   session.txt           — canonical server_url, optional local/public routes, access_token
 #
 # Flow:
 #   1. Parse item_id, server_url, access_token
@@ -83,6 +83,7 @@ fi
 
 SERVER_URL=$(read_kv session.txt server_url)
 LOCAL_SERVER_URL=$(read_kv session.txt local_server_url)
+PUBLIC_SERVER_URL=$(read_kv session.txt public_server_url)
 ACCESS_TOKEN=$(read_kv session.txt access_token)
 
 if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && { [ -z "$SERVER_URL" ] || [ -z "$ACCESS_TOKEN" ]; }; then
@@ -98,10 +99,6 @@ for _f in miyoofin-https-bridge; do
         exit 1
     fi
 done
-if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ ! -f cacert.pem ]; then
-    playback_log "ERROR: cacert.pem not found"
-    exit 1
-fi
 
 playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}, source_mode=${REQUEST_SOURCE_MODE}) ==="
 
@@ -123,15 +120,40 @@ build_stream_url() {
     printf '%s' "$_url"
 }
 PLAY_SESSION_ID="miyoofin-$(date +%s)-$$"
-PUBLIC_TURL=$(build_stream_url "$SERVER_URL")
+PUBLIC_BASE=${PUBLIC_SERVER_URL:-$SERVER_URL}
+LAN_BASE=$LOCAL_SERVER_URL
+# public_server_url is only set for LAN-canonical sessions.
+if [ -z "$LAN_BASE" ] && [ -n "$PUBLIC_SERVER_URL" ]; then LAN_BASE=$SERVER_URL; fi
+PUBLIC_TURL=$(build_stream_url "$PUBLIC_BASE")
 TURL=$PUBLIC_TURL
 FALLBACK_TURL=""
-if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$LOCAL_SERVER_URL" ]; then
-    TURL=$(build_stream_url "$LOCAL_SERVER_URL")
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$LAN_BASE" ]; then
+    TURL=$(build_stream_url "$LAN_BASE")
     FALLBACK_TURL=$PUBLIC_TURL
     playback_log "[PlaybackRoute] LAN"
 elif [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
     playback_log "[PlaybackRoute] PUBLIC"
+fi
+
+# The bridge accepts an empty CA path for HTTP-only routes.  Keep TLS
+# verification mandatory whenever an HTTPS route is used, but do not prevent a
+# usable LAN HTTP route from starting merely because its optional HTTPS fallback
+# cannot be verified on this device.
+CA_CERT_PATH=""
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
+    case "$TURL" in https://*) PRIMARY_USES_HTTPS=1 ;; *) PRIMARY_USES_HTTPS=0 ;; esac
+    case "$FALLBACK_TURL" in https://*) FALLBACK_USES_HTTPS=1 ;; *) FALLBACK_USES_HTTPS=0 ;; esac
+    if [ "$PRIMARY_USES_HTTPS" = 1 ] || [ "$FALLBACK_USES_HTTPS" = 1 ]; then
+        if [ -s cacert.pem ]; then
+            CA_CERT_PATH="$APP_DIR/cacert.pem"
+        elif [ "$PRIMARY_USES_HTTPS" = 1 ]; then
+            playback_log "ERROR: cacert.pem not found for HTTPS playback"
+            exit 1
+        else
+            playback_log "WARNING: Secure HTTPS fallback unavailable: cacert.pem not found; using LAN HTTP only"
+            FALLBACK_TURL=""
+        fi
+    fi
 fi
 playback_log "Resume ticks=$REQUEST_RESUME_TICKS PlaySessionId=$PLAY_SESSION_ID"
 
@@ -160,10 +182,10 @@ if [ "$REQUEST_SOURCE_MODE" = local ]; then
     > "$APP_DIR/playback-bridge.log" 2>&1 &
 else
     if [ -n "$FALLBACK_TURL" ]; then
-        "$APP_DIR/miyoofin-https-bridge" --fallback-url "$FALLBACK_TURL" "$TURL" "$APP_DIR/cacert.pem" 18080 \
+        "$APP_DIR/miyoofin-https-bridge" --fallback-url "$FALLBACK_TURL" "$TURL" "$CA_CERT_PATH" 18080 \
         > "$APP_DIR/playback-bridge.log" 2>&1 &
     else
-        "$APP_DIR/miyoofin-https-bridge" "$TURL" "$APP_DIR/cacert.pem" 18080 \
+        "$APP_DIR/miyoofin-https-bridge" "$TURL" "$CA_CERT_PATH" 18080 \
     > "$APP_DIR/playback-bridge.log" 2>&1 &
     fi
 fi

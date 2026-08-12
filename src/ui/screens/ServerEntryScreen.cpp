@@ -11,14 +11,14 @@
 namespace miyoofin {
 
 ServerEntryScreen::ServerEntryScreen()
-    : m_url("https://")
+    : m_url()
 {
     buildKeyboard();
 }
 
 ServerEntryScreen::ServerEntryScreen(const std::string &initialUrl,
                                      const std::string &errorMsg)
-    : m_url(initialUrl.empty() ? "https://" : initialUrl)
+    : m_url(initialUrl)
     , m_message(errorMsg)
 {
     buildKeyboard();
@@ -27,11 +27,12 @@ ServerEntryScreen::ServerEntryScreen(const std::string &initialUrl,
 ServerEntryScreen::ServerEntryScreen(const std::string &initialUrl,
                                      const std::string &errorMsg,
                                      const std::string &expectedServerId,
-                                     bool localAddressEntry)
-    : m_url(localAddressEntry ? initialUrl : (initialUrl.empty() ? "https://" : initialUrl))
+                                     bool localAddressEntry, bool publicAddressEntry)
+    : m_url(initialUrl)
     , m_message(errorMsg)
     , m_expectedServerId(expectedServerId)
     , m_localAddressEntry(localAddressEntry)
+    , m_publicAddressEntry(publicAddressEntry)
 {
     buildKeyboard();
 }
@@ -109,14 +110,11 @@ void ServerEntryScreen::pressKey(const Key &key)
     if (c == '\b') {
         if (!m_url.empty()) {
             m_url.pop_back();
-            if (m_url.empty() || m_url == "https" || m_url == "https:" ||
-                m_url == "http" || m_url == "http:")
-                m_url = "https://";
         }
         m_message.clear();
         return;
     }
-    if (c == 0x7F) { m_url = m_localAddressEntry ? "" : "https://"; m_message.clear(); return; }
+    if (c == 0x7F) { m_url.clear(); m_message.clear(); return; }
     if (c == 0x01) {
         if (!m_connecting && !m_connected) startConnection();
         return;
@@ -161,7 +159,7 @@ void ServerEntryScreen::finishConnection()
 {
     m_connecting = false;
     if (m_connectSuccess) {
-        if (m_localAddressEntry && !JellyfinApi::serverIdsMatch(
+        if ((m_localAddressEntry || m_publicAddressEntry) && !JellyfinApi::serverIdsMatch(
                 m_expectedServerId, m_connectResult.serverId)) {
             m_message = "Different Jellyfin server";
             return;
@@ -170,7 +168,7 @@ void ServerEntryScreen::finishConnection()
         m_serverInfo = m_connectResult;
         m_serverUrl = m_url;
         m_infoTimer = 2000;
-        if (!m_localAddressEntry) {
+        if (!m_localAddressEntry && !m_publicAddressEntry) {
             FILE *f = fopen("server.txt", "w");
             if (f) { fprintf(f, "%s\n", m_serverUrl.c_str()); fclose(f); }
         }
@@ -183,6 +181,15 @@ void ServerEntryScreen::finishConnection()
                       m_connectError.c_str());
         m_message = buf;
     }
+}
+
+void ServerEntryScreen::cancelAddressEntry()
+{
+    // Settings address entry is an edit transaction: abandoning it must not
+    // trigger verification or hand a value back to App for persistence.
+    if (!m_localAddressEntry && !m_publicAddressEntry) return;
+    m_addressEntryCancelled = true;
+    if (m_stack) m_stack->pop();
 }
 
 void ServerEntryScreen::enter()
@@ -248,12 +255,20 @@ bool ServerEntryScreen::handleAction(Action action)
         return true;
     }
     case Action::Back:
+        if (m_localAddressEntry || m_publicAddressEntry) {
+            cancelAddressEntry();
+            return true;
+        }
         pressKey(Key{'\b',"[DEL]",0,0}); return true;
     case Action::Search:
         pressKey(Key{0x7F,"[CLR]",0,0}); return true;
     case Action::Settings:
         pressKey(Key{0x01,"[DONE]",0,0}); return true;
     case Action::Menu:
+        if (m_localAddressEntry || m_publicAddressEntry) {
+            cancelAddressEntry();
+            return true;
+        }
         pressKey(Key{0x02,"[CANCEL]",0,0}); return true;
     default:
         return false;
@@ -277,8 +292,10 @@ void ServerEntryScreen::render(SDL_Surface *fb)
     BitmapFont::drawString(fb, 8, 8, m_localAddressEntry ? "Enter Local Jellyfin Address" : "Enter Jellyfin Server URL",
         Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
         Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    BitmapFont::drawString(fb, 8, 28,
-        "A=Type  B=Delete  X=Clear  L2=Caps  START=Done  SELECT=Cancel",
+    const char *hints = (m_localAddressEntry || m_publicAddressEntry)
+        ? "A=Type  B=Back  [DEL]=Delete  X=Clear  L2=Caps  START=Done"
+        : "A=Type  B=Delete  X=Clear  L2=Caps  START=Done  SELECT=Cancel";
+    BitmapFont::drawString(fb, 8, 28, hints,
         Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
         Theme::BG_R, Theme::BG_G, Theme::BG_B);
     drawInputField(fb);

@@ -1,4 +1,5 @@
 #include "HttpClient.hpp"
+#include "TlsConfig.hpp"
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cstdio>
@@ -119,8 +120,7 @@ bool HttpClient::getBinary(const std::string &url,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    if (!configureTls(curl, url, &error)) { curl_easy_cleanup(curl); return false; }
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
     if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
 
@@ -184,8 +184,7 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);   // no cert validation
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);   // for embedded simplicity
+    if (!configureTls(curl, url, &error)) { curl_easy_cleanup(curl); return false; }
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
     if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
 

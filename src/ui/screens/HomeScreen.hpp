@@ -76,7 +76,8 @@ inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
-    enum class SettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, Logout };
+    enum class SettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, PublicAddress, Logout };
+    struct SettingsAddressRow { std::string section; std::string value; SettingsRowAction action; };
     struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
@@ -93,13 +94,19 @@ public:
 
     static constexpr int settingsRowCount() { return 9; }
     static SettingsRowAction settingsRowAction(int row);
+    static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
+    static int settingsRowCount(const Session &session);
+    static SettingsRowAction settingsRowAction(int row, const Session &session);
+    static const char *lastApiRouteValue();
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
     /// True when the user has confirmed changing servers (App handles the transition).
     bool changeServerRequested() const { return m_changeServerRequested; }
     bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
+    bool takePublicAddressRequest() { const bool requested = m_publicAddressRequested; m_publicAddressRequested = false; return requested; }
     void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
+    void setPublicServerUrl(const std::string &url) { m_session.publicServerUrl = url; }
     bool presentationOffline() const { return m_libraryOffline || m_session.manualOfflineMode; }
 
     /// Replace, insert, or remove Home's Continue Watching row.
@@ -195,6 +202,7 @@ private:
     SettingsConfirmation m_settingsConfirmation = SettingsConfirmation::None;
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
+    bool m_publicAddressRequested = false;
 
     // Downloads is rendered only from this copied manager snapshot.  It is
     // refreshed in update(), never while rendering or handling input.

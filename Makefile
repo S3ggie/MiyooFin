@@ -3,7 +3,7 @@
 # Targets:
 #   all          — Host debug build
 #   test         — Host unit tests (empty in Checkpoint A)
-#   onionos      — Cross-compile via Docker (builds ARMarch binary)
+#   onionos      — Cross-compile via Docker (builds ARM binary)
 #   verify-arm   — Verify ARM binary architecture
 #   package      — Stage OnionOS folder under output/package/ (uses ARM binary)
 #   clean        — Remove output/

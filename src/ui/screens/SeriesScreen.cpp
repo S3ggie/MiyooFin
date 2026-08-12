@@ -98,12 +98,13 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
     return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" + std::to_string(POSTER_H);
 }
 
-SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool offline,
-                           std::vector<MediaItem> cachedSeasons)
+SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool networkOffline,
+                           std::vector<MediaItem> cachedSeasons, bool downloadedOnly)
     : m_session(session)
     , m_series(series)
     , m_downloads(std::move(downloads))
-    , m_offline(offline)
+    , m_networkOffline(networkOffline)
+    , m_downloadedOnly(downloadedOnly)
     , m_seasons(std::move(cachedSeasons))
 {
     if (!m_seasons.empty()) m_loadState=LoadState::Ready;
@@ -165,17 +166,17 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
     m_error.clear();
     {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;m_cachedSeasonsDone=false;}
     m_fetchCancelled.store(false, std::memory_order_release); Session s=m_session; std::string id=m_series.id;
-    const bool offline=m_offline, loadCached=loadCachedSeasons;
+    const bool networkOffline=m_networkOffline, downloadedOnly=m_downloadedOnly, loadCached=loadCachedSeasons;
     const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
     std::shared_ptr<DownloadManager> downloads=m_downloads;
     const MediaItem series=m_series;
-    m_fetchThread=std::thread([this,s,id,offline,loadCached,catalogPath,downloads,series](){
+    m_fetchThread=std::thread([this,s,id,networkOffline,downloadedOnly,loadCached,catalogPath,downloads,series](){
         if(loadCached) {
             OfflineCatalogSnapshot catalog;
             OfflineCatalog::load(catalogPath,catalog,nullptr);
             if(m_fetchCancelled.load(std::memory_order_acquire)) return;
             std::vector<MediaItem> cached;
-            if(offline) {
+            if(downloadedOnly) {
                 LibrarySnapshot library;
                 OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
                 cached=projection.seasons(id);
@@ -184,12 +185,15 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
                 if(it!=catalog.seasonsBySeries.end()) cached=it->second;
             }
             {std::lock_guard<std::mutex>g(m_fetchMutex);m_cachedSeasons=std::move(cached);m_cachedSeasonsDone=true;}
-            if(offline) { std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=true;m_fetchDone=true;return; }
+            if(networkOffline) { std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=true;m_fetchDone=true;return; }
         }
         if(m_fetchCancelled.load(std::memory_order_acquire)) return;
         std::vector<MediaItem> v;std::string e;bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getSeasons(base,s.accessToken,s.userId,s.deviceId,id,v,e,&m_fetchCancelled);},e);
         // Persist network results on the worker too: save() fsyncs the catalog.
-        if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) OfflineCatalog::storeSeasons(catalogPath,series,v,nullptr);
+        if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
+            OfflineCatalog::storeSeasons(catalogPath,series,v,nullptr);
+            if (downloadedOnly) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(catalogPath,catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{}); v=projection.seasons(id); }
+        }
         std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchSeasons=std::move(v);m_fetchError=e;m_fetchDone=true;
     });
 }
@@ -367,7 +371,7 @@ bool SeriesScreen::handleAction(Action action)
         printf("[SeriesScreen] Select season: %s index=%d\n",
                season.title.c_str(), season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-            m_session, m_series, season, "", m_downloads, m_offline));
+            m_session, m_series, season, "", m_downloads, m_networkOffline, m_downloadedOnly));
         return true;
     }
 
@@ -411,10 +415,10 @@ void SeriesScreen::update(Uint32 /*dt*/)
         // Offline completion and a usable online cache are immediately
         // interactive; an empty online cache continues showing the loader
         // while the network request is in flight.
-        if(m_offline || !m_seasons.empty()) m_loadState=LoadState::Ready;
+        if(m_networkOffline || !m_seasons.empty()) m_loadState=LoadState::Ready;
     }
     bool fetchDone; {std::lock_guard<std::mutex>g(m_fetchMutex);fetchDone=m_fetchDone;}
-    if(fetchDone){UiDiagnostics::Scope scope("SeriesScreen::publishSeasonResult");std::vector<MediaItem> fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchSeasons);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){if(!m_offline)m_seasons=replaceSeasonsKeepingSelection(m_seasons,std::move(fresh),m_selectedSeason);m_loadState=LoadState::Ready;}else if(m_seasons.empty()){m_loadState=LoadState::Error;m_error=err;}}
+    if(fetchDone){UiDiagnostics::Scope scope("SeriesScreen::publishSeasonResult");std::vector<MediaItem> fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchSeasons);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok){if(!m_networkOffline)m_seasons=replaceSeasonsKeepingSelection(m_seasons,std::move(fresh),m_selectedSeason);m_loadState=LoadState::Ready;}else if(m_seasons.empty()){m_loadState=LoadState::Error;m_error=err;}}
     {
         UiDiagnostics::Scope scope("SeriesScreen::publishArtworkResult");
         std::lock_guard<std::mutex> g(m_artworkMutex);

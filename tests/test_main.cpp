@@ -278,6 +278,7 @@ static void testSession()
     s1.userId      = "user-42";
     s1.userName    = "testuser";
     s1.deviceId    = "dev-001";
+    s1.manualOfflineMode = true;
 
     CHECK(s1.saveTo(tmpPath));
 
@@ -290,6 +291,11 @@ static void testSession()
     CHECK_EQ(s2.userId,      "user-42");
     CHECK_EQ(s2.userName,    "testuser");
     CHECK_EQ(s2.deviceId,    "dev-001");
+    CHECK(s2.manualOfflineMode);
+
+    s2.manualOfflineMode = false;
+    CHECK(s2.saveTo(tmpPath));
+    CHECK(!Session::loadFrom(tmpPath).manualOfflineMode);
 
     s2.clear();
     CHECK(!s2.valid());
@@ -320,6 +326,7 @@ static void testSessionBackwardCompatibility()
     CHECK_EQ(session.serverUrl, "https://public.example.com");
     CHECK(session.serverId.empty());
     CHECK(session.localServerUrl.empty());
+    CHECK(!session.manualOfflineMode);
     CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId),
              LibraryCache::scopeKey("https://public.example.com", "user"));
     session.serverId = "new-server-id";
@@ -2147,13 +2154,14 @@ static void testOfflineLibraryProjection(){
     CHECK(HomeScreen::transitionTabIndex(offline,3,online)==4);
 }
 static void testSettingsRowActions(){
-    CHECK(HomeScreen::settingsRowCount() == 8);
-    CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::ChangeServer);
-    CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::LocalAddress);
-    CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(6)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::Logout);
-    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowCount() == 9);
+    CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::OfflineMode);
+    CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK(HomeScreen::settingsRowAction(3)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::Logout);
+    CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
 static void testSeriesCachedSeasonHandoff(){
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";

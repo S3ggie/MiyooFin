@@ -26,7 +26,8 @@ public:
     EpisodeBrowserScreen(const Session &session,
                          const MediaItem &series,
                          const MediaItem &season,
-                         const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={}, bool offline=false);
+                         const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
+                         bool downloadedOnly=false);
     ~EpisodeBrowserScreen() override;
 
     void enter() override;
@@ -124,7 +125,7 @@ private:
     MediaItem     m_season;
     std::string   m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
-    std::shared_ptr<DownloadManager> m_downloads; bool m_offline=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
+    std::shared_ptr<DownloadManager> m_downloads; bool m_networkOffline=false, m_downloadedOnly=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
     std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedEpisodesDone=false; std::vector<MediaItem> m_fetchEpisodes, m_cachedEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};

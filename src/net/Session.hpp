@@ -17,6 +17,9 @@ struct Session {
     std::string userId;
     std::string userName;
     std::string deviceId;
+    /// User-selected downloaded-only library presentation.  This is not a
+    /// connectivity state and must not affect requests or playback reporting.
+    bool manualOfflineMode = false;
 
     /// True if the session contains enough data to attempt token validation.
     bool valid() const {
@@ -32,6 +35,7 @@ struct Session {
         userId.clear();
         userName.clear();
         deviceId.clear();
+        manualOfflineMode = false;
     }
 
     /// Save to the default path ("session.txt") in the current directory.

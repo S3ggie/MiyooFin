@@ -76,7 +76,7 @@ inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
-    enum class SettingsRowAction { None, ChangeServer, LocalAddress, Logout };
+    enum class SettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, Logout };
     struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
@@ -91,7 +91,7 @@ public:
     int diagnosticActiveTab() const { return m_activeTab; }
     const char *diagnosticTabName() const;
 
-    static constexpr int settingsRowCount() { return 8; }
+    static constexpr int settingsRowCount() { return 9; }
     static SettingsRowAction settingsRowAction(int row);
 
     /// True when the user has confirmed logout (App handles the transition).
@@ -100,6 +100,7 @@ public:
     bool changeServerRequested() const { return m_changeServerRequested; }
     bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
     void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
+    bool presentationOffline() const { return m_libraryOffline || m_session.manualOfflineMode; }
 
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
@@ -258,6 +259,8 @@ private:
     void startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
+    void applyPresentationProjection();
+    void restoreOnlinePresentation();
     void applyOfflineProjection();
     void prepareOfflineProjection();
     void startPosterSync(const LibrarySnapshot &snapshot);

@@ -143,13 +143,32 @@ output/test:
 	@mkdir -p $@
 
 # -------------------------------------------------------------------
+# Miyoo build-time shared libraries (build inputs, not shipped)
+# -------------------------------------------------------------------
+MIYOO_LIB_DIR := vendor/miyoo/lib
+MIYOO_LIBS    := $(MIYOO_LIB_DIR)/libEGL.so.1 \
+                 $(MIYOO_LIB_DIR)/libGLESv2.so \
+                 $(MIYOO_LIB_DIR)/libmi_ao.so \
+                 $(MIYOO_LIB_DIR)/libmi_common.so \
+                 $(MIYOO_LIB_DIR)/libmi_gfx.so \
+                 $(MIYOO_LIB_DIR)/libmi_sys.so
+
+.PHONY: import-miyoo-libs
+import-miyoo-libs:
+	@sh tools/import-miyoo-build-libs.sh
+
+.PHONY: check-miyoo-libs
+check-miyoo-libs:
+	@sh tools/import-miyoo-build-libs.sh --verify
+
+# -------------------------------------------------------------------
 # OnionOS cross-compilation via Docker
 # -------------------------------------------------------------------
 DOCKER_TAG := miyoofin-toolchain
 ARM_TARGET := output/build-arm/miyoofin
 
 .PHONY: onionos
-onionos: $(DOCKER_TAG)
+onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
 	    make -f Makefile.cross all bridge reporter
@@ -207,7 +226,7 @@ check-ca-bundle: $(CA_BUNDLE)
 update-ca-bundle:
 	@sh tools/update-ca-bundle.sh $(CA_BUNDLE)
 
-package: onionos check-ca-bundle
+package: onionos check-ca-bundle check-miyoo-libs
 	@rm -rf $(PACKAGE_DIR)
 	@mkdir -p $(PACKAGE_DIR)/lib
 	@mkdir -p $(PACKAGE_DIR)/assets
@@ -326,6 +345,7 @@ help:
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"
+	@echo "  make import-miyoo-libs — Import Miyoo build libraries from device"
 	@echo "  make update-ca-bundle — Refresh cacert.pem from curl's Mozilla CA bundle"
 	@echo "  make clean   — Remove output/"
 	@echo "  make help    — This message"

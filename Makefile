@@ -256,7 +256,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	@echo "  Package uses ARM binary: OK"
 	@echo "  Package CA bundle: OK ($(PACKAGE_DIR)/cacert.pem)"
 	@echo "  Package staged at: $(PACKAGE_DIR)/"
-	@echo "  Bundle as: cd output/package && zip -r MiyooFin.zip MiyooFin/"
+	@echo "  Bundle as: cd output/package && zip -ry MiyooFin.zip MiyooFin/"
 
 # -------------------------------------------------------------------
 # HTTPS bridge (standalone helper — NOT linked into MiyooFin)

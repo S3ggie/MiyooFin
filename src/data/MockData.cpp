@@ -140,6 +140,9 @@ const std::vector<TabData>& getMockTabs()
         {"Downloads", {
             {"", {}} // empty -- placeholder
         }},
+        {"Settings", {
+            {"", {}} // empty -- placeholder
+        }},
     };
     return tabs;
 }

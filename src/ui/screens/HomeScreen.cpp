@@ -10,6 +10,7 @@
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
+#include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../app/UiDiagnostics.hpp"
@@ -38,6 +39,7 @@ static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_STRIP_H = 96;  // max card height across all types
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
+static constexpr int SETTINGS_VISIBLE_ROWS = 6;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
 static constexpr int SEASON_POSTER_W = 74;
@@ -49,6 +51,15 @@ static constexpr int SHOWS_HALF_W=302, SHOWS_LEFT_X=36, SHOWS_RIGHT_X=338;
 static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
+static std::string compactSyncAge(std::int64_t timestamp)
+{
+    if (timestamp <= 0) return "Never";
+    const std::int64_t elapsed=std::max<std::int64_t>(0,wallClockMs()-timestamp);
+    if (elapsed < 60LL*1000) return "Now";
+    if (elapsed < 60LL*60*1000) return std::to_string(elapsed/(60LL*1000))+"m ago";
+    if (elapsed < 24LL*60*60*1000) return std::to_string(elapsed/(60LL*60*1000))+"h ago";
+    return std::to_string(elapsed/(24LL*60*60*1000))+"d ago";
+}
 
 // Keep the selected grid row within the compact three-row movie viewport.
 // This is deliberately independent of logical MediaRow navigation.
@@ -98,6 +109,7 @@ HomeScreen::HomeScreen(const Session &session, std::shared_ptr<DownloadManager> 
     m_tabs.push_back({"Movies", {{"", {}}}});
     m_tabs.push_back({"Shows", {{"", {}}}});
     m_tabs.push_back({"Downloads", {{"", {}}}});
+    m_tabs.push_back({"Settings", {{"", {}}}});
     m_posterThread = std::thread(&HomeScreen::posterWorker, this);
     m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
@@ -137,6 +149,7 @@ std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
     if (shows.rows.empty()) shows.rows.push_back({"No shows found", {}});
     tabs.push_back(std::move(shows));
     tabs.push_back({"Downloads", {{"", {}}}});
+    tabs.push_back({"Settings", {{"", {}}}});
     return tabs;
 }
 
@@ -159,6 +172,16 @@ int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selecte
     for (int i=0; i<(int)to.size(); ++i) if (to[i].name==name) return i;
     for (int i=0; i<(int)to.size(); ++i) if (to[i].name=="Movies") return i;
     return to.empty() ? 0 : std::min(std::max(selected,0),(int)to.size()-1);
+}
+
+HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
+{
+    switch (row) {
+    case 0: return SettingsRowAction::ChangeServer;
+    case 1: return SettingsRowAction::LocalAddress;
+    case 7: return SettingsRowAction::Logout;
+    default: return SettingsRowAction::None;
+    }
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
@@ -229,6 +252,7 @@ const TabData &HomeScreen::currentTab() const
     return m_activeTab>=0 && m_activeTab<(int)m_tabs.size() ? m_tabs[m_activeTab] : empty;
 }
 
+const char *HomeScreen::diagnosticTabName() const { return currentTab().name.empty() ? "other" : currentTab().name.c_str(); }
 bool HomeScreen::activeTabNamed(const char *name) const { return currentTab().name==name; }
 int HomeScreen::tabIndex(const char *name) const { for(int i=0;i<(int)m_tabs.size();++i) if(m_tabs[i].name==name) return i; return -1; }
 
@@ -367,6 +391,52 @@ bool HomeScreen::handleAction(Action action)
 
     // Ready: normal navigation
     if (activeTabNamed("Downloads") && handleDownloadsAction(action)) return true;
+    if (activeTabNamed("Settings")) {
+        if (action == Action::Back) {
+            if (m_settingsConfirmation != SettingsConfirmation::None) {
+                m_settingsConfirmation = SettingsConfirmation::None;
+                return true;
+            }
+            return false;
+        }
+        if (action == Action::Up || action == Action::Down) {
+            const int previous = m_settingsSelected;
+            if (action == Action::Up && m_settingsSelected > 0) --m_settingsSelected;
+            else if (action == Action::Down && m_settingsSelected < settingsRowCount()-1) ++m_settingsSelected;
+            if (m_settingsSelected != previous)
+                m_settingsConfirmation = SettingsConfirmation::None;
+            m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount()-SETTINGS_VISIBLE_ROWS));
+            return true;
+        }
+        if (action == Action::Confirm) {
+            switch (settingsRowAction(m_settingsSelected)) {
+            case SettingsRowAction::LocalAddress:
+                m_localAddressRequested = true;
+                return true;
+            case SettingsRowAction::ChangeServer:
+            case SettingsRowAction::Logout: {
+                const SettingsConfirmation requested = settingsRowAction(m_settingsSelected) == SettingsRowAction::ChangeServer
+                    ? SettingsConfirmation::ChangeServer : SettingsConfirmation::Logout;
+                if (m_settingsConfirmation == requested) {
+                    if (requested == SettingsConfirmation::ChangeServer)
+                        m_changeServerRequested = true;
+                    else
+                        m_logoutRequested = true;
+                    m_settingsConfirmation = SettingsConfirmation::None;
+                } else {
+                    m_settingsConfirmation = requested;
+                }
+                return true;
+            }
+            case SettingsRowAction::None:
+                break;
+            }
+        }
+        // Settings owns its account actions; do not let Y or X trigger Home actions.
+        if (action == Action::ActionsMenu || action == Action::Search) return true;
+        if (action != Action::NextTab && action != Action::PrevTab) return true;
+        m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount()-SETTINGS_VISIBLE_ROWS));
+    }
     switch (action) {
     case Action::Up:
         if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);clampShowsNavigation();return true;}
@@ -402,14 +472,14 @@ bool HomeScreen::handleAction(Action action)
         m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if(activeTabNamed("Downloads")&&m_downloads)m_downloads->requestReconcile(); return true;
+        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if((activeTabNamed("Downloads")||activeTabNamed("Settings"))&&m_downloads) { if(activeTabNamed("Downloads"))m_downloads->requestReconcile(); refreshDownloads(); } return true;
     case Action::PrevTab:
         m_activeTab--;
         if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
         m_movieRailFocused = false;
         m_activeRow = 0; m_activeCard = 0;
         m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if(activeTabNamed("Downloads")&&m_downloads)m_downloads->requestReconcile(); return true;
+        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if((activeTabNamed("Downloads")||activeTabNamed("Settings"))&&m_downloads) { if(activeTabNamed("Downloads"))m_downloads->requestReconcile(); refreshDownloads(); } return true;
     case Action::Search: return false;
     case Action::ActionsMenu:
         if (m_logoutArmed) { m_logoutRequested = true; }
@@ -644,7 +714,7 @@ void HomeScreen::update(Uint32 dt)
         finishResumeRefresh();
     }
     if (m_downloadRefreshTimer > dt) m_downloadRefreshTimer-=dt; else m_downloadRefreshTimer=0;
-    if (m_loadState == LoadState::Ready && activeTabNamed("Downloads")) refreshDownloads();
+    if (m_loadState == LoadState::Ready && (activeTabNamed("Downloads") || activeTabNamed("Settings"))) refreshDownloads();
     // Reconcile before draining: an in-flight decode can complete between a
     // directional input and this update, so it must see the new viewport.
     if (m_loadState == LoadState::Ready)
@@ -679,6 +749,8 @@ void HomeScreen::render(SDL_Surface *fb)
     const TabData &tab = currentTab();
     if (activeTabNamed("Downloads")) {
         drawDownloadsTab(fb);
+    } else if (activeTabNamed("Settings")) {
+        drawSettingsTab(fb);
     } else if (tab.rows.size() == 1 && tab.rows[0].items.empty()) {
         drawPlaceholderTab(fb, tab.rows[0].label.empty() ? "No content" : tab.rows[0].label.c_str());
     } else {
@@ -711,12 +783,13 @@ void HomeScreen::startFetch()
     m_fetchCacheSaved = false;
     m_fetchOfflinePrepared = false;
 
-    std::string url   = m_session.serverUrl;
+    Session session=m_session;
+    std::string url   = session.serverUrl;
     std::string token = m_session.accessToken;
     std::string uid   = m_session.userId;
     std::string devId = m_session.deviceId;
 
-    m_fetchThread = std::thread([this, url, token, uid, devId]() {
+    m_fetchThread = std::thread([this, session, url, token, uid, devId]() {
         std::string err;
         auto fail=[&](const std::string &error) {
             m_fetchError=error;
@@ -726,7 +799,7 @@ void HomeScreen::startFetch()
 
         // 1. Get library views
         std::vector<LibraryView> views;
-        if (!JellyfinApi::getViews(url, token, uid, devId, views, err)) {
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getViews(base, token, uid, devId, views, err);},err)) {
             fail(err);
             return;
         }
@@ -735,13 +808,13 @@ void HomeScreen::startFetch()
         // 2. Continue watching (non-fatal if fails)
         std::vector<MediaItem> cw;
         std::string cwErr;
-        if (!JellyfinApi::getResumeItems(url, token, uid, devId, 12, cw, cwErr))
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr);},cwErr))
             printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
 
         // 3. Recently added (non-fatal)
         std::vector<MediaItem> ra;
         std::string raErr;
-        if (!JellyfinApi::getLatestItems(url, token, uid, devId, 16, ra, raErr))
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr);},raErr))
             printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
 
         // 4. Per-library items
@@ -753,15 +826,13 @@ void HomeScreen::startFetch()
         for (const auto &v : views) {
             if (v.collectionType == "movies") {
                 std::vector<MediaItem> items; std::string ie;
-                if (JellyfinApi::getLibraryItems(url, token, uid, devId,
-                        v.id, "Movie", 50, items, ie)) {
+                if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base, token, uid, devId,v.id, "Movie", 50, items, ie);},ie)) {
                     moviesByView.push_back({v.name, std::move(items)});
                     snapshot.movies.push_back({v.id, v.name, v.collectionType, moviesByView.back().second});
                 } else { fail(ie); return; }
             } else if (v.collectionType == "tvshows") {
                 std::vector<MediaItem> items; std::string ie;
-                if (JellyfinApi::getLibraryItems(url, token, uid, devId,
-                        v.id, "Series", 50, items, ie)) {
+                if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base, token, uid, devId,v.id, "Series", 50, items, ie);},ie)) {
                     showsByView.push_back({v.name, std::move(items)});
                     snapshot.shows.push_back({v.id, v.name, v.collectionType, showsByView.back().second});
                 } else { fail(ie); return; }
@@ -776,7 +847,7 @@ void HomeScreen::startFetch()
         // without walking every cached hierarchy.
         if (m_syncState.lastSuccessfulMs > 0 && !m_forceHierarchyReconcile) {
             std::vector<MediaItem> changed; std::string changedError;
-            if (!JellyfinApi::getChangedHierarchyItems(url,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError)) {
+            if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)) {
                 fail(changedError); return;
             }
             for(const auto&i:changed) {
@@ -949,7 +1020,7 @@ void HomeScreen::hierarchyWorker()
         for (const auto &series : shows) {
             { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
             std::vector<MediaItem> seasons; std::string error;
-            if (!JellyfinApi::getSeasons(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error)) { if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); continue; }
+            if (!RouteRequest(m_session).run([&](const std::string &base){return JellyfinApi::getSeasons(base,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error);},error)) { if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); continue; }
             queuePosterJobs(collectSeasonPosterJobs(seasons));
             std::map<std::string,std::vector<MediaItem> > episodesBySeason;
             bool complete=true;
@@ -957,7 +1028,7 @@ void HomeScreen::hierarchyWorker()
                 { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
                 if (season.id.empty()) { complete=false; break; }
                 std::vector<MediaItem> episodes; error.clear();
-                if (!JellyfinApi::getEpisodes(m_session.serverUrl,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error)) { complete=false; if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); break; }
+                if (!RouteRequest(m_session).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error);},error)) { complete=false; if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); break; }
                 episodesBySeason[season.id]=std::move(episodes);
             }
             // A show is only complete after every discovered level has been
@@ -994,10 +1065,7 @@ void HomeScreen::posterWorker()
     for (;;) {
         std::vector<PosterJob> jobs;
         { std::unique_lock<std::mutex> lock(m_posterMutex); m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();}); if(m_stopPosterWorker) return; jobs.swap(m_pendingPosterJobs); }
-        CURLM *multi=curl_multi_init(); if(!multi) continue; size_t next=0; std::map<CURL*,PosterTransfer*> active;
-        auto launch=[&](const PosterJob &job){ auto *t=new PosterTransfer; t->job=job; CURL *easy=curl_easy_init(); if(!easy){delete t;return;} for(const auto&h:JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId))t->headers=curl_slist_append(t->headers,h.c_str()); t->url=buildImageUrl(m_session.serverUrl,job.itemId,job.imageType,job.imageTag,job.width,job.height); curl_easy_setopt(easy,CURLOPT_URL,t->url.c_str()); curl_easy_setopt(easy,CURLOPT_WRITEFUNCTION,posterWrite);curl_easy_setopt(easy,CURLOPT_WRITEDATA,t);curl_easy_setopt(easy,CURLOPT_HTTPHEADER,t->headers);curl_easy_setopt(easy,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(easy,CURLOPT_TIMEOUT,8L);curl_easy_setopt(easy,CURLOPT_CONNECTTIMEOUT,8L);curl_easy_setopt(easy,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(easy,CURLOPT_SSL_VERIFYPEER,0L);curl_easy_setopt(easy,CURLOPT_SSL_VERIFYHOST,0L);curl_multi_add_handle(multi,easy);active[easy]=t; };
-        while(next<jobs.size()||!active.empty()) { while(next<jobs.size()&&active.size()<POSTER_MAX_CONCURRENT)launch(jobs[next++]); int running=0;curl_multi_perform(multi,&running);int n=0;while(CURLMsg*msg=curl_multi_info_read(multi,&n)){if(msg->msg!=CURLMSG_DONE)continue;CURL*easy=msg->easy_handle;auto*t=active[easy];long status=0;curl_easy_getinfo(easy,CURLINFO_RESPONSE_CODE,&status);if(msg->data.result==CURLE_OK&&status>=200&&status<300&&!t->tooLarge&&!t->bytes.empty())ImageCache::writeToCache(t->job.itemId,t->job.imageType,t->job.imageTag,t->job.width,t->job.height,t->bytes.data(),t->bytes.size());curl_multi_remove_handle(multi,easy);curl_easy_cleanup(easy);curl_slist_free_all(t->headers);delete t;active.erase(easy);}if(!active.empty()){int fds=0;curl_multi_wait(multi,nullptr,0,100,&fds);} }
-        curl_multi_cleanup(multi);
+        for(const auto &job:jobs){ HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty())ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size()); }
     }
 }
 
@@ -1013,18 +1081,18 @@ void HomeScreen::startResumeRefresh()
     m_resumeRefreshError.clear();
     m_resumeRefreshResult.clear();
 
-    std::string url = m_session.serverUrl;
+    Session session=m_session;
+    std::string url = session.serverUrl;
     std::string token = m_session.accessToken;
     std::string uid = m_session.userId;
     std::string devId = m_session.deviceId;
 
     LibrarySnapshot snapshot=m_cachedSnapshot;
     const std::string cachePath=LibraryCache::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
-    m_resumeRefreshThread = std::thread([this, url, token, uid, devId, snapshot, cachePath]() mutable {
+    m_resumeRefreshThread = std::thread([this, session, url, token, uid, devId, snapshot, cachePath]() mutable {
         std::vector<MediaItem> items;
         std::string error;
-        if (JellyfinApi::getResumeItems(url, token, uid, devId, 12,
-                                        items, error)) {
+        if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12,items, error);},error)) {
             m_resumeRefreshResult = std::move(items);
             m_resumeRefreshSucceeded = true;
             snapshot.continueWatching=m_resumeRefreshResult;
@@ -1388,10 +1456,12 @@ void HomeScreen::drawTabBar(SDL_Surface *fb)
 
 std::string HomeScreen::syncStatusText() const
 {
+    if (!activeTabNamed("Home") && !activeTabNamed("Movies") && !activeTabNamed("Shows"))
+        return "";
     return librarySyncStatus(m_activeTab,m_haveCachedSnapshot,
         m_libraryOffline || m_hierarchyOffline.load(),m_syncSchedule.inFlight,
         m_syncSchedule.hasSucceeded,{m_hierarchyCompleted.load(),m_hierarchyTotal.load()},
-        m_hierarchyActive.load());
+        m_hierarchyActive.load(),activeTabNamed("Shows"));
 }
 
 void HomeScreen::drawInfoPanel(SDL_Surface *fb)
@@ -1666,6 +1736,39 @@ void HomeScreen::drawPlaceholderTab(SDL_Surface *fb, const char *message)
         Theme::BG_R,Theme::BG_G,Theme::BG_B);
 }
 
+void HomeScreen::drawSettingsTab(SDL_Surface *fb)
+{
+    BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
+    struct SettingRow { const char *section; std::string value; };
+    const std::vector<SettingRow> rows={
+        {"Public Server", m_session.serverUrl.empty() ? "Not connected" : m_session.serverUrl},
+        {"Local Address", m_session.localServerUrl.empty() ? "Not Set" : m_session.localServerUrl},
+        {"Account", m_userName.empty() ? "Unknown" : m_userName},
+        {"LIBRARY", "Last Sync: " + compactSyncAge(m_syncState.lastSuccessfulMs)},
+        {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " + formatBytes(m_downloadSnapshot.freeBytes)},
+        {"DIAGNOSTICS", "UI Stall Logger Enabled"},
+        {"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
+        {"ACCOUNT", "Log Out"}
+    };
+    static constexpr int ROW_H=68, TOP=34;
+    for (int visible=0; visible<SETTINGS_VISIBLE_ROWS; ++visible) {
+        const int index=m_settingsScroll+visible;
+        if (index >= (int)rows.size()) break;
+        const int y=TOP+visible*ROW_H;
+        const bool selected=index==m_settingsSelected;
+        if (selected)
+            BitmapFont::fillRect(fb,8,y-2,624,ROW_H-4,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70);
+        BitmapFont::drawString(fb,16,y,rows[index].section,Theme::ACCENT_R,Theme::ACCENT_G,
+            Theme::ACCENT_B,24,24,32);
+        std::string value=rows[index].value;
+        static constexpr size_t MAX_CHARS=72;
+        if (value.size()>MAX_CHARS) value=value.substr(0,MAX_CHARS-3)+"...";
+        BitmapFont::drawString(fb,16,y+20,value.c_str(),Theme::TEXT_R,Theme::TEXT_G,
+            Theme::TEXT_B,24,24,32);
+        BitmapFont::fillRect(fb,16,y+ROW_H-8,608,1,48,48,58,255);
+    }
+}
+
 void HomeScreen::drawDownloadsTab(SDL_Surface *fb)
 {
     BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
@@ -1747,6 +1850,17 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
             Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
     } else {
         const char *hints = "A=Select  B=Back  L/R=Tabs  Y=Logout";
+        if (activeTabNamed("Settings")) {
+            const char *hint = "Up/Down=Scroll  B=Back  L/R=Tabs";
+            if (m_settingsConfirmation == SettingsConfirmation::ChangeServer)
+                hint = "A again: Change Server";
+            else if (m_settingsConfirmation == SettingsConfirmation::Logout)
+                hint = "A again: Log Out";
+            BitmapFont::drawString(fb,8,y+2,hint,
+                Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
+                Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
+            return;
+        }
         if (activeTabNamed("Downloads")) {
             if (!m_journalDiscardConfirmId.empty()) {
                 BitmapFont::drawString(fb,8,y+2,"Press X again to discard missing progress",Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);

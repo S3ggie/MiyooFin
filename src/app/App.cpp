@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "../net/RouteRequest.hpp"
 #include "UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
 #include "../playback/OfflinePlaybackJournal.hpp"
@@ -178,10 +179,18 @@ void App::startSavedSessionValidation()
 {
     const Session session = m_session;
     m_savedValidation = 0;
+    m_savedSessionServerId.clear();
     m_savedValidationThread = std::thread([this, session] {
         std::string error;
-        TokenValidation result = JellyfinApi::validateTokenStatus(session.serverUrl, session.accessToken,
-            session.userId, session.deviceId, error);
+        TokenValidation result=TokenValidation::Unavailable;
+        RouteRequest(session).run([&](const std::string &base){ result=JellyfinApi::validateTokenStatus(base,session.accessToken,session.userId,session.deviceId,error); return result==TokenValidation::Valid; },error);
+        if (result == TokenValidation::Valid && session.serverId.empty()) {
+            ServerInfo info;
+            std::string systemInfoError;
+            if (RouteRequest(session).run([&](const std::string &base){ return JellyfinApi::getSystemInfo(base, info, systemInfoError); }, systemInfoError)) {
+                m_savedSessionServerId = info.serverId;
+            }
+        }
         m_savedValidation = result == TokenValidation::Unauthorized ? 2 :
             (result == TokenValidation::Valid ? 3 : 1);
     });
@@ -197,7 +206,13 @@ void App::finishSavedSessionValidation()
         printf("[App] Saved session rejected; returning to login\n");
         logout();
         goToLogin("Session expired. Please log in again.");
-    } else if (m_savedValidation.load() == 3) scheduleJournalSync();
+    } else if (m_savedValidation.load() == 3) {
+        if (m_session.serverId.empty() && !m_savedSessionServerId.empty()) {
+            m_session.serverId = m_savedSessionServerId;
+            m_session.save();
+        }
+        scheduleJournalSync();
+    }
 }
 
 void App::loadSavedUrl()
@@ -287,8 +302,8 @@ void App::syncPlaybackJournal()
     if (!OfflinePlaybackJournal::load(journal, entries, nullptr)) return;
     auto map=[](PlaybackSyncStatus value){ switch(value){case PlaybackSyncStatus::Success:return OfflineJournalRequestStatus::Success;case PlaybackSyncStatus::Unauthorized:return OfflineJournalRequestStatus::Unauthorized;case PlaybackSyncStatus::Missing:return OfflineJournalRequestStatus::Missing;default:return OfflineJournalRequestStatus::Transient;} };
     OfflineJournalSyncStats stats=syncOfflinePlaybackEntries(entries,
-        [&](const OfflinePlaybackEntry &entry,std::int64_t &ticks){std::string error;return map(JellyfinApi::getPlaybackPositionTicks(session.serverUrl,session.accessToken,session.userId,session.deviceId,entry.itemId,ticks,error));},
-        [&](const OfflinePlaybackEntry &entry){std::string error;return map(JellyfinApi::reportPlaybackStopped(session.serverUrl,session.accessToken,session.deviceId,entry.itemId,entry.finalTicks,error));});
+        [&](const OfflinePlaybackEntry &entry,std::int64_t &ticks){std::string error; PlaybackSyncStatus status=PlaybackSyncStatus::Transient; RouteRequest(session).run([&](const std::string &base){status=JellyfinApi::getPlaybackPositionTicks(base,session.accessToken,session.userId,session.deviceId,entry.itemId,ticks,error);return status==PlaybackSyncStatus::Success;},error);return map(status);},
+        [&](const OfflinePlaybackEntry &entry){std::string error; PlaybackSyncStatus status=PlaybackSyncStatus::Transient; RouteRequest(session).run([&](const std::string &base){status=JellyfinApi::reportPlaybackStopped(base,session.accessToken,session.deviceId,entry.itemId,entry.finalTicks,error);return status==PlaybackSyncStatus::Success;},error);return map(status);});
     if (stats.changed) OfflinePlaybackJournal::save(journal, entries, nullptr);
     m_journalFailures=stats.retry ? m_journalFailures+1 : 0;
 }
@@ -529,9 +544,7 @@ int App::run()
         if (active) {
             uiDiagnostics().setScreen(active->diagnosticName());
             if (auto *home = dynamic_cast<HomeScreen *>(active)) {
-                static const char *const tabs[] = {"Home", "Movies", "Shows"};
-                const int tab = home->diagnosticActiveTab();
-                uiDiagnostics().setTab(tab >= 0 && tab < 3 ? tabs[tab] : "other");
+                uiDiagnostics().setTab(home->diagnosticTabName());
             } else {
                 uiDiagnostics().setTab("n/a");
             }
@@ -581,6 +594,14 @@ int App::run()
             }
             else if (auto *entry = dynamic_cast<ServerEntryScreen *>(top)) {
                 if (entry->connected() && entry->finished()) {
+                    if (entry->localAddressEntry()) {
+                        m_session.localServerUrl = entry->serverUrl();
+                        m_session.save();
+                        m_stack.pop();
+                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
+                            home->setLocalServerUrl(m_session.localServerUrl);
+                        continue;
+                    }
                     m_serverUrl = entry->serverUrl();
                     m_serverInfo = entry->serverInfo();
                     printf("[App] ServerEntryScreen success -> Login\n");
@@ -612,6 +633,7 @@ int App::run()
                         // Save the session
                         printf("[App] LoginScreen success -> Home\n");
                         m_session.serverUrl   = m_serverUrl;
+                        m_session.serverId    = login->result().serverId;
                         m_session.accessToken = login->result().accessToken;
                         m_session.userId      = login->result().userId;
                         m_session.userName    = login->result().userName;
@@ -633,7 +655,14 @@ int App::run()
                 }
             }
             else if (auto *home = dynamic_cast<HomeScreen *>(top)) {
-                if (home->logoutRequested()) {
+                if (home->takeLocalAddressRequest()) {
+                    m_stack.push(std::make_unique<ServerEntryScreen>(
+                        m_session.localServerUrl, "", m_session.serverId, true));
+                } else if (home->changeServerRequested()) {
+                    logout();
+                    m_stack.popToRoot();
+                    m_stack.push(std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
+                } else if (home->logoutRequested()) {
                     logout();
                     m_stack.popToRoot();
                     m_stack.push(

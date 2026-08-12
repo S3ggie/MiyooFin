@@ -344,6 +344,29 @@ void BitmapFont::drawString(SDL_Surface *surface, int x, int y,
     }
 }
 
+void BitmapFont::drawStringScaled(SDL_Surface *surface, int x, int y,
+                                  const char *text, int scale,
+                                  Uint8 fgR, Uint8 fgG, Uint8 fgB,
+                                  Uint8 bgR, Uint8 bgG, Uint8 bgB)
+{
+    if (!surface || !text || scale <= 0) return;
+    int cursorX = x;
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text);
+         *p; ++p) {
+        const uint8_t *glyph = glyphData(*p);
+        for (int row = 0; row < GLYPH_H; ++row) {
+            for (int col = 0; col < GLYPH_W; ++col) {
+                const bool set = (glyph[row] & (0x80 >> col)) != 0;
+                fillRect(surface, cursorX + col * scale, y + row * scale,
+                         scale, scale,
+                         set ? fgR : bgR, set ? fgG : bgG, set ? fgB : bgB,
+                         255);
+            }
+        }
+        cursorX += GLYPH_W * scale;
+    }
+}
+
 void BitmapFont::drawRect(SDL_Surface *surface,
                           int x, int y, int w, int h,
                           Uint8 r, Uint8 g, Uint8 b)

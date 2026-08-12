@@ -29,6 +29,14 @@ public:
                            Uint8 bgR, Uint8 bgG, Uint8 bgB,
                            int wrapCols = 0);
 
+    /// Draw a string with each bitmap pixel enlarged by an integer factor.
+    /// Used by the Server Entry keyboard so its labels remain legible on the
+    /// Miyoo Mini Plus display.
+    static void drawStringScaled(SDL_Surface *surface, int x, int y,
+                                 const char *text, int scale,
+                                 Uint8 fgR, Uint8 fgG, Uint8 fgB,
+                                 Uint8 bgR, Uint8 bgG, Uint8 bgB);
+
     /// Map a Unicode code point to an ASCII glyph for the bitmap font.
     /// Returns 0 for characters that have no sensible ASCII equivalent.
     static unsigned int mapCodePoint(unsigned int cp);

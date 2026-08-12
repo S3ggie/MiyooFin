@@ -6,7 +6,7 @@
 #
 # Reads:
 #   playback-request.txt  — item_id, item_type, and resume_ticks
-#   session.txt           — server_url and access_token
+#   session.txt           — canonical server_url, optional local_server_url, access_token
 #
 # Flow:
 #   1. Parse item_id, server_url, access_token
@@ -82,6 +82,7 @@ if [ "$REQUEST_SOURCE_MODE" = local ]; then
 fi
 
 SERVER_URL=$(read_kv session.txt server_url)
+LOCAL_SERVER_URL=$(read_kv session.txt local_server_url)
 ACCESS_TOKEN=$(read_kv session.txt access_token)
 
 if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && { [ -z "$SERVER_URL" ] || [ -z "$ACCESS_TOKEN" ]; }; then
@@ -108,17 +109,30 @@ playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQ
 # Construct the EXACT proven forced-transcode URL.
 # Never echo or log the URL (contains token).
 # -------------------------------------------------------------------
-TURL="${SERVER_URL}/Videos/${REQUEST_ITEM_ID}/stream.ts"
-TURL="${TURL}?Static=false&VideoCodec=h264&AudioCodec=aac"
-TURL="${TURL}&MaxWidth=640&MaxHeight=480&MaxFramerate=30"
-TURL="${TURL}&MaxVideoBitDepth=8&VideoBitRate=1200000"
-TURL="${TURL}&AudioBitRate=96000&AudioChannels=2&MaxAudioChannels=2"
-TURL="${TURL}&AllowVideoStreamCopy=false&AllowAudioStreamCopy=false"
-TURL="${TURL}&EnableAutoStreamCopy=false&Context=Streaming"
-TURL="${TURL}&SubtitleStreamIndex=-1&StartTimeTicks=${REQUEST_RESUME_TICKS}"
+build_stream_url() {
+    _base=$1
+    _url="${_base}/Videos/${REQUEST_ITEM_ID}/stream.ts"
+    _url="${_url}?Static=false&VideoCodec=h264&AudioCodec=aac"
+    _url="${_url}&MaxWidth=640&MaxHeight=480&MaxFramerate=30"
+    _url="${_url}&MaxVideoBitDepth=8&VideoBitRate=1200000"
+    _url="${_url}&AudioBitRate=96000&AudioChannels=2&MaxAudioChannels=2"
+    _url="${_url}&AllowVideoStreamCopy=false&AllowAudioStreamCopy=false"
+    _url="${_url}&EnableAutoStreamCopy=false&Context=Streaming"
+    _url="${_url}&SubtitleStreamIndex=-1&StartTimeTicks=${REQUEST_RESUME_TICKS}"
+    _url="${_url}&PlaySessionId=${PLAY_SESSION_ID}&ApiKey=${ACCESS_TOKEN}"
+    printf '%s' "$_url"
+}
 PLAY_SESSION_ID="miyoofin-$(date +%s)-$$"
-TURL="${TURL}&PlaySessionId=${PLAY_SESSION_ID}"
-TURL="${TURL}&ApiKey=${ACCESS_TOKEN}"
+PUBLIC_TURL=$(build_stream_url "$SERVER_URL")
+TURL=$PUBLIC_TURL
+FALLBACK_TURL=""
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$LOCAL_SERVER_URL" ]; then
+    TURL=$(build_stream_url "$LOCAL_SERVER_URL")
+    FALLBACK_TURL=$PUBLIC_TURL
+    playback_log "[PlaybackRoute] LAN"
+elif [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
+    playback_log "[PlaybackRoute] PUBLIC"
+fi
 playback_log "Resume ticks=$REQUEST_RESUME_TICKS PlaySessionId=$PLAY_SESSION_ID"
 
 # -------------------------------------------------------------------
@@ -145,8 +159,13 @@ if [ "$REQUEST_SOURCE_MODE" = local ]; then
     "$APP_DIR/miyoofin-https-bridge" --local-manifest "$LOCAL_MANIFEST" 18080 \
     > "$APP_DIR/playback-bridge.log" 2>&1 &
 else
-    "$APP_DIR/miyoofin-https-bridge" "$TURL" "$APP_DIR/cacert.pem" 18080 \
+    if [ -n "$FALLBACK_TURL" ]; then
+        "$APP_DIR/miyoofin-https-bridge" --fallback-url "$FALLBACK_TURL" "$TURL" "$APP_DIR/cacert.pem" 18080 \
+        > "$APP_DIR/playback-bridge.log" 2>&1 &
+    else
+        "$APP_DIR/miyoofin-https-bridge" "$TURL" "$APP_DIR/cacert.pem" 18080 \
     > "$APP_DIR/playback-bridge.log" 2>&1 &
+    fi
 fi
 BRIDGE_PID=$!
 

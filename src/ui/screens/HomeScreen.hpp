@@ -61,10 +61,11 @@ struct ShowsSyncProgress {
 
 inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
                                      bool metadataActive, bool syncSucceeded,
-                                     const ShowsSyncProgress &shows={}, bool hierarchyActive=false) {
+                                     const ShowsSyncProgress &shows={}, bool hierarchyActive=false,
+                                     bool showsTab=false) {
     if (tab < 0 || tab > 2) return "";
     if (offline && haveCache) return "OFFLINE";
-    if (tab == 2 && shows.total && (hierarchyActive || shows.completed < shows.total))
+    if ((showsTab || tab == 2) && shows.total && (hierarchyActive || shows.completed < shows.total))
         return "SYNC " + std::to_string(shows.percent()) + "%";
     if (metadataActive) return "SYNCING...";
     return syncSucceeded ? "SYNCED" : "SYNCING...";
@@ -75,6 +76,7 @@ inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
+    enum class SettingsRowAction { None, ChangeServer, LocalAddress, Logout };
     struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
@@ -87,9 +89,17 @@ public:
     const char *diagnosticName() const override { return "HomeScreen"; }
     bool deferDestruction() const override { return true; }
     int diagnosticActiveTab() const { return m_activeTab; }
+    const char *diagnosticTabName() const;
+
+    static constexpr int settingsRowCount() { return 8; }
+    static SettingsRowAction settingsRowAction(int row);
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
+    /// True when the user has confirmed changing servers (App handles the transition).
+    bool changeServerRequested() const { return m_changeServerRequested; }
+    bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
+    void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
 
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
@@ -153,6 +163,8 @@ private:
     int m_activeCard;
     int m_rowScroll;
     int m_cardScroll;
+    int m_settingsSelected = 0;
+    int m_settingsScroll = 0;
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;
@@ -178,6 +190,10 @@ private:
     bool m_logoutArmed = false;
     Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
+    enum class SettingsConfirmation { None, ChangeServer, Logout };
+    SettingsConfirmation m_settingsConfirmation = SettingsConfirmation::None;
+    bool m_changeServerRequested = false;
+    bool m_localAddressRequested = false;
 
     // Downloads is rendered only from this copied manager snapshot.  It is
     // refreshed in update(), never while rendering or handling input.
@@ -308,6 +324,7 @@ private:
     void refreshDownloads();
     bool handleDownloadsAction(Action action);
     void drawDownloadsTab(SDL_Surface *fb);
+    void drawSettingsTab(SDL_Surface *fb);
 
     // Selected artwork state (B5b)
     DecodedImage m_selectedArtwork;

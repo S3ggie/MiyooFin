@@ -10,6 +10,9 @@ namespace miyoofin {
 /// The password is never saved — only the access token.
 struct Session {
     std::string serverUrl;
+    std::string serverId;
+    /// Optional verified local route.  serverUrl remains the canonical identity.
+    std::string localServerUrl;
     std::string accessToken;
     std::string userId;
     std::string userName;
@@ -23,6 +26,8 @@ struct Session {
     /// Reset all fields to empty.
     void clear() {
         serverUrl.clear();
+        serverId.clear();
+        localServerUrl.clear();
         accessToken.clear();
         userId.clear();
         userName.clear();

@@ -17,6 +17,8 @@ class ServerEntryScreen : public Screen {
 public:
     ServerEntryScreen();
     ServerEntryScreen(const std::string &initialUrl, const std::string &errorMsg);
+    ServerEntryScreen(const std::string &initialUrl, const std::string &errorMsg,
+                      const std::string &expectedServerId, bool localAddressEntry);
     ~ServerEntryScreen() override;
 
     void enter() override;
@@ -36,6 +38,12 @@ public:
 
     /// Returns the server info after successful connection.
     const ServerInfo &serverInfo() const { return m_serverInfo; }
+    bool localAddressEntry() const { return m_localAddressEntry; }
+
+    // Keyboard state accessors support deterministic host tests.
+    bool capsEnabled() const { return m_caps; }
+    const std::string &entryText() const { return m_url; }
+    bool keyboardSelectionValid() const { return activeKey() != nullptr; }
 
 private:
     // Keyboard layout
@@ -45,10 +53,11 @@ private:
         int row, col;      // grid position
     };
 
-    static constexpr int KEY_W = 32;   // key width in pixels
-    static constexpr int KEY_H = 22;   // key height in pixels
-    static constexpr int KEY_GAP = 2;  // gap between keys
-    static constexpr int KEYBOARD_TOP = 100;  // Y offset for keyboard
+    static constexpr int KEY_W = 59;   // ten keys fit within 640px
+    static constexpr int KEY_H = 44;
+    static constexpr int KEY_GAP = 3;
+    static constexpr int KEYBOARD_TOP = 104;
+    static constexpr int KEY_LABEL_SCALE = 2;
 
     std::string m_url;           // current URL being typed
     std::string m_message;       // status or error message
@@ -56,12 +65,15 @@ private:
     bool m_connecting = false;
     ServerInfo m_serverInfo;
     std::string m_serverUrl;
+    std::string m_expectedServerId;
+    bool m_localAddressEntry = false;
 
     // Keyboard navigation
     std::vector<Key> m_keys;
     int m_activeKeyRow = 0;
     int m_activeKeyCol = 0;
     int m_maxCols = 0;
+    bool m_caps = false;
 
     // Connection attempt thread
     std::thread m_connectThread;
@@ -76,6 +88,7 @@ private:
     int keyIndex(int row, int col) const;
     const Key *activeKey() const;
     void pressKey(const Key &key);
+    std::string keyLabel(const Key &key) const;
     void startConnection();
     void finishConnection();
 

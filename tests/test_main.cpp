@@ -535,6 +535,84 @@ static void testSessionEmpty()
     std::printf("[test] Session empty/missing OK\n");
 }
 
+static void testSessionAtomicNoTmpResidue()
+{
+    std::printf("[test] Session atomic save — no .tmp residue\n");
+
+    const char *tmpPath = "test_atomic_session.txt";
+    std::string tmpFile = std::string(tmpPath) + ".tmp";
+    std::remove(tmpPath);
+    std::remove(tmpFile.c_str());
+
+    Session s;
+    s.serverUrl   = "http://server:8096";
+    s.accessToken = "tok";
+    s.userId      = "u1";
+    CHECK(s.saveTo(tmpPath));
+
+    // No temp file should remain after a successful save.
+    {
+        FILE *probe = std::fopen(tmpFile.c_str(), "r");
+        CHECK(probe == nullptr);
+        if (probe) std::fclose(probe);
+    }
+
+    Session loaded = Session::loadFrom(tmpPath);
+    CHECK(loaded.valid());
+    CHECK_EQ(loaded.serverUrl, "http://server:8096");
+    CHECK_EQ(loaded.accessToken, "tok");
+
+    std::remove(tmpPath);
+    std::remove(tmpFile.c_str());
+    std::printf("[test] Session atomic save — no .tmp residue OK\n");
+}
+
+static void testSessionAtomicReplacePreservesNewContent()
+{
+    std::printf("[test] Session atomic save — overwrite preserves new content\n");
+
+    const char *tmpPath = "test_atomic_replace.txt";
+    std::remove(tmpPath);
+
+    // First session.
+    Session s1;
+    s1.serverUrl   = "http://old:8096";
+    s1.serverId    = "old-id";
+    s1.accessToken = "old-token";
+    s1.userId      = "old-user";
+    s1.userName    = "old-name";
+    s1.deviceId    = "old-dev";
+    s1.manualOfflineMode = false;
+    CHECK(s1.saveTo(tmpPath));
+
+    // Overwrite with a different session.
+    Session s2;
+    s2.serverUrl   = "http://new:8096";
+    s2.serverId    = "new-id";
+    s2.localServerUrl = "http://10.0.0.1:8096";
+    s2.accessToken = "new-token";
+    s2.userId      = "new-user";
+    s2.userName    = "new-name";
+    s2.deviceId    = "new-dev";
+    s2.manualOfflineMode = true;
+    CHECK(s2.saveTo(tmpPath));
+
+    // Must load the second session's data, not a corrupt mix.
+    Session loaded = Session::loadFrom(tmpPath);
+    CHECK(loaded.valid());
+    CHECK_EQ(loaded.serverUrl, "http://new:8096");
+    CHECK_EQ(loaded.serverId, "new-id");
+    CHECK_EQ(loaded.localServerUrl, "http://10.0.0.1:8096");
+    CHECK_EQ(loaded.accessToken, "new-token");
+    CHECK_EQ(loaded.userId, "new-user");
+    CHECK_EQ(loaded.userName, "new-name");
+    CHECK_EQ(loaded.deviceId, "new-dev");
+    CHECK(loaded.manualOfflineMode);
+
+    std::remove(tmpPath);
+    std::printf("[test] Session atomic save — overwrite preserves new content OK\n");
+}
+
 // -------------------------------------------------------------------
 // Test 4: DeviceIdentity UUID generation
 // -------------------------------------------------------------------
@@ -2630,6 +2708,8 @@ int main()
     testSession();
     testSessionEmpty();
     testSessionBackwardCompatibility();
+    testSessionAtomicNoTmpResidue();
+    testSessionAtomicReplacePreservesNewContent();
     testSystemInfoParsing();
     testLocalServerIdentityVerification();
     testDeviceIdentity();

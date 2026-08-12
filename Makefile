@@ -2,7 +2,7 @@
 # MiyooFin Makefile
 # Targets:
 #   all          — Host debug build
-#   test         — Host unit tests (empty in Checkpoint A)
+#   test         — Host unit tests
 #   onionos      — Cross-compile via Docker (builds ARM binary)
 #   verify-arm   — Verify ARM binary architecture
 #   package      — Stage OnionOS folder under output/package/ (uses ARM binary)

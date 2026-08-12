@@ -19,3 +19,24 @@ Thumbs.db
 # Test binaries
 tests/*.o
 tests/*.test
+
+# Runtime identity & session state
+/device.txt
+/session.txt
+/server.txt
+
+# Runtime downloads and caches
+/downloads/
+/cache/
+
+# Playback runtime files
+/playback-request.txt
+/playback-result.txt
+/playback-launch.log
+/playback-bridge.log
+/playback-ffplay.log
+/playback-ffplay-exit.txt
+/playback-reporter.log
+
+# Runtime diagnostics
+/ui-stall.log

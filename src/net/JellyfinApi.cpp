@@ -96,6 +96,40 @@ static int decodeUnicodeEscape(const std::string &s, size_t pos,
 }
 
 // -------------------------------------------------------------------
+// Helper — decode JSON escape sequences in a string body.
+// The input is the content between quotes (quotes already stripped).
+// Handles \n, \r, \t, \\, \", \/, \b, \f, and \uXXXX (including
+// surrogate pairs via decodeUnicodeEscape).
+// -------------------------------------------------------------------
+static std::string decodeJsonStringBody(const std::string &s)
+{
+    std::string out;
+    out.reserve(s.size());
+    size_t pos = 0;
+    while (pos < s.size()) {
+        if (s[pos] == '\\' && pos + 1 < s.size()) {
+            pos++;
+            switch (s[pos]) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case '\\': out += '\\'; break;
+                case '"': out += '"'; break;
+                case '/': out += '/'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case 'u': pos += decodeUnicodeEscape(s, pos, out) - 1; break;
+                default: out += s[pos]; break;
+            }
+        } else {
+            out += s[pos];
+        }
+        pos++;
+    }
+    return out;
+}
+
+// -------------------------------------------------------------------
 // Helper — extract a top-level JSON string value.
 // -------------------------------------------------------------------
 std::string JellyfinApi::extractString(const std::string &json, const std::string &key)
@@ -479,22 +513,13 @@ std::string JellyfinApi::jsonRawValue(const std::string &json,
         pos++;
     if (pos >= json.size()) return {};
     if (json[pos] == '"') {
-        pos++; std::string val;
+        pos++;
+        size_t start = pos;
         while (pos < json.size() && json[pos] != '"') {
-            if (json[pos] == '\\' && pos + 1 < json.size()) { pos++;
-                switch (json[pos]) {
-                    case 'n': val += '\n'; break;
-                    case 'r': val += '\r'; break;
-                    case 't': val += '\t'; break;
-                    case '\\': val += '\\'; break;
-                    case '"': val += '"'; break;
-                    case 'u': pos += decodeUnicodeEscape(json, pos, val) - 1; break;
-                    default: val += json[pos]; break;
-                }
-            } else { val += json[pos]; }
+            if (json[pos] == 0x5c) pos++; // skip escaped char
             pos++;
         }
-        return val;
+        return decodeJsonStringBody(json.substr(start, pos - start));
     } else if (json[pos] == '{' || json[pos] == '[') {
         char open = json[pos], close = (open == '{') ? '}' : ']';
         int depth = 1; size_t start = pos; pos++;
@@ -641,6 +666,7 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
         for (auto &g : gs) {
             if (g.size()>=2 && g.front()=='"' && g.back()=='"')
                 g = g.substr(1, g.size()-2);
+            g = decodeJsonStringBody(g);
             if (!g.empty()) item.genres.push_back(g);
         }
         if (!item.genres.empty()) item.genre = item.genres[0];

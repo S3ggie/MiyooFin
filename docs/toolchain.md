@@ -7,8 +7,8 @@ The original Miyoo Buildroot toolchain from steward-fu's releases
 
 The current Dockerfile.onionos uses a clean, reproducible approach:
 
-- **Base image:** `debian:bookworm`
-- **Cross-compiler:** Debian's `gcc-arm-linux-gnueabihf` (GCC 12.2.0)
+- **Base image:** `debian:buster` (glibc 2.28, matching the Miyoo device)
+- **Cross-compiler:** Debian's `gcc-arm-linux-gnueabihf`
   - **Prefix:** `arm-linux-gnueabihf-`
   - **Sysroot:** `/usr/arm-linux-gnueabihf`
 - **SDL2:** Miyoo-patched version from XK9274/sdl2_miyoo

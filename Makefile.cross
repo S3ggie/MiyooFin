@@ -40,6 +40,7 @@ SRCS := \
     src/download/DownloadSupport.cpp \
     src/download/HlsPlaylist.cpp \
     src/ui/BitmapFont.cpp \
+    src/ui/OnScreenKeyboard.cpp \
     src/ui/screens/HomeScreen.cpp \
     src/ui/screens/StartupScreen.cpp \
     src/ui/screens/ServerEntryScreen.cpp \

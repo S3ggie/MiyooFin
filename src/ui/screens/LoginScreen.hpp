@@ -3,6 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../OnScreenKeyboard.hpp"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -40,24 +41,13 @@ public:
     const std::string &serverUrl() const { return m_serverUrl; }
 
     // Keyboard state accessors support deterministic host tests.
-    bool capsEnabled() const { return m_caps; }
+    bool capsEnabled() const { return m_keyboard.capsEnabled(); }
     const std::string &username() const { return m_username; }
     const std::string &password() const { return m_password; }
-    bool keyboardSelectionValid() const { return activeKey() != nullptr; }
+    bool keyboardSelectionValid() const { return m_keyboard.selectionValid(); }
 
 private:
-    // Keyboard layout (same grid as the server entry screen)
-    struct Key {
-        char ch;
-        const char *label;
-        int row, col;
-    };
-
-    static constexpr int KEY_W = 59;
-    static constexpr int KEY_H = 44;
-    static constexpr int KEY_GAP = 3;
-    static constexpr int KEYBOARD_TOP = 134;
-    static constexpr int KEY_LABEL_SCALE = 2;
+    OnScreenKeyboard m_keyboard;
 
     // Fields
     std::string m_username;
@@ -70,13 +60,6 @@ private:
     std::string m_deviceId;
     std::string m_message;
 
-    // Keyboard navigation
-    std::vector<Key> m_keys;
-    int m_activeKeyRow = 0;
-    int m_activeKeyCol = 0;
-    int m_maxCols = 0;
-    bool m_caps = false;
-
     // Login attempt state
     bool m_connecting = false;
     bool m_finished = false;
@@ -88,11 +71,6 @@ private:
     std::string m_loginError;
     AuthResult m_loginResult;
 
-    void buildKeyboard();
-    int keyIndex(int row, int col) const;
-    const Key *activeKey() const;
-    void pressKey(const Key &key);
-    std::string keyLabel(const Key &key) const;
     void submitLogin();
     void finishLogin();
     std::string &activeText();
@@ -102,7 +80,6 @@ private:
     void drawField(SDL_Surface *fb, int y, const char *label,
                    const std::string &display, bool selected, bool masked);
     void drawInputFields(SDL_Surface *fb);
-    void drawKeyboard(SDL_Surface *fb);
     void drawStatus(SDL_Surface *fb);
     void drawHints(SDL_Surface *fb);
 };

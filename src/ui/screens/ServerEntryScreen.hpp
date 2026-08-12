@@ -3,6 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../OnScreenKeyboard.hpp"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -44,23 +45,12 @@ public:
     bool addressEntryCancelled() const { return m_addressEntryCancelled; }
 
     // Keyboard state accessors support deterministic host tests.
-    bool capsEnabled() const { return m_caps; }
+    bool capsEnabled() const { return m_keyboard.capsEnabled(); }
     const std::string &entryText() const { return m_url; }
-    bool keyboardSelectionValid() const { return activeKey() != nullptr; }
+    bool keyboardSelectionValid() const { return m_keyboard.selectionValid(); }
 
 private:
-    // Keyboard layout
-    struct Key {
-        char ch;           // character to append (0 for special)
-        const char *label; // display label
-        int row, col;      // grid position
-    };
-
-    static constexpr int KEY_W = 59;   // ten keys fit within 640px
-    static constexpr int KEY_H = 44;
-    static constexpr int KEY_GAP = 3;
-    static constexpr int KEYBOARD_TOP = 104;
-    static constexpr int KEY_LABEL_SCALE = 2;
+    OnScreenKeyboard m_keyboard;
 
     std::string m_url;           // current URL being typed
     std::string m_message;       // status or error message
@@ -73,13 +63,6 @@ private:
     bool m_publicAddressEntry = false;
     bool m_addressEntryCancelled = false;
 
-    // Keyboard navigation
-    std::vector<Key> m_keys;
-    int m_activeKeyRow = 0;
-    int m_activeKeyCol = 0;
-    int m_maxCols = 0;
-    bool m_caps = false;
-
     // Connection attempt thread
     std::thread m_connectThread;
     std::atomic<bool> m_connectDone{false};
@@ -89,18 +72,12 @@ private:
     bool m_finished = false;
     Uint32 m_infoTimer = 0;
 
-    void buildKeyboard();
-    int keyIndex(int row, int col) const;
-    const Key *activeKey() const;
-    void pressKey(const Key &key);
-    std::string keyLabel(const Key &key) const;
     void startConnection();
     void finishConnection();
     void cancelAddressEntry();
 
     // Drawing helpers
     void drawInputField(SDL_Surface *fb);
-    void drawKeyboard(SDL_Surface *fb);
     void drawStatus(SDL_Surface *fb);
 };
 

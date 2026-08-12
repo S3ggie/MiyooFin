@@ -23,6 +23,7 @@
 #include "../src/ui/screens/HomeScreen.hpp"
 #include "../src/ui/screens/ServerEntryScreen.hpp"
 #include "../src/ui/screens/LoginScreen.hpp"
+#include "../src/ui/OnScreenKeyboard.hpp"
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/cache/LibraryCache.hpp"
@@ -265,6 +266,229 @@ static void testLoginKeyboardCaps()
     screen.leave();
     CHECK(!screen.capsEnabled());
     std::printf("[test] Login keyboard caps and fields OK\n");
+}
+
+static void testOnScreenKeyboardGrid()
+{
+    std::printf("[test] OnScreenKeyboard 10-column grid geometry\n");
+    OnScreenKeyboard kb;
+    CHECK(OnScreenKeyboard::GRID_COLS == 10);
+    CHECK(OnScreenKeyboard::NUM_ROWS == 6);
+
+    // Count keys per row by tracking position changes
+    int totalKeys = 0;
+    for (int row = 0; row < 6; ++row) {
+        kb.reset();
+        for (int i = 0; i < row; ++i) kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left); // go to leftmost
+        int n = 0;
+        int prevCol = -1;
+        for (int i = 0; i < 12; ++i) {
+            const auto *k = kb.activeKey();
+            if (k && k->col != prevCol) {
+                n++;
+                prevCol = k->col;
+            }
+            kb.handleAction(Action::Right);
+        }
+        if (row < 5) CHECK(n == 10); else CHECK(n == 5);
+        totalKeys += n;
+    }
+    CHECK(totalKeys == 55);
+
+    // Action row: five 2-column keys
+    kb.reset();
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+    const OnScreenKeyboard::Key *k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->colSpan == 2);
+    for (int i = 0; i < 4; ++i) {
+        kb.handleAction(Action::Right);
+        k = kb.activeKey();
+        CHECK(k != nullptr);
+        CHECK(k->colSpan == 2);
+    }
+    CHECK(k->col == 8);
+    std::printf("[test] OnScreenKeyboard 10-column grid geometry OK\n");
+}
+
+static void testOnScreenKeyboardSpace()
+{
+    std::printf("[test] OnScreenKeyboard space key\n");
+    OnScreenKeyboard kb;
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+    const OnScreenKeyboard::Key *k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->ch == ' ');
+    CHECK(k->row == 5);
+    CHECK(k->col == 0);
+    CHECK(kb.processKey(*k) == ' ');
+    CHECK_EQ(kb.keyLabel(*k), "SPACE");
+    std::printf("[test] OnScreenKeyboard space key OK\n");
+}
+
+static void testServerEntrySpace()
+{
+    std::printf("[test] ServerEntryScreen space insertion\n");
+    ServerEntryScreen screen;
+    CHECK_EQ(screen.entryText(), "");
+    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), " ");
+    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Up);
+    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), " 1");
+    screen.handleAction(Action::Back);
+    CHECK_EQ(screen.entryText(), " ");
+    screen.handleAction(Action::Search);
+    CHECK_EQ(screen.entryText(), "");
+    std::printf("[test] ServerEntryScreen space insertion OK\n");
+}
+
+static void testLoginUsernameSpace()
+{
+    std::printf("[test] LoginScreen username space insertion\n");
+    LoginScreen screen("https://server", "Server", "device");
+    screen.handleAction(Action::Down);
+    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.username(), " ");
+    for (int i = 0; i < 5; ++i) screen.handleAction(Action::Up);
+    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.username(), " 1");
+    std::printf("[test] LoginScreen username space insertion OK\n");
+}
+
+static void testLoginPasswordSpace()
+{
+    std::printf("[test] LoginScreen password space insertion\n");
+    LoginScreen screen("https://server", "Server", "device");
+    screen.handleAction(Action::Right);
+    screen.handleAction(Action::Down);
+    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.password(), " ");
+    CHECK(screen.password().size() == (size_t)1);
+    CHECK(screen.password()[0] == ' ');
+    std::printf("[test] LoginScreen password space insertion OK\n");
+}
+
+static void testSharedKeyboardLayoutConsistency()
+{
+    std::printf("[test] Shared keyboard layout consistency\n");
+    OnScreenKeyboard kbA(OnScreenKeyboard::Config{"[DONE]", 104});
+    OnScreenKeyboard kbB(OnScreenKeyboard::Config{"[SIGN IN]", 134});
+
+    auto getChar = [](OnScreenKeyboard &kb, int r, int c) -> char {
+        kb.reset();
+        for (int i = 0; i < r; ++i) kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+        for (int i = 0; i < c; ++i) kb.handleAction(Action::Right);
+        const auto *k = kb.activeKey();
+        return k ? k->ch : '\0';
+    };
+    for (int row = 0; row < 5; ++row)
+        for (int col = 0; col < 10; ++col)
+            CHECK(getChar(kbA, row, col) == getChar(kbB, row, col));
+
+    // Navigate to submit key on action row (3rd Right from left = SUBMIT)
+    // Verify configs are different
+    {
+        OnScreenKeyboard::Config cA{"[DONE]", 104};
+        OnScreenKeyboard::Config cB{"[SIGN IN]", 134};
+        CHECK(std::string(cA.submitLabel) == "[DONE]");
+        CHECK(std::string(cB.submitLabel) == "[SIGN IN]");
+    }
+
+    auto getSubmitInfo = [](OnScreenKeyboard &kb) -> std::pair<char, std::string> {
+        kb.reset();
+        for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+        for (int i = 0; i < 3; ++i) kb.handleAction(Action::Right); // 3rd key
+        const auto *k = kb.activeKey();
+        return k ? std::make_pair(k->ch, std::string(k->label))
+                 : std::make_pair('\0', std::string());
+    };
+    auto subA = getSubmitInfo(kbA);
+    auto subB = getSubmitInfo(kbB);
+    CHECK(subA.first == OnScreenKeyboard::KEY_SUBMIT);
+    CHECK(subB.first == OnScreenKeyboard::KEY_SUBMIT);
+    // Labels differ between screens
+    CHECK(subA.second != subB.second);
+
+    // Other action labels are shared
+    auto getActionLabel = [](OnScreenKeyboard &kb, int keyIdx) -> std::string {
+        kb.reset();
+        for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+        for (int i = 0; i < keyIdx; ++i) kb.handleAction(Action::Right);
+        const auto *k = kb.activeKey();
+        return k ? k->label : "";
+    };
+    CHECK(getActionLabel(kbA, 0) == getActionLabel(kbB, 0));
+    CHECK(getActionLabel(kbA, 1) == getActionLabel(kbB, 1));
+    CHECK(getActionLabel(kbA, 2) == getActionLabel(kbB, 2));
+    CHECK(getActionLabel(kbA, 4) == getActionLabel(kbB, 4));
+
+    std::printf("[test] Shared keyboard layout consistency OK\n");
+}
+
+static void testKeyboardVerticalNavActionRow()
+{
+    std::printf("[test] Keyboard vertical navigation to action row\n");
+    OnScreenKeyboard kb;
+    const OnScreenKeyboard::Key *k;
+
+    // Row 0 col 0 (center 0.5) → SPACE (center 1.0)
+    kb.reset();
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->row == 5);
+    CHECK(k->col == 0);
+
+    // Row 0 col 9 (center 9.5) → CANCEL (center 9.0)
+    kb.reset();
+    for (int i = 0; i < 9; ++i) kb.handleAction(Action::Right);
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->col == 8);
+
+    // DEL on action row → Up lands near col 2–3 on row 4
+    kb.reset();
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+    kb.handleAction(Action::Right); // DEL at col 2
+    k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->col == 2);
+    kb.handleAction(Action::Up);
+    k = kb.activeKey();
+    CHECK(k != nullptr);
+    CHECK(k->row == 4);
+    CHECK(k->col == 2 || k->col == 3);
+
+    // Up at row 0 stays at row 0
+    kb.reset();
+    CHECK(kb.selectionRow() == 0);
+    kb.handleAction(Action::Up);
+    CHECK(kb.selectionRow() == 0);
+
+    // Down at row 5 stays at row 5
+    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    CHECK(kb.selectionRow() == 5);
+    kb.handleAction(Action::Down);
+    CHECK(kb.selectionRow() == 5);
+
+    std::printf("[test] Keyboard vertical navigation to action row OK\n");
 }
 
 static void testUiDiagnostics()
@@ -2819,6 +3043,13 @@ int main()
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();
     testLoginKeyboardCaps();
+    testOnScreenKeyboardGrid();
+    testOnScreenKeyboardSpace();
+    testServerEntrySpace();
+    testLoginUsernameSpace();
+    testLoginPasswordSpace();
+    testSharedKeyboardLayoutConsistency();
+    testKeyboardVerticalNavActionRow();
     testUiDiagnostics();
     std::printf("\n--- Movie title organization tests ---\n");
     testMovieOrganizationalTitles();

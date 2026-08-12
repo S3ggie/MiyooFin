@@ -36,6 +36,7 @@
 #include <curl/curl.h>
 
 #include "playback_clock_parser.hpp"
+#include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
 
 using namespace miyoofin;
@@ -154,7 +155,9 @@ static size_t discard_write(void *, size_t size, size_t nmemb, void *)
 // HTTP POST helper
 // ===================================================================
 
-static long post_json(const std::string &url,
+struct PostResult { long httpStatus=0; bool transportFailure=false; };
+
+static PostResult post_json(const std::string &url,
                       const std::vector<std::string> &headers,
                       const std::string &body,
                       const std::string &cacertPath)
@@ -162,7 +165,7 @@ static long post_json(const std::string &url,
     CURL *curl = curl_easy_init();
     if (!curl) {
         reporter_log("curl_easy_init failed");
-        return 0;
+        return {0, true};
     }
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -196,7 +199,7 @@ static long post_json(const std::string &url,
 
     curl_slist_free_all(hdrList);
     curl_easy_cleanup(curl);
-    return httpStatus;
+    return {httpStatus, res != CURLE_OK};
 }
 
 // ===================================================================
@@ -250,9 +253,11 @@ static std::string build_stopped_payload(const std::string &itemId,
 // Report helpers
 // ===================================================================
 
-static void report_start(const std::string &serverUrl,
+static bool report_event(const char *name, const std::string &path,
+                         const PlaybackRoute &route,
                          const std::string &itemId,
                          int64_t positionTicks,
+                         bool stopped, bool failed,
                          const std::string &token,
                          const std::string &deviceId,
                          const std::string &cacertPath)
@@ -260,47 +265,15 @@ static void report_start(const std::string &serverUrl,
     std::vector<std::string> headers;
     headers.push_back("X-Emby-Token: " + token);
     build_identity_headers(deviceId, headers);
-    std::string url = serverUrl + "/Sessions/Playing";
-    std::string body = build_playing_payload(itemId, positionTicks, true);
-    long status = post_json(url, headers, body, cacertPath);
-    reporter_log("ReportPlaybackStart ticks=%lld HTTP %ld",
-                 (long long)positionTicks, status);
-}
-
-static void report_progress(const std::string &serverUrl,
-                            const std::string &itemId,
-                            int64_t positionTicks,
-                            const std::string &token,
-                            const std::string &deviceId,
-                            const std::string &cacertPath)
-{
-    std::vector<std::string> headers;
-    headers.push_back("X-Emby-Token: " + token);
-    build_identity_headers(deviceId, headers);
-    std::string url = serverUrl + "/Sessions/Playing/Progress";
-    std::string body = build_playing_payload(itemId, positionTicks, true);
-    long status = post_json(url, headers, body, cacertPath);
-    reporter_log("progress %lld ticks HTTP %ld",
-                 (long long)positionTicks, status);
-}
-
-static bool report_stopped(const std::string &serverUrl,
-                           const std::string &itemId,
-                           int64_t positionTicks,
-                           bool failed,
-                           const std::string &token,
-                           const std::string &deviceId,
-                           const std::string &cacertPath)
-{
-    std::vector<std::string> headers;
-    headers.push_back("X-Emby-Token: " + token);
-    build_identity_headers(deviceId, headers);
-    std::string url = serverUrl + "/Sessions/Playing/Stopped";
-    std::string body = build_stopped_payload(itemId, positionTicks, failed);
-    long status = post_json(url, headers, body, cacertPath);
-    reporter_log("stopped %lld ticks HTTP %ld",
-                 (long long)positionTicks, status);
-    return status >= 200 && status < 300;
+    const std::string body = stopped ? build_stopped_payload(itemId, positionTicks, failed)
+                                     : build_playing_payload(itemId, positionTicks, true);
+    PostResult result=post_json(route.primary + path, headers, body, cacertPath);
+    if (!route.fallback.empty() && playback_should_fallback(result.transportFailure, result.httpStatus)) {
+        reporter_log("[ReporterRoute] LAN failed; PUBLIC");
+        result=post_json(route.fallback + path, headers, body, cacertPath);
+    }
+    reporter_log("%s %lld ticks HTTP %ld", name, (long long)positionTicks, result.httpStatus);
+    return result.httpStatus >= 200 && result.httpStatus < 300;
 }
 
 // ===================================================================
@@ -340,6 +313,7 @@ int main(int argc, char *argv[])
         std::fclose(g_logFile); return 1;
     }
     std::string serverUrl   = read_kv_from_content(sessionContent, "server_url");
+    std::string localServerUrl = read_kv_from_content(sessionContent, "local_server_url");
     std::string accessToken = read_kv_from_content(sessionContent, "access_token");
     std::string userId      = read_kv_from_content(sessionContent, "user_id");
     std::string deviceId    = read_kv_from_content(sessionContent, "device_id");
@@ -363,7 +337,11 @@ int main(int argc, char *argv[])
     }
     int64_t resumeTicks = parse_resume_ticks(
         read_kv_from_content(reqContent, "resume_ticks"));
+    // Downloaded/local playback retains its established public-only reporter
+    // behavior. LAN route selection belongs only to remote Jellyfin playback.
+    PlaybackRoute route=playback_route(serverUrl, sourceMode == "local" ? "" : localServerUrl);
     reporter_log("item=%s server=%s", itemId.c_str(), serverUrl.c_str());
+    reporter_log("[ReporterRoute] %s", route.usingLan ? "LAN" : "PUBLIC");
     reporter_log("resume ticks=%lld", (long long)resumeTicks);
 
     std::string cacertPath = appDir + "/cacert.pem";
@@ -424,17 +402,14 @@ int main(int argc, char *argv[])
                         if (!pts_event(startAttempted)) {
                             // First valid PTS → send PlaybackStart (once)
                             reporter_log("first pts %.4f sec", pts);
-                            report_start(serverUrl, itemId,
-                                         absolute_position_ticks(resumeTicks,
-                                                                 pts),
-                                         accessToken, deviceId,
-                                         cacertPath);
+                            report_event("ReportPlaybackStart", "/Sessions/Playing", route, itemId,
+                                         absolute_position_ticks(resumeTicks, pts), false, false,
+                                         accessToken, deviceId, cacertPath);
                         } else {
                             // Subsequent valid PTS → send PlaybackProgress
-                            report_progress(serverUrl, itemId,
-                                            absolute_position_ticks(resumeTicks,
-                                                                    pts),
-                                            accessToken, deviceId, cacertPath);
+                            report_event("progress", "/Sessions/Playing/Progress", route, itemId,
+                                         absolute_position_ticks(resumeTicks, pts), false, false,
+                                         accessToken, deviceId, cacertPath);
                         }
                     }
                 }
@@ -523,7 +498,7 @@ int main(int argc, char *argv[])
         const int64_t finalTicks =
             absolute_position_ticks(resumeTicks, lastPts);
         const std::string resultPath = appDir + "/playback-result.txt";
-        const bool serverReported=report_stopped(serverUrl, itemId, finalTicks, failed, accessToken, deviceId, cacertPath);
+        const bool serverReported=report_event("stopped", "/Sessions/Playing/Stopped", route, itemId, finalTicks, true, failed, accessToken, deviceId, cacertPath);
         if (write_playback_result(resultPath, itemId, itemType, finalTicks, resumeTicks, sourceMode, serverReported))
             reporter_log("playback result position=%lld",
                          (long long)finalTicks);

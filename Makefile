@@ -119,6 +119,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/app/ScreenStack.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
+               src/ui/screens/ServerEntryScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
@@ -235,7 +236,7 @@ BRIDGE_LOCAL_TEST_SRC := tests/test_bridge_local.cpp
 .PHONY: bridge
 bridge: $(BRIDGE_HOST)
 
-$(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp | output/build
+$(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | output/build
 	$(CXX) $(CXXFLAGS) -Itools -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -276,7 +277,7 @@ REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
 .PHONY: reporter
 reporter: $(REPORTER_HOST)
 
-$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp | output/build
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/build
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -284,7 +285,7 @@ $(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp | output/build
 reporter-test: $(REPORTER_TEST)
 	@$(REPORTER_TEST)
 
-$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp | output/test
+$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/test
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 

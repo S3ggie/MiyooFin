@@ -7,6 +7,7 @@
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
+#include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
 #include "../../cache/LibraryCache.hpp"
@@ -186,7 +187,7 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
             if(offline) { std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=true;m_fetchDone=true;return; }
         }
         if(m_fetchCancelled.load(std::memory_order_acquire)) return;
-        std::vector<MediaItem> v;std::string e;bool ok=JellyfinApi::getSeasons(s.serverUrl,s.accessToken,s.userId,s.deviceId,id,v,e,&m_fetchCancelled);
+        std::vector<MediaItem> v;std::string e;bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getSeasons(base,s.accessToken,s.userId,s.deviceId,id,v,e,&m_fetchCancelled);},e);
         // Persist network results on the worker too: save() fsyncs the catalog.
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) OfflineCatalog::storeSeasons(catalogPath,series,v,nullptr);
         std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchSeasons=std::move(v);m_fetchError=e;m_fetchDone=true;
@@ -234,7 +235,7 @@ void SeriesScreen::artworkWorkerLoop()
         auto tag=job.item.imageTags.find("Primary"); if(tag==job.item.imageTags.end()) continue;
         std::vector<unsigned char> data;
         if(ImageCache::isCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height)) data=ImageCache::readCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height);
-        if(data.empty() && !m_artworkCancelled.load(std::memory_order_acquire)) { HttpClient c;c.setTimeoutSec(8);BinaryHttpResponse r;std::string e;if(c.getBinary(buildImageUrl(m_session.serverUrl,job.item.id,ImageType::Primary,tag->second,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),r,e,512*1024,&m_artworkCancelled)&&r.ok()){data=std::move(r.data);ImageCache::writeToCache(job.item.id,ImageType::Primary,tag->second,job.width,job.height,data.data(),data.size());} }
+        if(data.empty() && !m_artworkCancelled.load(std::memory_order_acquire)) { HttpClient c;c.setTimeoutSec(8);BinaryHttpResponse r;std::string e;if(RouteRequest(m_session).run([&](const std::string &base){return c.getBinary(buildImageUrl(base,job.item.id,ImageType::Primary,tag->second,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),r,e,512*1024,&m_artworkCancelled)&&r.ok();},e)){data=std::move(r.data);ImageCache::writeToCache(job.item.id,ImageType::Primary,tag->second,job.width,job.height,data.data(),data.size());} }
         DecodedImage image; if(!data.empty()&&!m_artworkCancelled.load(std::memory_order_acquire)) image=ImageDecoder::decodeJpeg(data.data(),data.size());
         {std::lock_guard<std::mutex>g(m_artworkMutex);if(!m_artworkStop)m_artworkCompleted[job.key]=std::move(image);}
     }

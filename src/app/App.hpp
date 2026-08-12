@@ -73,6 +73,7 @@ private:
     std::shared_ptr<DownloadManager> m_downloadManager;
     std::thread     m_savedValidationThread;
     std::atomic<int> m_savedValidation{0}; // 0 pending, 1 unavailable, 2 unauthorized, 3 valid
+    std::string     m_savedSessionServerId;
     bool            m_savedFastPath = false;
     std::thread     m_journalSyncThread;
     std::mutex      m_journalMutex;

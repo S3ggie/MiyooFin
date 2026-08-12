@@ -282,16 +282,29 @@ bool JellyfinApi::getSystemInfo(const std::string &baseUrl,
         return false;
     }
 
-    info.serverName       = extractString(body, "ServerName");
-    info.version          = extractString(body, "Version");
-    info.operatingSystem  = extractString(body, "OperatingSystem");
-
-    if (info.serverName.empty()) {
+    if (!parseSystemInfoResponse(body, info)) {
         error = "Could not parse server name from response";
         return false;
     }
 
     return true;
+}
+
+bool JellyfinApi::parseSystemInfoResponse(const std::string &body,
+                                          ServerInfo &info)
+{
+    info = {};
+    info.serverId         = extractString(body, "Id");
+    info.serverName       = extractString(body, "ServerName");
+    info.version          = extractString(body, "Version");
+    info.operatingSystem  = extractString(body, "OperatingSystem");
+    return !info.serverName.empty();
+}
+
+bool JellyfinApi::serverIdsMatch(const std::string &expectedServerId,
+                                 const std::string &returnedServerId)
+{
+    return !expectedServerId.empty() && expectedServerId == returnedServerId;
 }
 
 bool JellyfinApi::authenticateByName(const std::string &baseUrl,
@@ -712,6 +725,7 @@ std::vector<TabData> JellyfinApi::buildTabs(
     tabs.push_back(std::move(shows));
 
     tabs.push_back({"Downloads", {{"", {}}}});
+    tabs.push_back({"Settings", {{"", {}}}});
     return tabs;
 }
 

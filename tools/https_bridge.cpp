@@ -25,6 +25,7 @@
 #include <curl/curl.h>
 
 #include "https_bridge_parse.hpp"
+#include "playback_route.hpp"
 
 // ===================================================================
 // Global state for signal handling
@@ -239,6 +240,7 @@ static size_t header_cb(char *buffer, size_t size, size_t nitems, void * /*ud*/)
 // Handle one client connection
 // ===================================================================
 static void handle_client(int client_fd, const std::string &upstream_url,
+                          const std::string &fallback_url,
                           const std::string &cacert_path)
 {
     std::string req_data;
@@ -282,24 +284,6 @@ static void handle_client(int client_fd, const std::string &upstream_url,
     }
 
     StreamContext sctx{client_fd, true};
-    curl_easy_setopt(curl, CURLOPT_URL, upstream_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-    if (!cacert_path.empty())
-        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert_path.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &sctx);
-
-    // Reset state for this request (single-threaded)
-    s_upstream = {};
-    s_final_headers_sent = false;
-    s_client_fd = client_fd;
-
     struct curl_slist *hdr_list = nullptr;
     if (!req.range.empty()) {
         std::string rh = "Range: " + req.range;
@@ -312,7 +296,30 @@ static void handle_client(int client_fd, const std::string &upstream_url,
     if (req.method == "HEAD")
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    CURLcode res = curl_easy_perform(curl);
+    auto perform = [&](const std::string &url) {
+        curl_easy_reset(curl);
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        if (!cacert_path.empty()) curl_easy_setopt(curl, CURLOPT_CAINFO, cacert_path.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &sctx);
+        if (hdr_list) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr_list);
+        if (!req.range.empty()) { std::string spec=parse_range_spec(req.range); if(!spec.empty()) curl_easy_setopt(curl,CURLOPT_RANGE,spec.c_str()); }
+        if (req.method == "HEAD") curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+        s_upstream = {}; s_final_headers_sent = false; s_client_fd = client_fd;
+        return curl_easy_perform(curl);
+    };
+    CURLcode res = perform(upstream_url);
+    if (!fallback_url.empty() && playback_should_fallback(res != CURLE_OK && res != CURLE_WRITE_ERROR, s_upstream.status_code) && !s_final_headers_sent) {
+        log_info("[PlaybackRoute] LAN failed; PUBLIC");
+        res = perform(fallback_url);
+    }
 
     // Send final headers if not yet sent (HEAD or empty-body responses)
     if (!s_final_headers_sent) {
@@ -355,7 +362,7 @@ static void handle_local_client(int fd,const LocalMedia&m){std::string d;char q[
 static void usage(const char *argv0)
 {
     std::fprintf(stderr,
-        "Usage: %s <upstream-url> <cacert-path> [port]\n       %s --local-manifest <manifest> [port]\n"
+        "Usage: %s [--fallback-url <public-url>] <upstream-url> <cacert-path> [port]\n       %s --local-manifest <manifest> [port]\n"
         "\n"
         "HTTPS-to-HTTP streaming bridge for MiyooFin.\n"
         "\n"
@@ -371,15 +378,18 @@ static void usage(const char *argv0)
 int main(int argc, char *argv[])
 {
     bool local = argc >= 3 && std::string(argv[1]) == "--local-manifest";
-    if ((!local && (argc < 3 || argc > 4)) || (local && (argc < 3 || argc > 4))) { usage(argv[0]); return 1; }
+    bool fallback = argc >= 5 && std::string(argv[1]) == "--fallback-url";
+    if ((!local && !fallback && (argc < 3 || argc > 4)) || (fallback && (argc < 5 || argc > 6)) || (local && (argc < 3 || argc > 4))) { usage(argv[0]); return 1; }
 
-    std::string upstream_url = local ? "" : argv[1];
-    std::string cacert_path  = local ? "" : argv[2];
+    std::string upstream_url = local ? "" : (fallback ? argv[3] : argv[1]);
+    std::string fallback_url = fallback ? argv[2] : "";
+    std::string cacert_path  = local ? "" : (fallback ? argv[4] : argv[2]);
     LocalMedia media;
     if (local && !local_manifest(argv[2], media)) { std::fprintf(stderr,"Error: invalid local manifest\n"); return 1; }
     int port = 18080;
-    if (argc == 4) {
-        port = std::atoi(argv[3]);
+    int portArg = local ? 3 : (fallback ? 5 : 3);
+    if (argc > portArg) {
+        port = std::atoi(argv[portArg]);
         if (port <= 0 || port > 65535) {
             std::fprintf(stderr, "Error: invalid port %s\n", argv[3]);
             usage(argv[0]);
@@ -426,7 +436,7 @@ int main(int argc, char *argv[])
         socklen_t cl = sizeof(ca);
         int cfd = ::accept(g_listen_fd, (struct sockaddr *)&ca, &cl);
         if (cfd < 0) { if (!g_running) break; continue; }
-        if (local) handle_local_client(cfd, media); else handle_client(cfd, upstream_url, cacert_path);
+        if (local) handle_local_client(cfd, media); else handle_client(cfd, upstream_url, fallback_url, cacert_path);
         ::close(cfd);
     }
 

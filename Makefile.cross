@@ -91,7 +91,7 @@ BRIDGE_ARM := output/build-arm/miyoofin-https-bridge
 
 bridge: $(BRIDGE_ARM)
 
-$(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp | output/build-arm
+$(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | output/build-arm
 	$(CXX) $(CXXFLAGS) -Itools -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 
@@ -116,7 +116,7 @@ REPORTER_ARM     := output/build-arm/miyoofin-playback-reporter
 
 reporter: $(REPORTER_ARM)
 
-$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp | output/build-arm
+$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/build-arm
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 

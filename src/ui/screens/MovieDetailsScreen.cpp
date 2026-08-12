@@ -6,6 +6,7 @@
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
+#include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
@@ -370,10 +371,6 @@ DecodedImage MovieDetailsScreen::loadMovieArtwork()
     // 2. If not cached, synchronous HTTP request
     if (jpegData.empty()) {
         if(m_prepareCancelled.load(std::memory_order_acquire))return {};
-        std::string url = buildImageUrl(
-            m_session.serverUrl, m_movie.id, ImageType::Primary,
-            tag, POSTER_W, POSTER_H);
-
         HttpClient client;
         client.setTimeoutSec(8);
         auto headers = JellyfinApi::buildAuthHeaders(
@@ -387,7 +384,7 @@ DecodedImage MovieDetailsScreen::loadMovieArtwork()
             // responsible for the hardware-proven multi-second push stall.
             uiDiagnostics().setWorker("artwork","movie Jellyfin artwork HTTP");
             UiDiagnostics::Scope scope("MovieDetailsScreen::Jellyfin artwork HTTP/curl",false);
-            fetched=client.getBinary(url,headers,response,error,512*1024,&m_prepareCancelled);
+            fetched=RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,m_movie.id,ImageType::Primary,tag,POSTER_W,POSTER_H),headers,response,error,512*1024,&m_prepareCancelled)&&response.ok();},error);
         }
         if(!fetched){
             printf("[MovieDetailsScreen] Artwork fetch failed: %s\n",

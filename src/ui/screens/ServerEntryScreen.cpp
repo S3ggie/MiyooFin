@@ -24,6 +24,18 @@ ServerEntryScreen::ServerEntryScreen(const std::string &initialUrl,
     buildKeyboard();
 }
 
+ServerEntryScreen::ServerEntryScreen(const std::string &initialUrl,
+                                     const std::string &errorMsg,
+                                     const std::string &expectedServerId,
+                                     bool localAddressEntry)
+    : m_url(localAddressEntry ? initialUrl : (initialUrl.empty() ? "https://" : initialUrl))
+    , m_message(errorMsg)
+    , m_expectedServerId(expectedServerId)
+    , m_localAddressEntry(localAddressEntry)
+{
+    buildKeyboard();
+}
+
 ServerEntryScreen::~ServerEntryScreen()
 {
     if (m_connectThread.joinable()) {
@@ -38,12 +50,12 @@ void ServerEntryScreen::buildKeyboard()
     static const KeyDef defs[] = {
         {"1",'1',0},{"2",'2',0},{"3",'3',0},{"4",'4',0},{"5",'5',0},
         {"6",'6',0},{"7",'7',0},{"8",'8',0},{"9",'9',0},{"0",'0',0},
-        {"Q",'Q',1},{"W",'W',1},{"E",'E',1},{"R",'R',1},{"T",'T',1},
-        {"Y",'Y',1},{"U",'U',1},{"I",'I',1},{"O",'O',1},{"P",'P',1},
-        {"A",'A',2},{"S",'S',2},{"D",'D',2},{"F",'F',2},{"G",'G',2},
-        {"H",'H',2},{"J",'J',2},{"K",'K',2},{"L",'L',2},
-        {"Z",'Z',3},{"X",'X',3},{"C",'C',3},{"V",'V',3},{"B",'B',3},
-        {"N",'N',3},{"M",'M',3},
+        {"q",'q',1},{"w",'w',1},{"e",'e',1},{"r",'r',1},{"t",'t',1},
+        {"y",'y',1},{"u",'u',1},{"i",'i',1},{"o",'o',1},{"p",'p',1},
+        {"a",'a',2},{"s",'s',2},{"d",'d',2},{"f",'f',2},{"g",'g',2},
+        {"h",'h',2},{"j",'j',2},{"k",'k',2},{"l",'l',2},
+        {"z",'z',3},{"x",'x',3},{"c",'c',3},{"v",'v',3},{"b",'b',3},
+        {"n",'n',3},{"m",'m',3},
         {".",'.',4},{":",':',4},{"/",'/',4},{"-",'-',4},{"_",'_',4},
         {"~",'~',4},
         {"[DEL]",'\b',5},{"[CLR]",0x7F,5},{"[DONE]",0x01,5},
@@ -60,6 +72,17 @@ void ServerEntryScreen::buildKeyboard()
     }
     m_activeKeyRow = 0;
     m_activeKeyCol = 0;
+}
+
+std::string ServerEntryScreen::keyLabel(const Key &key) const
+{
+    std::string label(key.label);
+    if (m_caps && label.size() == 1 && std::isalpha(
+            static_cast<unsigned char>(label[0]))) {
+        label[0] = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(label[0])));
+    }
+    return label;
 }
 
 int ServerEntryScreen::keyIndex(int row, int col) const
@@ -81,6 +104,8 @@ const ServerEntryScreen::Key *ServerEntryScreen::activeKey() const
 void ServerEntryScreen::pressKey(const Key &key)
 {
     char c = key.ch;
+    if (m_caps && std::isalpha(static_cast<unsigned char>(c)))
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     if (c == '\b') {
         if (!m_url.empty()) {
             m_url.pop_back();
@@ -91,7 +116,7 @@ void ServerEntryScreen::pressKey(const Key &key)
         m_message.clear();
         return;
     }
-    if (c == 0x7F) { m_url = "https://"; m_message.clear(); return; }
+    if (c == 0x7F) { m_url = m_localAddressEntry ? "" : "https://"; m_message.clear(); return; }
     if (c == 0x01) {
         if (!m_connecting && !m_connected) startConnection();
         return;
@@ -103,6 +128,12 @@ void ServerEntryScreen::pressKey(const Key &key)
 
 void ServerEntryScreen::startConnection()
 {
+    if (m_localAddressEntry && m_url.empty()) {
+        m_serverUrl.clear();
+        m_connected = true;
+        m_finished = true;
+        return;
+    }
     if (m_url.empty() || m_url == "http://" || m_url == "https://") {
         m_message = "Please enter a server URL";
         return;
@@ -124,19 +155,25 @@ void ServerEntryScreen::startConnection()
         else { m_connectError = err; m_connectSuccess = false; }
         m_connectDone = true;
     });
-    m_connectThread.detach();
 }
 
 void ServerEntryScreen::finishConnection()
 {
     m_connecting = false;
     if (m_connectSuccess) {
+        if (m_localAddressEntry && !JellyfinApi::serverIdsMatch(
+                m_expectedServerId, m_connectResult.serverId)) {
+            m_message = "Different Jellyfin server";
+            return;
+        }
         m_connected = true;
         m_serverInfo = m_connectResult;
         m_serverUrl = m_url;
         m_infoTimer = 2000;
-        FILE *f = fopen("server.txt", "w");
-        if (f) { fprintf(f, "%s\n", m_serverUrl.c_str()); fclose(f); }
+        if (!m_localAddressEntry) {
+            FILE *f = fopen("server.txt", "w");
+            if (f) { fprintf(f, "%s\n", m_serverUrl.c_str()); fclose(f); }
+        }
         printf("[ServerEntry] Connected to %s (%s v%s)\n",
                m_serverUrl.c_str(), m_serverInfo.serverName.c_str(),
                m_serverInfo.version.c_str());
@@ -150,11 +187,13 @@ void ServerEntryScreen::finishConnection()
 
 void ServerEntryScreen::enter()
 {
+    m_caps = false;
     printf("[ServerEntryScreen] enter\n");
 }
 
 void ServerEntryScreen::leave()
 {
+    m_caps = false;
     printf("[ServerEntryScreen] leave\n");
     if (m_connectThread.joinable()) m_connectThread.join();
 }
@@ -165,6 +204,9 @@ bool ServerEntryScreen::handleAction(Action action)
     if (m_connected) { m_finished = true; return false; }
 
     switch (action) {
+    case Action::PrevPage:
+        m_caps = !m_caps;
+        return true;
     case Action::Up:
         if (m_activeKeyRow > 0) {
             m_activeKeyRow--;
@@ -220,7 +262,10 @@ bool ServerEntryScreen::handleAction(Action action)
 
 void ServerEntryScreen::update(Uint32 dt)
 {
-    if (m_connecting && m_connectDone) finishConnection();
+    if (m_connecting && m_connectDone) {
+        if (m_connectThread.joinable()) m_connectThread.join();
+        finishConnection();
+    }
     if (m_connected && !m_finished) {
         if (dt >= m_infoTimer) { m_infoTimer = 0; m_finished = true; }
         else { m_infoTimer -= dt; }
@@ -229,11 +274,11 @@ void ServerEntryScreen::update(Uint32 dt)
 
 void ServerEntryScreen::render(SDL_Surface *fb)
 {
-    BitmapFont::drawString(fb, 8, 8, "Enter Jellyfin Server URL",
+    BitmapFont::drawString(fb, 8, 8, m_localAddressEntry ? "Enter Local Jellyfin Address" : "Enter Jellyfin Server URL",
         Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
         Theme::BG_R, Theme::BG_G, Theme::BG_B);
     BitmapFont::drawString(fb, 8, 28,
-        "A=Type  B=Delete  X=Clear  START=Done  SELECT=Cancel",
+        "A=Type  B=Delete  X=Clear  L2=Caps  START=Done  SELECT=Cancel",
         Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
         Theme::BG_R, Theme::BG_G, Theme::BG_B);
     drawInputField(fb);
@@ -243,18 +288,18 @@ void ServerEntryScreen::render(SDL_Surface *fb)
 
 void ServerEntryScreen::drawInputField(SDL_Surface *fb)
 {
-    BitmapFont::fillRect(fb, 8, 50, 624, 28, 40, 40, 50, 255);
-    BitmapFont::drawRect(fb, 8, 50, 624, 28,
+    BitmapFont::fillRect(fb, 8, 50, 624, 38, 40, 40, 50, 255);
+    BitmapFont::drawRect(fb, 8, 50, 624, 38,
         Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B);
     int maxChars = (624 - 8) / BitmapFont::GLYPH_W;
     std::string display = m_url;
     if ((int)display.size() > maxChars)
         display = display.substr((int)display.size() - maxChars);
-    BitmapFont::drawString(fb, 12, 54, display.c_str(),
+    BitmapFont::drawString(fb, 12, 61, display.c_str(),
         220, 220, 220, 40, 40, 50);
     int cursorX = 12 + (int)display.size() * BitmapFont::GLYPH_W;
     if (cursorX < 620)
-        BitmapFont::fillRect(fb, cursorX, 54, 8, 16, 170, 170, 220, 255);
+        BitmapFont::fillRect(fb, cursorX, 61, 8, 16, 170, 170, 220, 255);
 }
 
 void ServerEntryScreen::drawKeyboard(SDL_Surface *fb)
@@ -272,11 +317,22 @@ void ServerEntryScreen::drawKeyboard(SDL_Surface *fb)
         }
         if (firstCol > lastCol) continue;
         int rkc = lastCol - firstCol + 1;
-        int startX = (640 - (rkc * KEY_W + (rkc - 1) * KEY_GAP)) / 2;
+        int rowW = 0;
+        for (const auto &k : m_keys) {
+            if (k.row != row) continue;
+            const std::string label = keyLabel(k);
+            const int keyW = (k.ch == '\b' || k.ch == 0x7F ||
+                              k.ch == 0x01 || k.ch == 0x02)
+                ? (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE + 16
+                : KEY_W;
+            rowW += keyW;
+        }
+        rowW += (rkc - 1) * KEY_GAP;
+        int startX = (640 - rowW) / 2;
+        int x = startX;
 
         for (const auto &k : m_keys) {
             if (k.row != row) continue;
-            int x = startX + k.col * (KEY_W + KEY_GAP);
             int y = KEYBOARD_TOP + row * (KEY_H + KEY_GAP);
             bool sel = (k.row == m_activeKeyRow && k.col == m_activeKeyCol);
             Uint8 bgR = sel ? Theme::ACCENT_R : 40;
@@ -285,16 +341,25 @@ void ServerEntryScreen::drawKeyboard(SDL_Surface *fb)
             Uint8 fgR = sel ? 255 : Theme::TEXT_R;
             Uint8 fgG = sel ? 255 : Theme::TEXT_G;
             Uint8 fgB = sel ? 255 : Theme::TEXT_B;
+            const std::string label = keyLabel(k);
             int keyW = KEY_W;
             if (k.ch == '\b' || k.ch == 0x7F || k.ch == 0x01 || k.ch == 0x02)
-                keyW = (int)::strlen(k.label) * BitmapFont::GLYPH_W + 8;
+                keyW = (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE + 16;
             BitmapFont::fillRect(fb, x, y, keyW, KEY_H, bgR, bgG, bgB, 255);
             BitmapFont::drawRect(fb, x, y, keyW, KEY_H, fgR, fgG, fgB);
-            int lx = x + (keyW - (int)::strlen(k.label) * BitmapFont::GLYPH_W) / 2;
-            int ly = y + (KEY_H - BitmapFont::GLYPH_H) / 2;
-            BitmapFont::drawString(fb, lx, ly, k.label, fgR, fgG, fgB, bgR, bgG, bgB);
+            int labelW = (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE;
+            int lx = x + (keyW - labelW) / 2;
+            int ly = y + (KEY_H - BitmapFont::GLYPH_H * KEY_LABEL_SCALE) / 2;
+            BitmapFont::drawStringScaled(fb, lx, ly, label.c_str(), KEY_LABEL_SCALE,
+                                         fgR, fgG, fgB, bgR, bgG, bgB);
+            x += keyW + KEY_GAP;
         }
     }
+    BitmapFont::drawString(fb, 8, 88, m_caps ? "CAPS ON" : "CAPS OFF",
+        m_caps ? Theme::ACCENT_R : Theme::TEXT_R,
+        m_caps ? Theme::ACCENT_G : Theme::TEXT_G,
+        m_caps ? Theme::ACCENT_B : Theme::TEXT_B,
+        Theme::BG_R, Theme::BG_G, Theme::BG_B);
 }
 
 void ServerEntryScreen::drawStatus(SDL_Surface *fb)

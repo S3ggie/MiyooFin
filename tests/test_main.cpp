@@ -21,6 +21,7 @@
 #include "../src/data/MediaItem.hpp"
 #include "../src/ui/BitmapFont.hpp"
 #include "../src/ui/screens/HomeScreen.hpp"
+#include "../src/ui/screens/ServerEntryScreen.hpp"
 #include "../src/image/ImageDecoder.hpp"
 #include "../src/cache/ImageCache.hpp"
 #include "../src/cache/LibraryCache.hpp"
@@ -28,6 +29,7 @@
 #include "../src/cache/OfflineCatalog.hpp"
 #include "../src/cache/OfflineLibraryProjection.hpp"
 #include "../src/net/HttpClient.hpp"
+#include "../src/net/RouteRequest.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
@@ -67,6 +69,79 @@ static int g_failures = 0;
             ++g_failures; \
         } \
     } while (0)
+
+static void testRouteRequest()
+{
+    std::printf("[test] LAN route selection and fallback\n");
+    Session s; s.serverUrl="https://public";
+    std::string error; int calls=0;
+    CHECK(RouteRequest(s).run([&](const std::string &base){++calls;return base=="https://public";},error));
+    CHECK(calls==1 && RouteRequest(s).primary()=="https://public");
+    s.localServerUrl="http://lan"; calls=0; error.clear();
+    CHECK(RouteRequest(s).run([&](const std::string &base){++calls;return base=="http://lan";},error));
+    CHECK(calls==1 && RouteRequest(s).primary()=="http://lan");
+    calls=0; error.clear();
+    CHECK(RouteRequest(s).run([&](const std::string &base){++calls;if(base=="http://lan"){error="Transport: Couldn't connect";return false;}return base=="https://public";},error));
+    CHECK(calls==2);
+    calls=0; error.clear();
+    CHECK(!RouteRequest(s).run([&](const std::string &){++calls;error="Unauthorized";return false;},error));
+    CHECK(calls==1);
+    calls=0; error.clear();
+    CHECK(!RouteRequest(s).run([&](const std::string &){++calls;error="Transport: Callback aborted";return false;},error));
+    CHECK(calls==1); // cancellation must never launch a public retry
+    const std::string scope=LibraryCache::scopeKey(s.serverUrl,"user");
+    CHECK_EQ(scope,LibraryCache::scopeKey("https://public","user"));
+    CHECK_EQ(RouteRequest::replaceBase("http://lan/a","http://lan","https://public"),"https://public/a");
+}
+
+static void testServerEntryKeyboardCaps()
+{
+    std::printf("[test] Server Entry keyboard caps and navigation\n");
+    ServerEntryScreen screen;
+    CHECK(!screen.capsEnabled());
+    CHECK(screen.keyboardSelectionValid());
+
+    // Numeric characters remain unchanged in caps mode.
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), "https://1");
+    screen.handleAction(Action::PrevPage);  // L2
+    CHECK(screen.capsEnabled());
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), "https://11");
+
+    // The first alphabetic key is q; L2 changes only its case.
+    screen.handleAction(Action::Down);
+    CHECK(screen.keyboardSelectionValid());
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), "https://11Q");
+    screen.handleAction(Action::PrevPage);
+    CHECK(!screen.capsEnabled());
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.entryText(), "https://11Qq");
+
+    // Every navigation transition remains on a key, including the action row.
+    for (int i = 0; i < 8; ++i) {
+        screen.handleAction(Action::Down);
+        CHECK(screen.keyboardSelectionValid());
+    }
+    for (int i = 0; i < 12; ++i) {
+        screen.handleAction(Action::Right);
+        CHECK(screen.keyboardSelectionValid());
+    }
+    for (int i = 0; i < 12; ++i) {
+        screen.handleAction(Action::Left);
+        CHECK(screen.keyboardSelectionValid());
+    }
+
+    // Leaving and each new text-entry session start in lowercase mode.
+    screen.handleAction(Action::PrevPage);
+    CHECK(screen.capsEnabled());
+    screen.leave();
+    CHECK(!screen.capsEnabled());
+    ServerEntryScreen reopened;
+    CHECK(!reopened.capsEnabled());
+    std::printf("[test] Server Entry keyboard caps OK\n");
+}
 
 static void testUiDiagnostics()
 {
@@ -197,6 +272,8 @@ static void testSession()
 
     Session s1;
     s1.serverUrl   = "http://server:8096";
+    s1.serverId    = "server-id-42";
+    s1.localServerUrl = "http://192.168.1.212:8096";
     s1.accessToken = "abc123token";
     s1.userId      = "user-42";
     s1.userName    = "testuser";
@@ -207,6 +284,8 @@ static void testSession()
     Session s2 = Session::loadFrom(tmpPath);
     CHECK(s2.valid());
     CHECK_EQ(s2.serverUrl,   "http://server:8096");
+    CHECK_EQ(s2.serverId,    "server-id-42");
+    CHECK_EQ(s2.localServerUrl, "http://192.168.1.212:8096");
     CHECK_EQ(s2.accessToken, "abc123token");
     CHECK_EQ(s2.userId,      "user-42");
     CHECK_EQ(s2.userName,    "testuser");
@@ -215,10 +294,74 @@ static void testSession()
     s2.clear();
     CHECK(!s2.valid());
     CHECK(s2.serverUrl.empty());
+    CHECK(s2.serverId.empty());
+    CHECK(s2.localServerUrl.empty());
     CHECK(s2.accessToken.empty());
 
     std::remove(tmpPath);
     std::printf("[test] Session save/load OK\n");
+}
+
+static void testSessionBackwardCompatibility()
+{
+    std::printf("[test] Session legacy compatibility\n");
+    const char *tmpPath = "test_legacy_session.txt";
+    std::remove(tmpPath);
+    {
+        FILE *f = std::fopen(tmpPath, "w");
+        CHECK(f != nullptr);
+        if (f) {
+            std::fputs("server_url=https://public.example.com\naccess_token=token\nuser_id=user\n", f);
+            std::fclose(f);
+        }
+    }
+    Session session = Session::loadFrom(tmpPath);
+    CHECK(session.valid());
+    CHECK_EQ(session.serverUrl, "https://public.example.com");
+    CHECK(session.serverId.empty());
+    CHECK(session.localServerUrl.empty());
+    CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId),
+             LibraryCache::scopeKey("https://public.example.com", "user"));
+    session.serverId = "new-server-id";
+    CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId),
+             LibraryCache::scopeKey("https://public.example.com", "user"));
+    std::remove(tmpPath);
+    std::printf("[test] Session legacy compatibility OK\n");
+}
+
+static void testLocalServerIdentityVerification()
+{
+    std::printf("[test] local server identity verification\n");
+    Session session;
+    session.serverUrl = "https://public.example.com";
+    session.serverId = "canonical-server";
+    session.userId = "user";
+    session.localServerUrl = "http://192.168.1.10:8096";
+    const std::string canonicalUrl = session.serverUrl;
+    const std::string scope = LibraryCache::scopeKey(session.serverUrl, session.userId);
+
+    CHECK(JellyfinApi::serverIdsMatch(session.serverId, "canonical-server"));
+    CHECK(!JellyfinApi::serverIdsMatch(session.serverId, "other-server"));
+    CHECK(!JellyfinApi::serverIdsMatch(session.serverId, ""));
+
+    // A rejected or unreachable verification never replaces the existing route.
+    if (JellyfinApi::serverIdsMatch(session.serverId, "other-server"))
+        session.localServerUrl = "http://192.168.1.20:8096";
+    CHECK_EQ(session.localServerUrl, "http://192.168.1.10:8096");
+    CHECK_EQ(session.serverUrl, canonicalUrl);
+    CHECK_EQ(LibraryCache::scopeKey(session.serverUrl, session.userId), scope);
+    std::printf("[test] local server identity verification OK\n");
+}
+
+static void testSystemInfoParsing()
+{
+    std::printf("[test] SystemInfo Id parsing\n");
+    ServerInfo info;
+    CHECK(JellyfinApi::parseSystemInfoResponse(
+        "{\"Id\":\"server-id-42\",\"ServerName\":\"Jellyfin\",\"Version\":\"10.10.0\",\"OperatingSystem\":\"Linux\"}", info));
+    CHECK_EQ(info.serverId, "server-id-42");
+    CHECK_EQ(info.serverName, "Jellyfin");
+    std::printf("[test] SystemInfo Id parsing OK\n");
 }
 
 // -------------------------------------------------------------------
@@ -448,7 +591,7 @@ static void testBuildTabs()
         {{"TV", {{"s1","S1","",2019,9.0f,"S","show"}}}};
 
     auto tabs = JellyfinApi::buildTabs(views, cw, ra, mbv, sbv);
-    CHECK(tabs.size() == 4);
+    CHECK(tabs.size() == 5);
     CHECK_EQ(tabs[0].name, "Home");
     CHECK_EQ(tabs[1].name, "Movies");
     CHECK_EQ(tabs[2].name, "Shows");
@@ -459,12 +602,13 @@ static void testBuildTabs()
     CHECK(tabs[2].rows[0].items.size() == 1);
     CHECK_EQ(tabs[3].name, "Downloads");
     CHECK(tabs[3].rows[0].items.empty());  // Downloads placeholder
+    CHECK_EQ(tabs[4].name, "Settings");
 
     // Empty case
     std::vector<MediaItem> e;
     std::vector<std::pair<std::string, std::vector<MediaItem>>> ep;
     auto t2 = JellyfinApi::buildTabs({}, e, e, ep, ep);
-    CHECK(t2.size() == 4);
+    CHECK(t2.size() == 5);
     CHECK(t2[0].rows.size() == 1);
     CHECK(t2[0].rows[0].items.empty());
     std::printf("[test] buildTabs OK\n");
@@ -1987,8 +2131,8 @@ static void testOfflineLibraryProjection(){
     auto online=HomeScreen::tabsFromSnapshot(l);
     auto offline=HomeScreen::offlineTabsFromSnapshot(l);
     const auto onlineNames=HomeScreen::tabNames(online), offlineNames=HomeScreen::tabNames(offline);
-    CHECK((onlineNames==std::vector<std::string>{"Home","Movies","Shows","Downloads"}));
-    CHECK((offlineNames==std::vector<std::string>{"Movies","Shows","Downloads"}));
+    CHECK((onlineNames==std::vector<std::string>{"Home","Movies","Shows","Downloads","Settings"}));
+    CHECK((offlineNames==std::vector<std::string>{"Movies","Shows","Downloads","Settings"}));
     CHECK(std::find(offlineNames.begin(),offlineNames.end(),"Home")==offlineNames.end());
     // Cold offline startup and a selected Home both use the Movies fallback.
     CHECK(HomeScreen::transitionTabIndex({},0,offline)==0);
@@ -1996,9 +2140,20 @@ static void testOfflineLibraryProjection(){
     // Other named tabs survive layout changes where possible.
     CHECK(HomeScreen::transitionTabIndex(online,2,offline)==1);
     CHECK(HomeScreen::transitionTabIndex(online,3,offline)==2);
+    CHECK(HomeScreen::transitionTabIndex(online,4,offline)==3);
     CHECK(HomeScreen::transitionTabIndex(offline,0,online)==1);
     CHECK(HomeScreen::transitionTabIndex(offline,1,online)==2);
     CHECK(HomeScreen::transitionTabIndex(offline,2,online)==3);
+    CHECK(HomeScreen::transitionTabIndex(offline,3,online)==4);
+}
+static void testSettingsRowActions(){
+    CHECK(HomeScreen::settingsRowCount() == 8);
+    CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(6)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::Logout);
+    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::None);
 }
 static void testSeriesCachedSeasonHandoff(){
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
@@ -2257,6 +2412,8 @@ static void testHlsFailureClassification()
 
 int main()
 {
+    testRouteRequest();
+    testServerEntryKeyboardCaps();
     testUiDiagnostics();
     std::printf("\n--- Movie title organization tests ---\n");
     testMovieOrganizationalTitles();
@@ -2266,7 +2423,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSettingsRowActions(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 
@@ -2274,6 +2431,9 @@ int main()
     testNormaliseUrl();
     testSession();
     testSessionEmpty();
+    testSessionBackwardCompatibility();
+    testSystemInfoParsing();
+    testLocalServerIdentityVerification();
     testDeviceIdentity();
     testDeviceIdentityLoadOrCreate();
     testAuthTypes();

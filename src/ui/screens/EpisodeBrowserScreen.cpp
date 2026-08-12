@@ -8,6 +8,7 @@
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
+#include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
 #include "../../cache/LibraryCache.hpp"
@@ -288,7 +289,7 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         }
         if(m_fetchCancelled.load(std::memory_order_acquire)) return;
         std::vector<MediaItem>v;std::string e;
-        bool ok=JellyfinApi::getEpisodes(s.serverUrl,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);
+        bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);},e);
         // storeEpisodes reads, merges, serializes, fsyncs and renames the full
         // catalog.  Complete it here before publishing a cheap UI result.
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire))
@@ -753,10 +754,6 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         {
             success = true;
         } else {
-            std::string url = buildImageUrl(
-                m_session.serverUrl, job.itemId, ImageType::Primary,
-                job.imageTag, job.width, job.height);
-
             HttpClient client;
             client.setTimeoutSec(3);
             auto headers = JellyfinApi::buildAuthHeaders(
@@ -764,8 +761,7 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
 
             BinaryHttpResponse response;
             std::string error;
-            const bool fetched = client.getBinary(url, headers, response, error,
-                                                  512 * 1024, &m_workerCancelled);
+            const bool fetched = RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,ImageType::Primary,job.imageTag,job.width,job.height),headers,response,error,512*1024,&m_workerCancelled)&&response.ok();},error);
             if (fetched)
             {
                 if (response.ok()) {

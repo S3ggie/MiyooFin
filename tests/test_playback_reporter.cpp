@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include "../tools/playback_clock_parser.hpp"
+#include "../tools/playback_route.hpp"
 
 static int g_failures = 0;
 
@@ -27,6 +28,18 @@ static int g_failures = 0;
             ++g_failures; \
         } \
     } while (0)
+
+static void testPlaybackRoutes() {
+    PlaybackRoute publicOnly=playback_route("https://public", "");
+    CHECK_EQ(publicOnly.primary, std::string("https://public")); CHECK(publicOnly.fallback.empty()); CHECK(!publicOnly.usingLan);
+    PlaybackRoute lan=playback_route("https://public", "http://lan");
+    CHECK_EQ(lan.primary, std::string("http://lan")); CHECK_EQ(lan.fallback, std::string("https://public")); CHECK(lan.usingLan);
+    CHECK(playback_should_fallback(true, 0));
+    CHECK(!playback_should_fallback(false, 401)); CHECK(!playback_should_fallback(false, 403));
+    // One failed transport attempt is retried through the fallback once: this
+    // preserves one logical Start/Stopped event rather than emitting duplicates.
+    int attempts=0; if (playback_should_fallback(true, 0)) ++attempts; ++attempts; CHECK(attempts==2);
+}
 
 // A: seconds_to_ticks tests
 static void testTicksZero() {
@@ -505,6 +518,9 @@ int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
     std::printf("=============================\n\n");
+
+    std::printf("--- Route selection and fallback policy ---\n");
+    testPlaybackRoutes();
 
     std::printf("--- A: seconds_to_ticks ---\n");
     testTicksZero(); testTicks525(); testTicks60(); testTicks138742();

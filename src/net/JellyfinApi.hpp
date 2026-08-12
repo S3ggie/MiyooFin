@@ -12,6 +12,7 @@ namespace miyoofin {
 
 /// Server info returned by the /System/Info endpoint.
 struct ServerInfo {
+    std::string serverId;
     std::string serverName;
     std::string version;
     std::string operatingSystem;
@@ -69,6 +70,14 @@ public:
     static bool getSystemInfo(const std::string &baseUrl,
                               ServerInfo &info,
                              std::string &error);
+
+    /// Parse a /System/Info/Public response. Public for focused tests.
+    static bool parseSystemInfoResponse(const std::string &body,
+                                        ServerInfo &info);
+
+    /// A local route is usable only when it identifies the canonical server.
+    static bool serverIdsMatch(const std::string &expectedServerId,
+                               const std::string &returnedServerId);
 
     /// Authenticate with username/password via POST /Users/AuthenticateByName.
     static bool authenticateByName(const std::string &baseUrl,

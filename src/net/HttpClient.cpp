@@ -139,7 +139,7 @@ bool HttpClient::getBinary(const std::string &url,
     CURLcode res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
-        error = curl_easy_strerror(res);
+        error = std::string("Transport: ") + curl_easy_strerror(res);
         curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
         return false;
@@ -214,7 +214,7 @@ bool HttpClient::perform(const std::string &method,
     response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
-        error = curl_easy_strerror(res);
+        error = std::string("Transport: ") + curl_easy_strerror(res);
         curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
         return false;

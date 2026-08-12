@@ -1,4 +1,5 @@
 #include "HttpClient.hpp"
+#include "ClockCheck.hpp"
 #include "TlsConfig.hpp"
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
@@ -47,6 +48,19 @@ static size_t binaryWriteCallback(void *contents, size_t size, size_t nmemb, voi
     ctx->data->resize(offset + total);
     std::memcpy(ctx->data->data() + offset, contents, total);
     return total;
+}
+
+/// Classify a curl TLS transport failure.  When the failure looks
+/// like a certificate/peer-verification error AND the system clock
+/// is obviously wrong, return the user-friendly clock message.
+/// Otherwise return the default "Transport: ..." string.
+static std::string classifyTransportError(CURLcode res)
+{
+    if (shouldShowClockError(res == CURLE_PEER_FAILED_VERIFICATION,
+                             std::time(nullptr))) {
+        return kClockErrorMessage;
+    }
+    return std::string("Transport: ") + curl_easy_strerror(res);
 }
 
 HttpClient::HttpClient()
@@ -213,7 +227,7 @@ bool HttpClient::perform(const std::string &method,
     response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
-        error = std::string("Transport: ") + curl_easy_strerror(res);
+        error = classifyTransportError(res);
         curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
         return false;

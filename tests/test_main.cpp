@@ -1218,6 +1218,201 @@ static void testBitmapFontMapCodePoint()
 }
 
 // -------------------------------------------------------------------
+// Test: BitmapFont::mapCodePoint — Latin-1 accent transliteration
+// -------------------------------------------------------------------
+static void testBitmapFontMapCodePointLatinAccents()
+{
+    std::printf("[test] BitmapFont::mapCodePoint Latin accents\n");
+
+    // Spanish
+    CHECK(BitmapFont::mapCodePoint(0x00E1) == 'a');  // á → a
+    CHECK(BitmapFont::mapCodePoint(0x00E9) == 'e');  // é → e
+    CHECK(BitmapFont::mapCodePoint(0x00ED) == 'i');  // í → i
+    CHECK(BitmapFont::mapCodePoint(0x00F3) == 'o');  // ó → o
+    CHECK(BitmapFont::mapCodePoint(0x00FA) == 'u');  // ú → u
+    CHECK(BitmapFont::mapCodePoint(0x00F1) == 'n');  // ñ → n
+    CHECK(BitmapFont::mapCodePoint(0x00FC) == 'u');  // ü → u
+    CHECK(BitmapFont::mapCodePoint(0x00D1) == 'N');  // Ñ → N
+    CHECK(BitmapFont::mapCodePoint(0x00DC) == 'U');  // Ü → U
+    CHECK(BitmapFont::mapCodePoint(0x00BF) == '?');  // ¿ → ?
+    CHECK(BitmapFont::mapCodePoint(0x00A1) == '!');  // ¡ → !
+
+    // French/German/Portuguese/Italian
+    CHECK(BitmapFont::mapCodePoint(0x00E7) == 'c');  // ç → c
+    CHECK(BitmapFont::mapCodePoint(0x00C7) == 'C');  // Ç → C
+    CHECK(BitmapFont::mapCodePoint(0x00E4) == 'a');  // ä → a
+    CHECK(BitmapFont::mapCodePoint(0x00F6) == 'o');  // ö → o
+    CHECK(BitmapFont::mapCodePoint(0x00E8) == 'e');  // è → e
+    CHECK(BitmapFont::mapCodePoint(0x00EA) == 'e');  // ê → e
+    CHECK(BitmapFont::mapCodePoint(0x00C0) == 'A');  // À → A
+    CHECK(BitmapFont::mapCodePoint(0x00C1) == 'A');  // Á → A
+    CHECK(BitmapFont::mapCodePoint(0x00C9) == 'E');  // É → E
+    CHECK(BitmapFont::mapCodePoint(0x00D3) == 'O');  // Ó → O
+    CHECK(BitmapFont::mapCodePoint(0x00DA) == 'U');  // Ú → U
+    CHECK(BitmapFont::mapCodePoint(0x00CD) == 'I');  // Í → I
+    CHECK(BitmapFont::mapCodePoint(0x00D0) == 'D');  // Ð → D
+    CHECK(BitmapFont::mapCodePoint(0x00F0) == 'd');  // ð → d
+    CHECK(BitmapFont::mapCodePoint(0x00DE) == 'T');  // Þ → T
+    CHECK(BitmapFont::mapCodePoint(0x00FE) == 't');  // þ → t
+
+    // Existing mappings still work
+    CHECK(BitmapFont::mapCodePoint('A') == 'A');
+    CHECK(BitmapFont::mapCodePoint(0x00B2) == '2');
+    CHECK(BitmapFont::mapCodePoint(0x201C) == '"');
+    CHECK(BitmapFont::mapCodePoint(0x1F600) == 0);
+
+    std::printf("[test] BitmapFont::mapCodePoint Latin accents OK\n");
+}
+
+// -------------------------------------------------------------------
+// Test: ampersand regression + JSON escape round-trip
+// -------------------------------------------------------------------
+static void testAmpersandAndJsonEscape()
+{
+    std::printf("[test] Ampersand regression + JSON escape\n");
+
+    // U+0026 is already ASCII '&' — bitmap font has the glyph.
+    CHECK(BitmapFont::mapCodePoint(0x0026) == 0x26);
+    CHECK(BitmapFont::mapCodePoint(0x0026) == '&');
+
+    // Literal & in JSON
+    std::string j1 = R"({"Name":"Tom & Jerry"})";
+    CHECK_EQ(JellyfinApi::jsonStringField(j1, "Name"),
+             std::string("Tom & Jerry"));
+
+    // JSON Unicode escape \u0026 -> &
+    std::string j2 = R"({"Name":"Tom \u0026 Jerry"})";
+    CHECK_EQ(JellyfinApi::jsonStringField(j2, "Name"),
+             std::string("Tom & Jerry"));
+
+    // HTML entity &amp; passes through literally (no HTML decoding)
+    std::string j3 = R"({"Name":"Tom &amp; Jerry"})";
+    CHECK_EQ(JellyfinApi::jsonStringField(j3, "Name"),
+             std::string("Tom &amp; Jerry"));
+
+    std::printf("[test] Ampersand regression + JSON escape OK\n");
+}
+
+// -------------------------------------------------------------------
+// Test: BitmapFont::truncateUtf8
+// -------------------------------------------------------------------
+static void testBitmapFontTruncateUtf8()
+{
+    std::printf("[test] BitmapFont::truncateUtf8\n");
+
+    // ASCII shorter than limit — unchanged
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 10), std::string("hello"));
+
+    // ASCII exactly at limit — unchanged
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 5), std::string("hello"));
+
+    // ASCII over limit — truncated with ".."
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 4), std::string("he.."));
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 3), std::string("h.."));
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 2), std::string(".."));
+
+    // Empty string and zero limit
+    CHECK_EQ(BitmapFont::truncateUtf8("", 5), std::string(""));
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 0), std::string(""));
+
+    // UTF-8: "más" = m + á(0xC3 0xA1) + s = 3 glyphs, 4 bytes
+    // á is 0xC3 0xA1 (NOT 0xC2 0xA1 which is ¡)
+    std::string mas = "m\xC3\xA1s";
+    CHECK_EQ(BitmapFont::truncateUtf8(mas, 10), mas);
+    CHECK_EQ(BitmapFont::truncateUtf8(mas, 3), mas);
+
+    // "abcdéfgh" = 8 glyphs. Truncate to 6: keep 4 + ".."
+    std::string s1 = "abcd\xC3\xA9" "fgh";
+    CHECK_EQ(BitmapFont::truncateUtf8(s1, 6), std::string("abcd.."));
+
+    // "abácdef" = 7 glyphs. Truncate to 5: keep 3 + ".."
+    std::string s2 = "ab\xC3\xA1" "cdef";
+    std::string expected_s2 = "ab\xC3\xA1" "..";
+    CHECK_EQ(BitmapFont::truncateUtf8(s2, 5), expected_s2);
+
+    // "José" = 4 glyphs. Truncate to 3: keep 1 + ".."
+    std::string jose = "Jos\xC3\xA9";
+    CHECK_EQ(BitmapFont::truncateUtf8(jose, 3), std::string("J.."));
+
+    // --- maxGlyphs == 1: truncated string must be "." (one column) ---
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 1), std::string("."));
+    CHECK_EQ(BitmapFont::truncateUtf8("ab", 1), std::string("."));
+    CHECK_EQ(BitmapFont::truncateUtf8(mas, 1), std::string("."));
+
+    // maxGlyphs == 1 with a string that fits
+    CHECK_EQ(BitmapFont::truncateUtf8("a", 1), std::string("a"));
+
+    // maxGlyphs == 0 (negative edge: <= 0)
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", 0), std::string(""));
+    CHECK_EQ(BitmapFont::truncateUtf8("hello", -5), std::string(""));
+
+    // --- Truncated / incomplete multi-byte UTF-8 must not crash or overrun ---
+    // Incomplete 2-byte: 0xC3 with no continuation byte
+    {
+        std::string bad2("\xC3", 1);           // 1 byte of a 2-byte seq = 1 glyph
+        CHECK_EQ(BitmapFont::truncateUtf8(bad2, 10), bad2);  // fits: 1 glyph
+        // Prepend "x" so input is 2 glyphs; truncate to 1 → "."
+        std::string bad2x = std::string("x") + std::string("\xC3", 1);
+        CHECK_EQ(BitmapFont::truncateUtf8(bad2x, 10), bad2x); // fits
+        CHECK_EQ(BitmapFont::truncateUtf8(bad2x, 1), std::string("."));
+    }
+
+    // Incomplete 3-byte: 0xE2 with only 1 continuation byte
+    {
+        std::string bad3("\xE2\x80", 2);       // 2 of 3 bytes = 1 glyph
+        CHECK_EQ(BitmapFont::truncateUtf8(bad3, 10), bad3);
+        std::string bad3x = std::string("x") + std::string("\xE2\x80", 2);
+        CHECK_EQ(BitmapFont::truncateUtf8(bad3x, 10), bad3x);
+        CHECK_EQ(BitmapFont::truncateUtf8(bad3x, 1), std::string("."));
+    }
+
+    // Incomplete 4-byte: 0xF0 with only 1 continuation byte
+    {
+        std::string bad4("\xF0\x90", 2);       // 2 of 4 bytes = 1 glyph
+        CHECK_EQ(BitmapFont::truncateUtf8(bad4, 10), bad4);
+        std::string bad4x = std::string("x") + std::string("\xF0\x90", 2);
+        CHECK_EQ(BitmapFont::truncateUtf8(bad4x, 10), bad4x);
+        CHECK_EQ(BitmapFont::truncateUtf8(bad4x, 1), std::string("."));
+    }
+
+    // Invalid lead byte 0xFF (not a valid UTF-8 start)
+    {
+        std::string badff("\xFF", 1);
+        CHECK_EQ(BitmapFont::truncateUtf8(badff, 10), badff);
+        std::string badffx = std::string("x") + std::string("\xFF", 1);
+        CHECK_EQ(BitmapFont::truncateUtf8(badffx, 10), badffx);
+        CHECK_EQ(BitmapFont::truncateUtf8(badffx, 1), std::string("."));
+    }
+
+    // Bare continuation byte 0x80 (not after a lead byte)
+    {
+        std::string bare("\x80", 1);
+        CHECK_EQ(BitmapFont::truncateUtf8(bare, 10), bare);
+        std::string barex = std::string("x") + std::string("\x80", 1);
+        CHECK_EQ(BitmapFont::truncateUtf8(barex, 10), barex);
+        CHECK_EQ(BitmapFont::truncateUtf8(barex, 1), std::string("."));
+    }
+
+    // Valid UTF-8 followed by incomplete 2-byte — mixed input
+    {
+        std::string mixed = std::string("ab") + std::string("\xC3", 1);
+        // "a", "b", incomplete-0xC3 = 3 glyphs; fits at 3
+        CHECK_EQ(BitmapFont::truncateUtf8(mixed, 3), mixed);
+        // Truncate to 2: keep 0 + ".."
+        CHECK_EQ(BitmapFont::truncateUtf8(mixed, 2), std::string(".."));
+        // Truncate to 1
+        CHECK_EQ(BitmapFont::truncateUtf8(mixed, 1), std::string("."));
+    }
+
+    // --- Output never exceeds maxGlyphs columns ---
+    // For maxGlyphs==1 the suffix is "." (1 ASCII byte) so result size == 1.
+    CHECK(BitmapFont::truncateUtf8("hello", 1).size() == 1u);
+    CHECK(BitmapFont::truncateUtf8(mas, 1).size() == 1u);
+
+    std::printf("[test] BitmapFont::truncateUtf8 OK\n");
+}
+
+// -------------------------------------------------------------------
 // Test: buildLatestUrl includes GroupItems=false
 // -------------------------------------------------------------------
 static void testBuildLatestUrl()
@@ -3141,6 +3336,9 @@ int main()
     testBuildLibraryItemsUrl();
     testUnicodeEscapeDecoding();
     testBitmapFontMapCodePoint();
+    testBitmapFontMapCodePointLatinAccents();
+    testAmpersandAndJsonEscape();
+    testBitmapFontTruncateUtf8();
 
     // B5a tests — Artwork infrastructure
     std::printf("\n--- B5a artwork infrastructure tests ---\n");

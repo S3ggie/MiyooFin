@@ -1635,6 +1635,48 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
             Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,24,24,32);
         my += BitmapFont::GLYPH_H + 2;
     }
+
+    // --- Playback progress bar and status ---
+    {
+        const bool hasProgress = item->played
+            || item->progress > 0.0f
+            || item->playbackPositionTicks > 0;
+        if (hasProgress) {
+            const int pct = item->played ? 100 : playbackPercent(*item);
+            constexpr int BAR_W = 180;
+            constexpr int BAR_H = 4;
+            // Percentage text on the progress row
+            const int py = my - 2;  // start 2 px above current my
+            char pctBuf[12];
+            std::snprintf(pctBuf,sizeof(pctBuf),"%d%%",pct);
+            BitmapFont::drawString(fb,mx+BAR_W+4,py,pctBuf,
+                Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+            // Track (background) — vertically centred in the text row
+            const int barY = py + (BitmapFont::GLYPH_H - BAR_H) / 2;
+            BitmapFont::fillRect(fb,mx,barY,BAR_W,BAR_H,40,40,50,255);
+            // Filled portion
+            const int fillW = BAR_W * std::max(0,std::min(100,pct)) / 100;
+            if (fillW > 0)
+                BitmapFont::fillRect(fb,mx,barY,fillW,BAR_H,
+                    Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,255);
+            my = py + BitmapFont::GLYPH_H;
+
+            // Watched/remaining time or "Watched"
+            if (item->played) {
+                BitmapFont::drawString(fb,mx,my,"Watched",
+                    Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);
+            } else {
+                const std::string timeStr =
+                    formatPlaybackTime(item->playbackPositionTicks,
+                                       item->runTimeTicks);
+                if (!timeStr.empty()) {
+                    BitmapFont::drawString(fb,mx,my,timeStr.c_str(),
+                        Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+                }
+            }
+        }
+    }
+
     BitmapFont::fillRect(fb,0,INFO_Y+INFO_H,640,1,
         Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,60);
 }

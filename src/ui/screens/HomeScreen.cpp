@@ -1594,31 +1594,45 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
     BitmapFont::drawRect(fb,px,py,pw,ph,
         Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);
     int mx=px+pw+10, my=py+2;
-    BitmapFont::drawString(fb,mx,my,item->title.c_str(),
-        Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);
+
+    // Title: for episodes show "Episode Name - Show Name"
+    if (item->type == "episode" && !item->seriesName.empty()) {
+        char titleBuf[128];
+        std::snprintf(titleBuf,sizeof(titleBuf),"%s - %s",item->title.c_str(),item->seriesName.c_str());
+        BitmapFont::drawString(fb,mx,my,titleBuf,
+            Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);
+    } else {
+        BitmapFont::drawString(fb,mx,my,item->title.c_str(),
+            Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);
+    }
     my += BitmapFont::GLYPH_H + 2;
-    char line1[128];
-    std::snprintf(line1,sizeof(line1),"%d  |  %s",item->year,item->genre.c_str());
-    BitmapFont::drawString(fb,mx,my,line1,
-        Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
-    my += BitmapFont::GLYPH_H + 2;
-    char rs[32];
-    int fs=(int)item->rating, idx=0;
-    for (int s=0;s<fs;++s) rs[idx++]='*';
-    if (item->rating-fs>=0.25f) rs[idx++]='.';
-    rs[idx]='\0';
-    BitmapFont::drawString(fb,mx,my,rs,
-        Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,24,24,32);
-    char rn[16];
-    std::snprintf(rn,sizeof(rn),"  %.1f/5.0",item->rating);
-    BitmapFont::drawString(fb,mx+(int)::strlen(rs)*BitmapFont::GLYPH_W,my,rn,
-        Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
-    my += BitmapFont::GLYPH_H + 2;
-    char ov[256];
-    std::snprintf(ov,sizeof(ov),"%s",item->overview.c_str());
-    if ((int)::strlen(ov) > 55) { ov[55]='\0'; std::strcat(ov,"..."); }
-    BitmapFont::drawString(fb,mx,my,ov,
-        Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+
+    // Metadata: year and/or genre with conditional separator
+    {
+        char line1[128];
+        if (item->year > 0 && !item->genre.empty())
+            std::snprintf(line1,sizeof(line1),"%d  |  %s",item->year,item->genre.c_str());
+        else if (item->year > 0)
+            std::snprintf(line1,sizeof(line1),"%d",item->year);
+        else if (!item->genre.empty())
+            std::snprintf(line1,sizeof(line1),"%s",item->genre.c_str());
+        else
+            line1[0] = '\0';
+        if (line1[0] != '\0') {
+            BitmapFont::drawString(fb,mx,my,line1,
+                Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+            my += BitmapFont::GLYPH_H + 2;
+        }
+    }
+
+    // Rating — Jellyfin community rating is 0.0–10.0
+    if (item->rating > 0.0f) {
+        char rn[16];
+        std::snprintf(rn,sizeof(rn),"%.1f/10",(double)item->rating);
+        BitmapFont::drawString(fb,mx,my,rn,
+            Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,24,24,32);
+        my += BitmapFont::GLYPH_H + 2;
+    }
     BitmapFont::fillRect(fb,0,INFO_Y+INFO_H,640,1,
         Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,60);
 }

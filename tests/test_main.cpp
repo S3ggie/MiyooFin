@@ -1294,6 +1294,80 @@ static void testAmpersandAndJsonEscape()
 }
 
 // -------------------------------------------------------------------
+// Test: Genre JSON Unicode-escape decoding through jsonToMediaItem
+// Regression: genres were extracted via jsonExtractArray + manual
+// quote stripping, which did NOT run the escape decoder.
+// -------------------------------------------------------------------
+static void testGenreUnicodeEscapeDecoding()
+{
+    std::printf("[test] Genre Unicode escape decoding\n");
+
+    // 1. Genre \\u0026 decodes to &
+    {
+        std::string j = R"({"Id":"s1","Name":"Key \u0026 Peele","Type":"Series","Genres":["Action \u0026 Adventure","Comedy"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK_EQ(item.genre, "Action & Adventure");
+        CHECK(item.genres.size() == 2);
+        CHECK_EQ(item.genres[0], "Action & Adventure");
+        CHECK_EQ(item.genres[1], "Comedy");
+    }
+
+    // 2. Multiple generic Unicode escapes: \u00E9 -> é, \u00F1 -> ñ
+    {
+        std::string j = R"({"Id":"s2","Name":"Test","Genres":["\u00E9lan","\u00F1o\u00F1o","Action \u0026 Adventure"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK(item.genres.size() == 3);
+        CHECK_EQ(item.genres[0], "\xC3\xA9lan");           // élan
+        CHECK_EQ(item.genres[1], "\xC3\xB1o\xC3\xB1o");   // ñoño
+        CHECK_EQ(item.genres[2], "Action & Adventure");
+    }
+
+    // 3. Title and genre in the same object both decode correctly
+    {
+        std::string j = R"({"Id":"s3","Name":"Fionna \u0026 Cake","Genres":["Animation \u0026 Comedy"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK_EQ(item.title, "Fionna & Cake");
+        CHECK_EQ(item.genre, "Animation & Comedy");
+    }
+
+    // 4. Plain ASCII genres remain unchanged
+    {
+        std::string j = R"({"Id":"m1","Name":"Movie","Genres":["Drama","Thriller"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK_EQ(item.genre, "Drama");
+        CHECK(item.genres.size() == 2);
+        CHECK_EQ(item.genres[0], "Drama");
+        CHECK_EQ(item.genres[1], "Thriller");
+    }
+
+    // 5. Empty Genres array remains empty
+    {
+        std::string j = R"({"Id":"m2","Name":"No Genres","Genres":[]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK(item.genre.empty());
+        CHECK(item.genres.empty());
+    }
+
+    // 6. Single genre containing only \u0026 becomes "&"
+    {
+        std::string j = R"({"Id":"s4","Name":"Single","Genres":["\u0026"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK_EQ(item.genre, "&");
+        CHECK(item.genres.size() == 1);
+        CHECK_EQ(item.genres[0], "&");
+    }
+
+    // 7. Surrogate pair in genre (\uD83D\uDE00 -> U+1F600)
+    {
+        std::string j = R"({"Id":"s5","Name":"Emoji","Genres":["\uD83D\uDE00 Fun"]})";
+        auto item = JellyfinApi::jsonToMediaItem(j);
+        CHECK_EQ(item.genre, "\xF0\x9F\x98\x80 Fun");
+    }
+
+    std::printf("[test] Genre Unicode escape decoding OK\n");
+}
+
+// -------------------------------------------------------------------
 // Test: BitmapFont::truncateUtf8
 // -------------------------------------------------------------------
 static void testBitmapFontTruncateUtf8()
@@ -3338,6 +3412,7 @@ int main()
     testBitmapFontMapCodePoint();
     testBitmapFontMapCodePointLatinAccents();
     testAmpersandAndJsonEscape();
+    testGenreUnicodeEscapeDecoding();
     testBitmapFontTruncateUtf8();
 
     // B5a tests — Artwork infrastructure

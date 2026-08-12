@@ -49,4 +49,4 @@ make clean
 
 ## License
 
-GPL-3.0
+GPL-3.0-only — see [LICENSE](LICENSE) for the full text.

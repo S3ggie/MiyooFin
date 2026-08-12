@@ -228,6 +228,73 @@ static unsigned int mapCodePointImpl(unsigned int cp)
         case 0x2122: return 'T';   // ™ → T
         case 0x00A9: return 'C';   // © → C
         case 0x00AE: return 'R';   // ® → R
+
+        // Latin-1 Supplement — Western European accent transliteration
+        // Spanish
+        case 0x00A1: return '!';   // ¡ → !
+        case 0x00BF: return '?';   // ¿ → ?
+        case 0x00D1: return 'N';   // Ñ → N
+        case 0x00F1: return 'n';   // ñ → n
+        // À-Ö, Ø (uppercase Latin-1)
+        case 0x00C0: return 'A';   // À → A
+        case 0x00C1: return 'A';   // Á → A
+        case 0x00C2: return 'A';   // Â → A
+        case 0x00C3: return 'A';   // Ã → A
+        case 0x00C4: return 'A';   // Ä → A
+        case 0x00C5: return 'A';   // Å → A
+        case 0x00C7: return 'C';   // Ç → C
+        case 0x00C8: return 'E';   // È → E
+        case 0x00C9: return 'E';   // É → E
+        case 0x00CA: return 'E';   // Ê → E
+        case 0x00CB: return 'E';   // Ë → E
+        case 0x00CC: return 'I';   // Ì → I
+        case 0x00CD: return 'I';   // Í → I
+        case 0x00CE: return 'I';   // Î → I
+        case 0x00CF: return 'I';   // Ï → I
+        case 0x00D0: return 'D';   // Ð → D
+        case 0x00D2: return 'O';   // Ò → O
+        case 0x00D3: return 'O';   // Ó → O
+        case 0x00D4: return 'O';   // Ô → O
+        case 0x00D5: return 'O';   // Õ → O
+        case 0x00D6: return 'O';   // Ö → O
+        case 0x00D8: return 'O';   // Ø → O
+        case 0x00D9: return 'U';   // Ù → U
+        case 0x00DA: return 'U';   // Ú → U
+        case 0x00DB: return 'U';   // Û → U
+        case 0x00DC: return 'U';   // Ü → U
+        case 0x00DD: return 'Y';   // Ý → Y
+        case 0x00DE: return 'T';   // Þ → T
+        // à-ö, ø (lowercase Latin-1)
+        case 0x00E0: return 'a';   // à → a
+        case 0x00E1: return 'a';   // á → a
+        case 0x00E2: return 'a';   // â → a
+        case 0x00E3: return 'a';   // ã → a
+        case 0x00E4: return 'a';   // ä → a
+        case 0x00E5: return 'a';   // å → a
+        case 0x00E7: return 'c';   // ç → c
+        case 0x00E8: return 'e';   // è → e
+        case 0x00E9: return 'e';   // é → e
+        case 0x00EA: return 'e';   // ê → e
+        case 0x00EB: return 'e';   // ë → e
+        case 0x00EC: return 'i';   // ì → i
+        case 0x00ED: return 'i';   // í → i
+        case 0x00EE: return 'i';   // î → i
+        case 0x00EF: return 'i';   // ï → i
+        case 0x00F0: return 'd';   // ð → d
+        case 0x00F2: return 'o';   // ò → o
+        case 0x00F3: return 'o';   // ó → o
+        case 0x00F4: return 'o';   // ô → o
+        case 0x00F5: return 'o';   // õ → o
+        case 0x00F6: return 'o';   // ö → o
+        case 0x00F8: return 'o';   // ø → o
+        case 0x00F9: return 'u';   // ù → u
+        case 0x00FA: return 'u';   // ú → u
+        case 0x00FB: return 'u';   // û → u
+        case 0x00FC: return 'u';   // ü → u
+        case 0x00FD: return 'y';   // ý → y
+        case 0x00FE: return 't';   // þ → t
+        case 0x00FF: return 'y';   // ÿ → y
+
         default: return 0;         // no mapping
     }
 }
@@ -244,6 +311,79 @@ const uint8_t *BitmapFont::glyphData(unsigned char ch)
 unsigned int BitmapFont::mapCodePoint(unsigned int cp)
 {
     return mapCodePointImpl(cp);
+}
+
+// Returns the byte length (1–4) of the UTF-8 sequence starting at *p,
+// or 0 when *p is the null terminator or p >= end.
+// Never reads past end.  Malformed / incomplete sequences are returned
+// as length 1 (one fallback glyph byte).
+static int utf8SequenceBytes(const unsigned char *p,
+                             const unsigned char *end)
+{
+    if (p >= end || *p == 0) return 0;
+
+    unsigned char ch = *p;
+    int expected = 1;
+    if (ch < 0x80)                    expected = 1;
+    else if ((ch & 0xE0) == 0xC0)     expected = 2;
+    else if ((ch & 0xF0) == 0xE0)     expected = 3;
+    else if ((ch & 0xF8) == 0xF0)     expected = 4;
+    else return 1;                    // invalid lead → 1 fallback byte
+
+    int avail = static_cast<int>(end - p);
+    if (avail < expected) return 1;   // incomplete → 1 fallback byte
+
+    for (int i = 1; i < expected; ++i)
+        if ((p[i] & 0xC0) != 0x80) return 1; // bad continuation → 1 byte
+
+    return expected;
+}
+
+std::string BitmapFont::truncateUtf8(const std::string &text, int maxGlyphs)
+{
+    if (maxGlyphs <= 0) return {};
+
+    const auto *bytes =
+        reinterpret_cast<const unsigned char *>(text.c_str());
+    const unsigned char *end = bytes + text.size();
+
+    // Count complete code points in the input.
+    int glyphs = 0;
+    {
+        const unsigned char *q = bytes;
+        while (q < end && *q) {
+            int len = utf8SequenceBytes(q, end);
+            if (len == 0) break;
+            q += len;
+            ++glyphs;
+        }
+    }
+
+    // Fits without truncation?
+    if (glyphs <= maxGlyphs)
+        return text;
+
+    // Determine suffix: "." for maxGlyphs==1, ".." otherwise.
+    const char *suffix = (maxGlyphs >= 2) ? ".." : ".";
+    int suffixCols     = (maxGlyphs >= 2) ? 2   : 1;
+    int keep = maxGlyphs - suffixCols;
+    if (keep < 0) keep = 0;
+
+    // Walk again, keeping the first @p keep code points.
+    const unsigned char *p = bytes;
+    const unsigned char *cut = p;
+    int count = 0;
+    while (p < end && *p && count < keep) {
+        int len = utf8SequenceBytes(p, end);
+        if (len == 0) break;
+        p += len;
+        cut = p;
+        ++count;
+    }
+
+    return std::string(reinterpret_cast<const char *>(bytes),
+                       cut - bytes)
+         + suffix;
 }
 
 void BitmapFont::drawChar(SDL_Surface *surface, int x, int y,

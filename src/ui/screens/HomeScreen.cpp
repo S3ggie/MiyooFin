@@ -1768,9 +1768,8 @@ void HomeScreen::drawMoviePreview(SDL_Surface *fb)
     }
     BitmapFont::drawRect(fb, px, py, 64, 96, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
     int x=114, y=33;
-    char title[68]; std::snprintf(title, sizeof(title), "%s", item->title.c_str());
-    if ((int)std::strlen(title) > 64) { title[61]='.'; title[62]='.'; title[63]='.'; title[64]='\0'; }
-    BitmapFont::drawString(fb, x, y, title, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 24,24,32);
+    std::string truncatedTitle = BitmapFont::truncateUtf8(item->title, 65);
+    BitmapFont::drawString(fb, x, y, truncatedTitle.c_str(), Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 24,24,32);
     char meta[96] = {}; int n=0;
     if (item->year > 0) n += std::snprintf(meta+n, sizeof(meta)-n, "%d", item->year);
     int mins=ticksToMinutes(item->runTimeTicks); if (mins > 0) n += std::snprintf(meta+n, sizeof(meta)-n, "%s%dh %dm", n ? " * " : "", mins/60, mins%60);
@@ -1846,13 +1845,9 @@ void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
 
     int ty = y + h - BitmapFont::GLYPH_H - 2;
     BitmapFont::fillRect(fb,x,ty,w,BitmapFont::GLYPH_H+2,0,0,0,160);
-    char buf[64];
-    std::snprintf(buf,sizeof(buf),"%s",item.title.c_str());
     int mcc = (w-4)/BitmapFont::GLYPH_W;
-    if ((int)::strlen(buf) > mcc) {
-        buf[mcc-1]='.'; buf[mcc-2]='.'; buf[mcc]='\0';
-    }
-    BitmapFont::drawString(fb,x+2,ty+1,buf,255,255,255,0,0,0);
+    std::string truncated = BitmapFont::truncateUtf8(item.title, mcc);
+    BitmapFont::drawString(fb,x+2,ty+1,truncated.c_str(),255,255,255,0,0,0);
     if (selected) {
         BitmapFont::drawRect(fb,x-2,y-2,w+4,h+4,255,220,40);
         BitmapFont::drawRect(fb,x-1,y-1,w+2,h+2,255,255,120);

@@ -3,6 +3,7 @@
 
 #include <SDL2/SDL.h>
 #include <cstdint>
+#include <string>
 
 namespace miyoofin {
 
@@ -40,6 +41,12 @@ public:
     /// Map a Unicode code point to an ASCII glyph for the bitmap font.
     /// Returns 0 for characters that have no sensible ASCII equivalent.
     static unsigned int mapCodePoint(unsigned int cp);
+
+    /// Truncate a UTF-8 string to at most @p maxGlyphs rendered code points.
+    /// If truncation is needed, replaces the tail with ".." (maxGlyphs >= 2)
+    /// or "." (maxGlyphs == 1).  Never splits a multi-byte UTF-8 sequence.
+    /// maxGlyphs <= 0 returns "".  Returns the resulting string.
+    static std::string truncateUtf8(const std::string &text, int maxGlyphs);
 
     /// Glyph dimensions
     static constexpr int GLYPH_W = 8;

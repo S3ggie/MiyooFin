@@ -40,3 +40,7 @@ tests/*.test
 
 # Runtime diagnostics
 /ui-stall.log
+
+# Miyoo build-time libraries (imported from device, not part of source distribution)
+vendor/miyoo/lib/*.so
+vendor/miyoo/lib/*.so.*

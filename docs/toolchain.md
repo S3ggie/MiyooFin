@@ -66,6 +66,41 @@ The OnionOS package (`make package`) automatically bundles:
 These are placed in `lib/` beside the binary. `launch.sh` sets
 `LD_LIBRARY_PATH` to include this directory.
 
+## Miyoo build-time shared libraries
+
+The patched SDL2 build requires six shared libraries from the Miyoo Mini /
+Mini Plus as **build-time inputs**. These are not part of MiyooFin's source
+distribution and must be supplied by the developer:
+
+| Library | Device path |
+|---|---|
+| `libEGL.so.1` | `/mnt/SDCARD/.tmp_update/lib/parasyte/` |
+| `libGLESv2.so` | `/mnt/SDCARD/.tmp_update/lib/parasyte/` |
+| `libmi_ao.so` | `/config/lib/` |
+| `libmi_common.so` | `/config/lib/` |
+| `libmi_gfx.so` | `/config/lib/` |
+| `libmi_sys.so` | `/config/lib/` |
+
+After importing, the files live in `vendor/miyoo/lib/` and are copied
+into the Docker image at build time. They are **never** copied into the
+release package and are **not** tracked in Git.
+
+### First-time setup
+
+A Miyoo Mini / Mini Plus running OnionOS and reachable over SSH is
+required for the import step. The default SSH host is `miyoo`; override
+it with a hostname argument or `MIYOO_HOST` environment variable.
+
+```shell
+make import-miyoo-libs
+```
+
+This fetches all six libraries into a temporary directory, verifies
+every SHA-256 hash, and only then installs them. A partial or corrupt
+import is rejected and the existing libraries remain unchanged.
+
+After that, `make onionos` and `make package` will work as usual.
+
 ## Investigation History
 
 1. **steward-fu toolchain** — URL `toolchain.tar.gz` returned 302

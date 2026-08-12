@@ -34,6 +34,7 @@
 #include "../src/net/RouteRequest.hpp"
 #include "../src/net/RouteStatus.hpp"
 #include "../src/net/ServerAddress.hpp"
+#include "../src/net/ClockCheck.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
 #include "../src/ui/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
@@ -3037,6 +3038,57 @@ static void testFormatPlaybackTimeZeroPosition()
     std::printf("[test] formatPlaybackTime zero position OK\n");
 }
 
+// -------------------------------------------------------------------
+// Clock check tests — Issue #1: friendly error when device clock breaks HTTPS
+// Tests exercise the shared shouldShowClockError() decision helper
+// directly, with no conceptual/indirect assertions.
+// -------------------------------------------------------------------
+
+static void testShouldShowClockErrorTrue()
+{
+    std::printf("[test] shouldShowClockError: peer-fail + 1970 -> true\n");
+    // Peer verification failed AND clock is 1970 — must fire.
+    CHECK(shouldShowClockError(true, std::time_t(0)));
+    CHECK(shouldShowClockError(true, std::time_t(591913)));
+    // One second before the 2020 boundary is still invalid.
+    CHECK(shouldShowClockError(true, std::time_t(1577836799L)));
+    std::printf("[test] shouldShowClockError: peer-fail + 1970 -> true OK\n");
+}
+
+static void testShouldShowClockErrorFalseModernEpoch()
+{
+    std::printf("[test] shouldShowClockError: peer-fail + modern epoch -> false\n");
+    // Peer verification failed but clock is fine — must NOT fire.
+    CHECK(!shouldShowClockError(true, std::time_t(1577836800L)));  // exactly 2020-01-01
+    CHECK(!shouldShowClockError(true, std::time_t(1750000000L)));  // 2025
+    std::printf("[test] shouldShowClockError: peer-fail + modern epoch -> false OK\n");
+}
+
+static void testShouldShowClockErrorFalseUnrelatedFailure()
+{
+    std::printf("[test] shouldShowClockError: unrelated failure + 1970 -> false\n");
+    // Clock is wrong but the curl error is NOT peer verification — must NOT fire.
+    CHECK(!shouldShowClockError(false, std::time_t(0)));
+    CHECK(!shouldShowClockError(false, std::time_t(591913)));
+    std::printf("[test] shouldShowClockError: unrelated failure + 1970 -> false OK\n");
+}
+
+static void testClockMessageFormat()
+{
+    std::printf("[test] kClockErrorMessage: one-line, short, contains OnionOS path\n");
+    std::string msg = kClockErrorMessage;
+    // Must be short enough to fit in wrapCols=75 without wrapping.
+    CHECK(msg.size() <= 75);
+    // Must contain no newline.
+    CHECK(msg.find('\n') == std::string::npos);
+    // Must contain the OnionOS navigation path.
+    CHECK(msg.find("OnionOS") != std::string::npos);
+    CHECK(msg.find("Apps") != std::string::npos);
+    CHECK(msg.find("Tweaks") != std::string::npos);
+    CHECK(msg.find("Date/time") != std::string::npos);
+    std::printf("[test] kClockErrorMessage: one-line, short, contains OnionOS path OK\n");
+}
+
 int main()
 {
     testRouteRequest();
@@ -3210,6 +3262,13 @@ int main()
     testFormatPlaybackTimeZeroRuntime();
     testFormatPlaybackTimeClampedPosition();
     testFormatPlaybackTimeZeroPosition();
+
+    // Issue #1: Clock check tests — friendly HTTPS error when system clock is wrong
+    std::printf("\n--- Clock check tests (Issue #1) ---\n");
+    testShouldShowClockErrorTrue();
+    testShouldShowClockErrorFalseModernEpoch();
+    testShouldShowClockErrorFalseUnrelatedFailure();
+    testClockMessageFormat();
 
     std::printf("\n");
     if (g_failures == 0) {

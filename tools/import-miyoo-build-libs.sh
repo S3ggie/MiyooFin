@@ -5,9 +5,9 @@
 # Import the six Miyoo build-time shared libraries from a Miyoo Mini /
 # Mini Plus running OnionOS, reachable over SSH.
 #
-# All six files are fetched into a temporary directory first.  Only
+# All six files are fetched into a temporary directory first. Only
 # after every SHA-256 hash matches are the files installed via a
-# transactional two-rename swap.  On failure the original directory
+# transactional two-rename swap. On failure the original directory
 # is restored and the target directory is left unchanged.
 #
 # Usage:
@@ -24,6 +24,10 @@
 #
 # OnionOS defaults to username "onion" when SSH authentication is
 # enabled. If SSH authentication is disabled, use username "root".
+#
+# Password-based imports authenticate once. The script opens a temporary
+# OpenSSH ControlMaster connection, reuses it for all six scp transfers,
+# then explicitly closes it.
 # -------------------------------------------------------------------
 set -eu
 
@@ -117,10 +121,33 @@ fi
 # Import mode: fetch from device and install transactionally
 # -------------------------------------------------------------------
 TMP_DIR="$(mktemp -d)"
-cleanup() { rm -rf "$TMP_DIR"; }
-trap cleanup EXIT
+CONTROL_DIR="${TMP_DIR}/ssh-control"
+CONTROL_PATH="${CONTROL_DIR}/master"
+MASTER_STARTED=0
+mkdir -m 700 "$CONTROL_DIR"
+
+cleanup() {
+    if [ "$MASTER_STARTED" -ne 0 ]; then
+        ssh -o ControlPath="$CONTROL_PATH" -O exit "$HOST" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT INT TERM
 
 echo "Importing Miyoo build libraries from ${HOST}..."
+echo "Opening one reusable SSH connection..."
+if ! ssh \
+    -o ControlMaster=yes \
+    -o ControlPath="$CONTROL_PATH" \
+    -o ControlPersist=60 \
+    -o ConnectTimeout=10 \
+    -N -f "$HOST"; then
+    echo ""
+    echo "ERROR: Could not open SSH connection to ${HOST}."
+    echo "       Check the IP/hostname, SSH username, password, and OnionOS SSH settings."
+    exit 1
+fi
+MASTER_STARTED=1
 
 # ---- Phase 1: Fetch into temp directory --------------------------------
 while IFS= read -r line; do
@@ -131,7 +158,10 @@ while IFS= read -r line; do
     expected_hash="$3"
 
     printf "  Fetching %s ... " "$local_name"
-    if ! scp -q "${HOST}:${remote_path}" "${TMP_DIR}/${local_name}"; then
+    if ! scp -q \
+        -o ControlMaster=no \
+        -o ControlPath="$CONTROL_PATH" \
+        "${HOST}:${remote_path}" "${TMP_DIR}/${local_name}"; then
         echo "FAIL"
         echo ""
         echo "ERROR: Could not fetch ${local_name} from ${HOST}:${remote_path}"
@@ -143,6 +173,10 @@ while IFS= read -r line; do
 done <<ENDLIBS
 $LIBS
 ENDLIBS
+
+# All remote reads are complete; close the master before local verification.
+ssh -o ControlPath="$CONTROL_PATH" -O exit "$HOST" >/dev/null 2>&1 || true
+MASTER_STARTED=0
 
 # ---- Phase 2: Verify all six SHA-256 hashes ----------------------------
 echo ""
@@ -177,17 +211,17 @@ fi
 
 # ---- Phase 3: Transactional install via mv-based swap ------------------
 # Build a fresh directory alongside the current one, then promote it
-# into place.  If anything goes wrong the old copy stays and is
-# restored on failure.  Individual renames are atomic on POSIX, but
+# into place. If anything goes wrong the old copy stays and is
+# restored on failure. Individual renames are atomic on POSIX, but
 # the two-rename sequence means a crash between the backup and
-# promotion steps would leave the libraries in ${BAKE_DIR}.  The
+# promotion steps would leave the libraries in ${BAKE_DIR}. The
 # script detects and recovers from this on its next run.
 echo ""
 
 STAGE_DIR="${DEST_DIR}.new"
 BAKE_DIR="${DEST_DIR}.bak"
 
-# Recover from a previous interrupted swap.  If DEST_DIR is missing
+# Recover from a previous interrupted swap. If DEST_DIR is missing
 # but BAKE_DIR exists, a prior run moved the original aside but
 # crashed before promotion — restore it so the working tree is
 # consistent before we proceed.
@@ -195,13 +229,13 @@ if [ ! -d "$DEST_DIR" ] && [ -d "$BAKE_DIR" ]; then
     echo "Restoring ${DEST_DIR}/ from previous interrupted swap backup..."
     mv "$BAKE_DIR" "$DEST_DIR"
 elif [ -d "$BAKE_DIR" ]; then
-    # DEST_DIR exists; BAKE_DIR is a stale leftover.  Discard it.
+    # DEST_DIR exists; BAKE_DIR is a stale leftover. Discard it.
     rm -rf "$BAKE_DIR"
 fi
+
 # Remove any stale staging directory (should not normally exist here,
 # but clear it defensively).
 rm -rf "$STAGE_DIR"
-
 mkdir -p "$STAGE_DIR"
 
 while IFS= read -r line; do

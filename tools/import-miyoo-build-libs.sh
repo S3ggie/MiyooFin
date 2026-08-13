@@ -11,10 +11,19 @@
 # is restored and the target directory is left unchanged.
 #
 # Usage:
-#   tools/import-miyoo-build-libs.sh [--verify] [HOST]
+#   tools/import-miyoo-build-libs.sh [--verify] [SSH_TARGET]
 #
-# --verify   Only check SHA-256 of local files (no SSH needed).
-# HOST       defaults to $MIYOO_HOST, then "miyoo".
+# --verify     Only check SHA-256 of local files (no SSH needed).
+# SSH_TARGET   Optional explicit scp/ssh target such as
+#              onion@192.168.1.50 or a configured SSH alias.
+#
+# Import target resolution, in order:
+#   1. Explicit SSH_TARGET argument
+#   2. $MIYOO_HOST environment variable
+#   3. Interactive prompt for Miyoo IP/hostname and SSH username
+#
+# OnionOS defaults to username "onion" when SSH authentication is
+# enabled. If SSH authentication is disabled, use username "root".
 # -------------------------------------------------------------------
 set -eu
 
@@ -30,7 +39,27 @@ for arg in "$@"; do
 done
 
 if [ "$VERIFY_ONLY" -eq 0 ] && [ -z "$HOST" ]; then
-    HOST="${MIYOO_HOST:-miyoo}"
+    if [ -n "${MIYOO_HOST:-}" ]; then
+        HOST="$MIYOO_HOST"
+    elif [ -t 0 ]; then
+        printf "Miyoo IP address or hostname: "
+        IFS= read -r DEVICE_HOST
+        if [ -z "$DEVICE_HOST" ]; then
+            echo "ERROR: Miyoo IP address or hostname cannot be empty." >&2
+            exit 1
+        fi
+
+        printf "SSH username [onion] (use root if SSH authentication is disabled): "
+        IFS= read -r SSH_USER
+        SSH_USER="${SSH_USER:-onion}"
+        HOST="${SSH_USER}@${DEVICE_HOST}"
+    else
+        echo "ERROR: No Miyoo SSH target was provided." >&2
+        echo "       Run interactively with 'make import-miyoo-libs'," >&2
+        echo "       or set MIYOO_HOST to a full SSH target, for example:" >&2
+        echo "       MIYOO_HOST=onion@192.168.1.50 make import-miyoo-libs" >&2
+        exit 1
+    fi
 fi
 
 DEST_DIR="vendor/miyoo/lib"

@@ -105,14 +105,32 @@ release package and are **not** tracked in Git.
 ### First-time setup
 
 A Miyoo Mini / Mini Plus running OnionOS and reachable over SSH is
-required for the import step. The default SSH host is `miyoo`; override
-it with a hostname argument or `MIYOO_HOST` environment variable.
+required for the import step. Enable SSH in OnionOS, then run:
 
 ```shell
 make import-miyoo-libs
 ```
 
-This fetches all six libraries into a temporary directory, verifies
+When run interactively, the import script asks for the Miyoo's IP address or
+hostname and the SSH username. OnionOS uses `onion` by default when SSH
+authentication is enabled; if SSH authentication is disabled, use `root`.
+This means contributors do not need a machine-specific SSH alias named
+`miyoo`.
+
+For automation or an already-configured SSH alias, set a full target with
+`MIYOO_HOST`:
+
+```shell
+MIYOO_HOST=onion@192.168.1.50 make import-miyoo-libs
+```
+
+The import script also accepts an explicit target when called directly:
+
+```shell
+tools/import-miyoo-build-libs.sh onion@192.168.1.50
+```
+
+The script fetches all six libraries into a temporary directory, verifies
 every SHA-256 hash, and only then installs them. A partial or corrupt
 import is rejected and the existing libraries remain unchanged.
 

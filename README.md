@@ -3,6 +3,12 @@
 Native Jellyfin media browser for the Miyoo Mini Plus running OnionOS.
 Built with C++17, SDL2, libcurl, and json-c.
 
+> **Unofficial third-party project:** MiyooFin is an independent client and is
+> not affiliated with, endorsed by, or an official client of Jellyfin, Inc.,
+> the Miyoo hardware manufacturer, or the OnionOS project. “Jellyfin”, “Miyoo”,
+> and “OnionOS” are used only to identify software compatibility and the target
+> platform. MiyooFin uses its own name and logo.
+
 ## Installation
 
 **Requires:** Miyoo Mini Plus running [OnionOS](https://github.com/OnionUI/Onion).
@@ -33,10 +39,20 @@ are functional.
 
 ### First-time setup
 
-Fetch six external build-time libraries from your Miyoo:
+Enable SSH on the Miyoo, then fetch six external build-time libraries:
 
 ```shell
 make import-miyoo-libs
+```
+
+The script prompts for the Miyoo IP address or hostname and SSH username.
+OnionOS uses `onion` by default when SSH authentication is enabled; use
+`root` when SSH authentication is disabled.
+
+For non-interactive use, provide a full SSH target:
+
+```shell
+MIYOO_HOST=onion@192.168.1.50 make import-miyoo-libs
 ```
 
 ### Host (development)
@@ -60,6 +76,10 @@ make package
 ```
 
 Stages the ready-to-copy OnionOS App folder under `output/package/`.
+
+For a public binary release, use `sh tools/build-release.sh` instead. That
+wrapper adds the project license and third-party notices before creating the
+redistributable ZIP. See [RELEASING.md](RELEASING.md).
 
 ### Verify ARM binary
 
@@ -88,3 +108,6 @@ For build-system details, see [docs/toolchain.md](docs/toolchain.md).
 ## License
 
 GPL-3.0-only — see [LICENSE](LICENSE) for the full text.
+
+Bundled-component licenses, notices, and source-availability information are
+recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

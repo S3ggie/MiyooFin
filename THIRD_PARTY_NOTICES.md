@@ -99,6 +99,26 @@ this embedded image-loader source.
 Upstream project:
 https://github.com/nothings/stb
 
+## font8x8 printable ASCII data (vendored source)
+
+File:
+
+- `third_party/font8x8_basic_public_domain.h`
+
+MiyooFin uses a printable-ASCII subset of Daniel Hepper's `font8x8_basic.h`,
+pinned to upstream commit:
+
+`8e279d2d864e79128e96188a6b9526cfa3fbfef9`
+
+The upstream file identifies Daniel Hepper as the author, states `License:
+Public Domain`, and credits Marcel Sondaar / IBM public-domain VGA fonts. The
+vendored subset preserves those attribution and provenance details in its
+header. MiyooFin converts the upstream LSB-first 8x8 rows into its existing
+MSB-first 8x16 rendering format at runtime; no other glyph source is used.
+
+Pinned source:
+https://github.com/dhepper/font8x8/blob/8e279d2d864e79128e96188a6b9526cfa3fbfef9/font8x8_basic.h
+
 ## Libraries used from the device but not redistributed by MiyooFin
 
 MiyooFin links to or uses additional libraries supplied by OnionOS/the Miyoo

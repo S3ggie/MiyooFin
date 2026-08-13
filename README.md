@@ -39,10 +39,20 @@ are functional.
 
 ### First-time setup
 
-Fetch six external build-time libraries from your Miyoo:
+Enable SSH on the Miyoo, then fetch six external build-time libraries:
 
 ```shell
 make import-miyoo-libs
+```
+
+The script prompts for the Miyoo IP address or hostname and SSH username.
+OnionOS uses `onion` by default when SSH authentication is enabled; use
+`root` when SSH authentication is disabled.
+
+For non-interactive use, provide a full SSH target:
+
+```shell
+MIYOO_HOST=onion@192.168.1.50 make import-miyoo-libs
 ```
 
 ### Host (development)

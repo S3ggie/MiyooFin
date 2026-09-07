@@ -71,6 +71,7 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserRender.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
     $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
@@ -149,6 +150,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/screens/LoginScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
+               src/ui/screens/EpisodeBrowserRender.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp

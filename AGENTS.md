@@ -223,3 +223,44 @@ If escalation is needed because of unexpected coupling, the coordinator must sta
 For ordinary extraction, file-splitting, pure-logic movement, Makefile edits, rendering splits, test organization, and documentation tasks, use Luna Low.
 
 Do not use Terra Medium.
+
+### Refactor orchestration policy
+
+For numbered refactor tasks, use the simplest safe workflow.
+
+Routine mechanical tasks:
+- Read AGENTS.md, refactor/EXECUTION_RULES.md, and the current task file.
+- Verify `git status --short` is clean.
+- Run the required pre-change test.
+- Spawn at most ONE implementation subagent, using the refactor delegation policy.
+- Do not create an SDD workspace, task ledger, generated task brief, review package, or other orchestration artifact.
+- Do not spawn a separate reviewer subagent.
+- The coordinating model reviews the implementation diff itself.
+- Do not use Superpowers subagent-driven-development machinery for routine numbered refactor tasks.
+- Do not poll or inspect unrelated files while waiting for the implementation subagent.
+- After implementation, run the task's focused validation and `make refactor-check`.
+- Do not run an additional `make test` after `make refactor-check`, because `make refactor-check` already runs `make test`.
+- Review `git diff --stat` and `git diff` before committing.
+- Commit exactly one task, verify the worktree is clean, then STOP.
+
+Routine tasks include:
+- pure-logic extraction
+- mechanical movement of existing function definitions
+- translation-unit splitting
+- Makefile/source-list updates
+- rendering splits
+- test-file organization
+- documentation changes
+
+Heavy review workflow is reserved for tasks involving:
+- concurrency or synchronization changes
+- worker lifecycle or ownership
+- networking or routing semantics
+- persistent cache/session/download formats
+- HLS transfer/retry/cancellation logic
+- playback handoff semantics
+- concrete unexpected architectural coupling
+
+For heavy-risk tasks, a separate reviewer subagent may be used after implementation.
+
+Do not use heavy orchestration merely because a file is large or a task touches multiple files.

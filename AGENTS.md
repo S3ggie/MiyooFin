@@ -207,3 +207,19 @@ Do not commit or deploy merely because validation passed.
 - Do not upgrade from Luna Low merely because a task touches several files; upgrade only when the actual reasoning required justifies it.
 - Any delegated subagent must obey the same AGENTS.md, refactor/EXECUTION_RULES.md, Allowed Files, validation, commit, and STOP requirements.
 - The coordinating model remains responsible for reviewing the delegated diff and validation before accepting it.
+
+### Refactor delegation reasoning enforcement
+
+For numbered refactor tasks, GPT-5.6 Luna Low is the REQUIRED default implementation subagent.
+
+Do not use Luna Medium or Luna High merely because the task touches multiple files.
+
+A higher reasoning level is allowed only when:
+- the numbered task explicitly involves concurrency, worker lifecycle/ownership, networking semantics, persistence formats, or HLS transfer behavior; or
+- Luna Low encounters concrete unexpected coupling that prevents safe completion.
+
+If escalation is needed because of unexpected coupling, the coordinator must state the concrete reason before spawning the higher-reasoning subagent.
+
+For ordinary extraction, file-splitting, pure-logic movement, Makefile edits, rendering splits, test organization, and documentation tasks, use Luna Low.
+
+Do not use Terra Medium.

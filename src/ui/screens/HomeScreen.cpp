@@ -71,7 +71,7 @@ void HomeScreen::enter()
         std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
         bool cacheNeedsRefresh=false;
         if (LibraryCache::load(path, m_cachedSnapshot, nullptr, &cacheNeedsRefresh)) {
-            m_tabs = tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
+            m_tabs = miyoofin::tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
             m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
             refreshMovieFilter();
             rebuildShowsPresentation();

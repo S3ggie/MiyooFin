@@ -1,61 +1,14 @@
 #include "HomeScreen.hpp"
-#include "../../net/ServerAddress.hpp"
-#include "SeriesScreen.hpp"
-#include "MovieDetailsScreen.hpp"
-#include "EpisodeBrowserScreen.hpp"
-#include "../Theme.hpp"
-#include "../BitmapFont.hpp"
-#include "../ArtworkLayout.hpp"
-#include "../MovieTitle.hpp"
-#include "../ShowsBrowser.hpp"
-#include "../../net/JellyfinApi.hpp"
-#include "../../net/ArtworkUrl.hpp"
-#include "../../net/HttpClient.hpp"
-#include "../../net/RouteRequest.hpp"
 #include "../../net/RouteStatus.hpp"
-#include "../../cache/ImageCache.hpp"
-#include "../../app/ScreenStack.hpp"
 #include "../../app/UiDiagnostics.hpp"
-#include "../../playback/PlaybackRequest.hpp"
-#include "../../download/DownloadSupport.hpp"
-#include "miyoofin/version.hpp"
 #include <cstdio>
-#include <cstring>
-#include <map>
-#include <atomic>
-#include <chrono>
 #include <ctime>
-#include <cctype>
-#include <curl/curl.h>
 
 namespace miyoofin {
 
-// Layout constants
-static constexpr int TAB_Y       = 0;
-static constexpr int TAB_H       = 24;
-static constexpr int INFO_Y      = 26;
-static constexpr int INFO_H      = 110;
-static constexpr int ROWS_Y      = INFO_Y + INFO_H + 2;
-static constexpr int BOTTOM_H    = 18;
-static constexpr int ROW_STRIP_H = 96;  // max card height across all types
-static constexpr int ROW_LABEL_H = 18;
-static constexpr int POSTER_MAX_CONCURRENT = 4;
-static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
-static constexpr int SEASON_POSTER_W = 74;
-static constexpr int SEASON_POSTER_H = 111;
-static constexpr int SHOWS_RAIL_W=36, SHOWS_PREVIEW_H=105, SHOWS_GRID_TOP=153;
-static constexpr int SHOWS_HALF_W=302, SHOWS_LEFT_X=36, SHOWS_RIGHT_X=338;
 static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
-struct PosterTransfer { HomeScreen::PosterJob job; std::string url; std::vector<unsigned char> bytes; curl_slist *headers=nullptr; bool tooLarge=false; };
-static size_t posterWrite(void *p, size_t s, size_t n, void *u) {
-    PosterTransfer *t=static_cast<PosterTransfer*>(u); size_t z=s*n;
-    if (z > POSTER_MAX_BYTES-t->bytes.size()) { t->tooLarge=true; return 0; }
-    const unsigned char *b=static_cast<const unsigned char*>(p); t->bytes.insert(t->bytes.end(),b,b+z); return z;
-}
-
-// Width and height are now computed per-item via artworkBoxSize()
 
 HomeScreen::HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)

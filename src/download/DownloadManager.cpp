@@ -1,20 +1,7 @@
 #include "DownloadManager.hpp"
-#include "../net/JellyfinApi.hpp"
-#include "../net/RouteRequest.hpp"
-#include "../net/TlsConfig.hpp"
-#include "../cache/OfflineCatalog.hpp"
-#include "../cache/LibraryCache.hpp"
 #include "DownloadSupport.hpp"
-#include "DownloadReconcile.hpp"
-#include "../app/UiDiagnostics.hpp"
-#include <curl/curl.h>
 #include <sys/statvfs.h>
-#include <sys/stat.h>
-#include <cstdio>
 #include <algorithm>
-#include <chrono>
-#include <limits>
-#include <unistd.h>
 namespace miyoofin {
 DownloadManager::DownloadManager(const Session&s,const std::string&r):m_store(r){configure(s);m_thread=std::thread(&DownloadManager::worker,this);m_planThread=std::thread(&DownloadManager::planner,this);m_reconcileThread=std::thread(&DownloadManager::reconciler,this);}
 DownloadManager::~DownloadManager(){{std::lock_guard<std::mutex>l(m_mutex);m_stop=true;persistLocked();}m_wake.notify_all();m_planWake.notify_all();m_reconcileWake.notify_all();if(m_thread.joinable())m_thread.join();if(m_planThread.joinable())m_planThread.join();if(m_reconcileThread.joinable())m_reconcileThread.join();}

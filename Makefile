@@ -55,6 +55,7 @@ SRCS        := \
     $(SRC_DIR)/ui/HomeTabs.cpp \
     $(SRC_DIR)/ui/HomeArtworkPlan.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenNavigation.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenRefresh.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenSync.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenHierarchy.cpp \
@@ -136,6 +137,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/app/ScreenStack.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
+               src/ui/screens/HomeScreenNavigation.cpp \
                src/ui/screens/HomeScreenRefresh.cpp \
                src/ui/screens/HomeScreenSync.cpp \
                src/ui/screens/HomeScreenHierarchy.cpp \

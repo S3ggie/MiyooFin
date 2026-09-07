@@ -186,3 +186,13 @@ Keep the report concise and include:
 Do not dump large diffs, source listings, compiler output, or subagent transcripts unless specifically requested.
 
 Do not commit or deploy merely because validation passed.
+
+## Refactor task execution
+
+- Numbered tasks live under `refactor/tasks/`.
+- Execute exactly one task at a time.
+- `refactor/EXECUTION_RULES.md` is mandatory.
+- Allowed Files are a hard boundary.
+- Run every validation command.
+- One task equals one commit.
+- Stop after the commit and never auto-start the next task.

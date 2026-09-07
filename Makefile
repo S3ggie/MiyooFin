@@ -52,6 +52,7 @@ SRCS        := \
     $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
+    $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
     $(SRC_DIR)/download/DownloadReconcile.cpp \
     $(SRC_DIR)/download/DownloadSupport.cpp \
     $(SRC_DIR)/download/HlsPlaylist.cpp \
@@ -142,6 +143,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/cache/OfflineLibraryProjection.cpp \
                src/download/DownloadStore.cpp \
                src/download/DownloadManager.cpp \
+               src/download/DownloadManagerPlanning.cpp \
                src/download/DownloadReconcile.cpp \
                src/download/DownloadSupport.cpp \
                src/download/HlsPlaylist.cpp \

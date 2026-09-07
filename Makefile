@@ -39,6 +39,7 @@ SRCS        := \
     $(SRC_DIR)/net/JellyfinApi.cpp \
     $(SRC_DIR)/net/JellyfinApiJson.cpp \
     $(SRC_DIR)/net/JellyfinApiAuth.cpp \
+    $(SRC_DIR)/net/JellyfinApiLibrary.cpp \
     $(SRC_DIR)/net/Session.cpp \
     $(SRC_DIR)/net/DeviceIdentity.cpp \
     $(SRC_DIR)/cache/ImageCache.cpp \
@@ -121,6 +122,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
                src/net/JellyfinApiJson.cpp \
                src/net/JellyfinApiAuth.cpp \
+               src/net/JellyfinApiLibrary.cpp \
                src/net/ArtworkUrl.cpp \
                src/net/HttpClient.cpp \
                src/net/Session.cpp \

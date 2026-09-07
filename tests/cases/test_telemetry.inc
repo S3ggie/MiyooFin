@@ -2,10 +2,26 @@
 #include <type_traits>
 #include "../../src/diagnostics/TelemetryIds.hpp"
 #include "../../src/diagnostics/TelemetryTypes.hpp"
+#include "../../src/diagnostics/TelemetryClock.hpp"
+
+static void testTelemetryClocks()
+{
+    std::printf("[test] telemetry monotonic and process CPU clocks\n");
+    const uint64_t monotonic_before = TelemetryClock::monotonicUs();
+    const uint64_t monotonic_after = TelemetryClock::monotonicUs();
+    const uint64_t cpu_before = TelemetryClock::processCpuUs();
+    const uint64_t cpu_after = TelemetryClock::processCpuUs();
+    CHECK(monotonic_before != 0);
+    CHECK(monotonic_after >= monotonic_before);
+    CHECK(cpu_before != 0);
+    CHECK(cpu_after >= cpu_before);
+    std::printf("[test] telemetry monotonic and process CPU clocks OK\n");
+}
 
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
+    testTelemetryClocks();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

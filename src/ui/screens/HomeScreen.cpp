@@ -578,6 +578,27 @@ void HomeScreen::startDownloadRefresh()
     });
 }
 
+void HomeScreen::finishDownloadRefresh()
+{
+    UiDiagnostics::Scope scope("HomeScreen::publishDownloadSnapshot");
+    if(m_downloadRefreshThread.joinable())m_downloadRefreshThread.join();
+    m_downloadRefreshDone=false;m_downloadRefreshInFlight=false;
+    m_downloadSnapshot=std::move(m_downloadRefreshResult);
+    m_missingJournalEntries=std::move(m_downloadJournalResult);
+    m_downloadRefreshTimer=500;
+    m_downloadHierarchy=buildDownloadHierarchy(m_downloadSnapshot,m_downloadExpanded);
+    const auto &rows=m_downloadHierarchy.visible;
+    m_downloadSelected=downloadHierarchySelection(rows,m_downloadSelectedId,m_downloadSelected);
+    m_downloadScroll=clampDownloadScroll(m_downloadSelected,(int)rows.size(),m_downloadScroll,5);
+    m_downloadSelectedId=rows.empty()?"":rows[m_downloadSelected].id;
+    if (!m_downloadConfirmId.empty() && m_downloadConfirmId != m_downloadSelectedId) {
+        m_downloadConfirmId.clear();
+        m_downloadConfirmItemIds.clear();
+    }
+    if (!m_journalDiscardConfirmId.empty() && (m_missingJournalEntries.empty() || m_missingJournalEntries.front().itemId != m_journalDiscardConfirmId))
+        m_journalDiscardConfirmId.clear();
+}
+
 void HomeScreen::update(Uint32 dt)
 {
     if (m_logoutArmed && !m_logoutRequested) {

@@ -196,3 +196,14 @@ Do not commit or deploy merely because validation passed.
 - Run every validation command.
 - One task equals one commit.
 - Stop after the commit and never auto-start the next task.
+
+### Refactor delegation policy
+
+- Prefer GPT-5.6 Luna with Low reasoning for normal mechanical refactor tasks.
+- Use GPT-5.6 Luna with Medium reasoning only when the task exposes moderate coupling or requires nontrivial implementation judgment.
+- Use GPT-5.6 Luna with High reasoning only for tasks involving concurrency, worker lifecycle or ownership, networking semantics, persistence formats, HLS transfer behavior, or unexpected architectural ambiguity.
+- Do not use Terra Medium for refactor implementation work.
+- Do not silently substitute another model.
+- Do not upgrade from Luna Low merely because a task touches several files; upgrade only when the actual reasoning required justifies it.
+- Any delegated subagent must obey the same AGENTS.md, refactor/EXECUTION_RULES.md, Allowed Files, validation, commit, and STOP requirements.
+- The coordinating model remains responsible for reviewing the delegated diff and validation before accepting it.

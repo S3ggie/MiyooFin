@@ -29,8 +29,12 @@ SRC_DIR     := src
 TELEMETRY_SRCS :=
 TELEMETRY_TEST_SRCS :=
 ifeq ($(PERF_TELEMETRY),1)
-TELEMETRY_SRCS :=
-TELEMETRY_TEST_SRCS :=
+TELEMETRY_SRCS := \
+    $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp
+TELEMETRY_TEST_SRCS := \
+    $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp
 endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
@@ -100,6 +104,7 @@ OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
                output/build/download \
+               output/build/diagnostics \
                output/build/ui output/build/ui/screens \
                output/build/playback
 
@@ -130,6 +135,7 @@ output/build:
 # Test
 # -------------------------------------------------------------------
 TEST_TARGET := output/test/test_runner
+TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TEST_SRCS   := tests/test_main.cpp \
@@ -199,7 +205,7 @@ refactor-check:
 	@sh tools/refactor-check.sh
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 output/test:

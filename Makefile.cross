@@ -18,7 +18,9 @@ INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
 # Source files
 TELEMETRY_SRCS :=
 ifeq ($(PERF_TELEMETRY),1)
-TELEMETRY_SRCS :=
+TELEMETRY_SRCS := \
+    src/diagnostics/TelemetryConfig.cpp \
+    src/diagnostics/PerformanceTelemetry.cpp
 endif
 SRCS := \
     src/main.cpp \
@@ -92,6 +94,7 @@ TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
              output/build-arm/download \
+             output/build-arm/diagnostics \
              output/build-arm/ui/screens output/build-arm/playback
 
 .PHONY: all bridge reporter

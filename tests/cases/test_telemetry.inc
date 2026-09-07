@@ -1,5 +1,9 @@
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include <type_traits>
+#include "../../src/diagnostics/PerformanceTelemetry.hpp"
+#include "../../src/diagnostics/TelemetryConfig.hpp"
 #include "../../src/diagnostics/TelemetryIds.hpp"
 #include "../../src/diagnostics/TelemetryTypes.hpp"
 #include "../../src/diagnostics/TelemetryClock.hpp"
@@ -18,10 +22,78 @@ static void testTelemetryClocks()
     std::printf("[test] telemetry monotonic and process CPU clocks OK\n");
 }
 
+static void testTelemetryConfigAndFacade()
+{
+    std::printf("[test] telemetry config and runtime facade\n");
+    const char *savedTelemetry = std::getenv("MIYOOFIN_TELEMETRY");
+    const char *savedMinFree = std::getenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB");
+    const std::string telemetryValue = savedTelemetry ? savedTelemetry : "";
+    const std::string minFreeValue = savedMinFree ? savedMinFree : "";
+    const bool hadTelemetry = savedTelemetry != nullptr;
+    const bool hadMinFree = savedMinFree != nullptr;
+
+    unsetenv("MIYOOFIN_TELEMETRY");
+    unsetenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB");
+    const TelemetryConfig defaults = TelemetryConfig::fromEnvironment();
+    CHECK(!defaults.runtimeEnabled);
+    CHECK(defaults.sampleIntervalMs == 1000);
+    CHECK(defaults.freeSpaceIntervalMs == 10000);
+    CHECK(defaults.writerBufferBytes == 32768);
+    CHECK(defaults.flushIntervalMs == 5000);
+    CHECK(defaults.rotateBytes == 16ull * 1024ull * 1024ull);
+    CHECK(defaults.retainFiles == 4);
+    CHECK(defaults.minFreeStorageBytes == 128ull * 1024ull * 1024ull);
+    CHECK(defaults.targetDirectory == "/tmp/miyoofin-telemetry-test");
+
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+    setenv("MIYOOFIN_TELEMETRY", "01", 1);
+    CHECK(!TelemetryConfig::fromEnvironment().runtimeEnabled);
+    setenv("MIYOOFIN_TELEMETRY", "1", 1);
+    CHECK(TelemetryConfig::fromEnvironment().runtimeEnabled);
+
+    setenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB", "32", 1);
+    CHECK(TelemetryConfig::fromEnvironment().minFreeStorageBytes == 64ull * 1024ull * 1024ull);
+    setenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB", "8192", 1);
+    CHECK(TelemetryConfig::fromEnvironment().minFreeStorageBytes == 4096ull * 1024ull * 1024ull);
+    setenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB", "not-a-number", 1);
+    CHECK(TelemetryConfig::fromEnvironment().minFreeStorageBytes == 128ull * 1024ull * 1024ull);
+#endif
+
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+    CHECK(!telemetry.enabledFast());
+    TelemetryConfig enabled = defaults;
+    enabled.runtimeEnabled = true;
+    telemetry.start(enabled);
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+    CHECK(telemetry.enabledFast());
+    CHECK(telemetry.nextEphemeralId() != 0);
+    CHECK(telemetry.nextEphemeralId() != 0);
+    telemetry.suspendSampling(true, SamplingReason::ExternalPlayback);
+    CHECK(telemetry.enabledFast());
+#else
+    CHECK(!telemetry.enabledFast());
+    CHECK(telemetry.nextEphemeralId() == 0);
+#endif
+    telemetry.stop();
+    CHECK(!telemetry.enabledFast());
+
+    if (hadTelemetry)
+        setenv("MIYOOFIN_TELEMETRY", telemetryValue.c_str(), 1);
+    else
+        unsetenv("MIYOOFIN_TELEMETRY");
+    if (hadMinFree)
+        setenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB", minFreeValue.c_str(), 1);
+    else
+        unsetenv("MIYOOFIN_TELEMETRY_MIN_FREE_MIB");
+    std::printf("[test] telemetry config and runtime facade OK\n");
+}
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
     testTelemetryClocks();
+    testTelemetryConfigAndFacade();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

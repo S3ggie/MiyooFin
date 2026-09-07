@@ -87,6 +87,9 @@ private:
     /// Discard artwork belonging to the previously selected episode.
     void clearSelectedEpisodeArtwork();
 
+    void startSelectedEpisodePlayback();
+    void updatePlaybackState();
+
     // ----- Artwork worker types -----
 
     /// Immutable job description copied to the background worker.

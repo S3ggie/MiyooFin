@@ -187,80 +187,41 @@ Do not dump large diffs, source listings, compiler output, or subagent transcrip
 
 Do not commit or deploy merely because validation passed.
 
-## Refactor task execution
+## Refactor Tasks
 
-- Numbered tasks live under `refactor/tasks/`.
-- Execute exactly one task at a time.
-- `refactor/EXECUTION_RULES.md` is mandatory.
+For numbered tasks under `refactor/tasks/`:
+
+- Read `refactor/EXECUTION_RULES.md` and the current task file before editing.
+- Execute exactly one numbered task at a time.
 - Allowed Files are a hard boundary.
-- Run every validation command.
 - One task equals one commit.
-- Stop after the commit and never auto-start the next task.
+- Run every validation command required by the task.
+- Stop after the task commit; never start the next task automatically.
 
-### Refactor delegation policy
+### Delegation
 
-- Prefer GPT-5.6 Luna with Low reasoning for normal mechanical refactor tasks.
-- Use GPT-5.6 Luna with Medium reasoning only when the task exposes moderate coupling or requires nontrivial implementation judgment.
-- Use GPT-5.6 Luna with High reasoning only for tasks involving concurrency, worker lifecycle or ownership, networking semantics, persistence formats, HLS transfer behavior, or unexpected architectural ambiguity.
-- Do not use Terra Medium for refactor implementation work.
-- Do not silently substitute another model.
-- Do not upgrade from Luna Low merely because a task touches several files; upgrade only when the actual reasoning required justifies it.
-- Any delegated subagent must obey the same AGENTS.md, refactor/EXECUTION_RULES.md, Allowed Files, validation, commit, and STOP requirements.
-- The coordinating model remains responsible for reviewing the delegated diff and validation before accepting it.
+- GPT-5.6 Luna Low is the default implementation subagent for routine refactor work.
+- Routine work includes pure-logic extraction, mechanical function moves, translation-unit splits, Makefile edits, rendering splits, test organization, and documentation.
+- Use Luna Medium or High only for concrete complexity involving concurrency, worker lifecycle/ownership, networking/routing semantics, persistent formats, HLS behavior, playback handoff, or unexpected architectural coupling.
+- State the concrete reason before escalating reasoning level.
+- Do not use Terra Medium.
+- Any subagent must obey the same repo rules, task scope, validation, commit, and STOP requirements.
 
-### Refactor delegation reasoning enforcement
+### Orchestration
 
-For numbered refactor tasks, GPT-5.6 Luna Low is the REQUIRED default implementation subagent.
+For routine numbered tasks:
 
-Do not use Luna Medium or Luna High merely because the task touches multiple files.
+1. Verify the worktree is clean.
+2. Run the required pre-change validation.
+3. Spawn at most one implementation subagent.
+4. Do not create SDD workspaces, ledgers, generated briefs, review packages, or other orchestration artifacts.
+5. Do not spawn a separate reviewer subagent.
+6. The coordinating model reviews the resulting diff itself.
+7. Run the task's focused validation and `make refactor-check`.
+8. Do not run another `make test` after `make refactor-check`; it already runs the test suite.
+9. Review `git diff --stat` and `git diff`.
+10. Commit the single task, verify a clean worktree, then STOP.
 
-A higher reasoning level is allowed only when:
-- the numbered task explicitly involves concurrency, worker lifecycle/ownership, networking semantics, persistence formats, or HLS transfer behavior; or
-- Luna Low encounters concrete unexpected coupling that prevents safe completion.
+A separate reviewer subagent or heavier workflow is reserved for genuinely high-risk tasks involving concurrency, networking, persistence, HLS, playback handoff, or concrete unexpected coupling.
 
-If escalation is needed because of unexpected coupling, the coordinator must state the concrete reason before spawning the higher-reasoning subagent.
-
-For ordinary extraction, file-splitting, pure-logic movement, Makefile edits, rendering splits, test organization, and documentation tasks, use Luna Low.
-
-Do not use Terra Medium.
-
-### Refactor orchestration policy
-
-For numbered refactor tasks, use the simplest safe workflow.
-
-Routine mechanical tasks:
-- Read AGENTS.md, refactor/EXECUTION_RULES.md, and the current task file.
-- Verify `git status --short` is clean.
-- Run the required pre-change test.
-- Spawn at most ONE implementation subagent, using the refactor delegation policy.
-- Do not create an SDD workspace, task ledger, generated task brief, review package, or other orchestration artifact.
-- Do not spawn a separate reviewer subagent.
-- The coordinating model reviews the implementation diff itself.
-- Do not use Superpowers subagent-driven-development machinery for routine numbered refactor tasks.
-- Do not poll or inspect unrelated files while waiting for the implementation subagent.
-- After implementation, run the task's focused validation and `make refactor-check`.
-- Do not run an additional `make test` after `make refactor-check`, because `make refactor-check` already runs `make test`.
-- Review `git diff --stat` and `git diff` before committing.
-- Commit exactly one task, verify the worktree is clean, then STOP.
-
-Routine tasks include:
-- pure-logic extraction
-- mechanical movement of existing function definitions
-- translation-unit splitting
-- Makefile/source-list updates
-- rendering splits
-- test-file organization
-- documentation changes
-
-Heavy review workflow is reserved for tasks involving:
-- concurrency or synchronization changes
-- worker lifecycle or ownership
-- networking or routing semantics
-- persistent cache/session/download formats
-- HLS transfer/retry/cancellation logic
-- playback handoff semantics
-- concrete unexpected architectural coupling
-
-For heavy-risk tasks, a separate reviewer subagent may be used after implementation.
-
-Do not use heavy orchestration merely because a file is large or a task touches multiple files.
+Do not use heavy orchestration merely because a file is large or several files are touched.

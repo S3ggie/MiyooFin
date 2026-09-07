@@ -15,6 +15,7 @@ Split EpisodeBrowser playback handoff. This task must be behavior-preserving.
 ## Allowed Files
 
 - `src/ui/screens/EpisodeBrowserScreen.cpp`
+- `src/ui/screens/EpisodeBrowserScreen.hpp`
 - `src/ui/screens/EpisodeBrowserPlayback.cpp`
 - `Makefile`
 
@@ -37,8 +38,30 @@ make test
 ## Exact Steps
 
 Create `EpisodeBrowserPlayback.cpp`.
-Move member methods that create playback requests, choose local/online playback source, trigger external playback, and consume playback results.
-Do not modify PlaybackRequest, OfflinePlaybackJournal, runner scripts, or routing implementation.
+
+The current playback logic is inline inside `EpisodeBrowserScreen::handleAction()` and/or `update()`.
+That is expected and is NOT a STOP condition.
+
+Extract only the existing playback-specific inline blocks into the smallest reasonable set of private
+`EpisodeBrowserScreen` member methods.
+
+Add the required private method declarations to `EpisodeBrowserScreen.hpp`, and place their
+definitions in `EpisodeBrowserPlayback.cpp`.
+
+The extracted methods may cover only existing behavior for:
+- initiating playback for the selected episode;
+- choosing the existing local/downloaded versus online playback path;
+- creating/triggering the existing external playback handoff;
+- playback-specific artwork/prefetch pause/resume handling;
+- consuming/applying the existing playback result after returning.
+
+Replace the original inline blocks with calls to those extracted methods.
+
+Preserve the original conditions, statement order, state mutations, return behavior, and playback
+semantics as closely as possible. This is extraction, not redesign.
+
+Do not modify PlaybackRequest, OfflinePlaybackJournal, runner scripts, routing implementation, or
+files outside Allowed Files.
 
 ## Behavior That Must Not Change
 
@@ -82,7 +105,7 @@ Read the full diff. Verify every changed path is listed under Allowed Files.
 Commit exactly this task with:
 
 ```sh
-git add src/ui/screens/EpisodeBrowserScreen.cpp src/ui/screens/EpisodeBrowserPlayback.cpp Makefile
+git add src/ui/screens/EpisodeBrowserScreen.cpp src/ui/screens/EpisodeBrowserScreen.hpp src/ui/screens/EpisodeBrowserPlayback.cpp Makefile
 git commit -m "refactor: split episode playback"
 git status --short
 ```

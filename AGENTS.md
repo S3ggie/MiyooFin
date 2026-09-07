@@ -195,6 +195,7 @@ For numbered tasks under `refactor/tasks/`:
 - Execute exactly one numbered task at a time.
 - Allowed Files are a hard boundary.
 - One task equals one commit.
+- For numbered refactor tasks, the task file's explicit commit instruction counts as user authorization to commit that task and overrides the general no-commit rule above.
 - Run every validation command required by the task.
 - Stop after the task commit; never start the next task automatically.
 

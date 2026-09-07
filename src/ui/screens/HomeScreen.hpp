@@ -15,6 +15,7 @@
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
+#include "../HomeSettingsModel.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
 #include <atomic>
@@ -29,13 +30,15 @@
 #include <thread>
 #include <vector>
 
+namespace miyoofin {
+
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
-    enum class SettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, PublicAddress, Logout };
-    struct SettingsAddressRow { std::string section; std::string value; SettingsRowAction action; };
+    using SettingsRowAction = HomeSettingsRowAction;
+    using SettingsAddressRow = HomeSettingsAddressRow;
     struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
@@ -50,7 +53,7 @@ public:
     int diagnosticActiveTab() const { return m_activeTab; }
     const char *diagnosticTabName() const;
 
-    static constexpr int settingsRowCount() { return 9; }
+    static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
     static SettingsRowAction settingsRowAction(int row);
     static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
     static int settingsRowCount(const Session &session);

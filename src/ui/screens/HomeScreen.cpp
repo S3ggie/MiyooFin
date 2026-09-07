@@ -177,44 +177,16 @@ int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selecte
 }
 
 HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
-{
-    switch (row) {
-    case 0: return SettingsRowAction::OfflineMode;
-    case 1: return SettingsRowAction::ChangeServer;
-    case 2: return SettingsRowAction::LocalAddress;
-    case 8: return SettingsRowAction::Logout;
-    default: return SettingsRowAction::None;
-    }
-}
+{ return homeSettingsRowAction(row); }
 
 std::vector<HomeScreen::SettingsAddressRow> HomeScreen::settingsAddressRows(const Session &session)
-{
-    const bool lanOnly=session.localServerUrl.empty() && isObviousLanServerUrl(session.serverUrl);
-    std::vector<SettingsAddressRow> rows;
-    rows.push_back({lanOnly ? "LAN Server" : "Public Server",
-                    session.serverUrl.empty() ? "Not connected" : session.serverUrl,
-                    SettingsRowAction::ChangeServer});
-    if (lanOnly)
-        rows.push_back({"Public Address", session.publicServerUrl.empty() ? "Not Set" : session.publicServerUrl,
-                        SettingsRowAction::PublicAddress});
-    else
-        rows.push_back({"Local Address", session.localServerUrl.empty() ? "Not Set" : session.localServerUrl,
-                        SettingsRowAction::LocalAddress});
-    return rows;
-}
+{ return homeSettingsAddressRows(session); }
 
 int HomeScreen::settingsRowCount(const Session &session)
-{
-    return 1+(int)settingsAddressRows(session).size()+7;
-}
+{ return homeSettingsRowCount(session); }
 
 HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Session &session)
-{
-    if (row==0) return SettingsRowAction::OfflineMode;
-    const std::vector<SettingsAddressRow> addresses=settingsAddressRows(session);
-    if (row>=1 && row<=static_cast<int>(addresses.size())) return addresses[row-1].action;
-    return row==settingsRowCount(session)-1 ? SettingsRowAction::Logout : SettingsRowAction::None;
-}
+{ return homeSettingsRowAction(row, session); }
 
 const char *HomeScreen::lastApiRouteValue()
 {

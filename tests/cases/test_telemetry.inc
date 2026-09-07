@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <string>
 #include <type_traits>
+#include "../../src/diagnostics/TelemetryContext.hpp"
+#include "../../src/diagnostics/TelemetryGuards.hpp"
 #include "../../src/diagnostics/PerformanceTelemetry.hpp"
 #include "../../src/diagnostics/TelemetryConfig.hpp"
 #include "../../src/diagnostics/TelemetryIds.hpp"
@@ -89,11 +91,88 @@ static void testTelemetryConfigAndFacade()
     std::printf("[test] telemetry config and runtime facade OK\n");
 }
 
+static void testTelemetryContextAndGuards()
+{
+    std::printf("[test] telemetry context and hot-path guards\n");
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+    CHECK(currentRequestKind() == RequestKind::Unknown);
+    CHECK(currentRouteKind() == RouteKind::Unknown);
+    CHECK(currentRouteAttempt() == 0);
+    CHECK(!currentRouteFallback());
+    CHECK(currentArtworkContext() == ArtworkContext::Unknown);
+    {
+        TelemetryRequestScope request(RequestKind::Artwork);
+        TelemetryRouteScope route(RouteKind::Public, 2, true);
+        TelemetryArtworkScope artwork(ArtworkContext::EpisodePrefetch);
+        CHECK(currentRequestKind() == RequestKind::Unknown);
+        CHECK(currentRouteKind() == RouteKind::Unknown);
+        CHECK(currentRouteAttempt() == 0);
+        CHECK(!currentRouteFallback());
+        CHECK(currentArtworkContext() == ArtworkContext::Unknown);
+    }
+
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+    TelemetryConfig config;
+    config.runtimeEnabled = true;
+    telemetry.start(config);
+    CHECK(currentRequestKind() == RequestKind::Unknown);
+    CHECK(currentRouteKind() == RouteKind::Unknown);
+    CHECK(currentArtworkContext() == ArtworkContext::Unknown);
+    {
+        TelemetryRequestScope outerRequest(RequestKind::Artwork);
+        TelemetryRouteScope outerRoute(RouteKind::Lan, 1, false);
+        TelemetryArtworkScope outerArtwork(ArtworkContext::MovieDetails);
+        CHECK(currentRequestKind() == RequestKind::Artwork);
+        CHECK(currentRouteKind() == RouteKind::Lan);
+        CHECK(currentRouteAttempt() == 1);
+        CHECK(!currentRouteFallback());
+        CHECK(currentArtworkContext() == ArtworkContext::MovieDetails);
+        {
+            TelemetryRequestScope innerRequest(RequestKind::PlaybackPosition);
+            TelemetryRouteScope innerRoute(RouteKind::Public, 2, true);
+            TelemetryArtworkScope innerArtwork(ArtworkContext::EpisodeSelected);
+            CHECK(currentRequestKind() == RequestKind::PlaybackPosition);
+            CHECK(currentRouteKind() == RouteKind::Public);
+            CHECK(currentRouteAttempt() == 2);
+            CHECK(currentRouteFallback());
+            CHECK(currentArtworkContext() == ArtworkContext::EpisodeSelected);
+        }
+        CHECK(currentRequestKind() == RequestKind::Artwork);
+        CHECK(currentRouteKind() == RouteKind::Lan);
+        CHECK(currentRouteAttempt() == 1);
+        CHECK(!currentRouteFallback());
+        CHECK(currentArtworkContext() == ArtworkContext::MovieDetails);
+    }
+    CHECK(currentRequestKind() == RequestKind::Unknown);
+    CHECK(currentRouteKind() == RouteKind::Unknown);
+    CHECK(currentRouteAttempt() == 0);
+    CHECK(!currentRouteFallback());
+    CHECK(currentArtworkContext() == ArtworkContext::Unknown);
+#endif
+
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+    TelemetryTimer activeTimer;
+    CHECK(activeTimer.active());
+    telemetry.stop();
+    TelemetryTimer inactiveTimer;
+    CHECK(!inactiveTimer.active());
+    CHECK(inactiveTimer.elapsedUs() == 0);
+#else
+    telemetry.stop();
+    TelemetryTimer inactiveTimer;
+    CHECK(!inactiveTimer.active());
+    CHECK(inactiveTimer.elapsedUs() == 0);
+#endif
+    std::printf("[test] telemetry context and hot-path guards OK\n");
+}
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
     testTelemetryClocks();
     testTelemetryConfigAndFacade();
+    testTelemetryContextAndGuards();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

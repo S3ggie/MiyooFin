@@ -18,6 +18,7 @@
 #include "../HomeSettingsModel.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
+#include "../HomeTabs.hpp"
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
@@ -72,31 +73,7 @@ public:
 
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
-    static void updateContinueWatchingRow(std::vector<TabData> &tabs,
-                                          const std::vector<MediaItem> &items)
-    {
-        auto homeIt = std::find_if(tabs.begin(), tabs.end(),
-            [](const TabData &tab) { return tab.name == "Home"; });
-        if (homeIt == tabs.end()) return;
-
-        auto &rows = homeIt->rows;
-        auto cwIt = std::find_if(rows.begin(), rows.end(),
-            [](const MediaRow &row) { return row.label == "Continue Watching"; });
-        if (!items.empty()) {
-            if (cwIt != rows.end()) {
-                cwIt->items = items;
-            } else {
-                if (rows.size() == 1 && rows[0].label.empty() && rows[0].items.empty())
-                    rows.clear();
-                auto recentlyAdded = std::find_if(rows.begin(), rows.end(),
-                    [](const MediaRow &row) { return row.label == "Recently Added"; });
-                rows.insert(recentlyAdded, {"Continue Watching", items});
-            }
-        } else if (cwIt != rows.end()) {
-            rows.erase(cwIt);
-            if (rows.empty()) rows.push_back({"", {}});
-        }
-    }
+    static void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
 
     // --- Row artwork helpers (public for testing) -------------------------
 

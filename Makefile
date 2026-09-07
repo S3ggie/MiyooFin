@@ -53,6 +53,7 @@ SRCS        := \
     $(SRC_DIR)/ui/OnScreenKeyboard.cpp \
     $(SRC_DIR)/ui/HomeSettingsModel.cpp \
     $(SRC_DIR)/ui/HomeTabs.cpp \
+    $(SRC_DIR)/ui/HomeArtworkPlan.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
     $(SRC_DIR)/ui/screens/ServerEntryScreen.cpp \
@@ -124,6 +125,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/OnScreenKeyboard.cpp \
                src/ui/HomeSettingsModel.cpp \
                src/ui/HomeTabs.cpp \
+               src/ui/HomeArtworkPlan.cpp \
                src/app/ScreenStack.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \

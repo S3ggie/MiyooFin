@@ -966,25 +966,17 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs)
 
 std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySnapshot &snapshot)
 {
-    std::vector<PosterJob> out; std::set<std::string> seen;
-    auto add=[&](const MediaItem &item) { DisplayArtwork a=displayArtworkForItem(item); if(!a.valid()) return; PosterJob j{item.id,a.imageType,a.tag,a.width,a.height}; std::string key=buildRowArtworkKey(item); if(seen.insert(key).second && !ImageCache::isCached(j.itemId,j.imageType,j.imageTag,j.width,j.height)) out.push_back(std::move(j)); };
-    for(const auto &views : {&snapshot.movies,&snapshot.shows}) for(const auto &view:*views) for(const auto &item:view.items) add(item);
-    for(const auto &item:snapshot.continueWatching) add(item);
-    for(const auto &item:snapshot.recentlyAdded) add(item);
+    std::vector<PosterJob> out;
+    for (auto &job : planHomePosterJobs(snapshot))
+        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
     return out;
 }
 
 std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std::vector<MediaItem> &seasons)
 {
-    std::vector<PosterJob> out; std::set<std::string> seen;
-    for (const auto &season : seasons) {
-        if (!season.type.empty() && season.type != "season") continue;
-        auto tag=season.imageTags.find("Primary");
-        if (season.id.empty() || tag==season.imageTags.end() || tag->second.empty()) continue;
-        PosterJob job{season.id,ImageType::Primary,tag->second,SEASON_POSTER_W,SEASON_POSTER_H};
-        std::string key=job.itemId+":"+job.imageTag;
-        if (seen.insert(key).second && !ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
-    }
+    std::vector<PosterJob> out;
+    for (auto &job : planSeasonPosterJobs(seasons))
+        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
     return out;
 }
 
@@ -1200,7 +1192,7 @@ void HomeScreen::tryLoadSelectedArtwork()
 
 std::string HomeScreen::rowArtworkKey(const MediaItem &item)
 {
-    return buildRowArtworkKey(item);
+    return homeArtworkKey(item);
 }
 
 void HomeScreen::evictRowArtworkIfNeeded()

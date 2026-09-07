@@ -19,6 +19,7 @@
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
 #include "../HomeTabs.hpp"
+#include "../HomeArtworkPlan.hpp"
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
@@ -40,7 +41,7 @@ class HomeScreen : public Screen {
 public:
     using SettingsRowAction = HomeSettingsRowAction;
     using SettingsAddressRow = HomeSettingsAddressRow;
-    struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
+    using PosterJob = HomePosterJob;
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
 

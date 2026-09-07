@@ -1074,29 +1074,29 @@ static void testContinueWatchingRowRefresh()
     std::vector<TabData> tabs = {{"Home", {
         {"Continue Watching", {oldItem}}, {"Recently Added", {recentItem}}
     }}};
-    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    updateContinueWatchingRow(tabs, {newItem});
     CHECK(tabs[0].rows.size() == 2);
     CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
     CHECK_EQ(tabs[0].rows[0].items[0].id, "new");
     CHECK_EQ(tabs[0].rows[1].label, "Recently Added");
 
     tabs = {{"Home", {{"Recently Added", {recentItem}}}}};
-    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    updateContinueWatchingRow(tabs, {newItem});
     CHECK(tabs[0].rows.size() == 2);
     CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
     CHECK_EQ(tabs[0].rows[1].label, "Recently Added");
 
-    HomeScreen::updateContinueWatchingRow(tabs, {});
+    updateContinueWatchingRow(tabs, {});
     CHECK(tabs[0].rows.size() == 1);
     CHECK_EQ(tabs[0].rows[0].label, "Recently Added");
 
     tabs = {{"Home", {{"Continue Watching", {oldItem}}}}};
-    HomeScreen::updateContinueWatchingRow(tabs, {});
+    updateContinueWatchingRow(tabs, {});
     CHECK(tabs[0].rows.size() == 1);
     CHECK(tabs[0].rows[0].label.empty());
     CHECK(tabs[0].rows[0].items.empty());
 
-    HomeScreen::updateContinueWatchingRow(tabs, {newItem});
+    updateContinueWatchingRow(tabs, {newItem});
     CHECK(tabs[0].rows.size() == 1);
     CHECK_EQ(tabs[0].rows[0].label, "Continue Watching");
     std::printf("[test] Continue Watching row refresh OK\n");
@@ -2853,23 +2853,23 @@ static void testOfflineLibraryProjection(){
     OfflineLibraryProjection p(l,c,d);
     CHECK(p.movies().size()==1&&p.movies()[0].id==movie.id); CHECK(p.series().size()==1&&p.series()[0].id==show.id); CHECK(p.seasons(show.id).size()==1&&p.seasons(show.id)[0].id==season.id); CHECK(p.episodes(season.id).size()==2&&p.episodes(season.id)[1].id==ep3.id); CHECK(!p.playable(partial.id));
     // Online retains Home; offline has no Home projection or curation surface.
-    auto online=HomeScreen::tabsFromSnapshot(l);
-    auto offline=HomeScreen::offlineTabsFromSnapshot(l);
-    const auto onlineNames=HomeScreen::tabNames(online), offlineNames=HomeScreen::tabNames(offline);
+    auto online=tabsFromSnapshot(l);
+    auto offline=offlineTabsFromSnapshot(l);
+    const auto onlineNames=tabNames(online), offlineNames=tabNames(offline);
     CHECK((onlineNames==std::vector<std::string>{"Home","Movies","Shows","Downloads","Settings"}));
     CHECK((offlineNames==std::vector<std::string>{"Movies","Shows","Downloads","Settings"}));
     CHECK(std::find(offlineNames.begin(),offlineNames.end(),"Home")==offlineNames.end());
     // Cold offline startup and a selected Home both use the Movies fallback.
-    CHECK(HomeScreen::transitionTabIndex({},0,offline)==0);
-    CHECK(HomeScreen::transitionTabIndex(online,0,offline)==0);
+    CHECK(transitionTabIndex({},0,offline)==0);
+    CHECK(transitionTabIndex(online,0,offline)==0);
     // Other named tabs survive layout changes where possible.
-    CHECK(HomeScreen::transitionTabIndex(online,2,offline)==1);
-    CHECK(HomeScreen::transitionTabIndex(online,3,offline)==2);
-    CHECK(HomeScreen::transitionTabIndex(online,4,offline)==3);
-    CHECK(HomeScreen::transitionTabIndex(offline,0,online)==1);
-    CHECK(HomeScreen::transitionTabIndex(offline,1,online)==2);
-    CHECK(HomeScreen::transitionTabIndex(offline,2,online)==3);
-    CHECK(HomeScreen::transitionTabIndex(offline,3,online)==4);
+    CHECK(transitionTabIndex(online,2,offline)==1);
+    CHECK(transitionTabIndex(online,3,offline)==2);
+    CHECK(transitionTabIndex(online,4,offline)==3);
+    CHECK(transitionTabIndex(offline,0,online)==1);
+    CHECK(transitionTabIndex(offline,1,online)==2);
+    CHECK(transitionTabIndex(offline,2,online)==3);
+    CHECK(transitionTabIndex(offline,3,online)==4);
 }
 static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowCount() == 9);

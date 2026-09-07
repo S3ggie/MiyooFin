@@ -122,18 +122,6 @@ std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(const LibrarySnapshot &
 std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData> &tabs) { return miyoofin::tabNames(tabs); }
 int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selected, const std::vector<TabData> &to) { return miyoofin::transitionTabIndex(from, selected, to); }
 
-HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
-{ return homeSettingsRowAction(row); }
-
-std::vector<HomeScreen::SettingsAddressRow> HomeScreen::settingsAddressRows(const Session &session)
-{ return homeSettingsAddressRows(session); }
-
-int HomeScreen::settingsRowCount(const Session &session)
-{ return homeSettingsRowCount(session); }
-
-HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Session &session)
-{ return homeSettingsRowAction(row, session); }
-
 const char *HomeScreen::lastApiRouteValue()
 {
     return RouteStatus::label(RouteStatus::latest());

@@ -15,6 +15,7 @@ Split EpisodeBrowser download actions/planning. This task must be behavior-prese
 ## Allowed Files
 
 - `src/ui/screens/EpisodeBrowserScreen.cpp`
+- `src/ui/screens/EpisodeBrowserScreen.hpp`
 - `src/ui/screens/EpisodeBrowserDownloads.cpp`
 - `Makefile`
 
@@ -37,9 +38,32 @@ make test
 ## Exact Steps
 
 Create `EpisodeBrowserDownloads.cpp`.
-Move episode/season download action handling, plan polling/confirmation, and DownloadManager interaction.
+
+The current Episode/Season download logic may be inline inside `EpisodeBrowserScreen::handleAction()`
+and/or `update()`. That is expected and is NOT a STOP condition.
+
+Extract only the existing download-specific inline blocks into the smallest reasonable set of private
+`EpisodeBrowserScreen` member methods.
+
+Add the required private method declarations to `EpisodeBrowserScreen.hpp`, and place their
+definitions in `EpisodeBrowserDownloads.cpp`.
+
+The extracted methods may cover only existing behavior for:
+- Episode download actions;
+- Season download actions;
+- download-plan request/polling;
+- download-plan confirmation;
+- stale plan-generation protection;
+- existing DownloadManager interaction directly associated with those actions.
+
+Replace the original inline blocks with calls to the extracted methods.
+
+Preserve the original conditions, statement order, state mutations, plan generations, confirmation
+behavior, and return behavior as closely as possible. This is extraction, not redesign.
+
 Do not modify DownloadManager itself.
-Keep separate Episode and Season actions and existing plan-generation stale-result protection.
+Do not combine Episode and Season actions.
+Do not change download persistence or worker behavior.
 
 ## Behavior That Must Not Change
 
@@ -82,7 +106,7 @@ Read the full diff. Verify every changed path is listed under Allowed Files.
 Commit exactly this task with:
 
 ```sh
-git add src/ui/screens/EpisodeBrowserScreen.cpp src/ui/screens/EpisodeBrowserDownloads.cpp Makefile
+git add src/ui/screens/EpisodeBrowserScreen.cpp src/ui/screens/EpisodeBrowserScreen.hpp src/ui/screens/EpisodeBrowserDownloads.cpp Makefile
 git commit -m "refactor: split episode downloads"
 git status --short
 ```

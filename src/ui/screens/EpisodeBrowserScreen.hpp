@@ -89,6 +89,9 @@ private:
 
     void startSelectedEpisodePlayback();
     void updatePlaybackState();
+    void handleDownloadConfirmation(Action action);
+    void requestSeasonDownloadPlan();
+    void handleDownloadButtonAction();
 
     // ----- Artwork worker types -----
 

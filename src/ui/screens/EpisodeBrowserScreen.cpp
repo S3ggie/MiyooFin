@@ -358,14 +358,14 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 
     if (action == Action::Back) { if(m_confirmDownload){m_confirmDownload=false;return true;} m_stack->pop(); return true; }
     if (m_confirmDownload) {
-        if(action==Action::Confirm && m_downloads && m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);m_confirmDownload=false;}
+        handleDownloadConfirmation(action);
         return true;
     }
     // Y plans the whole displayed season.  Episodes have already been fetched,
     // so only the manager-owned planner performs network work from here.
     if (action == Action::ActionsMenu && m_downloads && !m_episodes.empty()) {
-        if(m_planId && m_planIsSeason && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
-        else {m_confirmDownload=false; m_planIsSeason=true; m_planId=m_downloads->requestPlan(m_episodes);} return true;
+        requestSeasonDownloadPlan();
+        return true;
     }
 
     // ----- EpisodeList focus -----
@@ -424,8 +424,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
                     startSelectedEpisodePlayback();
                 }
             } else {
-                if (m_confirmDownload) { if(m_downloads&&m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);}m_confirmDownload=false; }
-                else if(m_downloads && m_selectedEpisode>=0 && m_selectedEpisode<total) { bool season=m_actionBtn==ActionButton::DownloadSeason; if(m_planId && m_planIsSeason==season && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true; else {m_planIsSeason=season;m_planId=m_downloads->requestPlan(season?m_episodes:std::vector<MediaItem>{m_episodes[m_selectedEpisode]});} }
+                handleDownloadButtonAction();
             }
             return true;
         case Action::Up:

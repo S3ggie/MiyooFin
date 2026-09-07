@@ -74,6 +74,7 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/EpisodeBrowserRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserArtwork.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserPlayback.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserDownloads.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
     $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
@@ -155,6 +156,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/screens/EpisodeBrowserRender.cpp \
                src/ui/screens/EpisodeBrowserArtwork.cpp \
                src/ui/screens/EpisodeBrowserPlayback.cpp \
+               src/ui/screens/EpisodeBrowserDownloads.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp

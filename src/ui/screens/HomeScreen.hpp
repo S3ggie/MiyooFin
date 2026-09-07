@@ -14,8 +14,12 @@
 #include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include <memory>
+#include "../HomeSyncState.hpp"
+#include "../HomeSettingsModel.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
+#include "../HomeTabs.hpp"
+#include "../HomeArtworkPlan.hpp"
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
@@ -29,56 +33,15 @@
 #include <vector>
 
 namespace miyoofin {
-struct LibrarySyncSchedule {
-    static constexpr Uint32 FRESH_MS = 15u * 60u * 1000u;
-    static constexpr Uint32 RETRY_DELAY_MS = 60u * 1000u;
-    bool inFlight=false, pending=false, hasAttempted=false, hasSucceeded=false;
-    Uint32 lastAttempt=0, lastSuccess=0;
-    bool request(Uint32 now) {
-        if (inFlight) { pending=true; return false; }
-        if (hasSucceeded && now-lastSuccess < FRESH_MS) return false;
-        if (hasAttempted && now-lastAttempt < RETRY_DELAY_MS) return false;
-        inFlight=true; hasAttempted=true; lastAttempt=now; return true;
-    }
-    // A completed request already includes all coalesced navigation requests.
-    // Never immediately retry a failed hostname/network request on the UI path.
-    bool complete(Uint32 now, bool succeeded) {
-        inFlight=false; pending=false;
-        if (succeeded) { hasSucceeded=true; lastSuccess=now; }
-        return false;
-    }
-};
-
-struct ShowsSyncProgress {
-    size_t completed=0, total=0;
-    int percent(int previous=0) const {
-        if (!total) return 100;
-        const size_t bounded=std::min(completed,total);
-        const int value=(int)((bounded*100)/total);
-        return std::max(0,std::min(100,std::max(previous,value)));
-    }
-};
-
-inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
-                                     bool metadataActive, bool syncSucceeded,
-                                     const ShowsSyncProgress &shows={}, bool hierarchyActive=false,
-                                     bool showsTab=false) {
-    if (tab < 0 || tab > 2) return "";
-    if (offline && haveCache) return "OFFLINE";
-    if ((showsTab || tab == 2) && shows.total && (hierarchyActive || shows.completed < shows.total))
-        return "SYNC " + std::to_string(shows.percent()) + "%";
-    if (metadataActive) return "SYNCING...";
-    return syncSucceeded ? "SYNCED" : "SYNCING...";
-}
 
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
-    enum class SettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, PublicAddress, Logout };
-    struct SettingsAddressRow { std::string section; std::string value; SettingsRowAction action; };
-    struct PosterJob { std::string itemId; ImageType imageType; std::string imageTag; int width; int height; };
+    using SettingsRowAction = HomeSettingsRowAction;
+    using SettingsAddressRow = HomeSettingsAddressRow;
+    using PosterJob = HomePosterJob;
     explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
     ~HomeScreen() override;
 
@@ -92,7 +55,7 @@ public:
     int diagnosticActiveTab() const { return m_activeTab; }
     const char *diagnosticTabName() const;
 
-    static constexpr int settingsRowCount() { return 9; }
+    static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
     static SettingsRowAction settingsRowAction(int row);
     static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
     static int settingsRowCount(const Session &session);
@@ -111,31 +74,7 @@ public:
 
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
-    static void updateContinueWatchingRow(std::vector<TabData> &tabs,
-                                          const std::vector<MediaItem> &items)
-    {
-        auto homeIt = std::find_if(tabs.begin(), tabs.end(),
-            [](const TabData &tab) { return tab.name == "Home"; });
-        if (homeIt == tabs.end()) return;
-
-        auto &rows = homeIt->rows;
-        auto cwIt = std::find_if(rows.begin(), rows.end(),
-            [](const MediaRow &row) { return row.label == "Continue Watching"; });
-        if (!items.empty()) {
-            if (cwIt != rows.end()) {
-                cwIt->items = items;
-            } else {
-                if (rows.size() == 1 && rows[0].label.empty() && rows[0].items.empty())
-                    rows.clear();
-                auto recentlyAdded = std::find_if(rows.begin(), rows.end(),
-                    [](const MediaRow &row) { return row.label == "Recently Added"; });
-                rows.insert(recentlyAdded, {"Continue Watching", items});
-            }
-        } else if (cwIt != rows.end()) {
-            rows.erase(cwIt);
-            if (rows.empty()) rows.push_back({"", {}});
-        }
-    }
+    static void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
 
     // --- Row artwork helpers (public for testing) -------------------------
 

@@ -186,3 +186,56 @@ Keep the report concise and include:
 Do not dump large diffs, source listings, compiler output, or subagent transcripts unless specifically requested.
 
 Do not commit or deploy merely because validation passed.
+
+## Refactor Tasks
+
+For numbered tasks under `refactor/tasks/`:
+
+- Read `refactor/EXECUTION_RULES.md` and the current task file before editing.
+- Execute exactly one numbered task at a time.
+- Allowed Files are a hard boundary.
+- One task equals one commit.
+- For numbered refactor tasks, the task file's explicit commit instruction counts as user authorization to commit that task and overrides the general no-commit rule above.
+- Run every validation command required by the task.
+- Stop after the task commit; never start the next task automatically.
+
+### Delegation
+
+- GPT-5.6 Luna Low is the default implementation subagent for routine refactor work.
+- Routine work includes pure-logic extraction, mechanical function moves, translation-unit splits, Makefile edits, rendering splits, test organization, and documentation.
+- Use Luna Medium or High only for concrete complexity involving concurrency, worker lifecycle/ownership, networking/routing semantics, persistent formats, HLS behavior, playback handoff, or unexpected architectural coupling.
+- State the concrete reason before escalating reasoning level.
+- Do not use Terra Medium.
+- Any subagent must obey the same repo rules, task scope, validation, commit, and STOP requirements.
+
+### Orchestration
+
+For routine numbered tasks:
+
+1. Verify the worktree is clean.
+2. Run the required pre-change validation.
+3. Spawn at most one implementation subagent.
+4. Do not create SDD workspaces, ledgers, generated briefs, review packages, or other orchestration artifacts.
+5. Do not spawn a separate reviewer subagent.
+6. The coordinating model reviews the resulting diff itself.
+7. Run the task's focused validation and `make refactor-check`.
+8. Do not run another `make test` after `make refactor-check`; it already runs the test suite.
+9. Review `git diff --stat` and `git diff`.
+10. Commit the single task, verify a clean worktree, then STOP.
+
+A separate reviewer subagent or heavier workflow is reserved for genuinely high-risk tasks involving concurrency, networking, persistence, HLS, playback handoff, or concrete unexpected coupling.
+
+Do not use heavy orchestration merely because a file is large or several files are touched.
+
+### Direct execution for numbered refactor tasks
+
+For numbered tasks under `refactor/tasks/`, the main Codex agent MUST perform the implementation directly.
+
+This rule overrides the general Main Agent Role delegation instructions above for numbered refactor tasks.
+
+- Do not spawn implementation subagents.
+- Do not spawn reviewer subagents.
+- Do not create SDD workspaces, ledgers, generated briefs, or review packages.
+- Read the current task, inspect only the code necessary for that task, implement it directly, validate it, review the diff, commit it, and STOP.
+- Use the currently selected Codex model and reasoning level for the entire task.
+- If the task exposes unexpected coupling or cannot be completed safely within Allowed Files, STOP and report the problem instead of delegating or widening scope.

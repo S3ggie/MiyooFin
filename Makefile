@@ -37,6 +37,12 @@ SRCS        := \
     $(SRC_DIR)/net/ArtworkUrl.cpp \
     $(SRC_DIR)/net/HttpClient.cpp \
     $(SRC_DIR)/net/JellyfinApi.cpp \
+    $(SRC_DIR)/net/JellyfinApiJson.cpp \
+    $(SRC_DIR)/net/JellyfinApiAuth.cpp \
+    $(SRC_DIR)/net/JellyfinApiLibrary.cpp \
+    $(SRC_DIR)/net/JellyfinApiHierarchy.cpp \
+    $(SRC_DIR)/net/JellyfinApiPlayback.cpp \
+    $(SRC_DIR)/net/JellyfinApiDownload.cpp \
     $(SRC_DIR)/net/Session.cpp \
     $(SRC_DIR)/net/DeviceIdentity.cpp \
     $(SRC_DIR)/cache/ImageCache.cpp \
@@ -46,12 +52,26 @@ SRCS        := \
     $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
+    $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
+    $(SRC_DIR)/download/DownloadManagerReconcileWorker.cpp \
+    $(SRC_DIR)/download/DownloadManagerTransfer.cpp \
     $(SRC_DIR)/download/DownloadReconcile.cpp \
     $(SRC_DIR)/download/DownloadSupport.cpp \
     $(SRC_DIR)/download/HlsPlaylist.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/OnScreenKeyboard.cpp \
+    $(SRC_DIR)/ui/HomeSettingsModel.cpp \
+    $(SRC_DIR)/ui/HomeTabs.cpp \
+    $(SRC_DIR)/ui/HomeArtworkPlan.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenNavigation.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenRefresh.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenSync.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenHierarchy.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenArtwork.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenSettings.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenDownloads.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenRender.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
     $(SRC_DIR)/ui/screens/ServerEntryScreen.cpp \
     $(SRC_DIR)/ui/screens/ConnectScreen.cpp \
@@ -60,6 +80,10 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserRender.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserArtwork.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserPlayback.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserDownloads.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
     $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
@@ -102,6 +126,12 @@ RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
+               src/net/JellyfinApiJson.cpp \
+               src/net/JellyfinApiAuth.cpp \
+               src/net/JellyfinApiLibrary.cpp \
+               src/net/JellyfinApiHierarchy.cpp \
+               src/net/JellyfinApiPlayback.cpp \
+               src/net/JellyfinApiDownload.cpp \
                src/net/ArtworkUrl.cpp \
                src/net/HttpClient.cpp \
                src/net/Session.cpp \
@@ -115,18 +145,36 @@ TEST_SRCS   := tests/test_main.cpp \
                src/cache/OfflineLibraryProjection.cpp \
                src/download/DownloadStore.cpp \
                src/download/DownloadManager.cpp \
+               src/download/DownloadManagerPlanning.cpp \
+               src/download/DownloadManagerReconcileWorker.cpp \
+               src/download/DownloadManagerTransfer.cpp \
                src/download/DownloadReconcile.cpp \
                src/download/DownloadSupport.cpp \
                src/download/HlsPlaylist.cpp \
                src/ui/BitmapFont.cpp \
                src/ui/OnScreenKeyboard.cpp \
+               src/ui/HomeSettingsModel.cpp \
+               src/ui/HomeTabs.cpp \
+               src/ui/HomeArtworkPlan.cpp \
                src/app/ScreenStack.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
+               src/ui/screens/HomeScreenNavigation.cpp \
+               src/ui/screens/HomeScreenRefresh.cpp \
+               src/ui/screens/HomeScreenSync.cpp \
+               src/ui/screens/HomeScreenHierarchy.cpp \
+               src/ui/screens/HomeScreenArtwork.cpp \
+               src/ui/screens/HomeScreenSettings.cpp \
+               src/ui/screens/HomeScreenDownloads.cpp \
+               src/ui/screens/HomeScreenRender.cpp \
                src/ui/screens/ServerEntryScreen.cpp \
                src/ui/screens/LoginScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
+               src/ui/screens/EpisodeBrowserRender.cpp \
+               src/ui/screens/EpisodeBrowserArtwork.cpp \
+               src/ui/screens/EpisodeBrowserPlayback.cpp \
+               src/ui/screens/EpisodeBrowserDownloads.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp
@@ -136,6 +184,10 @@ test: $(TEST_TARGET)
 	@$(TEST_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
+
+.PHONY: refactor-check
+refactor-check:
+	@sh tools/refactor-check.sh
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)

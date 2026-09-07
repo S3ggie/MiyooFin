@@ -1,6 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
 #include "../../cache/OfflineLibraryProjection.hpp"
-#include "../../download/DownloadSupport.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -12,7 +11,6 @@
 #include "../../cache/ImageCache.hpp"
 #include "../../cache/OfflineCatalog.hpp"
 #include "../../cache/LibraryCache.hpp"
-#include "../../playback/PlaybackRequest.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -423,32 +421,7 @@ bool EpisodeBrowserScreen::handleAction(Action action)
         case Action::Confirm:
             if (m_actionBtn == ActionButton::Play) {
                 if (m_selectedEpisode >= 0 && m_selectedEpisode < total) {
-                    printf("[EpisodeBrowserScreen] Play selected: %s\n",
-                           m_episodes[m_selectedEpisode].title.c_str());
-                    std::string error;
-                    PlaybackSource source=m_downloads?resolvePlayback(m_episodes[m_selectedEpisode],*m_downloads):PlaybackSource::Jellyfin;
-                    if (source==PlaybackSource::UnavailableOffline) return true;
-                    if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(),
-                            m_episodes[m_selectedEpisode].id,
-                            "episode",
-                            m_episodes[m_selectedEpisode].playbackPositionTicks, source==PlaybackSource::Local?"local":"jellyfin", source==PlaybackSource::Local?m_downloads->scope():"",
-                            error))
-                    {
-                        {
-                            std::lock_guard<std::mutex> lock(m_workerMutex);
-                            m_workerPaused = true;
-                            ++m_workerGeneration;
-                        }
-                        m_prefetchResumePending = true;
-                        m_prefetchResumeDelayUpdates = 1;
-                        m_playbackEpisodeId = m_episodes[m_selectedEpisode].id;
-                        printf("[EpisodeBrowserScreen] Playback request "
-                               "written, requesting external playback\n");
-                        m_stack->requestExternalPlayback();
-                    } else {
-                        printf("[EpisodeBrowserScreen] Playback request "
-                               "failed: %s\n", error.c_str());
-                    }
+                    startSelectedEpisodePlayback();
                 }
             } else {
                 if (m_confirmDownload) { if(m_downloads&&m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);}m_confirmDownload=false; }
@@ -477,29 +450,7 @@ void EpisodeBrowserScreen::update(Uint32 /*dt*/)
     }
     bool fetchDone; { std::lock_guard<std::mutex> g(m_fetchMutex); fetchDone=m_fetchDone; }
     if(fetchDone){UiDiagnostics::Scope scope("EpisodeBrowserScreen::publishFetchResult");std::vector<MediaItem>fresh;std::string err;bool ok;{std::lock_guard<std::mutex>g(m_fetchMutex);ok=m_fetchOk;fresh=std::move(m_fetchEpisodes);err=m_fetchError;m_fetchDone=false;}if(m_fetchThread.joinable())m_fetchThread.join();if(ok)publishEpisodes(std::move(fresh));else if(m_episodes.empty()){m_loadState=LoadState::Error;m_error=err;}}
-    if (advancePrefetchResume(m_prefetchResumePending,
-                              m_prefetchResumeDelayUpdates)) {
-        {
-            std::lock_guard<std::mutex> lock(m_workerMutex);
-            m_workerPaused = false;
-            ++m_workerGeneration;
-        }
-        m_workerCv.notify_one();
-
-        std::int64_t resultTicks = 0;
-        std::string error;
-        if (PlaybackRequest::consumeResult(m_playbackEpisodeId,
-                                           resultTicks, error)) {
-            const int playedIndex = findEpisodeIndex(m_episodes,
-                                                      m_playbackEpisodeId);
-            if (playedIndex >= 0) {
-                m_episodes[playedIndex].playbackPositionTicks = resultTicks;
-                printf("[EpisodeBrowserScreen] Playback position updated: "
-                       "%lld\n", (long long)resultTicks);
-            }
-        }
-        m_playbackEpisodeId.clear();
-    }
+    updatePlaybackState();
 
     if (m_loadState == LoadState::Ready)
         tryLoadSelectedEpisodeArtwork();

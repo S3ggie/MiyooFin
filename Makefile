@@ -11,7 +11,8 @@
 
 CXX         := g++
 CC          := gcc
-CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0
+PERF_TELEMETRY ?= 1
+CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 INCLUDES    := -I. -Iinclude
 
@@ -25,6 +26,12 @@ CURL_LIBS   := $(shell pkg-config --libs libcurl 2>/dev/null || echo '-lcurl')
 
 # Source files
 SRC_DIR     := src
+TELEMETRY_SRCS :=
+TELEMETRY_TEST_SRCS :=
+ifeq ($(PERF_TELEMETRY),1)
+TELEMETRY_SRCS :=
+TELEMETRY_TEST_SRCS :=
+endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
@@ -86,7 +93,8 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/EpisodeBrowserDownloads.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
-    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
+    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp \
+    $(TELEMETRY_SRCS)
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
@@ -177,7 +185,8 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/screens/EpisodeBrowserDownloads.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
-               src/playback/OfflinePlaybackJournal.cpp
+               src/playback/OfflinePlaybackJournal.cpp \
+               $(TELEMETRY_TEST_SRCS)
 
 .PHONY: test
 test: $(TEST_TARGET)
@@ -225,7 +234,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross all bridge reporter
+	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image

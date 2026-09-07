@@ -79,6 +79,7 @@ static int g_failures = 0;
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
 #include "cases/test_downloads.inc"
+#include "cases/test_telemetry.inc"
 // -------------------------------------------------------------------
 // Test 1: URL normalisation (from B2, kept)
 // -------------------------------------------------------------------
@@ -99,6 +100,7 @@ int main()
     testSharedKeyboardLayoutConsistency();
     testKeyboardVerticalNavActionRow();
     testUiDiagnostics();
+    testTelemetrySchemaTypes();
     std::printf("\n--- Movie title organization tests ---\n");
     testMovieOrganizationalTitles();
     testMovieAlphabetOrganization();

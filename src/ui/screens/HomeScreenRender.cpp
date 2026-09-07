@@ -41,7 +41,6 @@ static constexpr int CARD_GAP    = 6;
 static constexpr int ROW_STRIP_H = 96;  // max card height across all types
 static constexpr int ROW_LABEL_H = 18;
 static constexpr int VISIBLE_ROWS = 3;
-static constexpr int SETTINGS_VISIBLE_ROWS = 6;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
 static constexpr int SEASON_POSTER_W = 74;
@@ -52,17 +51,6 @@ static constexpr int SHOWS_RAIL_W=36, SHOWS_PREVIEW_H=105, SHOWS_GRID_TOP=153;
 static constexpr int SHOWS_HALF_W=302, SHOWS_LEFT_X=36, SHOWS_RIGHT_X=338;
 static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
-static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
-static std::string compactSyncAge(std::int64_t timestamp)
-{
-    if (timestamp <= 0) return "Never";
-    const std::int64_t elapsed=std::max<std::int64_t>(0,wallClockMs()-timestamp);
-    if (elapsed < 60LL*1000) return "Now";
-    if (elapsed < 60LL*60*1000) return std::to_string(elapsed/(60LL*1000))+"m ago";
-    if (elapsed < 24LL*60*60*1000) return std::to_string(elapsed/(60LL*60*1000))+"h ago";
-    return std::to_string(elapsed/(24LL*60*60*1000))+"d ago";
-}
-
 // Selected artwork box origin (top-left of info panel)
 static constexpr int ART_X = 8;
 static constexpr int ART_Y = INFO_Y + 6;   // 32
@@ -486,40 +474,6 @@ void HomeScreen::drawPlaceholderTab(SDL_Surface *fb, const char *message)
     BitmapFont::drawString(fb,8,200,message,
         Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,
         Theme::BG_R,Theme::BG_G,Theme::BG_B);
-}
-
-void HomeScreen::drawSettingsTab(SDL_Surface *fb)
-{
-    BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
-    struct SettingRow { std::string section; std::string value; };
-    std::vector<SettingRow> rows={{"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"}};
-    for (const SettingsAddressRow &row:settingsAddressRows(m_session)) rows.push_back({row.section,row.value});
-    rows.insert(rows.end(), {
-        {"Last API Route", lastApiRouteValue()},
-        {"Account", m_userName.empty() ? "Unknown" : m_userName},
-        {"LIBRARY", "Last Sync: " + compactSyncAge(m_syncState.lastSuccessfulMs)},
-        {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " + formatBytes(m_downloadSnapshot.freeBytes)},
-        {"DIAGNOSTICS", "UI Stall Logger Enabled"},
-        {"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
-        {"ACCOUNT", "Log Out"}
-    });
-    static constexpr int ROW_H=68, TOP=34;
-    for (int visible=0; visible<SETTINGS_VISIBLE_ROWS; ++visible) {
-        const int index=m_settingsScroll+visible;
-        if (index >= (int)rows.size()) break;
-        const int y=TOP+visible*ROW_H;
-        const bool selected=index==m_settingsSelected;
-        if (selected)
-            BitmapFont::fillRect(fb,8,y-2,624,ROW_H-4,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70);
-        BitmapFont::drawString(fb,16,y,rows[index].section.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,
-            Theme::ACCENT_B,24,24,32);
-        std::string value=rows[index].value;
-        static constexpr size_t MAX_CHARS=72;
-        if (value.size()>MAX_CHARS) value=value.substr(0,MAX_CHARS-3)+"...";
-        BitmapFont::drawString(fb,16,y+20,value.c_str(),Theme::TEXT_R,Theme::TEXT_G,
-            Theme::TEXT_B,24,24,32);
-        BitmapFont::fillRect(fb,16,y+ROW_H-8,608,1,48,48,58,255);
-    }
 }
 
 void HomeScreen::drawDownloadsTab(SDL_Surface *fb)

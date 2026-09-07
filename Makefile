@@ -137,6 +137,10 @@ test: $(TEST_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
 
+.PHONY: refactor-check
+refactor-check:
+	@sh tools/refactor-check.sh
+
 $(TEST_TARGET): $(TEST_SRCS) | output/test
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"

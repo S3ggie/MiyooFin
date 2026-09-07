@@ -54,6 +54,7 @@ SRCS        := \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
     $(SRC_DIR)/download/DownloadManagerReconcileWorker.cpp \
+    $(SRC_DIR)/download/DownloadManagerTransfer.cpp \
     $(SRC_DIR)/download/DownloadReconcile.cpp \
     $(SRC_DIR)/download/DownloadSupport.cpp \
     $(SRC_DIR)/download/HlsPlaylist.cpp \
@@ -146,6 +147,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/download/DownloadManager.cpp \
                src/download/DownloadManagerPlanning.cpp \
                src/download/DownloadManagerReconcileWorker.cpp \
+               src/download/DownloadManagerTransfer.cpp \
                src/download/DownloadReconcile.cpp \
                src/download/DownloadSupport.cpp \
                src/download/HlsPlaylist.cpp \

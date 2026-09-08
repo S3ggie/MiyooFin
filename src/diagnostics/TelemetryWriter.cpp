@@ -65,6 +65,9 @@ bool TelemetryWriter::open(const TelemetryConfig &config, const MftFileHeader &h
     logicalBytesWritten_ = 0;
     lastFlushMonotonicUs_ = 0;
     flushIntervalMs_ = config.flushIntervalMs;
+    rotationCount_ = 0;
+    config_ = config;
+    header_ = header;
     buffered_ = 0;
     buffer_.clear();
     path_.clear();
@@ -133,6 +136,40 @@ bool TelemetryWriter::append(const TelemetryRecord &record)
     if (!encodeRecord(record, encoded.data(), encoded.size(), encodedSize)) {
         setError(WriterErrorKind::Write, EINVAL);
         return false;
+    }
+
+    if (config_.rotateBytes != 0
+        && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
+        const std::string previousPath = path_;
+        const uint32_t previousIndex = header_.rotation_index;
+        const uint32_t nextIndex = previousIndex + 1;
+        if (!close())
+            return false;
+
+        const std::string rotatedPath = config_.targetDirectory + "/telemetry-"
+            + std::to_string(previousIndex) + ".mft";
+        std::remove(rotatedPath.c_str());
+        if (std::rename(previousPath.c_str(), rotatedPath.c_str()) != 0) {
+            setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
+            return false;
+        }
+        const uint32_t retainFiles = config_.retainFiles == 0 ? 1 : config_.retainFiles;
+        if (nextIndex >= retainFiles) {
+            const uint32_t expiredIndex = nextIndex - retainFiles;
+            const std::string expiredPath = config_.targetDirectory + "/telemetry-"
+                + std::to_string(expiredIndex) + ".mft";
+            std::remove(expiredPath.c_str());
+        }
+
+        MftFileHeader nextHeader = header_;
+        nextHeader.rotation_index = nextIndex;
+        const uint32_t rotations = rotationCount_;
+        if (!open(config_, nextHeader)) {
+            if (lastErrorKind_ == WriterErrorKind::Unknown)
+                setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
+            return false;
+        }
+        rotationCount_ = rotations + 1;
     }
 
     if (encodedSize > buffer_.size()) {
@@ -223,6 +260,11 @@ uint64_t TelemetryWriter::logicalBytesWritten() const noexcept
 std::size_t TelemetryWriter::bufferedBytes() const noexcept
 {
     return buffered_;
+}
+
+uint32_t TelemetryWriter::rotationCount() const noexcept
+{
+    return rotationCount_;
 }
 
 WriterErrorKind TelemetryWriter::lastErrorKind() const noexcept

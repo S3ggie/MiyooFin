@@ -30,6 +30,7 @@ public:
     bool isOpen() const noexcept;
     uint64_t logicalBytesWritten() const noexcept;
     std::size_t bufferedBytes() const noexcept;
+    uint32_t rotationCount() const noexcept;
     WriterErrorKind lastErrorKind() const noexcept;
     int lastErrorNumber() const noexcept;
 
@@ -40,9 +41,12 @@ private:
     std::vector<uint8_t> buffer_;
     std::size_t buffered_ = 0;
     std::string path_;
+    TelemetryConfig config_;
+    MftFileHeader header_{};
     uint64_t logicalBytesWritten_ = 0;
     uint64_t lastFlushMonotonicUs_ = 0;
     uint32_t flushIntervalMs_ = 0;
+    uint32_t rotationCount_ = 0;
     WriterErrorKind lastErrorKind_ = WriterErrorKind::Unknown;
     int lastErrorNumber_ = 0;
 };

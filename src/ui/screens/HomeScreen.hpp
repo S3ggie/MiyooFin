@@ -20,6 +20,7 @@
 #include "../ShowsBrowser.hpp"
 #include "../HomeTabs.hpp"
 #include "../HomeArtworkPlan.hpp"
+#include "../../diagnostics/TelemetryIds.hpp"
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
@@ -193,7 +194,7 @@ private:
     std::thread m_decodeThread;
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeWake;
-    struct DecodeJob { std::string key; PosterJob artwork; bool shows = false; };
+    struct DecodeJob { std::string key; PosterJob artwork; bool shows = false; ArtworkContext context = ArtworkContext::Unknown; };
     struct DecodeResult { std::string key; DecodedImage image; bool shows = false; bool cachePresent = false; };
     std::deque<DecodeJob> m_decodeJobs;
     std::deque<DecodeResult> m_decodeResults;

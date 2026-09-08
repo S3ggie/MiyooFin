@@ -475,6 +475,47 @@ static void testTelemetrySegmentAttemptPayload()
     std::printf("[test] HLS segment attempt payload builder OK\n");
 }
 
+static PlaybackEvent makeTelemetryPlaybackEventPayload(
+    PlaybackStage stage, PlaybackSourceKind source, uint8_t childExitKind,
+    int32_t childExitCode, uint64_t durationUs, uint32_t playbackSequence)
+{
+    PlaybackEvent payload{};
+    payload.stage = static_cast<uint8_t>(stage);
+    payload.source = static_cast<uint8_t>(source);
+    payload.child_exit_kind = childExitKind;
+    payload.duration_us = durationUs;
+    payload.child_exit_code = childExitCode;
+    payload.playback_seq = playbackSequence;
+    return payload;
+}
+
+static void testTelemetryPlaybackEventPayload()
+{
+    std::printf("[test] playback milestone payload bookkeeping\n");
+    const PlaybackStage stages[] = {
+        PlaybackStage::RequestToFinalPresent,
+        PlaybackStage::SuspendPlatform,
+        PlaybackStage::ChildWait,
+        PlaybackStage::ResumePlatform,
+        PlaybackStage::ReturnToFirstNormalFrame,
+    };
+    for (std::size_t index = 0; index < sizeof(stages) / sizeof(stages[0]); ++index) {
+        const PlaybackEvent payload = makeTelemetryPlaybackEventPayload(
+            stages[index], PlaybackSourceKind::Unknown,
+            index == 2 ? 1 : 0, index == 2 ? 17 : 0,
+            100 + index, 23);
+        CHECK(payload.stage == static_cast<uint8_t>(stages[index]));
+        CHECK(payload.source == static_cast<uint8_t>(PlaybackSourceKind::Unknown));
+        CHECK(payload.child_exit_kind == (index == 2 ? 1 : 0));
+        CHECK(payload.duration_us == 100 + index);
+        CHECK(payload.child_exit_code == (index == 2 ? 17 : 0));
+        CHECK(payload.playback_seq == 23);
+        CHECK(payload.reserved0 == 0);
+        CHECK(payload.reserved1 == 0);
+    }
+    std::printf("[test] playback milestone payload bookkeeping OK\n");
+}
+
 static void testTelemetryWriter()
 {
     std::printf("[test] buffered telemetry writer header, flush, close, and errors\n");
@@ -784,6 +825,7 @@ static void testTelemetrySchemaTypes()
     testMftV1Codec();
     testTelemetryWriter();
     testTelemetrySegmentAttemptPayload();
+    testTelemetryPlaybackEventPayload();
     testTelemetryServiceThread();
     testHttpClientTelemetry();
     std::printf("[test] linux process metrics parsing and validity\n");

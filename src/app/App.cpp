@@ -16,6 +16,7 @@
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #endif
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
@@ -51,6 +52,27 @@ const char *playbackStartingLabel(Uint32 elapsedMs)
 }
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+void emitPlaybackEvent(PerformanceTelemetry &telemetry,
+                       uint32_t playbackSequence,
+                       PlaybackStage stage,
+                       PlaybackSourceKind source,
+                       uint8_t childExitKind,
+                       int32_t childExitCode,
+                       uint64_t durationUs) noexcept
+{
+    if (!telemetry.enabledFast() || playbackSequence == 0)
+        return;
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::PlaybackEvent;
+    record.payload.playback_event.stage = static_cast<uint8_t>(stage);
+    record.payload.playback_event.source = static_cast<uint8_t>(source);
+    record.payload.playback_event.child_exit_kind = childExitKind;
+    record.payload.playback_event.duration_us = durationUs;
+    record.payload.playback_event.child_exit_code = childExitCode;
+    record.payload.playback_event.playback_seq = playbackSequence;
+    telemetry.emitRecord(record);
+}
+
 class FramePhaseTimer
 {
 public:
@@ -460,10 +482,20 @@ void App::handleExternalPlayback()
     printf("[App] Starting external playback handoff\n");
 
     // 1. Suspend SDL/video/input
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    TelemetryTimer suspendTimer;
+#endif
     if (!suspendPlatform()) {
         fprintf(stderr, "[App] Failed to suspend platform — aborting playback\n");
         return;
     }
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    emitPlaybackEvent(telemetry, m_playbackSequence,
+                      PlaybackStage::SuspendPlatform,
+                      PlaybackSourceKind::Unknown, 0, 0,
+                      suspendTimer.elapsedUs());
+#endif
 
     // 2. Locate the playback runner script relative to this binary
     std::string runnerPath;
@@ -503,20 +535,58 @@ void App::handleExternalPlayback()
     // 4. Parent waits for child to finish
     printf("[App] Waiting for playback child (PID=%d)\n", pid);
     int status = 0;
-    waitpid(pid, &status, 0);
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    telemetry.suspendSampling(true, SamplingReason::ExternalPlayback);
+    telemetry.emitSessionEvent(SessionEventKind::SamplingSuspended,
+                               Outcome::Success,
+                               static_cast<uint32_t>(SamplingReason::ExternalPlayback), 0);
+    TelemetryTimer childWaitTimer;
+#endif
+    const pid_t waitedPid = waitpid(pid, &status, 0);
 
     if (WIFEXITED(status)) {
         printf("[App] Playback child exited with status %d\n", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
         printf("[App] Playback child killed by signal %d\n", WTERMSIG(status));
     }
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    const uint8_t childExitKind = waitedPid < 0 ? 0
+        : (WIFEXITED(status) ? 1 : (WIFSIGNALED(status) ? 2 : 0));
+    const int32_t childExitCode = WIFEXITED(status)
+        ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    emitPlaybackEvent(telemetry, m_playbackSequence,
+                      PlaybackStage::ChildWait,
+                      PlaybackSourceKind::Unknown, childExitKind, childExitCode,
+                      childWaitTimer.elapsedUs());
+#endif
 
     // 5. Resume SDL/video/input
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    TelemetryTimer resumeTimer;
+#endif
     if (!resumePlatform()) {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        telemetry.suspendSampling(false, SamplingReason::ExternalPlayback);
+        telemetry.emitSessionEvent(SessionEventKind::SamplingResumed,
+                                   Outcome::Success,
+                                   static_cast<uint32_t>(SamplingReason::ExternalPlayback), 0);
+#endif
         fprintf(stderr, "[App] Failed to resume platform — exiting\n");
         m_running = false;
         return;
     }
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    emitPlaybackEvent(telemetry, m_playbackSequence,
+                      PlaybackStage::ResumePlatform,
+                      PlaybackSourceKind::Unknown, 0, 0,
+                      resumeTimer.elapsedUs());
+    telemetry.suspendSampling(false, SamplingReason::ExternalPlayback);
+    telemetry.emitSessionEvent(SessionEventKind::SamplingResumed,
+                               Outcome::Success,
+                               static_cast<uint32_t>(SamplingReason::ExternalPlayback), 0);
+    if (telemetry.enabledFast())
+        m_playbackResumeUs = TelemetryClock::monotonicUs();
+#endif
 
     // Read (but leave for the active screen to consume) before its next update.
     if (ingestPlaybackResult(false)) scheduleJournalSync();
@@ -552,7 +622,8 @@ int App::run()
         const bool telemetryEnabled = telemetry.enabledFast();
         const uint64_t frameStartUs = telemetryEnabled
             ? TelemetryClock::monotonicUs() : 0;
-        telemetry.setPlaybackState(PlaybackState::UiActive);
+        if (!m_playbackReturnPending)
+            telemetry.setPlaybackState(PlaybackState::UiActive);
 #endif
         uiDiagnostics().heartbeat();
         uiDiagnostics().setPhase("event/input");
@@ -629,6 +700,12 @@ int App::run()
             m_playbackStarting = true;
             m_playbackStartingTick = now;
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            if (telemetryEnabled && telemetry.enabledFast()) {
+                m_playbackSequence = static_cast<uint32_t>(telemetry.nextEphemeralId());
+                if (m_playbackSequence != 0)
+                    m_playbackRequestUs = TelemetryClock::monotonicUs();
+                m_playbackReturnPending = false;
+            }
             telemetry.setPlaybackState(PlaybackState::StartingOverlay);
 #endif
         }
@@ -809,6 +886,32 @@ int App::run()
         }
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        if (m_playbackReturnPending) {
+            if (telemetryEnabled && telemetry.enabledFast()) {
+                const uint64_t presentUs = TelemetryClock::monotonicUs();
+                emitPlaybackEvent(telemetry, m_playbackSequence,
+                                  PlaybackStage::ReturnToFirstNormalFrame,
+                                  PlaybackSourceKind::Unknown, 0, 0,
+                                  presentUs >= m_playbackResumeUs
+                                      ? presentUs - m_playbackResumeUs : 0);
+                telemetry.setPlaybackState(PlaybackState::UiActive);
+            }
+            m_playbackReturnPending = false;
+        }
+#endif
+
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        if (handoffAfterPresent && telemetryEnabled && m_playbackSequence != 0) {
+            const uint64_t presentUs = TelemetryClock::monotonicUs();
+            emitPlaybackEvent(telemetry, m_playbackSequence,
+                              PlaybackStage::RequestToFinalPresent,
+                              PlaybackSourceKind::Unknown, 0, 0,
+                              presentUs >= m_playbackRequestUs
+                                  ? presentUs - m_playbackRequestUs : 0);
+        }
+#endif
+
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
         if (telemetryEnabled) {
             const uint64_t frameEndUs = TelemetryClock::monotonicUs();
             telemetry.recordFramePhase(
@@ -831,6 +934,10 @@ int App::run()
             telemetry.setPlaybackState(PlaybackState::Resuming);
 #endif
             m_playbackStarting = false;
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            if (m_playbackSequence != 0 && telemetry.enabledFast())
+                m_playbackReturnPending = true;
+#endif
             // Reset timing so dt doesn't include playback duration.
             m_lastTick = SDL_GetTicks();
         }

@@ -242,6 +242,7 @@ int main()
     testExternalPlaybackFlagInitial();
     testExternalPlaybackFlagSetConsume();
     testExternalPlaybackFlagMultipleSet();
+    testExternalPlaybackSourcePropagation();
     testPlaybackRequestStillWorks();
     testScreenStackPreservedDuringExternalPlayback();
     testScreenRetirementDoesNotBlockPop();

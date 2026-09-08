@@ -70,6 +70,8 @@ private:
     uint64_t        m_playbackRequestUs = 0;
     uint64_t        m_playbackResumeUs = 0;
     bool            m_playbackReturnPending = false;
+    ScreenStack::ExternalPlaybackSource m_playbackSource =
+        ScreenStack::ExternalPlaybackSource::Unknown;
 #endif
 
     // Startup flow state

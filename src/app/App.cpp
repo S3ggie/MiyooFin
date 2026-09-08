@@ -52,6 +52,19 @@ const char *playbackStartingLabel(Uint32 elapsedMs)
 }
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+PlaybackSourceKind telemetryPlaybackSource(
+    ScreenStack::ExternalPlaybackSource source) noexcept
+{
+    switch (source) {
+    case ScreenStack::ExternalPlaybackSource::Jellyfin:
+        return PlaybackSourceKind::Jellyfin;
+    case ScreenStack::ExternalPlaybackSource::Local:
+        return PlaybackSourceKind::Local;
+    default:
+        return PlaybackSourceKind::Unknown;
+    }
+}
+
 void emitPlaybackEvent(PerformanceTelemetry &telemetry,
                        uint32_t playbackSequence,
                        PlaybackStage stage,
@@ -493,7 +506,7 @@ void App::handleExternalPlayback()
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
     emitPlaybackEvent(telemetry, m_playbackSequence,
                       PlaybackStage::SuspendPlatform,
-                      PlaybackSourceKind::Unknown, 0, 0,
+                      telemetryPlaybackSource(m_playbackSource), 0, 0,
                       suspendTimer.elapsedUs());
 #endif
 
@@ -556,7 +569,7 @@ void App::handleExternalPlayback()
         ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     emitPlaybackEvent(telemetry, m_playbackSequence,
                       PlaybackStage::ChildWait,
-                      PlaybackSourceKind::Unknown, childExitKind, childExitCode,
+                      telemetryPlaybackSource(m_playbackSource), childExitKind, childExitCode,
                       childWaitTimer.elapsedUs());
 #endif
 
@@ -578,7 +591,7 @@ void App::handleExternalPlayback()
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
     emitPlaybackEvent(telemetry, m_playbackSequence,
                       PlaybackStage::ResumePlatform,
-                      PlaybackSourceKind::Unknown, 0, 0,
+                      telemetryPlaybackSource(m_playbackSource), 0, 0,
                       resumeTimer.elapsedUs());
     telemetry.suspendSampling(false, SamplingReason::ExternalPlayback);
     telemetry.emitSessionEvent(SessionEventKind::SamplingResumed,
@@ -695,11 +708,14 @@ int App::run()
         }
 
         // --- Check if a screen requested external playback ---
-        if (!m_playbackStarting && m_stack.pollExternalPlayback()) {
+        ScreenStack::ExternalPlaybackSource playbackSource =
+            ScreenStack::ExternalPlaybackSource::Unknown;
+        if (!m_playbackStarting && m_stack.pollExternalPlayback(playbackSource)) {
             printf("[App] External playback flagged by screen\n");
             m_playbackStarting = true;
             m_playbackStartingTick = now;
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            m_playbackSource = playbackSource;
             if (telemetryEnabled && telemetry.enabledFast()) {
                 m_playbackSequence = static_cast<uint32_t>(telemetry.nextEphemeralId());
                 if (m_playbackSequence != 0)
@@ -891,7 +907,7 @@ int App::run()
                 const uint64_t presentUs = TelemetryClock::monotonicUs();
                 emitPlaybackEvent(telemetry, m_playbackSequence,
                                   PlaybackStage::ReturnToFirstNormalFrame,
-                                  PlaybackSourceKind::Unknown, 0, 0,
+                                  telemetryPlaybackSource(m_playbackSource), 0, 0,
                                   presentUs >= m_playbackResumeUs
                                       ? presentUs - m_playbackResumeUs : 0);
                 telemetry.setPlaybackState(PlaybackState::UiActive);
@@ -905,7 +921,7 @@ int App::run()
             const uint64_t presentUs = TelemetryClock::monotonicUs();
             emitPlaybackEvent(telemetry, m_playbackSequence,
                               PlaybackStage::RequestToFinalPresent,
-                              PlaybackSourceKind::Unknown, 0, 0,
+                              telemetryPlaybackSource(m_playbackSource), 0, 0,
                               presentUs >= m_playbackRequestUs
                                   ? presentUs - m_playbackRequestUs : 0);
         }

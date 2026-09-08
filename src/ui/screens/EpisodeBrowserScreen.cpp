@@ -7,6 +7,8 @@
 #include "../../net/RouteRequest.hpp"
 #include "../../cache/OfflineCatalog.hpp"
 #include "../../cache/LibraryCache.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
 
 namespace miyoofin {
@@ -230,11 +232,34 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
     const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
     std::shared_ptr<DownloadManager> downloads=m_downloads;
     m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,networkOffline,downloadedOnly,loadCached,catalogPath,downloads](){
+        PerformanceTelemetry &telemetry=performanceTelemetry();
+        telemetry.setWorkerActive(WorkerId::EpisodeFetch, true);
+        telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 1);
+        TelemetryTimer fetchTimer;
+        bool telemetryCompleted = false;
+        auto completeTelemetry = [&](Outcome outcome) noexcept {
+            if (telemetryCompleted)
+                return;
+            telemetryCompleted = true;
+            if (fetchTimer.active())
+                (void)fetchTimer.elapsedUs();
+            if (outcome == Outcome::Success)
+                telemetry.addWorkerCompleted(WorkerId::EpisodeFetch);
+            else if (outcome == Outcome::Cancelled)
+                telemetry.addWorkerCancelled(WorkerId::EpisodeFetch);
+            else
+                telemetry.addWorkerFailed(WorkerId::EpisodeFetch);
+            telemetry.setWorkerActive(WorkerId::EpisodeFetch, false);
+            telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 0);
+        };
         std::vector<MediaItem> cached;
         if(loadCached) {
             OfflineCatalogSnapshot catalog;
             OfflineCatalog::load(catalogPath,catalog,nullptr);
-            if(m_fetchCancelled.load(std::memory_order_acquire)) return;
+            if(m_fetchCancelled.load(std::memory_order_acquire)) {
+                completeTelemetry(Outcome::Cancelled);
+                return;
+            }
             if(downloadedOnly) {
                 LibrarySnapshot library;
                 OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
@@ -249,12 +274,18 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
                 m_cachedEpisodesDone=true;
             }
             if(networkOffline) {
-                std::lock_guard<std::mutex>g(m_fetchMutex);
-                m_fetchOk=true;m_fetchEpisodes=std::move(cached);m_fetchDone=true;
+                {
+                    std::lock_guard<std::mutex>g(m_fetchMutex);
+                    m_fetchOk=true;m_fetchEpisodes=std::move(cached);m_fetchDone=true;
+                }
+                completeTelemetry(Outcome::Success);
                 return;
             }
         }
-        if(m_fetchCancelled.load(std::memory_order_acquire)) return;
+        if(m_fetchCancelled.load(std::memory_order_acquire)) {
+            completeTelemetry(Outcome::Cancelled);
+            return;
+        }
         std::vector<MediaItem>v;std::string e;
         bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);},e);
         // storeEpisodes reads, merges, serializes, fsyncs and renames the full
@@ -263,8 +294,12 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
             OfflineCatalog::storeEpisodes(catalogPath,seriesItem,seasonItem,v,nullptr);
             if (downloadedOnly) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(catalogPath,catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{}); v=projection.episodes(season); }
         }
-        std::lock_guard<std::mutex>g(m_fetchMutex);
-        m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;
+        {
+            std::lock_guard<std::mutex>g(m_fetchMutex);
+            m_fetchOk=ok;m_fetchEpisodes=std::move(v);m_fetchError=e;m_fetchDone=true;
+        }
+        completeTelemetry(m_fetchCancelled.load(std::memory_order_acquire)
+            ? Outcome::Cancelled : (ok ? Outcome::Success : Outcome::Failure));
     });
 }
 

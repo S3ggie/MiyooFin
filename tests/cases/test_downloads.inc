@@ -189,32 +189,64 @@ static void testDownloadPlanBatchAccounting()
 {
     // A manager with an invalid session never performs HTTP; makePlan is pure
     // with respect to its input and the manager's local queue.
-    DownloadManager d({}, "output/test/download-plan-fixture-"+std::to_string((long long)getpid()));
-    d.setPlaybackActive(true); // preserve fixture queue state; no transfer worker races
-    // enqueue is called by the SDL confirmation handler.  With the worker
-    // paused, no manifest or item directory may exist until that worker runs.
-    DownloadItem deferred=planItem("deferred",100);
-    d.enqueue(std::vector<DownloadItem>{deferred,planItem("deferred-two",100)});
-    DownloadStore deferredStore("output/test/download-plan-fixture-"+std::to_string((long long)getpid()));
-    CHECK(::access(deferredStore.manifestPath(d.scope(),"deferred").c_str(),F_OK)!=0);
-    CHECK(::access(deferredStore.itemPath(d.scope(),"deferred").c_str(),F_OK)!=0);
-    auto duplicate=d.makePlan({planItem("a",100),planItem("a",100),planItem("b",200)});
-    CHECK(duplicate.items.size() == (size_t)2); // season / cross-season dedupe
-    CHECK(duplicate.additionalRequiredBytes == (std::uint64_t)300);
-    auto unknown=d.makePlan({planItem("unknown",0)});
-    CHECK(!unknown.sizeKnown); CHECK(!unknown.error.empty());
-    CHECK(!DownloadManager::acceptsPlanResult(7,8)); // stale planner generation is ignored
-    CHECK(DownloadManager::acceptsPlanResult(8,8));
-    std::vector<DownloadItem> large; for(int n=0;n<128;++n) large.push_back(planItem("episode"+std::to_string(n),1));
-    CHECK(d.makePlan(large).items.size() == (size_t)128); // large series stays one plan
-    d.enqueue(planItem("partial",100,40));
-    auto partial=d.makePlan({planItem("partial",100)});
-    CHECK(partial.alreadyPresentBytes == (std::uint64_t)40);
-    CHECK(partial.additionalRequiredBytes == (std::uint64_t)0); // its remaining 60 is reserved once
-    d.enqueue(planItem("complete",100,100));
-    CHECK(d.makePlan({planItem("complete",100)}).additionalRequiredBytes == (std::uint64_t)0);
-    auto queued=d.makePlan({planItem("partial",100),planItem("new",10)});
-    CHECK(queued.additionalRequiredBytes == (std::uint64_t)10); // queued partial is not double-reserved
+    char rootTemplate[]="/tmp/miyoofin-download-plan-XXXXXX";
+    char *rootPath=::mkdtemp(rootTemplate);
+    CHECK(rootPath!=nullptr);
+    if (!rootPath) return;
+    const std::string root(rootPath);
+    std::string scope;
+    {
+        DownloadManager d({},root);
+        d.setPlaybackActive(true);
+        // enqueue is called by the SDL confirmation handler.  Playback pauses
+        // transfer selection, but the worker may persist the queued state.
+        DownloadItem deferred=planItem("deferred",100);
+        d.enqueue(std::vector<DownloadItem>{deferred,planItem("deferred-two",100)});
+        scope=d.scope();
+        DownloadStore deferredStore(root);
+        bool persisted=false;
+        for(unsigned n=0;n<100;n++){
+            std::vector<DownloadItem> saved;
+            if(deferredStore.loadIndex(scope,saved,nullptr)&&saved.size()==2){persisted=true;break;}
+            usleep(10000);
+        }
+        CHECK(persisted);
+        DownloadItem savedDeferred;
+        CHECK(deferredStore.loadManifest(scope,"deferred",savedDeferred));
+        CHECK(savedDeferred.state==DownloadState::Queued);
+        auto pausedSnapshot=d.snapshot();
+        CHECK(pausedSnapshot.playbackActive);
+        CHECK(pausedSnapshot.items.size()==2);
+        CHECK(std::all_of(pausedSnapshot.items.begin(),pausedSnapshot.items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;}));
+        // No HLS segment bytes may be created while playback is active.
+        CHECK(::access(deferredStore.segmentPath(scope,"deferred",0).c_str(),F_OK)!=0);
+        CHECK(::access(deferredStore.segmentPath(scope,"deferred",0,true).c_str(),F_OK)!=0);
+        auto duplicate=d.makePlan({planItem("a",100),planItem("a",100),planItem("b",200)});
+        CHECK(duplicate.items.size() == (size_t)2); // season / cross-season dedupe
+        CHECK(duplicate.additionalRequiredBytes == (std::uint64_t)300);
+        auto unknown=d.makePlan({planItem("unknown",0)});
+        CHECK(!unknown.sizeKnown); CHECK(!unknown.error.empty());
+        CHECK(!DownloadManager::acceptsPlanResult(7,8)); // stale planner generation is ignored
+        CHECK(DownloadManager::acceptsPlanResult(8,8));
+        std::vector<DownloadItem> large; for(int n=0;n<128;++n) large.push_back(planItem("episode"+std::to_string(n),1));
+        CHECK(d.makePlan(large).items.size() == (size_t)128); // large series stays one plan
+        d.enqueue(planItem("partial",100,40));
+        auto partial=d.makePlan({planItem("partial",100)});
+        CHECK(partial.alreadyPresentBytes == (std::uint64_t)40);
+        CHECK(partial.additionalRequiredBytes == (std::uint64_t)0); // its remaining 60 is reserved once
+        d.enqueue(planItem("complete",100,100));
+        CHECK(d.makePlan({planItem("complete",100)}).additionalRequiredBytes == (std::uint64_t)0);
+        auto queued=d.makePlan({planItem("partial",100),planItem("new",10)});
+        CHECK(queued.additionalRequiredBytes == (std::uint64_t)10); // queued partial is not double-reserved
+    }
+    DownloadStore cleanup(root);
+    for (const char *itemId : {"deferred","deferred-two","partial","complete"})
+        cleanup.removeItem(scope,itemId,nullptr);
+    std::remove((cleanup.scopePath(scope)+"/index.v1").c_str());
+    std::remove((cleanup.scopePath(scope)+"/index.v1.tmp").c_str());
+    ::rmdir((cleanup.scopePath(scope)+"/items").c_str());
+    ::rmdir(cleanup.scopePath(scope).c_str());
+    ::rmdir(root.c_str());
 }
 
 static void testHlsSizeEstimates()

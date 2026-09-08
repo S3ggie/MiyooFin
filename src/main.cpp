@@ -1,4 +1,6 @@
 #include "app/App.hpp"
+#include "diagnostics/PerformanceTelemetry.hpp"
+#include "diagnostics/TelemetryConfig.hpp"
 #include <SDL2/SDL.h>
 #include <cstdio>
 #include <cstdlib>
@@ -23,13 +25,22 @@ int main(int argc, char *argv[])
     }
     // ------------------------------------------
 
-    miyoofin::App app;
-    if (!app.init()) {
-        fprintf(stderr, "[main] App initialisation failed\n");
-        return 1;
+    const miyoofin::TelemetryConfig telemetryConfig =
+        miyoofin::TelemetryConfig::fromEnvironment();
+    miyoofin::performanceTelemetry().start(telemetryConfig);
+
+    int result = 0;
+    {
+        miyoofin::App app;
+        if (!app.init()) {
+            fprintf(stderr, "[main] App initialisation failed\n");
+            result = 1;
+        } else {
+            result = app.run();
+        }
     }
 
-    int result = app.run();
+    miyoofin::performanceTelemetry().stop();
     printf("[main] Exited with code %d\n", result);
     return result;
 }

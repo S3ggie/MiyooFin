@@ -231,7 +231,7 @@ fi
 # drivers.
 # -------------------------------------------------------------------
 unset SDL_VIDEODRIVER
-export SDL_AUDIODRIVER=mmiyoo
+unset SDL_AUDIODRIVER
 
 # -------------------------------------------------------------------
 # Run Onion FFplay

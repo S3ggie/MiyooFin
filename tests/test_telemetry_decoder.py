@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "telemetry"))
 
 import decode  # noqa: E402
+import analyze  # noqa: E402
 
 
 FIXTURES = ROOT / "tests" / "fixtures" / "telemetry"
@@ -87,6 +88,109 @@ class TelemetryDecoderTests(unittest.TestCase):
             with (csv_directory / "SessionEvent.csv").open(newline="") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows[0]["kind"], "TelemetryStarted")
+
+    def test_analysis_represents_all_domains_and_derives_rates(self):
+        decoded = decode.decode_file(FIXTURES / "valid_v1.mft")
+        summary = analyze.summarize(decoded, cpu_count=4)
+
+        self.assertEqual(summary["timeline"]["record_count"], 14)
+        self.assertAlmostEqual(
+            summary["system"]["samples"][0]["cpu_percent_one_core"], 0.0
+        )
+        self.assertIn("cpu_percent_device", summary["system"]["samples"][0])
+        for section in (
+            "system", "frames", "workers", "requests", "artwork", "downloads",
+            "playback", "health", "state", "session", "correlations",
+        ):
+            self.assertIn(section, summary)
+        self.assertEqual(summary["frames"]["histogram"], [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        self.assertEqual(summary["requests"]["latency"]["maximum_us"], 123)
+        self.assertEqual(summary["downloads"]["bytes"], 3000)
+
+    def test_analysis_cpu_io_and_grouping_math(self):
+        def record(record_type, timestamp, payload):
+            return {
+                "record_type": record_type,
+                "record_type_id": 1,
+                "record_size": 0,
+                "sequence": timestamp,
+                "monotonic_us": timestamp,
+                "payload": payload,
+            }
+
+        decoded = {"header": {}, "records": [
+            record("SystemSample", 1000, {
+                "process_cpu_us_cumulative": 100,
+                "process_read_bytes_cumulative": 1000,
+                "process_write_bytes_cumulative": 2000,
+                "rss_kib": 10, "peak_rss_kib": 12, "free_storage_bytes": 900,
+            }),
+            record("SystemSample", 3000, {
+                "process_cpu_us_cumulative": 1100,
+                "process_read_bytes_cumulative": 5000,
+                "process_write_bytes_cumulative": 2600,
+                "rss_kib": 20, "peak_rss_kib": 22, "free_storage_bytes": 800,
+            }),
+            record("NetworkRequest", 2500, {
+                "request_kind_id": 16, "request_kind": "Artwork", "duration_us": 1000,
+            }),
+        ]}
+        summary = analyze.summarize(decoded, cpu_count=2)
+        sample = summary["system"]["samples"][1]
+        self.assertEqual(sample["monotonic_delta_us"], 2000)
+        self.assertAlmostEqual(sample["cpu_percent_one_core"], 50.0)
+        self.assertAlmostEqual(sample["cpu_percent_device"], 25.0)
+        self.assertEqual(sample["read_bytes_delta"], 4000)
+        self.assertEqual(summary["system"]["io"]["write_bytes"], 600)
+
+    def test_analysis_correlates_state_and_overlapping_work(self):
+        def record(record_type, timestamp, payload):
+            return {
+                "record_type": record_type,
+                "record_type_id": 0,
+                "sequence": timestamp,
+                "monotonic_us": timestamp,
+                "payload": payload,
+            }
+
+        decoded = {"header": {}, "records": [
+            record("StateTransition", 100, {
+                "state_kind": "Screen", "current": "Home",
+            }),
+            record("WorkerSample", 105, {
+                "worker_id": 9, "active": 1, "queue_depth": 2,
+            }),
+            record("NetworkRequest", 190, {
+                "request_kind": "Artwork", "duration_us": 50,
+            }),
+            record("DownloadSegmentAttempt", 195, {
+                "duration_us": 40, "outcome": "Success",
+            }),
+            record("UiStall", 200, {
+                "duration_us": 100, "scope": "Screen::update",
+            }),
+        ]}
+        correlations = analyze.correlate(decoded)
+        self.assertEqual(len(correlations), 1)
+        self.assertEqual(correlations[0]["state"]["Screen"]["current"], "Home")
+        self.assertEqual(len(correlations[0]["workers"]), 1)
+        self.assertEqual(len(correlations[0]["network"]), 1)
+        self.assertEqual(len(correlations[0]["downloads"]), 1)
+
+    def test_analysis_writes_normalized_domain_exports(self):
+        decoded = decode.decode_file(FIXTURES / "valid_v1.mft")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            analyze.write_csv_exports(decoded, output, cpu_count=2)
+            for name in (
+                "summary.json", "system.csv", "frames.csv", "workers.csv",
+                "requests.csv", "artwork.csv", "downloads.csv", "playback.csv",
+                "health.csv", "state.csv", "session.csv", "correlations.csv",
+            ):
+                self.assertTrue((output / name).exists(), name)
+            with (output / "requests.csv").open(newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[0]["request_kind"], "Artwork")
 
 
 if __name__ == "__main__":

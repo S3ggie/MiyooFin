@@ -74,7 +74,7 @@ bridge, and the final network playback was audible.
 | Runtime crossing below cutoff disables tracing | PASS | `WriterDisabledLowSpace` decoded from the isolated tmpfs run. |
 | Final health and writer close | PASS | Zero drops/errors; telemetry service stopped and no further trace growth was observed. |
 | Main SD-card safety | PASS | No tens-of-gigabytes allocation; temporary filler was confined to the mounted 132 MiB overlay and removed. |
-| 16 MiB rotation / four-file retention | NOT RUN | Not required for the remaining Task 037 coverage and no rotation claim is made. |
+| 16 MiB rotation / four-file retention | NOT RUN | Not performed; no rotation claim is made. |
 
 ## Privacy review
 
@@ -86,7 +86,7 @@ bridge, and the final network playback was audible.
 
 ## Conclusion
 
-Task 037 acceptance criteria pass for the performed non-soak scenarios. The
+The required acceptance criteria pass for the performed non-soak scenarios. The
 observer-effect result is PASS for the available short-duration A/B/C evidence,
 with numeric CPU/RSS/frame-delta medians left unmeasured and the long soak
 explicitly waived/not performed.

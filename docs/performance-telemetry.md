@@ -83,6 +83,23 @@ The decoder and analyzer use only the Python standard library. Analysis derives
 CPU and I/O rates from monotonic deltas and keeps the device producer path numeric
 and bounded. `--cpu-count N` additionally reports whole-device CPU share.
 
+## Benchmark acceptance checks
+
+Keep device, filesystem, OnionOS/firmware, Wi-Fi, Jellyfin path and media,
+application settings, display conditions, and power/clock condition constant
+across variants. Disable unrelated device activity. Use repeated short runs when
+practical and report interruptions and environmental deviations; the completed
+results are linked above.
+
+The comparison checks compile-out removal, runtime-off absence of telemetry thread
+and file, guarded runtime-off clocks/context/event work, no added baseline UI
+stalls, ordinary trace rate in the few-KiB/s range, zero ordinary drops, bounded
+rotation, and low-storage shutdown. CPU/RSS/frame thresholds are reported only
+when measured; they are never inferred from functional behavior. A low-storage
+crossing must include `WriterDisabledLowSpace`, final health, writer close, the
+disabled state, no further trace growth, and unaffected application/download
+behavior. The main application filesystem must not be filled to cross the cutoff.
+
 ## Final coverage and ownership review
 
 The frozen implementation has one owner for each telemetry domain:
@@ -108,6 +125,11 @@ MFT v1 is allowlist-only: it serializes no strings, credentials, authenticated
 URLs, headers, bodies, persistent Jellyfin identifiers, titles, image tags, cache
 paths, or download scopes. The complete hardware, privacy, low-storage, and
 observer-effect review is linked from the benchmark report above.
+
+Allowed trace data is limited to fixed enums, booleans, counts, durations, byte
+counts, queue depths, numeric HTTP/CURL codes, build metadata, and ephemeral
+process-local sequence IDs/nonces. Persistent identifiers must not be hashed as a
+workaround.
 
 ## Safety and privacy
 

@@ -1,6 +1,6 @@
 # MFT v1 — Normative Binary Schema
 
-Normative before Task 000. Little-endian. Encode fields explicitly; never raw structs. Common record header 16 bytes. Maximum record size 256 bytes; largest current v1 record 88 bytes. No string record/table.
+Normative MFT v1 contract. Little-endian. Encode fields explicitly; never raw structs. Common record header 16 bytes. Maximum record size 256 bytes; largest current v1 record 88 bytes. No string record/table.
 
 ## File header — 80 bytes
 
@@ -60,7 +60,7 @@ u16 record_type; u16 record_size including header; u32 sequence; u64 monotonic_u
 ### StateKind u8
 1 Screen; 2 Tab; 3 Action; 4 PlaybackState.
 
-**There is no ConnectivityMode in MFT v1.** It is removed because this roadmap has no single authoritative connectivity-transition owner.
+**There is no ConnectivityMode in MFT v1.** It is omitted because no single authoritative connectivity-transition owner exists.
 
 ### PlaybackState u16
 0 Unknown; 1 UiActive; 2 StartingOverlay; 3 ExternalPlayback; 4 Resuming.

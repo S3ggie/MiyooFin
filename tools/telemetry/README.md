@@ -1,9 +1,15 @@
-# MFT v1 desktop decoder
+# MFT v1 desktop decoder and analysis tools
 
 `decode.py` is an independent standard-library decoder for the fixed-layout MFT v1
 trace format. It validates the file header, decodes known records, skips unknown
 records with valid sizes, stops safely on impossible sizes, and ignores a partial
-tail after preserving complete records.
+tail after preserving complete records. Its layouts and enum names are frozen to
+the normative [`telemetry/SCHEMA_V1.md`](../../telemetry/SCHEMA_V1.md) contract;
+the C++ encoder uses the same explicit little-endian field order and record sizes.
+
+MFT v1 is allowlist-only and contains no strings, credentials, authenticated URLs,
+headers, bodies, persistent identifiers, titles, image tags, cache paths, or
+download scopes. The decoder does not recover or invent any such values.
 
 Examples:
 
@@ -42,5 +48,11 @@ python3 tools/telemetry/compare_runs.py --self-test
 
 The comparison reports medians, min/max spread, B−A compile/variant deltas, and
 C−B runtime observer-effect deltas. The repository benchmark procedure is in
-`docs/performance-telemetry.md` and its initially `NOT RUN` result template is in
-`docs/performance-telemetry-benchmark.md`.
+`docs/performance-telemetry.md`; completed Miyoo Mini Plus evidence is in
+`docs/performance-telemetry-benchmark.md`. The benchmark report records the
+128 MiB low-storage result, A/B/C observer-effect limitations, and the explicitly
+waived/not-performed long soak.
+
+The final runtime architecture and ownership boundaries are documented in
+[`docs/architecture.md`](../../docs/architecture.md). These tools remain laptop-
+side consumers of MFT v1; they do not alter the device producer contract.

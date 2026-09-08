@@ -1,9 +1,14 @@
 # Performance telemetry workflow
 
 This document describes the supported desktop and Miyoo Mini Plus workflow for
-collecting and interpreting MiyooFin Performance Telemetry. It does not contain
-hardware results; the benchmark result template remains `NOT RUN` until a real
-device run is performed.
+collecting and interpreting MiyooFin Performance Telemetry. The completed
+real-device results are recorded in the
+[performance telemetry benchmark](performance-telemetry-benchmark.md).
+
+MFT v1 is frozen. The normative binary contract is
+[`telemetry/SCHEMA_V1.md`](../telemetry/SCHEMA_V1.md), the implementation is
+described in [`docs/architecture.md`](architecture.md), and the laptop tools
+consume that contract independently.
 
 ## Build and runtime variants
 
@@ -29,6 +34,13 @@ Always run `make clean` before changing `PERF_TELEMETRY=0` to `1` or `1` to `0`.
 The build outputs are shared across flags. Build A and B/C from the same source
 revision; B and C must use the same compiled-in binary, with only the runtime
 environment switch changed.
+
+The benchmark evidence passed the required non-soak scenarios on the Miyoo Mini
+Plus, including a valid growing C trace, normal network and local playback
+lifecycles, and isolated low-storage shutdown. The user-waived 1–2 hour soak was
+not performed. Numeric CPU/RSS/frame observer-effect medians were not captured
+and are not inferred as passes; see the benchmark report for the exact evidence
+and remaining limitations.
 
 ## Normal OnionOS launch scenarios
 
@@ -70,6 +82,32 @@ python3 tools/telemetry/analyze.py trace.mft --json trace-summary.json --csv-dir
 The decoder and analyzer use only the Python standard library. Analysis derives
 CPU and I/O rates from monotonic deltas and keeps the device producer path numeric
 and bounded. `--cpu-count N` additionally reports whole-device CPU share.
+
+## Final coverage and ownership review
+
+The frozen implementation has one owner for each telemetry domain:
+
+| Domain | Owner / guarantee |
+|---|---|
+| Process, cadence, aggregates, health | `PerformanceTelemetry` service thread; interval counters reset after emission and gauges remain instantaneous. |
+| Frames, UI state, and playback handoff | `App` and `ScreenStack`; five playback stages are recorded and sampling is suspended only during external child playback. |
+| Watchdog diagnostics | `UiDiagnostics`; it remains a sibling authority and only allowlisted numeric mappings enter MFT. |
+| Workers and screen retirement | Each owning worker updates its facade state; the service thread emits worker snapshots without taking worker mutexes. |
+| Artwork | `ImageCache` owns generic cache aggregates; `ImageDecoder` owns decode aggregates and individual decode records. |
+| Jellyfin and normal transport | `JellyfinApi`, `RouteRequest`, and `HttpClient` own semantic request, route-attempt, and transport records respectively. |
+| Downloads and HLS | `DownloadManager` owns download state and direct HLS attempt/retry records; no normal transport double-counting occurs. |
+| Desktop analysis | `tools/telemetry` decodes MFT v1 and derives summaries without changing device records. |
+
+Compile-out removes production telemetry and hot-path work. Runtime-off avoids
+the service thread, trace file, telemetry clocks, TLS context mutation, and event
+work. The writer samples the configured output filesystem, refuses startup below
+128 MiB, and disables tracing on the first valid runtime crossing without deleting
+application or download data.
+
+MFT v1 is allowlist-only: it serializes no strings, credentials, authenticated
+URLs, headers, bodies, persistent Jellyfin identifiers, titles, image tags, cache
+paths, or download scopes. The complete hardware, privacy, low-storage, and
+observer-effect review is linked from the benchmark report above.
 
 ## Safety and privacy
 

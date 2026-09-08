@@ -9,6 +9,7 @@
 #include <limits>
 #include <thread>
 #include <unistd.h>
+#include <cstring>
 
 #include "TelemetryClock.hpp"
 #include "miyoofin/version.hpp"
@@ -61,6 +62,76 @@ void PerformanceTelemetry::clearTestHooks() noexcept
 }
 #endif
 
+ScreenId PerformanceTelemetry::screenIdFromDiagnosticName(const char *name) noexcept
+{
+    if (name == nullptr)
+        return ScreenId::Other;
+    if (std::strcmp(name, "StartupScreen") == 0)
+        return ScreenId::Startup;
+    if (std::strcmp(name, "ServerEntryScreen") == 0)
+        return ScreenId::ServerEntry;
+    if (std::strcmp(name, "ConnectScreen") == 0)
+        return ScreenId::Connect;
+    if (std::strcmp(name, "LoginScreen") == 0)
+        return ScreenId::Login;
+    if (std::strcmp(name, "AuthCheckScreen") == 0)
+        return ScreenId::AuthCheck;
+    if (std::strcmp(name, "HomeScreen") == 0)
+        return ScreenId::Home;
+    if (std::strcmp(name, "SeriesScreen") == 0)
+        return ScreenId::Series;
+    if (std::strcmp(name, "EpisodeBrowserScreen") == 0)
+        return ScreenId::EpisodeBrowser;
+    if (std::strcmp(name, "MovieDetailsScreen") == 0)
+        return ScreenId::MovieDetails;
+    if (std::strcmp(name, "InputDiagnosticsScreen") == 0)
+        return ScreenId::InputDiagnostics;
+    return ScreenId::Other;
+}
+
+TabId PerformanceTelemetry::tabIdFromDiagnosticName(const char *name) noexcept
+{
+    if (name == nullptr || std::strcmp(name, "other") == 0)
+        return TabId::Other;
+    if (std::strcmp(name, "n/a") == 0)
+        return TabId::NotApplicable;
+    if (std::strcmp(name, "Home") == 0)
+        return TabId::Home;
+    if (std::strcmp(name, "Movies") == 0)
+        return TabId::Movies;
+    if (std::strcmp(name, "Shows") == 0)
+        return TabId::Shows;
+    if (std::strcmp(name, "Downloads") == 0)
+        return TabId::Downloads;
+    if (std::strcmp(name, "Settings") == 0)
+        return TabId::Settings;
+    return TabId::Other;
+}
+
+ActionId PerformanceTelemetry::actionIdFromAction(Action action) noexcept
+{
+    switch (action) {
+        case Action::None: return ActionId::None;
+        case Action::Up: return ActionId::Up;
+        case Action::Down: return ActionId::Down;
+        case Action::Left: return ActionId::Left;
+        case Action::Right: return ActionId::Right;
+        case Action::Confirm: return ActionId::Confirm;
+        case Action::Back: return ActionId::Back;
+        case Action::Search: return ActionId::Search;
+        case Action::ActionsMenu: return ActionId::ActionsMenu;
+        case Action::PrevTab: return ActionId::PrevTab;
+        case Action::NextTab: return ActionId::NextTab;
+        case Action::PrevPage: return ActionId::PrevPage;
+        case Action::NextPage: return ActionId::NextPage;
+        case Action::Settings: return ActionId::Settings;
+        case Action::Menu: return ActionId::Menu;
+        case Action::Exit: return ActionId::Exit;
+        case Action::Raw: return ActionId::Raw;
+    }
+    return ActionId::Other;
+}
+
 void PerformanceTelemetry::start(const TelemetryConfig &config)
 {
     stop();
@@ -71,6 +142,11 @@ void PerformanceTelemetry::start(const TelemetryConfig &config)
     m_writerErrors.store(0, std::memory_order_relaxed);
     m_rotationCount.store(0, std::memory_order_relaxed);
     m_samplingLate.store(0, std::memory_order_relaxed);
+    m_screenId.store(static_cast<uint16_t>(ScreenId::None), std::memory_order_relaxed);
+    m_tabId.store(static_cast<uint16_t>(TabId::NotApplicable), std::memory_order_relaxed);
+    m_actionId.store(static_cast<uint16_t>(ActionId::None), std::memory_order_relaxed);
+    m_playbackState.store(static_cast<uint16_t>(PlaybackState::Unknown), std::memory_order_relaxed);
+    m_transitionSequence.store(0, std::memory_order_relaxed);
     m_queueHighwater.store(0, std::memory_order_relaxed);
     for (WorkerSlot &slot : m_workerSlots) {
         slot.active.store(0, std::memory_order_relaxed);
@@ -132,6 +208,61 @@ void PerformanceTelemetry::stop() noexcept
 bool PerformanceTelemetry::enabledFast() const noexcept
 {
     return m_enabled.load(std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::emitStateTransition(StateKind kind,
+                                               uint16_t previous,
+                                               uint16_t current) noexcept
+{
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::StateTransition;
+    record.header.monotonic_us = monotonicUs();
+    record.payload.state_transition.state_kind = static_cast<uint8_t>(kind);
+    record.payload.state_transition.previous_id = previous;
+    record.payload.state_transition.current_id = current;
+    record.payload.state_transition.transition_seq =
+        m_transitionSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    enqueue(record);
+}
+
+void PerformanceTelemetry::setScreen(ScreenId screen) noexcept
+{
+    if (!enabledFast())
+        return;
+    const uint16_t current = static_cast<uint16_t>(screen);
+    const uint16_t previous = m_screenId.exchange(current, std::memory_order_relaxed);
+    if (previous != current)
+        emitStateTransition(StateKind::Screen, previous, current);
+}
+
+void PerformanceTelemetry::setTab(TabId tab) noexcept
+{
+    if (!enabledFast())
+        return;
+    const uint16_t current = static_cast<uint16_t>(tab);
+    const uint16_t previous = m_tabId.exchange(current, std::memory_order_relaxed);
+    if (previous != current)
+        emitStateTransition(StateKind::Tab, previous, current);
+}
+
+void PerformanceTelemetry::setAction(ActionId action) noexcept
+{
+    if (!enabledFast())
+        return;
+    const uint16_t current = static_cast<uint16_t>(action);
+    const uint16_t previous = m_actionId.exchange(current, std::memory_order_relaxed);
+    if (previous != current)
+        emitStateTransition(StateKind::Action, previous, current);
+}
+
+void PerformanceTelemetry::setPlaybackState(PlaybackState state) noexcept
+{
+    if (!enabledFast())
+        return;
+    const uint16_t current = static_cast<uint16_t>(state);
+    const uint16_t previous = m_playbackState.exchange(current, std::memory_order_relaxed);
+    if (previous != current)
+        emitStateTransition(StateKind::PlaybackState, previous, current);
 }
 
 PerformanceTelemetry::WorkerSlot *PerformanceTelemetry::workerSlot(WorkerId worker) noexcept

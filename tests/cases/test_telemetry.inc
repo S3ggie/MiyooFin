@@ -20,6 +20,7 @@
 #include "../../src/diagnostics/TelemetryClock.hpp"
 #include "../../src/diagnostics/MftFormat.hpp"
 #include "../../src/diagnostics/TelemetryWriter.hpp"
+#include "../../src/input/Action.hpp"
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
 #include "../../src/diagnostics/LinuxProcessMetrics.hpp"
 #endif
@@ -971,6 +972,103 @@ static void testTelemetrySchemaTypes()
     ::rmdir(frameRoot.c_str());
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] frame timing aggregation boundaries and interval reset OK\n");
+
+    std::printf("[test] telemetry state mapping and duplicate suppression\n");
+    CHECK(PerformanceTelemetry::screenIdFromDiagnosticName("HomeScreen") == ScreenId::Home);
+    CHECK(PerformanceTelemetry::screenIdFromDiagnosticName("unrecognized") == ScreenId::Other);
+    CHECK(PerformanceTelemetry::tabIdFromDiagnosticName("Movies") == TabId::Movies);
+    CHECK(PerformanceTelemetry::tabIdFromDiagnosticName("unrecognized") == TabId::Other);
+    CHECK(PerformanceTelemetry::actionIdFromAction(Action::Confirm) == ActionId::Confirm);
+    CHECK(PerformanceTelemetry::actionIdFromAction(static_cast<Action>(255)) == ActionId::Other);
+
+    static std::atomic<uint64_t> stateNowUs{1};
+    static std::atomic<uint32_t> stateMetricSamples{0};
+    const auto stateClock = []() noexcept -> uint64_t {
+        return stateNowUs.load(std::memory_order_relaxed);
+    };
+    const auto stateMetrics = [](bool) noexcept {
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        stateMetricSamples.fetch_add(1, std::memory_order_relaxed);
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({stateClock, stateMetrics});
+    const std::string stateRoot = "/tmp/miyoofin-state-transitions-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string statePath = stateRoot + "/telemetry.mft";
+    std::remove(statePath.c_str());
+    ::rmdir(stateRoot.c_str());
+    TelemetryConfig stateConfig;
+    stateConfig.runtimeEnabled = true;
+    stateConfig.targetDirectory = stateRoot;
+    stateConfig.sampleIntervalMs = 100;
+    stateConfig.flushIntervalMs = 1;
+    PerformanceTelemetry &stateTelemetry = performanceTelemetry();
+    stateTelemetry.stop();
+    stateMetricSamples.store(0, std::memory_order_relaxed);
+    stateTelemetry.start(stateConfig);
+    for (int attempt = 0; attempt < 100 && !stateTelemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    stateTelemetry.setScreen(ScreenId::Home);
+    stateTelemetry.setScreen(ScreenId::Home);
+    stateTelemetry.setScreen(ScreenId::Series);
+    stateTelemetry.setTab(TabId::Movies);
+    stateTelemetry.setTab(TabId::Movies);
+    stateTelemetry.setAction(ActionId::Confirm);
+    stateTelemetry.setAction(ActionId::Confirm);
+    stateTelemetry.setPlaybackState(PlaybackState::UiActive);
+    stateTelemetry.setPlaybackState(PlaybackState::UiActive);
+    stateTelemetry.stop();
+
+    std::ifstream stateFile(statePath, std::ios::binary);
+    const std::vector<uint8_t> stateBytes(
+        (std::istreambuf_iterator<char>(stateFile)), std::istreambuf_iterator<char>());
+    const auto stateReadU16 = [&stateBytes](std::size_t offset) {
+        return static_cast<uint16_t>(stateBytes[offset])
+            | (static_cast<uint16_t>(stateBytes[offset + 1]) << 8);
+    };
+    const auto stateReadU32 = [&stateBytes](std::size_t offset) {
+        return static_cast<uint32_t>(stateBytes[offset])
+            | (static_cast<uint32_t>(stateBytes[offset + 1]) << 8)
+            | (static_cast<uint32_t>(stateBytes[offset + 2]) << 16)
+            | (static_cast<uint32_t>(stateBytes[offset + 3]) << 24);
+    };
+    std::vector<std::size_t> stateOffsets;
+    for (std::size_t offset = 80; offset + 16 <= stateBytes.size();) {
+        const uint16_t recordSize = stateReadU16(offset + 2);
+        CHECK(recordSize >= 16);
+        if (recordSize < 16 || offset + recordSize > stateBytes.size())
+            break;
+        if (stateReadU16(offset) == static_cast<uint16_t>(RecordType::StateTransition))
+            stateOffsets.push_back(offset);
+        offset += recordSize;
+    }
+    CHECK(stateOffsets.size() == 5);
+    if (stateOffsets.size() == 5) {
+        CHECK(stateBytes[stateOffsets[0] + 16] == static_cast<uint8_t>(StateKind::Screen));
+        CHECK(stateReadU16(stateOffsets[0] + 18) == static_cast<uint16_t>(ScreenId::None));
+        CHECK(stateReadU16(stateOffsets[0] + 20) == static_cast<uint16_t>(ScreenId::Home));
+        CHECK(stateReadU32(stateOffsets[0] + 24) == 1);
+        CHECK(stateReadU16(stateOffsets[1] + 18) == static_cast<uint16_t>(ScreenId::Home));
+        CHECK(stateReadU16(stateOffsets[1] + 20) == static_cast<uint16_t>(ScreenId::Series));
+        CHECK(stateBytes[stateOffsets[2] + 16] == static_cast<uint8_t>(StateKind::Tab));
+        CHECK(stateReadU16(stateOffsets[2] + 18) == static_cast<uint16_t>(TabId::NotApplicable));
+        CHECK(stateReadU16(stateOffsets[2] + 20) == static_cast<uint16_t>(TabId::Movies));
+        CHECK(stateBytes[stateOffsets[3] + 16] == static_cast<uint8_t>(StateKind::Action));
+        CHECK(stateReadU16(stateOffsets[3] + 18) == static_cast<uint16_t>(ActionId::None));
+        CHECK(stateReadU16(stateOffsets[3] + 20) == static_cast<uint16_t>(ActionId::Confirm));
+        CHECK(stateBytes[stateOffsets[4] + 16]
+              == static_cast<uint8_t>(StateKind::PlaybackState));
+        CHECK(stateReadU16(stateOffsets[4] + 18) == static_cast<uint16_t>(PlaybackState::Unknown));
+        CHECK(stateReadU16(stateOffsets[4] + 20) == static_cast<uint16_t>(PlaybackState::UiActive));
+        for (std::size_t index = 0; index < stateOffsets.size(); ++index)
+            CHECK(stateReadU32(stateOffsets[index] + 24) == index + 1);
+    }
+    std::remove(statePath.c_str());
+    ::rmdir(stateRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] telemetry state mapping and duplicate suppression OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

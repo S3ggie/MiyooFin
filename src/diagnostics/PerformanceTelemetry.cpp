@@ -41,7 +41,7 @@ LinuxProcessMetricsSnapshot sampleProcessMetrics(LinuxProcessMetrics &metrics,
 {
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
     return g_testHooks.processMetrics != nullptr
-        ? g_testHooks.processMetrics(includeFreeStorage)
+        ? g_testHooks.processMetrics(metrics, includeFreeStorage)
         : metrics.sample(includeFreeStorage);
 #else
     return metrics.sample(includeFreeStorage);
@@ -633,7 +633,7 @@ void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
 
 void PerformanceTelemetry::serviceLoop() noexcept
 {
-    LinuxProcessMetrics metrics;
+    LinuxProcessMetrics metrics("/proc", m_config.targetDirectory);
     const LinuxProcessMetricsSnapshot startupSnapshot = sampleProcessMetrics(metrics, true);
     if ((startupSnapshot.validity_flags & FreeStorageValid) != 0
         && startupSnapshot.free_storage_bytes < m_config.minFreeStorageBytes) {

@@ -987,6 +987,47 @@ static void testTelemetrySchemaTypes()
           == (ReadBytesValid | WriteBytesValid));
     std::printf("[test] linux process metrics parsing and validity OK\n");
 
+    std::printf("[test] telemetry storage path follows configured output\n");
+    static const std::string configuredStoragePath = "/tmp/miyoofin-storage-path-"
+        + std::to_string(static_cast<long long>(getpid()));
+    static std::atomic<bool> configuredPathObserved{false};
+    static std::atomic<bool> rootPathObserved{false};
+    const auto storagePathMetrics = [](const LinuxProcessMetrics &sampled,
+                                        bool includeFreeStorage) noexcept {
+        configuredPathObserved.store(sampled.storagePath() == configuredStoragePath,
+                                      std::memory_order_relaxed);
+        rootPathObserved.store(sampled.storagePath() == "/", std::memory_order_relaxed);
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        if (includeFreeStorage) {
+            snapshot.free_storage_bytes = 256ull * 1024ull * 1024ull;
+            snapshot.validity_flags |= FreeStorageValid;
+        }
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({nullptr, storagePathMetrics});
+    TelemetryConfig storagePathConfig;
+    storagePathConfig.runtimeEnabled = true;
+    storagePathConfig.targetDirectory = configuredStoragePath;
+    storagePathConfig.sampleIntervalMs = 100;
+    storagePathConfig.freeSpaceIntervalMs = 600000;
+    storagePathConfig.flushIntervalMs = 1;
+    storagePathConfig.minFreeStorageBytes = 128ull * 1024ull * 1024ull;
+    PerformanceTelemetry &storagePathTelemetry = performanceTelemetry();
+    storagePathTelemetry.stop();
+    storagePathTelemetry.start(storagePathConfig);
+    for (int attempt = 0; attempt < 100 && !configuredPathObserved.load(std::memory_order_relaxed);
+         ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(configuredPathObserved.load(std::memory_order_relaxed));
+    CHECK(!rootPathObserved.load(std::memory_order_relaxed));
+    storagePathTelemetry.stop();
+    std::remove((configuredStoragePath + "/telemetry.mft").c_str());
+    ::rmdir(configuredStoragePath.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] telemetry storage path follows configured output OK\n");
+
     std::printf("[test] periodic system samples and fake service hooks\n");
     static std::atomic<uint64_t> fakeNowUs{1};
     static std::atomic<uint32_t> fakeMetricSamples{0};
@@ -994,7 +1035,7 @@ static void testTelemetrySchemaTypes()
     const auto fakeClock = []() noexcept -> uint64_t {
         return fakeNowUs.load(std::memory_order_relaxed);
     };
-    const auto fakeMetrics = [](bool includeFreeStorage) noexcept {
+    const auto fakeMetrics = [](const LinuxProcessMetrics &, bool includeFreeStorage) noexcept {
         LinuxProcessMetricsSnapshot snapshot{};
         snapshot.process_cpu_us_cumulative = 1000;
         snapshot.rss_kib = 2000;
@@ -1385,7 +1426,7 @@ static void testTelemetrySchemaTypes()
     const auto lowStorageClock = []() noexcept -> uint64_t {
         return lowStorageNowUs.load(std::memory_order_relaxed);
     };
-    const auto lowStorageMetrics = [](bool includeFreeStorage) noexcept {
+    const auto lowStorageMetrics = [](const LinuxProcessMetrics &, bool includeFreeStorage) noexcept {
         LinuxProcessMetricsSnapshot snapshot{};
         snapshot.process_cpu_us_cumulative = 1000;
         snapshot.rss_kib = 2000;
@@ -1433,7 +1474,7 @@ static void testTelemetrySchemaTypes()
     const auto activeLowClock = []() noexcept -> uint64_t {
         return activeLowNowUs.load(std::memory_order_relaxed);
     };
-    const auto activeLowMetrics = [](bool includeFreeStorage) noexcept {
+    const auto activeLowMetrics = [](const LinuxProcessMetrics &, bool includeFreeStorage) noexcept {
         LinuxProcessMetricsSnapshot snapshot{};
         snapshot.process_cpu_us_cumulative = 1000;
         snapshot.rss_kib = 2000;
@@ -1520,7 +1561,7 @@ static void testTelemetrySchemaTypes()
     const auto frameClock = []() noexcept -> uint64_t {
         return frameNowUs.load(std::memory_order_relaxed);
     };
-    const auto frameMetrics = [](bool) noexcept {
+    const auto frameMetrics = [](const LinuxProcessMetrics &, bool) noexcept {
         LinuxProcessMetricsSnapshot snapshot{};
         snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
             | ReadBytesValid | WriteBytesValid;
@@ -1635,7 +1676,7 @@ static void testTelemetrySchemaTypes()
     const auto stateClock = []() noexcept -> uint64_t {
         return stateNowUs.load(std::memory_order_relaxed);
     };
-    const auto stateMetrics = [](bool) noexcept {
+    const auto stateMetrics = [](const LinuxProcessMetrics &, bool) noexcept {
         LinuxProcessMetricsSnapshot snapshot{};
         snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
             | ReadBytesValid | WriteBytesValid;

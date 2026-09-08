@@ -31,6 +31,7 @@ public:
                                  std::string storagePath = "/");
 
     LinuxProcessMetricsSnapshot sample(bool includeFreeStorage = true) noexcept;
+    const std::string &storagePath() const noexcept { return m_storagePath; }
 
     // These helpers accept complete proc-file contents so desktop tests can
     // validate parsing without depending on a particular host's /proc data.

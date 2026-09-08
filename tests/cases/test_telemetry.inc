@@ -599,7 +599,7 @@ static void testTelemetrySchemaTypes()
             | ReadBytesValid | WriteBytesValid;
         fakeMetricSamples.fetch_add(1, std::memory_order_relaxed);
         if (includeFreeStorage) {
-            snapshot.free_storage_bytes = 6000;
+            snapshot.free_storage_bytes = 256ull * 1024ull * 1024ull;
             snapshot.validity_flags |= FreeStorageValid;
             fakeFreeSamples.fetch_add(1, std::memory_order_relaxed);
         }
@@ -638,7 +638,7 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.addDownloadSegmentCompleted(2);
     sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(100001, std::memory_order_relaxed);
-    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 1; ++attempt)
+    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     sampleTelemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
     sampleTelemetry.addWorkerCompleted(WorkerId::HomeLibraryFetch, 7);
@@ -647,14 +647,14 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.addDownloadBytes(300);
     sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(200001, std::memory_order_relaxed);
-    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    fakeNowUs.store(300001, std::memory_order_relaxed);
     for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 3; ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    fakeNowUs.store(300001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 4; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     sampleTelemetry.stop();
-    CHECK(fakeMetricSamples.load(std::memory_order_relaxed) == 3);
-    CHECK(fakeFreeSamples.load(std::memory_order_relaxed) == 2);
+    CHECK(fakeMetricSamples.load(std::memory_order_relaxed) == 4);
+    CHECK(fakeFreeSamples.load(std::memory_order_relaxed) == 3);
     std::ifstream sampleFile(samplePath, std::ios::binary);
     sampleFile.seekg(0, std::ios::end);
     CHECK(sampleFile.good());
@@ -728,6 +728,141 @@ static void testTelemetrySchemaTypes()
     ::rmdir(sampleRoot.c_str());
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] periodic system samples and fake service hooks OK\n");
+
+    std::printf("[test] low-storage startup and active shutdown\n");
+    static std::atomic<uint64_t> lowStorageNowUs{1};
+    static std::atomic<uint32_t> lowStorageSamples{0};
+    const auto lowStorageClock = []() noexcept -> uint64_t {
+        return lowStorageNowUs.load(std::memory_order_relaxed);
+    };
+    const auto lowStorageMetrics = [](bool includeFreeStorage) noexcept {
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.process_cpu_us_cumulative = 1000;
+        snapshot.rss_kib = 2000;
+        snapshot.peak_rss_kib = 3000;
+        snapshot.process_read_bytes_cumulative = 4000;
+        snapshot.process_write_bytes_cumulative = 5000;
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        lowStorageSamples.fetch_add(1, std::memory_order_relaxed);
+        if (includeFreeStorage) {
+            snapshot.free_storage_bytes = 64ull * 1024ull * 1024ull;
+            snapshot.validity_flags |= FreeStorageValid;
+        }
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({lowStorageClock, lowStorageMetrics});
+    const std::string startupLowRoot = "/tmp/miyoofin-low-storage-startup-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string startupLowPath = startupLowRoot + "/telemetry.mft";
+    std::remove(startupLowPath.c_str());
+    ::rmdir(startupLowRoot.c_str());
+    TelemetryConfig startupLowConfig;
+    startupLowConfig.runtimeEnabled = true;
+    startupLowConfig.targetDirectory = startupLowRoot;
+    startupLowConfig.sampleIntervalMs = 100;
+    startupLowConfig.freeSpaceIntervalMs = 200;
+    startupLowConfig.flushIntervalMs = 1;
+    PerformanceTelemetry &lowStorageTelemetry = performanceTelemetry();
+    lowStorageTelemetry.stop();
+    lowStorageTelemetry.start(startupLowConfig);
+    for (int attempt = 0; attempt < 100
+        && (lowStorageTelemetry.enabledFast() || lowStorageTelemetry.serviceThreadActive()); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(!lowStorageTelemetry.enabledFast());
+    CHECK(!lowStorageTelemetry.serviceThreadActive());
+    CHECK(lowStorageSamples.load(std::memory_order_relaxed) == 1);
+    CHECK(::access(startupLowPath.c_str(), F_OK) != 0);
+    CHECK(::access(startupLowRoot.c_str(), F_OK) != 0);
+    lowStorageTelemetry.stop();
+    PerformanceTelemetry::clearTestHooks();
+
+    static std::atomic<uint64_t> activeLowNowUs{1};
+    static std::atomic<uint32_t> activeLowSamples{0};
+    const auto activeLowClock = []() noexcept -> uint64_t {
+        return activeLowNowUs.load(std::memory_order_relaxed);
+    };
+    const auto activeLowMetrics = [](bool includeFreeStorage) noexcept {
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.process_cpu_us_cumulative = 1000;
+        snapshot.rss_kib = 2000;
+        snapshot.peak_rss_kib = 3000;
+        snapshot.process_read_bytes_cumulative = 4000;
+        snapshot.process_write_bytes_cumulative = 5000;
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        const uint32_t sample = activeLowSamples.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (includeFreeStorage) {
+            snapshot.free_storage_bytes = sample >= 3
+                ? 64ull * 1024ull * 1024ull : 256ull * 1024ull * 1024ull;
+            snapshot.validity_flags |= FreeStorageValid;
+        }
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({activeLowClock, activeLowMetrics});
+    const std::string activeLowRoot = "/tmp/miyoofin-low-storage-active-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string activeLowPath = activeLowRoot + "/telemetry.mft";
+    std::remove(activeLowPath.c_str());
+    ::rmdir(activeLowRoot.c_str());
+    TelemetryConfig activeLowConfig = startupLowConfig;
+    activeLowConfig.targetDirectory = activeLowRoot;
+    activeLowConfig.freeSpaceIntervalMs = 100;
+    lowStorageTelemetry.start(activeLowConfig);
+    for (int attempt = 0; attempt < 100 && !lowStorageTelemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    activeLowNowUs.store(100001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && activeLowSamples.load(std::memory_order_relaxed) < 2; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    activeLowNowUs.store(200001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && (lowStorageTelemetry.enabledFast() || lowStorageTelemetry.serviceThreadActive()); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    lowStorageTelemetry.stop();
+    CHECK(activeLowSamples.load(std::memory_order_relaxed) == 3);
+    CHECK(!lowStorageTelemetry.enabledFast());
+    CHECK(!lowStorageTelemetry.serviceThreadActive());
+    std::ifstream activeLowFile(activeLowPath, std::ios::binary);
+    const std::vector<uint8_t> activeLowBytes(
+        (std::istreambuf_iterator<char>(activeLowFile)), std::istreambuf_iterator<char>());
+    constexpr std::size_t lowStorageAggregateTickBytes = 88 + 14 * 44 + 80 + 56 + 48;
+    constexpr std::size_t lowEventOffset = 80 + 32 + lowStorageAggregateTickBytes;
+    constexpr std::size_t expectedLowSize = lowEventOffset + 32 + 48;
+    CHECK(activeLowBytes.size() == expectedLowSize);
+    if (activeLowBytes.size() >= expectedLowSize) {
+        const auto readU16 = [&activeLowBytes](std::size_t offset) {
+            return static_cast<uint16_t>(activeLowBytes[offset])
+                | (static_cast<uint16_t>(activeLowBytes[offset + 1]) << 8);
+        };
+        const auto readU32 = [&activeLowBytes](std::size_t offset) {
+            return static_cast<uint32_t>(activeLowBytes[offset])
+                | (static_cast<uint32_t>(activeLowBytes[offset + 1]) << 8)
+                | (static_cast<uint32_t>(activeLowBytes[offset + 2]) << 16)
+                | (static_cast<uint32_t>(activeLowBytes[offset + 3]) << 24);
+        };
+        const auto readU64 = [&activeLowBytes](std::size_t offset) {
+            uint64_t value = 0;
+            for (unsigned int byte = 0; byte < 8; ++byte)
+                value |= static_cast<uint64_t>(activeLowBytes[offset + byte]) << (byte * 8);
+            return value;
+        };
+        CHECK(readU16(lowEventOffset) == static_cast<uint16_t>(RecordType::SessionEvent));
+        CHECK(activeLowBytes[lowEventOffset + 16]
+              == static_cast<uint8_t>(SessionEventKind::WriterDisabledLowSpace));
+        CHECK(activeLowBytes[lowEventOffset + 17] == static_cast<uint8_t>(Outcome::Skipped));
+        CHECK(readU32(lowEventOffset + 20) == 128);
+        CHECK(readU64(lowEventOffset + 24) == 64ull * 1024ull * 1024ull);
+        CHECK(readU16(lowEventOffset + 32) == static_cast<uint16_t>(RecordType::TelemetryHealth));
+    }
+    std::ifstream activeLowFileAgain(activeLowPath, std::ios::binary);
+    activeLowFileAgain.seekg(0, std::ios::end);
+    CHECK(activeLowFileAgain.tellg() == static_cast<std::streamoff>(expectedLowSize));
+    std::remove(activeLowPath.c_str());
+    ::rmdir(activeLowRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] low-storage startup and active shutdown OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

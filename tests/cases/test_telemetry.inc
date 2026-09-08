@@ -730,6 +730,94 @@ static void testTelemetrySchemaTypes()
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] periodic system samples and fake service hooks OK\n");
 
+    std::printf("[test] screen retirement gauges and nonblocking pop\n");
+    const std::string retirementRoot = "/tmp/miyoofin-screen-retirement-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string retirementPath = retirementRoot + "/telemetry.mft";
+    std::remove(retirementPath.c_str());
+    ::rmdir(retirementRoot.c_str());
+    TelemetryConfig retirementConfig = sampleConfig;
+    retirementConfig.targetDirectory = retirementRoot;
+    fakeNowUs.store(1, std::memory_order_relaxed);
+    fakeMetricSamples.store(0, std::memory_order_relaxed);
+    PerformanceTelemetry &retirementTelemetry = performanceTelemetry();
+    retirementTelemetry.start(retirementConfig);
+    for (int attempt = 0; attempt < 100 && !retirementTelemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    class RetirementGaugeScreen final : public Screen {
+    public:
+        explicit RetirementGaugeScreen(bool deferred) : m_deferred(deferred) {}
+        ~RetirementGaugeScreen() override { if (m_deferred) usleep(150000); }
+        bool handleAction(Action) override { return false; }
+        void update(Uint32) override {}
+        void render(SDL_Surface *) override {}
+        bool deferDestruction() const override { return m_deferred; }
+    private:
+        bool m_deferred;
+    };
+    {
+        ScreenStack stack;
+        stack.push(std::unique_ptr<Screen>(new RetirementGaugeScreen(false)));
+        stack.push(std::unique_ptr<Screen>(new RetirementGaugeScreen(true)));
+        stack.push(std::unique_ptr<Screen>(new RetirementGaugeScreen(true)));
+        const auto retirementPopStart = std::chrono::steady_clock::now();
+        CHECK(stack.pop());
+        CHECK(stack.pop());
+        const auto retirementPopElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - retirementPopStart).count();
+        CHECK(retirementPopElapsed < 100);
+        CHECK(stack.size() == 1);
+        fakeNowUs.store(100001, std::memory_order_relaxed);
+        for (int attempt = 0; attempt < 100
+            && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    fakeNowUs.store(200001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && fakeMetricSamples.load(std::memory_order_relaxed) < 3; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    retirementTelemetry.stop();
+    std::ifstream retirementFile(retirementPath, std::ios::binary);
+    const std::vector<uint8_t> retirementBytes(
+        (std::istreambuf_iterator<char>(retirementFile)), std::istreambuf_iterator<char>());
+    bool retirementSawActive = false;
+    bool retirementSawQueued = false;
+    uint32_t retirementCompletedTotal = 0;
+    for (std::size_t offset = 80; offset + 16 <= retirementBytes.size();) {
+        const uint16_t recordSize = static_cast<uint16_t>(retirementBytes[offset + 2])
+            | (static_cast<uint16_t>(retirementBytes[offset + 3]) << 8);
+        if (recordSize < 16 || offset + recordSize > retirementBytes.size())
+            break;
+        if ((static_cast<uint16_t>(retirementBytes[offset])
+                | (static_cast<uint16_t>(retirementBytes[offset + 1]) << 8))
+                == static_cast<uint16_t>(RecordType::WorkerSample)
+            && recordSize >= 44) {
+            const std::size_t payload = offset + 16;
+            const uint16_t workerId = static_cast<uint16_t>(retirementBytes[payload])
+                | (static_cast<uint16_t>(retirementBytes[payload + 1]) << 8);
+            if (workerId == static_cast<uint16_t>(WorkerId::ScreenRetirement)) {
+                retirementSawActive = retirementSawActive || retirementBytes[payload + 2] != 0;
+                retirementSawQueued = retirementSawQueued
+                    || (static_cast<uint32_t>(retirementBytes[payload + 4])
+                        | (static_cast<uint32_t>(retirementBytes[payload + 5]) << 8)
+                        | (static_cast<uint32_t>(retirementBytes[payload + 6]) << 16)
+                        | (static_cast<uint32_t>(retirementBytes[payload + 7]) << 24)) != 0;
+                retirementCompletedTotal += static_cast<uint32_t>(retirementBytes[payload + 12])
+                    | (static_cast<uint32_t>(retirementBytes[payload + 13]) << 8)
+                    | (static_cast<uint32_t>(retirementBytes[payload + 14]) << 16)
+                    | (static_cast<uint32_t>(retirementBytes[payload + 15]) << 24);
+            }
+        }
+        offset += recordSize;
+    }
+    CHECK(retirementSawActive);
+    CHECK(retirementSawQueued);
+    CHECK(retirementCompletedTotal >= 2);
+    std::remove(retirementPath.c_str());
+    ::rmdir(retirementRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] screen retirement gauges and nonblocking pop OK\n");
+
     std::printf("[test] low-storage startup and active shutdown\n");
     static std::atomic<uint64_t> lowStorageNowUs{1};
     static std::atomic<uint32_t> lowStorageSamples{0};

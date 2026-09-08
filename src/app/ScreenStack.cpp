@@ -1,5 +1,8 @@
 #include "ScreenStack.hpp"
 #include "UiDiagnostics.hpp"
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+#include "../diagnostics/PerformanceTelemetry.hpp"
+#endif
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -31,6 +34,11 @@ struct ScreenStack::RetirementQueue {
         }
         wake.notify_one();
         if (worker.joinable()) worker.join();
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        telemetry.setWorkerActive(WorkerId::ScreenRetirement, false);
+        telemetry.setWorkerQueueDepth(WorkerId::ScreenRetirement, 0);
+#endif
     }
 
     void push(std::unique_ptr<Screen> screen)
@@ -38,6 +46,10 @@ struct ScreenStack::RetirementQueue {
         {
             std::lock_guard<std::mutex> lock(mutex);
             pending.push_back(std::move(screen));
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            performanceTelemetry().setWorkerQueueDepth(
+                WorkerId::ScreenRetirement, static_cast<uint32_t>(pending.size()));
+#endif
         }
         wake.notify_one();
     }
@@ -55,11 +67,23 @@ struct ScreenStack::RetirementQueue {
                 }
                 screen = std::move(pending.front());
                 pending.pop_front();
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                performanceTelemetry().setWorkerQueueDepth(
+                    WorkerId::ScreenRetirement, static_cast<uint32_t>(pending.size()));
+#endif
             }
             // Destruction joins the screen workers here, never on SDL's
             // event/update path.  The screen remains alive until all workers
             // that reference its state have stopped.
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            PerformanceTelemetry &telemetry = performanceTelemetry();
+            telemetry.setWorkerActive(WorkerId::ScreenRetirement, true);
+#endif
             screen.reset();
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            telemetry.setWorkerActive(WorkerId::ScreenRetirement, false);
+            telemetry.addWorkerCompleted(WorkerId::ScreenRetirement);
+#endif
         }
     }
 

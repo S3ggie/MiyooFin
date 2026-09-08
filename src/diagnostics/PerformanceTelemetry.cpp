@@ -80,6 +80,15 @@ void PerformanceTelemetry::start(const TelemetryConfig &config)
         slot.failed.store(0, std::memory_order_relaxed);
         slot.cancelled.store(0, std::memory_order_relaxed);
     }
+    for (FramePhaseAccumulator &phase : m_framePhases) {
+        phase.count.store(0, std::memory_order_relaxed);
+        phase.totalUs.store(0, std::memory_order_relaxed);
+        phase.maxUs.store(0, std::memory_order_relaxed);
+        phase.over50Ms.store(0, std::memory_order_relaxed);
+        phase.over100Ms.store(0, std::memory_order_relaxed);
+        for (std::atomic<uint32_t> &bin : phase.histogram)
+            bin.store(0, std::memory_order_relaxed);
+    }
     m_artworkCacheProbeHits.store(0, std::memory_order_relaxed);
     m_artworkCacheProbeMisses.store(0, std::memory_order_relaxed);
     m_artworkCacheReadSuccess.store(0, std::memory_order_relaxed);
@@ -239,6 +248,48 @@ void PerformanceTelemetry::recordArtworkDecode(bool success, uint64_t durationUs
     }
 }
 
+void PerformanceTelemetry::recordFramePhase(FramePhase phase, uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    const uint8_t phaseValue = static_cast<uint8_t>(phase);
+    if (phaseValue < static_cast<uint8_t>(FramePhase::FullFrame)
+        || phaseValue > static_cast<uint8_t>(FramePhase::Present))
+        return;
+
+    FramePhaseAccumulator &accumulator = m_framePhases[phaseValue - 1];
+    accumulator.count.fetch_add(1, std::memory_order_relaxed);
+    accumulator.totalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    accumulator.over50Ms.fetch_add(durationUs > 50000 ? 1u : 0u, std::memory_order_relaxed);
+    accumulator.over100Ms.fetch_add(durationUs > 100000 ? 1u : 0u, std::memory_order_relaxed);
+    const uint32_t duration = clampToUint32(durationUs);
+    uint32_t observed = accumulator.maxUs.load(std::memory_order_relaxed);
+    while (duration > observed
+        && !accumulator.maxUs.compare_exchange_weak(observed, duration,
+                                                    std::memory_order_relaxed,
+                                                    std::memory_order_relaxed)) {
+    }
+
+    std::size_t histogramBin = 8;
+    if (durationUs <= 8333)
+        histogramBin = 0;
+    else if (durationUs <= 16667)
+        histogramBin = 1;
+    else if (durationUs <= 25000)
+        histogramBin = 2;
+    else if (durationUs <= 33333)
+        histogramBin = 3;
+    else if (durationUs <= 50000)
+        histogramBin = 4;
+    else if (durationUs <= 100000)
+        histogramBin = 5;
+    else if (durationUs <= 250000)
+        histogramBin = 6;
+    else if (durationUs <= 500000)
+        histogramBin = 7;
+    accumulator.histogram[histogramBin].fetch_add(1, std::memory_order_relaxed);
+}
+
 void PerformanceTelemetry::setDownloadGauges(uint32_t activeDownloads,
                                              uint32_t queuedDownloads,
                                              uint32_t plannerQueueDepth) noexcept
@@ -395,6 +446,37 @@ void PerformanceTelemetry::emitDownloadSample(uint64_t nowUs, uint64_t actualInt
     record.payload.download_sample.segment_retries_delta = m_downloadSegmentRetries.exchange(0, std::memory_order_relaxed);
     record.payload.download_sample.planner_queue_depth = m_plannerQueueDepth.load(std::memory_order_relaxed);
     writeServiceRecord(record);
+}
+
+void PerformanceTelemetry::emitFrameTimingSummaries(uint64_t nowUs, uint64_t intervalUs) noexcept
+{
+    for (std::size_t index = 0; index < m_framePhases.size(); ++index) {
+        FramePhaseAccumulator &accumulator = m_framePhases[index];
+        const uint32_t count = accumulator.count.exchange(0, std::memory_order_relaxed);
+        const uint64_t totalUs = accumulator.totalUs.exchange(0, std::memory_order_relaxed);
+        const uint32_t maxUs = accumulator.maxUs.exchange(0, std::memory_order_relaxed);
+        const uint32_t over50Ms = accumulator.over50Ms.exchange(0, std::memory_order_relaxed);
+        const uint32_t over100Ms = accumulator.over100Ms.exchange(0, std::memory_order_relaxed);
+        std::array<uint32_t, 9> histogram{};
+        for (std::size_t bin = 0; bin < histogram.size(); ++bin)
+            histogram[bin] = accumulator.histogram[bin].exchange(0, std::memory_order_relaxed);
+        if (count == 0)
+            continue;
+
+        TelemetryRecord record{};
+        record.header.record_type = RecordType::FrameTimingSummary;
+        record.header.monotonic_us = nowUs;
+        record.payload.frame_timing_summary.phase = static_cast<uint8_t>(index + 1);
+        record.payload.frame_timing_summary.interval_us = clampToUint32(intervalUs);
+        record.payload.frame_timing_summary.sample_count = count;
+        record.payload.frame_timing_summary.total_us = totalUs;
+        record.payload.frame_timing_summary.max_us = maxUs;
+        record.payload.frame_timing_summary.over_50ms_count = over50Ms;
+        record.payload.frame_timing_summary.over_100ms_count = over100Ms;
+        for (std::size_t bin = 0; bin < histogram.size(); ++bin)
+            record.payload.frame_timing_summary.histogram[bin] = histogram[bin];
+        writeServiceRecord(record);
+    }
 }
 
 void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
@@ -568,6 +650,7 @@ void PerformanceTelemetry::serviceLoop() noexcept
                 const uint64_t actualIntervalUs = lastAggregateSampleUs != 0
                     && nowUs > lastAggregateSampleUs
                     ? nowUs - lastAggregateSampleUs : sampleIntervalUs;
+                emitFrameTimingSummaries(nowUs, actualIntervalUs);
                 emitWorkerSamples(nowUs);
                 emitArtworkSummary(nowUs);
                 emitDownloadSample(nowUs, actualIntervalUs);

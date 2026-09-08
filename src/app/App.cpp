@@ -13,6 +13,10 @@
 #include "../ui/screens/LoginScreen.hpp"
 #include "../ui/screens/AuthCheckScreen.hpp"
 #include "../net/DeviceIdentity.hpp"
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+#include "../diagnostics/PerformanceTelemetry.hpp"
+#include "../diagnostics/TelemetryClock.hpp"
+#endif
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cstdio>
@@ -45,6 +49,37 @@ const char *playbackStartingLabel(Uint32 elapsedMs)
     }
     return labels[phase];
 }
+
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+class FramePhaseTimer
+{
+public:
+    FramePhaseTimer(PerformanceTelemetry &telemetry,
+                    bool enabled,
+                    FramePhase phase) noexcept
+        : m_telemetry(telemetry)
+        , m_enabled(enabled)
+        , m_phase(phase)
+        , m_startUs(enabled ? TelemetryClock::monotonicUs() : 0)
+    {
+    }
+
+    ~FramePhaseTimer()
+    {
+        if (!m_enabled)
+            return;
+        const uint64_t endUs = TelemetryClock::monotonicUs();
+        m_telemetry.recordFramePhase(
+            m_phase, endUs >= m_startUs ? endUs - m_startUs : 0);
+    }
+
+private:
+    PerformanceTelemetry &m_telemetry;
+    bool m_enabled;
+    FramePhase m_phase;
+    uint64_t m_startUs;
+};
+#endif
 
 } // namespace
 
@@ -512,6 +547,12 @@ void App::drawPlaybackStartingOverlay(Uint32 elapsedMs)
 int App::run()
 {
     while (m_running) {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        const bool telemetryEnabled = telemetry.enabledFast();
+        const uint64_t frameStartUs = telemetryEnabled
+            ? TelemetryClock::monotonicUs() : 0;
+#endif
         uiDiagnostics().heartbeat();
         uiDiagnostics().setPhase("event/input");
         Uint32 now = SDL_GetTicks();
@@ -521,37 +562,47 @@ int App::run()
         // --- Input ---
         // Continue draining SDL events while the overlay is visible so input
         // pressed during startup cannot be delivered after playback returns.
-        std::vector<Action> actions = m_input.poll();
-        if (!m_playbackStarting) {
-            for (Action a : actions) {
-                uiDiagnostics().setLastAction(actionName(a));
-                if (a == Action::Exit) {
-                    m_running = false;
-                    break;
-                }
-                Screen *active = m_stack.top();
-                if (active) {
-                    uiDiagnostics().setScreen(active->diagnosticName());
-                    UiDiagnostics::Scope scope("Screen::handleAction");
-                    active->handleAction(a);
+        {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Input);
+#endif
+            std::vector<Action> actions = m_input.poll();
+            if (!m_playbackStarting) {
+                for (Action a : actions) {
+                    uiDiagnostics().setLastAction(actionName(a));
+                    if (a == Action::Exit) {
+                        m_running = false;
+                        break;
+                    }
+                    Screen *active = m_stack.top();
+                    if (active) {
+                        uiDiagnostics().setScreen(active->diagnosticName());
+                        UiDiagnostics::Scope scope("Screen::handleAction");
+                        active->handleAction(a);
+                    }
                 }
             }
         }
 
         // --- Update ---
-        Screen *active = m_stack.top();
-        uiDiagnostics().setPhase("update");
-        if (active) {
-            uiDiagnostics().setScreen(active->diagnosticName());
-            if (auto *home = dynamic_cast<HomeScreen *>(active)) {
-                uiDiagnostics().setTab(home->diagnosticTabName());
-            } else {
-                uiDiagnostics().setTab("n/a");
+        {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Update);
+#endif
+            Screen *active = m_stack.top();
+            uiDiagnostics().setPhase("update");
+            if (active) {
+                uiDiagnostics().setScreen(active->diagnosticName());
+                if (auto *home = dynamic_cast<HomeScreen *>(active)) {
+                    uiDiagnostics().setTab(home->diagnosticTabName());
+                } else {
+                    uiDiagnostics().setTab("n/a");
+                }
+                UiDiagnostics::Scope scope("Screen::update");
+                active->update(dt);
             }
-            UiDiagnostics::Scope scope("Screen::update");
-            active->update(dt);
+            { UiDiagnostics::Scope scope("App::finishSavedSessionValidation"); finishSavedSessionValidation(); }
         }
-        { UiDiagnostics::Scope scope("App::finishSavedSessionValidation"); finishSavedSessionValidation(); }
 
         // --- Check if a screen requested external playback ---
         if (!m_playbackStarting && m_stack.pollExternalPlayback()) {
@@ -561,9 +612,13 @@ int App::run()
         }
 
         // --- Startup flow transitions ---
-        Screen *top = m_stack.top();
-        uiDiagnostics().setPhase("screen transition");
-        if (top) {
+        {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer transitionTimer(telemetry, telemetryEnabled, FramePhase::Transition);
+#endif
+            Screen *top = m_stack.top();
+            uiDiagnostics().setPhase("screen transition");
+            if (top) {
             if (auto *conn = dynamic_cast<ConnectScreen *>(top)) {
                 if (conn->finished()) {
                     if (conn->connected()) {
@@ -683,6 +738,7 @@ int App::run()
                             "Logged out successfully."));
                 }
             }
+            }
         }
 
         // --- Render ---
@@ -696,6 +752,9 @@ int App::run()
         if (renderTop) {
             uiDiagnostics().setScreen(renderTop->diagnosticName());
             UiDiagnostics::Scope scope("Screen::render");
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::ScreenRender);
+#endif
             renderTop->render(m_fb);
         }
 
@@ -707,11 +766,30 @@ int App::run()
             drawPlaybackStartingOverlay(playbackStartingElapsed);
         }
 
-        SDL_UpdateTexture(m_fbTex, nullptr, m_fb->pixels, m_fb->pitch);
+        {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::FramebufferUpload);
+#endif
+            SDL_UpdateTexture(m_fbTex, nullptr, m_fb->pixels, m_fb->pitch);
+        }
 
-        SDL_RenderClear(m_renderer);
-        SDL_RenderCopy(m_renderer, m_fbTex, nullptr, nullptr);
-        SDL_RenderPresent(m_renderer);
+        {
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Present);
+#endif
+            SDL_RenderClear(m_renderer);
+            SDL_RenderCopy(m_renderer, m_fbTex, nullptr, nullptr);
+            SDL_RenderPresent(m_renderer);
+        }
+
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+        if (telemetryEnabled) {
+            const uint64_t frameEndUs = TelemetryClock::monotonicUs();
+            telemetry.recordFramePhase(
+                FramePhase::FullFrame,
+                frameEndUs >= frameStartUs ? frameEndUs - frameStartUs : 0);
+        }
+#endif
 
         // The terminal Loading... frame above has now reached the Miyoo
         // framebuffer, so it can remain visible while SDL is suspended.

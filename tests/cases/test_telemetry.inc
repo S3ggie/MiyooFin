@@ -22,6 +22,7 @@
 #include "../../src/diagnostics/TelemetryWriter.hpp"
 #include "../../src/cache/ImageCache.hpp"
 #include "../../src/image/ImageDecoder.hpp"
+#include "../../src/net/RouteRequest.hpp"
 #include "../../src/input/Action.hpp"
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
 #include "../../src/diagnostics/LinuxProcessMetrics.hpp"
@@ -176,6 +177,46 @@ static void testTelemetryContextAndGuards()
         CHECK(currentRequestKind() == RequestKind::SystemInfo);
     }
     CHECK(currentRequestKind() == RequestKind::Unknown);
+    Session routeSession;
+    routeSession.serverUrl = "https://public.example";
+    std::string routeError;
+    {
+        int routeCalls = 0;
+        CHECK(RouteRequest(routeSession).run([&](const std::string &base) {
+            ++routeCalls;
+            CHECK(base == "https://public.example");
+            CHECK(currentRouteKind() == RouteKind::Public);
+            CHECK(currentRouteAttempt() == 1);
+            CHECK(!currentRouteFallback());
+            return true;
+        }, routeError));
+        CHECK(routeCalls == 1);
+        CHECK(currentRouteKind() == RouteKind::Unknown);
+        CHECK(currentRouteAttempt() == 0);
+        CHECK(!currentRouteFallback());
+    }
+    routeSession.localServerUrl = "http://192.168.1.10";
+    routeSession.publicServerUrl = "https://public.example";
+    {
+        int routeCalls = 0;
+        CHECK(RouteRequest(routeSession).run([&](const std::string &base) {
+            ++routeCalls;
+            const bool lan = base == routeSession.localServerUrl;
+            CHECK(currentRouteKind() == (lan ? RouteKind::Lan : RouteKind::Public));
+            CHECK(currentRouteAttempt() == (lan ? 1 : 2));
+            CHECK(currentRouteFallback() == !lan);
+            if (lan) {
+                routeError = "Transport: connect failed";
+                return false;
+            }
+            CHECK(base == routeSession.publicServerUrl);
+            return true;
+        }, routeError));
+        CHECK(routeCalls == 2);
+        CHECK(currentRouteKind() == RouteKind::Unknown);
+        CHECK(currentRouteAttempt() == 0);
+        CHECK(!currentRouteFallback());
+    }
 #endif
 
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY

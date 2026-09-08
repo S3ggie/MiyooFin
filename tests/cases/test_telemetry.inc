@@ -1,7 +1,12 @@
 #include <cstdint>
+#include <atomic>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <type_traits>
+#include <vector>
+#define MIYOOFIN_TELEMETRY_RING_TEST 1
+#include "../../src/diagnostics/TelemetryRing.hpp"
 #include "../../src/diagnostics/TelemetryContext.hpp"
 #include "../../src/diagnostics/TelemetryGuards.hpp"
 #include "../../src/diagnostics/PerformanceTelemetry.hpp"
@@ -167,12 +172,98 @@ static void testTelemetryContextAndGuards()
     std::printf("[test] telemetry context and hot-path guards OK\n");
 }
 
+static TelemetryRecord makeTelemetryRingRecord(uint32_t sequence)
+{
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::SessionEvent;
+    record.header.record_size = sizeof(SessionEvent);
+    record.header.sequence = sequence;
+    record.header.monotonic_us = sequence;
+    record.payload.session_event.kind = static_cast<uint8_t>(SessionEventKind::TelemetryStarted);
+    return record;
+}
+
+static void testTelemetryRing()
+{
+    std::printf("[test] bounded telemetry ring FIFO, recovery, wrap, and MPSC stress\n");
+    TelemetryRing<4> ring;
+    TelemetryRecord record;
+    CHECK(ring.approximateDepth() == 0);
+    for (uint32_t sequence = 1; sequence <= 4; ++sequence)
+        CHECK(ring.tryEnqueue(makeTelemetryRingRecord(sequence)));
+    CHECK(ring.approximateDepth() == 4);
+    CHECK(!ring.tryEnqueue(makeTelemetryRingRecord(5)));
+    CHECK(ring.approximateHighWatermark() >= 4);
+    for (uint32_t sequence = 1; sequence <= 4; ++sequence) {
+        CHECK(ring.tryDequeue(record));
+        CHECK(record.header.sequence == sequence);
+    }
+    CHECK(!ring.tryDequeue(record));
+    CHECK(ring.approximateDepth() == 0);
+    CHECK(ring.tryEnqueue(makeTelemetryRingRecord(6)));
+    CHECK(ring.tryDequeue(record));
+    CHECK(record.header.sequence == 6);
+
+#if defined(MIYOOFIN_TELEMETRY_RING_TEST)
+    TelemetryRing<4> wrap;
+    wrap.seedPositionsForTest(UINT32_MAX - 1u);
+    for (uint32_t sequence = 1; sequence <= 4; ++sequence)
+        CHECK(wrap.tryEnqueue(makeTelemetryRingRecord(sequence)));
+    for (uint32_t sequence = 1; sequence <= 4; ++sequence) {
+        CHECK(wrap.tryDequeue(record));
+        CHECK(record.header.sequence == sequence);
+    }
+#endif
+
+    constexpr int producerCount = 4;
+    constexpr int recordsPerProducer = 128;
+    constexpr int totalRecords = producerCount * recordsPerProducer;
+    TelemetryRing<512> stressRing;
+    std::atomic<int> completedProducers{0};
+    std::atomic<int> consumedRecords{0};
+    std::vector<bool> seen(totalRecords, false);
+    std::vector<std::thread> producers;
+    producers.reserve(producerCount);
+    for (int producer = 0; producer < producerCount; ++producer) {
+        producers.emplace_back([&stressRing, &completedProducers, producer]() {
+            for (int index = 0; index < recordsPerProducer; ++index) {
+                const uint32_t sequence = static_cast<uint32_t>(producer * recordsPerProducer + index);
+                const TelemetryRecord record = makeTelemetryRingRecord(sequence);
+                while (!stressRing.tryEnqueue(record))
+                    std::this_thread::yield();
+            }
+            completedProducers.fetch_add(1, std::memory_order_release);
+        });
+    }
+    while (completedProducers.load(std::memory_order_acquire) != producerCount
+        || stressRing.approximateDepth() != 0) {
+        if (stressRing.tryDequeue(record)) {
+            CHECK(record.header.sequence < static_cast<uint32_t>(totalRecords));
+            if (record.header.sequence < static_cast<uint32_t>(totalRecords)) {
+                CHECK(!seen[record.header.sequence]);
+                seen[record.header.sequence] = true;
+            }
+            consumedRecords.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            std::this_thread::yield();
+        }
+    }
+    for (std::thread &producer : producers)
+        producer.join();
+    CHECK(consumedRecords.load(std::memory_order_relaxed) == totalRecords);
+    for (bool wasSeen : seen)
+        CHECK(wasSeen);
+    CHECK(stressRing.approximateDepth() == 0);
+    std::printf("[test] bounded telemetry ring FIFO, recovery, wrap, and MPSC stress OK\n");
+}
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
     testTelemetryClocks();
     testTelemetryConfigAndFacade();
     testTelemetryContextAndGuards();
+    testTelemetryRing();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

@@ -166,6 +166,16 @@ static void testTelemetryContextAndGuards()
     CHECK(currentRouteAttempt() == 0);
     CHECK(!currentRouteFallback());
     CHECK(currentArtworkContext() == ArtworkContext::Unknown);
+    {
+        TelemetryRequestScope outerRequest(RequestKind::SystemInfo);
+        CHECK(currentRequestKind() == RequestKind::SystemInfo);
+        {
+            TelemetryRequestScope innerRequest(RequestKind::Authentication);
+            CHECK(currentRequestKind() == RequestKind::Authentication);
+        }
+        CHECK(currentRequestKind() == RequestKind::SystemInfo);
+    }
+    CHECK(currentRequestKind() == RequestKind::Unknown);
 #endif
 
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY

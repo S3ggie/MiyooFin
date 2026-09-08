@@ -20,7 +20,8 @@ TELEMETRY_SRCS :=
 ifeq ($(PERF_TELEMETRY),1)
 TELEMETRY_SRCS := \
     src/diagnostics/TelemetryConfig.cpp \
-    src/diagnostics/PerformanceTelemetry.cpp
+    src/diagnostics/PerformanceTelemetry.cpp \
+    src/diagnostics/MftFormat.cpp
 endif
 SRCS := \
     src/main.cpp \

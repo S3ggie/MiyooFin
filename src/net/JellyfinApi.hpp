@@ -139,8 +139,9 @@ public:
                                 int limit,
                                 std::vector<MediaItem> &items,
                                 std::string &error);
-    /// Changed hierarchy records since a durable UTC checkpoint.  Jellyfin's
-    /// DateLastSaved includes metadata and per-user UserData changes.
+    /// Changed hierarchy relationships since a durable UTC checkpoint.  The
+    /// result retains only ID, normalized type, and SeriesId; DateLastSaved
+    /// still includes metadata and per-user UserData changes.
     static bool getChangedHierarchyItems(const std::string &baseUrl, const std::string &accessToken,
                                          const std::string &userId, const std::string &deviceId,
                                          std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error);

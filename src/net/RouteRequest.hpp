@@ -4,6 +4,16 @@
 #include "Session.hpp"
 #include "ServerAddress.hpp"
 #include "RouteStatus.hpp"
+#if defined(MIYOOFIN_TELEMETRY_HOST_TEST) \
+    && !defined(MIYOOFIN_TELEMETRY_RING_TEST)
+#define MIYOOFIN_ROUTE_REQUEST_RING_TEST 1
+#define MIYOOFIN_TELEMETRY_RING_TEST 1
+#endif
+#include "../diagnostics/TelemetryGuards.hpp"
+#if defined(MIYOOFIN_ROUTE_REQUEST_RING_TEST)
+#undef MIYOOFIN_TELEMETRY_RING_TEST
+#undef MIYOOFIN_ROUTE_REQUEST_RING_TEST
+#endif
 #include <cstdio>
 #include <string>
 
@@ -32,12 +42,18 @@ public:
         const std::string publicUrl=publicRoute();
         if (local.empty()) {
             std::printf("[Route] PUBLIC\n");
-            const bool succeeded=operation(publicUrl);
+            const bool succeeded=[&] {
+                TelemetryRouteScope route(RouteKind::Public, 1, false);
+                return operation(publicUrl);
+            }();
             if (succeeded) RouteStatus::record(ApiRoute::Public);
             return succeeded;
         }
         std::printf("[Route] LAN\n");
-        const bool succeeded=operation(local);
+        const bool succeeded=[&] {
+            TelemetryRouteScope route(RouteKind::Lan, 1, false);
+            return operation(local);
+        }();
         if (succeeded) {
             RouteStatus::record(ApiRoute::Lan);
             return true;
@@ -46,7 +62,10 @@ public:
         std::printf("[Route] LAN failed; public fallback\n");
         error.clear();
         std::printf("[Route] PUBLIC\n");
-        const bool fallbackSucceeded=operation(publicUrl);
+        const bool fallbackSucceeded=[&] {
+            TelemetryRouteScope route(RouteKind::Public, 2, true);
+            return operation(publicUrl);
+        }();
         if (fallbackSucceeded) RouteStatus::record(ApiRoute::Public);
         return fallbackSucceeded;
     }

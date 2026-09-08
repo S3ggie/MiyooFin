@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -18,6 +20,9 @@
 #include "../../src/diagnostics/TelemetryClock.hpp"
 #include "../../src/diagnostics/MftFormat.hpp"
 #include "../../src/diagnostics/TelemetryWriter.hpp"
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+#include "../../src/diagnostics/LinuxProcessMetrics.hpp"
+#endif
 
 static void testTelemetryClocks()
 {
@@ -537,6 +542,44 @@ static void testTelemetrySchemaTypes()
     testMftV1Codec();
     testTelemetryWriter();
     testTelemetryServiceThread();
+    std::printf("[test] linux process metrics parsing and validity\n");
+    const std::string ioFixture = [] {
+        std::ifstream stream("tests/fixtures/telemetry/proc_io_sample.txt");
+        return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    }();
+    const std::string statmFixture = [] {
+        std::ifstream stream("tests/fixtures/telemetry/proc_statm_sample.txt");
+        return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    }();
+    uint64_t readBytes = 0;
+    uint64_t writeBytes = 0;
+    uint64_t rssKib = 0;
+    CHECK(LinuxProcessMetrics::parseProcIo(ioFixture, readBytes, writeBytes));
+    CHECK(readBytes == 345678);
+    CHECK(writeBytes == 456789);
+    CHECK(LinuxProcessMetrics::parseProcStatm(statmFixture, 4096, rssKib));
+    CHECK(rssKib == 8192);
+    CHECK(!LinuxProcessMetrics::parseProcIo("read_bytes: malformed\n", readBytes, writeBytes));
+    CHECK(!LinuxProcessMetrics::parseProcStatm("4096 malformed\n", 4096, rssKib));
+
+    LinuxProcessMetrics metrics;
+    const LinuxProcessMetricsSnapshot first = metrics.sampleFromProcText(
+        statmFixture, ioFixture, 100, 64, 1024);
+    CHECK((first.validity_flags & (ProcessCpuValid | RssValid | PeakRssValid
+                                   | ReadBytesValid | WriteBytesValid | FreeStorageValid))
+          == (ProcessCpuValid | RssValid | PeakRssValid
+              | ReadBytesValid | WriteBytesValid | FreeStorageValid));
+    const std::string regressedIo =
+        "read_bytes: 3\nwrite_bytes: 456790\n";
+    const LinuxProcessMetricsSnapshot regressed = metrics.sampleFromProcText(
+        statmFixture, regressedIo, 101, 64, 1024);
+    CHECK((regressed.validity_flags & ReadBytesValid) == 0);
+    CHECK((regressed.validity_flags & WriteBytesValid) != 0);
+    const LinuxProcessMetricsSnapshot recovered = metrics.sampleFromProcText(
+        statmFixture, "read_bytes: 4\nwrite_bytes: 456791\n", 102, 64, 1024);
+    CHECK((recovered.validity_flags & (ReadBytesValid | WriteBytesValid))
+          == (ReadBytesValid | WriteBytesValid));
+    std::printf("[test] linux process metrics parsing and validity OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

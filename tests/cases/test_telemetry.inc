@@ -730,6 +730,78 @@ static void testTelemetrySchemaTypes()
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] periodic system samples and fake service hooks OK\n");
 
+    std::printf("[test] home library sync telemetry completion\n");
+    const std::string syncRoot = "/tmp/miyoofin-home-library-sync-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string syncPath = syncRoot + "/telemetry.mft";
+    std::remove(syncPath.c_str());
+    ::rmdir(syncRoot.c_str());
+    TelemetryConfig syncConfig = sampleConfig;
+    syncConfig.targetDirectory = syncRoot;
+    fakeNowUs.store(1, std::memory_order_relaxed);
+    fakeMetricSamples.store(0, std::memory_order_relaxed);
+    PerformanceTelemetry &syncTelemetry = performanceTelemetry();
+    syncTelemetry.start(syncConfig);
+    Session syncSession;
+    syncSession.serverUrl = "http://127.0.0.1:1";
+    syncSession.accessToken = "test-token";
+    syncSession.userId = "test-user";
+    syncSession.deviceId = "test-device";
+    {
+        HomeScreen home(syncSession);
+        home.enter();
+        for (int attempt = 0; attempt < 200; ++attempt) {
+            home.update(0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    fakeNowUs.store(100001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    syncTelemetry.stop();
+    std::ifstream syncFile(syncPath, std::ios::binary);
+    const std::vector<uint8_t> syncBytes(
+        (std::istreambuf_iterator<char>(syncFile)), std::istreambuf_iterator<char>());
+    std::size_t librarySyncCount = 0;
+    bool librarySyncFailure = false;
+    uint32_t librarySyncRequests = 0;
+    bool libraryWorkerSawInactive = false;
+    for (std::size_t offset = 80; offset + 16 <= syncBytes.size();) {
+        const uint16_t recordSize = static_cast<uint16_t>(syncBytes[offset + 2])
+            | (static_cast<uint16_t>(syncBytes[offset + 3]) << 8);
+        if (recordSize < 16 || offset + recordSize > syncBytes.size())
+            break;
+        const uint16_t recordType = static_cast<uint16_t>(syncBytes[offset])
+            | (static_cast<uint16_t>(syncBytes[offset + 1]) << 8);
+        if (recordType == static_cast<uint16_t>(RecordType::LibrarySync)
+            && recordSize >= 48) {
+            ++librarySyncCount;
+            librarySyncFailure = syncBytes[offset + 24]
+                == static_cast<uint8_t>(Outcome::Failure);
+            librarySyncRequests = static_cast<uint32_t>(syncBytes[offset + 40])
+                | (static_cast<uint32_t>(syncBytes[offset + 41]) << 8)
+                | (static_cast<uint32_t>(syncBytes[offset + 42]) << 16)
+                | (static_cast<uint32_t>(syncBytes[offset + 43]) << 24);
+        } else if (recordType == static_cast<uint16_t>(RecordType::WorkerSample)
+                   && recordSize >= 44 && offset + 20 <= syncBytes.size()) {
+            const std::size_t payload = offset + 16;
+            const uint16_t workerId = static_cast<uint16_t>(syncBytes[payload])
+                | (static_cast<uint16_t>(syncBytes[payload + 1]) << 8);
+            if (workerId == static_cast<uint16_t>(WorkerId::HomeLibraryFetch))
+                libraryWorkerSawInactive = syncBytes[payload + 2] == 0;
+        }
+        offset += recordSize;
+    }
+    CHECK(librarySyncCount == 1);
+    CHECK(librarySyncFailure);
+    CHECK(librarySyncRequests == 1);
+    CHECK(libraryWorkerSawInactive);
+    std::remove(syncPath.c_str());
+    ::rmdir(syncRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] home library sync telemetry completion OK\n");
+
     std::printf("[test] screen retirement gauges and nonblocking pop\n");
     const std::string retirementRoot = "/tmp/miyoofin-screen-retirement-"
         + std::to_string(static_cast<long long>(getpid()));

@@ -20,6 +20,7 @@ struct HttpResponse {
 /// Result of a binary HTTP request (e.g. image download).
 struct BinaryHttpResponse {
     long                    status = 0;   ///< HTTP status code (0 if transport error)
+    int                     transportCode = 0; ///< CURLcode when status is unavailable
     std::vector<unsigned char> data;      ///< Raw response bytes
     bool                    truncated = false;  ///< true if response exceeded max size
     bool ok() const { return status >= 200 && status < 300 && !truncated; }

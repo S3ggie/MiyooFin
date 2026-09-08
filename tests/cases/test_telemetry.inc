@@ -23,6 +23,7 @@
 #include "../../src/cache/ImageCache.hpp"
 #include "../../src/image/ImageDecoder.hpp"
 #include "../../src/net/RouteRequest.hpp"
+#include "../../src/net/HttpClient.hpp"
 #include "../../src/input/Action.hpp"
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
 #include "../../src/diagnostics/LinuxProcessMetrics.hpp"
@@ -585,6 +586,150 @@ static void testTelemetryServiceThread()
 }
 #endif
 
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+static void testHttpClientTelemetry()
+{
+    std::printf("[test] http client transport telemetry\n");
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+    const std::string root = "/tmp/miyoofin-http-telemetry-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string payloadPath = root + "-payload";
+    const std::string payloadUrl = "file://" + payloadPath;
+    const std::string missingUrl = "file://" + root + "-missing";
+    std::remove(payloadPath.c_str());
+    std::remove((root + "/telemetry.mft").c_str());
+    ::rmdir(root.c_str());
+    {
+        std::ofstream payload(payloadPath, std::ios::binary);
+        payload << "hello";
+    }
+
+    TelemetryConfig config;
+    config.runtimeEnabled = true;
+    config.targetDirectory = root;
+    config.sampleIntervalMs = 600000;
+    config.freeSpaceIntervalMs = 600000;
+    config.flushIntervalMs = 1;
+    telemetry.start(config);
+    for (int attempt = 0; attempt < 100 && !telemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(telemetry.enabledFast());
+    CHECK(telemetry.serviceThreadActive());
+
+    HttpClient client;
+    HttpResponse textResponse;
+    std::string error;
+    {
+        TelemetryRequestScope request(RequestKind::Views);
+        TelemetryRouteScope route(RouteKind::Public, 1, false);
+        CHECK(client.perform("GET", payloadUrl, {}, {}, textResponse, error));
+    }
+    CHECK(textResponse.body == "hello");
+    {
+        TelemetryRequestScope request(RequestKind::LibraryItems);
+        TelemetryRouteScope route(RouteKind::Public, 2, true);
+        CHECK(!client.perform("GET", missingUrl, {}, {}, textResponse, error));
+    }
+    BinaryHttpResponse binaryResponse;
+    {
+        TelemetryRequestScope request(RequestKind::Artwork);
+        TelemetryRouteScope route(RouteKind::Lan, 1, false);
+        CHECK(client.getBinary(payloadUrl, {}, binaryResponse, error));
+    }
+    CHECK(binaryResponse.data.size() == 5);
+    BinaryHttpResponse missingBinary;
+    CHECK(!client.getBinary(missingUrl, {}, missingBinary, error));
+    telemetry.stop();
+
+    std::ifstream sample(root + "/telemetry.mft", std::ios::binary);
+    const std::vector<uint8_t> bytes(
+        (std::istreambuf_iterator<char>(sample)), std::istreambuf_iterator<char>());
+    const auto readU16 = [&bytes](std::size_t offset) {
+        return static_cast<uint16_t>(bytes[offset])
+            | (static_cast<uint16_t>(bytes[offset + 1]) << 8);
+    };
+    const auto readU32 = [&bytes](std::size_t offset) {
+        return static_cast<uint32_t>(bytes[offset])
+            | (static_cast<uint32_t>(bytes[offset + 1]) << 8)
+            | (static_cast<uint32_t>(bytes[offset + 2]) << 16)
+            | (static_cast<uint32_t>(bytes[offset + 3]) << 24);
+    };
+    const auto readU64 = [&bytes](std::size_t offset) {
+        uint64_t value = 0;
+        for (unsigned int byte = 0; byte < 8; ++byte)
+            value |= static_cast<uint64_t>(bytes[offset + byte]) << (byte * 8);
+        return value;
+    };
+    std::size_t networkRecords = 0;
+    bool sawTextSuccess = false;
+    bool sawTextFailure = false;
+    bool sawBinarySuccess = false;
+    bool sawBinaryFailure = false;
+    for (std::size_t offset = 80; offset + 16 <= bytes.size();) {
+        const uint16_t size = readU16(offset + 2);
+        if (size < 16 || offset + size > bytes.size())
+            break;
+        if (readU16(offset) == static_cast<uint16_t>(RecordType::NetworkRequest)
+            && size >= 56) {
+            ++networkRecords;
+            const uint16_t requestKind = readU16(offset + 16);
+            const uint8_t routeKind = bytes[offset + 18];
+            const uint8_t method = bytes[offset + 19];
+            const uint32_t curlCode = readU32(offset + 32);
+            const uint64_t rxBytes = readU64(offset + 36);
+            const uint64_t txBytes = readU64(offset + 44);
+            const uint8_t attempt = bytes[offset + 52];
+            const uint8_t cancelled = bytes[offset + 53];
+            const uint8_t truncated = bytes[offset + 54];
+            const uint8_t fallback = bytes[offset + 55];
+            CHECK(method == 1);
+            CHECK(cancelled == 0);
+            CHECK(truncated == 0);
+            if (requestKind == static_cast<uint16_t>(RequestKind::Views)) {
+                CHECK(routeKind == static_cast<uint8_t>(RouteKind::Public));
+                CHECK(attempt == 1);
+                CHECK(fallback == 0);
+                CHECK(curlCode == 0);
+                CHECK(rxBytes == 5);
+                CHECK(txBytes == 0);
+                sawTextSuccess = true;
+            } else if (requestKind == static_cast<uint16_t>(RequestKind::LibraryItems)) {
+                CHECK(routeKind == static_cast<uint8_t>(RouteKind::Public));
+                CHECK(attempt == 2);
+                CHECK(fallback == 1);
+                CHECK(curlCode != 0);
+                sawTextFailure = true;
+            } else if (requestKind == static_cast<uint16_t>(RequestKind::Artwork)) {
+                CHECK(routeKind == static_cast<uint8_t>(RouteKind::Lan));
+                CHECK(attempt == 1);
+                CHECK(fallback == 0);
+                CHECK(curlCode == 0);
+                CHECK(rxBytes == 5);
+                sawBinarySuccess = true;
+            } else {
+                CHECK(requestKind == static_cast<uint16_t>(RequestKind::Unknown));
+                CHECK(routeKind == static_cast<uint8_t>(RouteKind::Unknown));
+                CHECK(attempt == 0);
+                CHECK(fallback == 0);
+                CHECK(curlCode != 0);
+                sawBinaryFailure = true;
+            }
+        }
+        offset += size;
+    }
+    CHECK(networkRecords == 4);
+    CHECK(sawTextSuccess);
+    CHECK(sawTextFailure);
+    CHECK(sawBinarySuccess);
+    CHECK(sawBinaryFailure);
+    std::remove(payloadPath.c_str());
+    std::remove((root + "/telemetry.mft").c_str());
+    ::rmdir(root.c_str());
+    std::printf("[test] http client transport telemetry OK\n");
+}
+#endif
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
@@ -596,6 +741,7 @@ static void testTelemetrySchemaTypes()
     testMftV1Codec();
     testTelemetryWriter();
     testTelemetryServiceThread();
+    testHttpClientTelemetry();
     std::printf("[test] linux process metrics parsing and validity\n");
     const std::string ioFixture = [] {
         std::ifstream stream("tests/fixtures/telemetry/proc_io_sample.txt");

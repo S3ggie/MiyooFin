@@ -231,7 +231,7 @@ fi
 # drivers.
 # -------------------------------------------------------------------
 unset SDL_VIDEODRIVER
-unset SDL_AUDIODRIVER
+export SDL_AUDIODRIVER=mmiyoo
 
 # -------------------------------------------------------------------
 # Run Onion FFplay
@@ -246,7 +246,7 @@ cd "$SYS" || {
     exit 1
 }
 
-./bin/ffplay \
+LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so ./bin/ffplay \
     -stats \
     -autoexit \
     -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \

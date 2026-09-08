@@ -4,6 +4,8 @@
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include <ctime>
 
 namespace miyoofin {
@@ -53,6 +55,8 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs)
         if (queued.insert(key).second && !ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
             m_pendingPosterJobs.push_back(std::move(job));
     }
+    performanceTelemetry().setWorkerQueueDepth(
+        WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
     m_posterWake.notify_one();
 }
 
@@ -96,11 +100,19 @@ void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const Libr
     }
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     const std::uint64_t generation=m_hierarchyGeneration.fetch_add(1)+1;
+    const std::size_t superseded=m_pendingHierarchyShows.size();
     m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
     m_pendingHierarchyGeneration=generation;
     m_hierarchyCompleted.store(0);
     m_hierarchyTotal.store(m_pendingHierarchyShows.size());
     m_hierarchyActive.store(!m_pendingHierarchyShows.empty());
+    PerformanceTelemetry &telemetry=performanceTelemetry();
+    telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy,
+                                  static_cast<uint32_t>(m_pendingHierarchyShows.size()));
+    telemetry.setWorkerActive(WorkerId::HomeHierarchy, !m_pendingHierarchyShows.empty());
+    if (superseded != 0)
+        telemetry.addWorkerCancelled(WorkerId::HomeHierarchy,
+                                     static_cast<uint32_t>(superseded));
     if(m_pendingHierarchyShows.empty()) {
         m_syncState.lastSuccessfulMs=wallClockMs();
         if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
@@ -115,17 +127,18 @@ void HomeScreen::hierarchyWorker()
     for (;;) {
         std::vector<MediaItem> shows;
         std::uint64_t generation=0;
-        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; }
+        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
         const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
-        for (const auto &series : shows) {
-            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
+        for (std::size_t showIndex=0; showIndex<shows.size(); ++showIndex) {
+            const auto &series=shows[showIndex];
+            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
             std::vector<MediaItem> seasons; std::string error;
-            if (!RouteRequest(m_session).run([&](const std::string &base){return JellyfinApi::getSeasons(base,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error);},error)) { if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); continue; }
+            if (!RouteRequest(m_session).run([&](const std::string &base){return JellyfinApi::getSeasons(base,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,seasons,error);},error)) { const bool current=generation==m_hierarchyGeneration.load(); if(current) m_hierarchyOffline.store(true); if(current) performanceTelemetry().addWorkerFailed(WorkerId::HomeHierarchy); else performanceTelemetry().addWorkerCancelled(WorkerId::HomeHierarchy); continue; }
             queuePosterJobs(collectSeasonPosterJobs(seasons));
             std::map<std::string,std::vector<MediaItem> > episodesBySeason;
             bool complete=true;
             for (const auto &season : seasons) {
-                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker)return; }
+                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
                 if (season.id.empty()) { complete=false; break; }
                 std::vector<MediaItem> episodes; error.clear();
                 if (!RouteRequest(m_session).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,m_session.accessToken,m_session.userId,m_session.deviceId,series.id,season.id,episodes,error);},error)) { complete=false; if(generation==m_hierarchyGeneration.load()) m_hierarchyOffline.store(true); break; }
@@ -142,11 +155,23 @@ void HomeScreen::hierarchyWorker()
                     m_catalogSnapshot=std::move(snapshot);
                     m_catalogSnapshotReady=true;
                 }
-                if (generation==m_hierarchyGeneration.load()) m_hierarchyCompleted.fetch_add(1);
+                if (generation==m_hierarchyGeneration.load()) {
+                    m_hierarchyCompleted.fetch_add(1);
+                    performanceTelemetry().addWorkerCompleted(WorkerId::HomeHierarchy);
+                } else {
+                    performanceTelemetry().addWorkerCancelled(WorkerId::HomeHierarchy);
+                }
+            } else {
+                if (generation==m_hierarchyGeneration.load())
+                    performanceTelemetry().addWorkerFailed(WorkerId::HomeHierarchy);
+                else
+                    performanceTelemetry().addWorkerCancelled(WorkerId::HomeHierarchy);
             }
         }
         if (generation==m_hierarchyGeneration.load()) {
             m_hierarchyActive.store(false);
+            performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, false);
+            performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0);
             // A watermark means the requested hierarchy was fully committed,
             // never merely that the metadata request happened.  Failures keep
             // the old checkpoint so the next online attempt is conservative.
@@ -164,8 +189,12 @@ void HomeScreen::posterWorker()
 {
     for (;;) {
         std::vector<PosterJob> jobs;
-        { std::unique_lock<std::mutex> lock(m_posterMutex); m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();}); if(m_stopPosterWorker) return; jobs.swap(m_pendingPosterJobs); }
-        for(const auto &job:jobs){ HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty())ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size()); }
+        { std::unique_lock<std::mutex> lock(m_posterMutex); m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();}); if(m_stopPosterWorker) return; jobs.swap(m_pendingPosterJobs); performanceTelemetry().setWorkerQueueDepth(WorkerId::HomePoster, 0); performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true); }
+        for(const auto &job:jobs){ HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster); if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty()){ if(ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size())) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster); else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); } else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); }
+        performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
+        std::lock_guard<std::mutex> lock(m_posterMutex);
+        performanceTelemetry().setWorkerQueueDepth(
+            WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
     }
 }
 

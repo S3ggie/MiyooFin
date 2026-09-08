@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <thread>
 #include <unistd.h>
@@ -32,6 +33,18 @@ uint32_t clampToUint32(uint64_t value) noexcept
 {
     return value > std::numeric_limits<uint32_t>::max()
         ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(value);
+}
+
+LinuxProcessMetricsSnapshot sampleProcessMetrics(LinuxProcessMetrics &metrics,
+                                                 bool includeFreeStorage) noexcept
+{
+#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
+    return g_testHooks.processMetrics != nullptr
+        ? g_testHooks.processMetrics(includeFreeStorage)
+        : metrics.sample(includeFreeStorage);
+#else
+    return metrics.sample(includeFreeStorage);
+#endif
 }
 
 } // namespace
@@ -407,6 +420,16 @@ void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
 
 void PerformanceTelemetry::serviceLoop() noexcept
 {
+    LinuxProcessMetrics metrics;
+    const LinuxProcessMetricsSnapshot startupSnapshot = sampleProcessMetrics(metrics, true);
+    if ((startupSnapshot.validity_flags & FreeStorageValid) != 0
+        && startupSnapshot.free_storage_bytes < m_config.minFreeStorageBytes) {
+        std::fprintf(stderr, "[telemetry] disabled: insufficient free storage\n");
+        m_enabled.store(false, std::memory_order_release);
+        m_stopRequested.store(true, std::memory_order_release);
+        return;
+    }
+
     MftFileHeader header{};
     header.flags = 2u;
     header.pid = static_cast<uint32_t>(::getpid());
@@ -441,7 +464,6 @@ void PerformanceTelemetry::serviceLoop() noexcept
     started.payload.session_event.value1 = m_config.minFreeStorageBytes;
     writeServiceRecord(started);
 
-    LinuxProcessMetrics metrics;
     const uint64_t sampleIntervalUs = std::max<uint64_t>(
         1ull, static_cast<uint64_t>(m_config.sampleIntervalMs) * 1000ull);
     const uint64_t freeSpaceIntervalUs = std::max<uint64_t>(
@@ -478,14 +500,35 @@ void PerformanceTelemetry::serviceLoop() noexcept
             } else {
                 const bool refreshFreeSpace = nowUs >= nextFreeSpaceUs;
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
-                LinuxProcessMetricsSnapshot snapshot = g_testHooks.processMetrics != nullptr
-                    ? g_testHooks.processMetrics(refreshFreeSpace)
-                    : metrics.sample(refreshFreeSpace);
+                LinuxProcessMetricsSnapshot snapshot = sampleProcessMetrics(metrics, refreshFreeSpace);
 #else
                 LinuxProcessMetricsSnapshot snapshot = metrics.sample(refreshFreeSpace);
 #endif
                 if (refreshFreeSpace)
                     nextFreeSpaceUs = nowUs + freeSpaceIntervalUs;
+                if (refreshFreeSpace
+                    && (snapshot.validity_flags & FreeStorageValid) != 0
+                    && snapshot.free_storage_bytes < m_config.minFreeStorageBytes) {
+                    TelemetryRecord disabled{};
+                    disabled.header.record_type = RecordType::SessionEvent;
+                    disabled.header.monotonic_us = nowUs;
+                    disabled.payload.session_event.kind = static_cast<uint8_t>(
+                        SessionEventKind::WriterDisabledLowSpace);
+                    disabled.payload.session_event.outcome = static_cast<uint8_t>(Outcome::Skipped);
+                    disabled.payload.session_event.value0 = clampToUint32(
+                        m_config.minFreeStorageBytes / (1024ull * 1024ull));
+                    disabled.payload.session_event.value1 = snapshot.free_storage_bytes;
+                    writeServiceRecord(disabled);
+                    emitTelemetryHealth(nowUs);
+                    if (!m_writer.flush())
+                        m_writerErrors.fetch_add(1, std::memory_order_relaxed);
+                    if (!m_writer.close())
+                        m_writerErrors.fetch_add(1, std::memory_order_relaxed);
+                    m_enabled.store(false, std::memory_order_release);
+                    m_stopRequested.store(true, std::memory_order_release);
+                    m_serviceActive.store(false, std::memory_order_release);
+                    return;
+                }
                 if ((snapshot.validity_flags & FreeStorageValid) != 0) {
                     lastFreeStorageBytes = snapshot.free_storage_bytes;
                     lastFreeSpaceSampleUs = nowUs;

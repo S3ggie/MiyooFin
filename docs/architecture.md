@@ -124,6 +124,14 @@ aggregates, and owns the writer. `LinuxProcessMetrics` performs `/proc` and `sta
 that service thread; storage sampling follows the filesystem containing the configured output
 directory.
 
+Process lifetime follows the application lifetime: `main` reads `TelemetryConfig`, starts
+`PerformanceTelemetry`, constructs and runs `App`, destroys `App`, then stops telemetry. A telemetry
+startup failure never fails the application, and an application-init failure still destroys `App`
+before telemetry is stopped. Runtime-off has no service thread or trace file and checks the relaxed
+`enabledFast()` flag before telemetry clocks, thread-local context changes, or event work. The
+compile-out build removes telemetry production objects and hot-path telemetry work; shared build
+outputs are rebuilt cleanly when switching compile variants.
+
 `MftFormat` explicitly encodes the frozen MFT v1 header and records in little-endian order. The
 independent standard-library laptop decoder validates the same header, sizes, record layouts, and
 allowlisted enum values before analysis. The normative contract is
@@ -134,6 +142,15 @@ a 32768-byte writer buffer, 16 MiB rotation, four retained trace files, and a 12
 cutoff. Runtime configuration may only adjust the documented numeric settings and remains
 clamped by the implementation. Real-device observer-effect and low-storage evidence is recorded
 in the [performance telemetry benchmark](performance-telemetry-benchmark.md).
+
+Each base tick emits one `SystemSample`, one sample for every defined worker, one
+`ArtworkSummary`, one `DownloadSample`, and one `TelemetryHealth`. Worker activity and queue depth
+are instantaneous; worker high-water and completion/failure/cancellation values are interval
+deltas reset after emission. Artwork cache counters belong only to `ImageCache`, decode counters
+and individual decode records belong only to `ImageDecoder`, and download byte/segment deltas are
+reset after emission. Download throughput uses the actual elapsed interval. Health drops, writer
+errors, rotations, and sampling-late counts are cumulative; queue depth and buffered bytes are
+instantaneous. No worker mutex is taken by the service thread.
 
 ## Threading, local-first behavior, and persistence
 

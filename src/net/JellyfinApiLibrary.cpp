@@ -1,5 +1,6 @@
 #include "JellyfinApi.hpp"
 #include "HttpClient.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
 
 namespace miyoofin {
@@ -57,6 +58,7 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
     auto headers = buildAuthHeaders(accessToken, deviceId);
     std::string url = baseUrl + "/Users/" + userId + "/Views";
     HttpResponse response;
+    TelemetryRequestScope request(RequestKind::Views);
     if (!client.perform("GET", url, headers, {}, response, error)) {
         if (error.empty()) error = "Could not reach server";
         return false;
@@ -103,6 +105,7 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
         std::string url = buildLibraryItemsUrl(baseUrl, userId, parentId,
                                                includeItemTypes, startIndex, limit);
         HttpResponse response;
+        TelemetryRequestScope request(RequestKind::LibraryItems);
         if (!client.perform("GET", url.c_str(), headers, {}, response, error)) {
             if (error.empty()) error = "Could not reach server";
             return false;
@@ -165,6 +168,7 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
         "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber",
         baseUrl.c_str(), userId.c_str(), limit);
     HttpResponse response;
+    TelemetryRequestScope request(RequestKind::ResumeItems);
     if (!client.perform("GET", urlBuf, headers, {}, response, error)) {
         if (error.empty()) error = "Could not reach server";
         return false;
@@ -206,6 +210,7 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     auto headers = buildAuthHeaders(accessToken, deviceId);
     std::string url = buildLatestUrl(baseUrl, userId, limit);
     HttpResponse response;
+    TelemetryRequestScope request(RequestKind::LatestItems);
     if (!client.perform("GET", url.c_str(), headers, {}, response, error)) {
         if (error.empty()) error = "Could not reach server";
         return false;

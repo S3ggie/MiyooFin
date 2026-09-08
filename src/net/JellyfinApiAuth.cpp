@@ -1,5 +1,6 @@
 #include "JellyfinApi.hpp"
 #include "HttpClient.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #include "miyoofin/version.hpp"
 #include <cstdio>
 #include <cctype>
@@ -59,6 +60,7 @@ bool JellyfinApi::getSystemInfo(const std::string &baseUrl,
     std::string body;
     long httpCode = 0;
 
+    TelemetryRequestScope request(RequestKind::SystemInfo);
     if (!client.get(url, body, httpCode, error)) {
         return false;
     }
@@ -123,6 +125,7 @@ bool JellyfinApi::authenticateByName(const std::string &baseUrl,
     };
 
     HttpResponse response;
+    TelemetryRequestScope request(RequestKind::Authentication);
     if (!client.post(baseUrl + "/Users/AuthenticateByName", headers, postBody,
                      response, error)) {
         // Transport failure (server unreachable, timeout, DNS, etc.)
@@ -183,6 +186,7 @@ TokenValidation JellyfinApi::validateTokenStatus(const std::string &baseUrl,
     std::string url = baseUrl + "/Users/" + userId;
 
     HttpResponse response;
+    TelemetryRequestScope request(RequestKind::TokenValidation);
     if (!client.perform("GET", url, headers, {}, response, error)) {
         if (error.empty()) error = "Could not reach server";
         return TokenValidation::Unavailable;

@@ -261,6 +261,7 @@ static void testTelemetryRing()
     std::printf("[test] bounded telemetry ring FIFO, recovery, wrap, and MPSC stress OK\n");
 }
 
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
 static void testMftV1Codec()
 {
     std::printf("[test] MFT v1 little-endian codec and golden bytes\n");
@@ -461,6 +462,70 @@ static void testTelemetryWriter()
     std::printf("[test] buffered telemetry writer header, flush, close, and errors OK\n");
 }
 
+static void testTelemetryServiceThread()
+{
+    std::printf("[test] telemetry service runtime-off, drain, drops, rotation, and join\n");
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+
+    const std::string offRoot = "/tmp/miyoofin-telemetry-off-" + std::to_string(static_cast<long long>(getpid()));
+    const std::string offPath = offRoot + "/telemetry.mft";
+    std::remove(offPath.c_str());
+    ::rmdir(offRoot.c_str());
+    TelemetryConfig offConfig;
+    offConfig.targetDirectory = offRoot;
+    offConfig.runtimeEnabled = false;
+    telemetry.start(offConfig);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(!telemetry.enabledFast());
+    CHECK(!telemetry.serviceThreadActive());
+    CHECK(::access(offPath.c_str(), F_OK) != 0);
+    telemetry.stop();
+
+    const std::string root = "/tmp/miyoofin-telemetry-service-" + std::to_string(static_cast<long long>(getpid()));
+    const std::string activePath = root + "/telemetry.mft";
+    std::remove(activePath.c_str());
+    ::rmdir(root.c_str());
+    TelemetryConfig config;
+    config.runtimeEnabled = true;
+    config.targetDirectory = root;
+    config.writerBufferBytes = 256;
+    config.flushIntervalMs = 1;
+    config.rotateBytes = 4096;
+    config.retainFiles = 4;
+    telemetry.start(config);
+    for (int attempt = 0; attempt < 100 && !telemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(telemetry.enabledFast());
+    CHECK(telemetry.serviceThreadActive());
+
+    for (uint32_t sequence = 0; sequence < 10000; ++sequence) {
+        telemetry.emitSessionEvent(SessionEventKind::SamplingResumed,
+                                    Outcome::Success, sequence, 0);
+    }
+    CHECK(telemetry.droppedRecordCount() > 0);
+    telemetry.stop();
+    CHECK(!telemetry.enabledFast());
+    CHECK(!telemetry.serviceThreadActive());
+    CHECK(::access(activePath.c_str(), F_OK) == 0);
+    CHECK(telemetry.rotationCount() > 0);
+    int retainedFiles = 1;
+    for (uint32_t index = 0; index < 100; ++index) {
+        const std::string rotated = root + "/telemetry-" + std::to_string(index) + ".mft";
+        if (::access(rotated.c_str(), F_OK) == 0)
+            ++retainedFiles;
+    }
+    CHECK(retainedFiles <= 4);
+    std::remove(activePath.c_str());
+    for (uint32_t index = 0; index < 100; ++index) {
+        const std::string rotated = root + "/telemetry-" + std::to_string(index) + ".mft";
+        std::remove(rotated.c_str());
+    }
+    ::rmdir(root.c_str());
+    std::printf("[test] telemetry service runtime-off, drain, drops, rotation, and join OK\n");
+}
+#endif
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
@@ -468,8 +533,11 @@ static void testTelemetrySchemaTypes()
     testTelemetryConfigAndFacade();
     testTelemetryContextAndGuards();
     testTelemetryRing();
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
     testMftV1Codec();
     testTelemetryWriter();
+    testTelemetryServiceThread();
+#endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

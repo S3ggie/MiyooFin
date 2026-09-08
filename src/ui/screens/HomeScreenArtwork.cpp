@@ -1,6 +1,8 @@
 #include "HomeScreen.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include "../../cache/ImageCache.hpp"
 
 namespace miyoofin {
@@ -105,18 +107,22 @@ void HomeScreen::submitDecode(const MediaItem &item, bool highPriority, bool sho
     if(key.empty() || !a.valid()) return;
     std::lock_guard<std::mutex> lock(m_decodeMutex);
     if(!m_decodeOutstanding.insert(key).second) return;
-    if(m_decodeJobs.size() >= 32) { m_decodeOutstanding.erase(key); return; }
-    DecodeJob job{key,{item.id,a.imageType,a.tag,a.width,a.height},shows};
+    if(m_decodeJobs.size() >= 32) { m_decodeOutstanding.erase(key); performanceTelemetry().addWorkerFailed(WorkerId::HomeDecode); return; }
+    const ArtworkContext context=shows ? ArtworkContext::HomeShows : (highPriority ? ArtworkContext::HomeSelected : ArtworkContext::HomeGrid);
+    DecodeJob job{key,{item.id,a.imageType,a.tag,a.width,a.height},shows,context};
     if(highPriority) m_decodeJobs.push_front(std::move(job)); else m_decodeJobs.push_back(std::move(job));
+    performanceTelemetry().setWorkerQueueDepth(
+        WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size()));
     m_decodeWake.notify_one();
 }
 
 void HomeScreen::decodeWorker()
 {
-    for (;;) { DecodeJob job; { std::unique_lock<std::mutex> lock(m_decodeMutex); m_decodeWake.wait(lock,[&]{return m_stopDecodeWorker||!m_decodeJobs.empty();}); if(m_stopDecodeWorker) return; job=std::move(m_decodeJobs.front());m_decodeJobs.pop_front(); }
+    for (;;) { DecodeJob job; { std::unique_lock<std::mutex> lock(m_decodeMutex); m_decodeWake.wait(lock,[&]{return m_stopDecodeWorker||!m_decodeJobs.empty();}); if(m_stopDecodeWorker){ performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, false); performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size())); return; } job=std::move(m_decodeJobs.front());m_decodeJobs.pop_front(); performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size())); performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, true); }
+        TelemetryArtworkScope artwork(job.context);
         auto bytes=ImageCache::readCached(job.artwork.itemId,job.artwork.imageType,job.artwork.imageTag,job.artwork.width,job.artwork.height);
         DecodedImage image=bytes.empty()?DecodedImage{}:ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
-        std::lock_guard<std::mutex> lock(m_decodeMutex); m_decodeResults.push_back({std::move(job.key),std::move(image),job.shows,!bytes.empty()});
+        std::lock_guard<std::mutex> lock(m_decodeMutex); m_decodeResults.push_back({std::move(job.key),std::move(image),job.shows,!bytes.empty()}); performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, false);
     }
 }
 
@@ -134,7 +140,7 @@ void HomeScreen::drainDecodedArtwork()
         // allowed to displace current Shows artwork after a scroll, though.
         if (result.shows
             && m_activeShowsDecodeKeys.find(result.key) == m_activeShowsDecodeKeys.end()
-            && protectedKeys.find(result.key) == protectedKeys.end()) continue;
+            && protectedKeys.find(result.key) == protectedKeys.end()) { performanceTelemetry().addWorkerCancelled(WorkerId::HomeDecode); continue; }
         if (!result.cachePresent) {
             // Poster sync may populate this key later; do not make a cache miss
             // a permanent failure.
@@ -213,6 +219,8 @@ void HomeScreen::updateShowsDecodeWorkingSet()
                 it = m_decodeJobs.erase(it);
             } else ++it;
         }
+        performanceTelemetry().setWorkerQueueDepth(
+            WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size()));
         return;
     }
     auto add = [&](const MediaItem &item) {
@@ -239,6 +247,8 @@ void HomeScreen::updateShowsDecodeWorkingSet()
                 it = m_decodeJobs.erase(it);
             } else ++it;
         }
+        performanceTelemetry().setWorkerQueueDepth(
+            WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size()));
     }
     for (size_t i = 0; i < desired.size(); ++i) {
         const std::string key = rowArtworkKey(*desired[i]);

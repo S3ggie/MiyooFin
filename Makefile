@@ -11,7 +11,8 @@
 
 CXX         := g++
 CC          := gcc
-CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0
+PERF_TELEMETRY ?= 1
+CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 INCLUDES    := -I. -Iinclude
 
@@ -25,6 +26,22 @@ CURL_LIBS   := $(shell pkg-config --libs libcurl 2>/dev/null || echo '-lcurl')
 
 # Source files
 SRC_DIR     := src
+TELEMETRY_SRCS :=
+TELEMETRY_TEST_SRCS :=
+ifeq ($(PERF_TELEMETRY),1)
+TELEMETRY_SRCS := \
+    $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/MftFormat.cpp \
+    $(SRC_DIR)/diagnostics/TelemetryWriter.cpp \
+    $(SRC_DIR)/diagnostics/LinuxProcessMetrics.cpp
+TELEMETRY_TEST_SRCS := \
+    $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/MftFormat.cpp \
+    $(SRC_DIR)/diagnostics/TelemetryWriter.cpp \
+    $(SRC_DIR)/diagnostics/LinuxProcessMetrics.cpp
+endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
@@ -86,12 +103,14 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/EpisodeBrowserDownloads.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
-    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
+    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp \
+    $(TELEMETRY_SRCS)
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
                output/build/download \
+               output/build/diagnostics \
                output/build/ui output/build/ui/screens \
                output/build/playback
 
@@ -122,8 +141,10 @@ output/build:
 # Test
 # -------------------------------------------------------------------
 TEST_TARGET := output/test/test_runner
+TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
+TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
                src/net/JellyfinApiJson.cpp \
@@ -177,20 +198,22 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/screens/EpisodeBrowserDownloads.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
                src/playback/PlaybackRequest.cpp \
-               src/playback/OfflinePlaybackJournal.cpp
+               src/playback/OfflinePlaybackJournal.cpp \
+               $(TELEMETRY_TEST_SRCS)
 
 .PHONY: test
 test: $(TEST_TARGET)
 	@$(TEST_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
+	@python3 $(TELEMETRY_DECODER_TEST)
 
 .PHONY: refactor-check
 refactor-check:
 	@sh tools/refactor-check.sh
 
 $(TEST_TARGET): $(TEST_SRCS) | output/test
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 output/test:
@@ -225,7 +248,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross all bridge reporter
+	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image

@@ -11,10 +11,20 @@ CXX := $(CROSS_PREFIX)g++
 CC  := $(CROSS_PREFIX)gcc
 AR  := $(CROSS_PREFIX)ar
 
-CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -g -O2
+PERF_TELEMETRY ?= 1
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -g -O2 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
 
 # Source files
+TELEMETRY_SRCS :=
+ifeq ($(PERF_TELEMETRY),1)
+TELEMETRY_SRCS := \
+    src/diagnostics/TelemetryConfig.cpp \
+    src/diagnostics/PerformanceTelemetry.cpp \
+    src/diagnostics/MftFormat.cpp \
+    src/diagnostics/TelemetryWriter.cpp \
+    src/diagnostics/LinuxProcessMetrics.cpp
+endif
 SRCS := \
     src/main.cpp \
     src/app/App.cpp \
@@ -76,7 +86,8 @@ SRCS := \
     src/ui/screens/EpisodeBrowserDownloads.cpp \
     src/ui/screens/MovieDetailsScreen.cpp \
     src/playback/OfflinePlaybackJournal.cpp \
-    src/playback/PlaybackRequest.cpp
+    src/playback/PlaybackRequest.cpp \
+    $(TELEMETRY_SRCS)
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
 DEPS      := $(OBJS:.o=.d)
@@ -86,6 +97,7 @@ TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
              output/build-arm/download \
+             output/build-arm/diagnostics \
              output/build-arm/ui/screens output/build-arm/playback
 
 .PHONY: all bridge reporter

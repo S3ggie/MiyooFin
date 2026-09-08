@@ -196,6 +196,25 @@ static void testExternalPlaybackFlagMultipleSet()
     std::printf("[test] B5f3a: ScreenStack external playback flag multiple sets OK\n");
 }
 
+// Playback telemetry must retain the source selected by the screen that
+// created the external playback request.
+static void testExternalPlaybackSourcePropagation()
+{
+    std::printf("[test] external playback source propagation\n");
+    ScreenStack stack;
+    ScreenStack::ExternalPlaybackSource source =
+        ScreenStack::ExternalPlaybackSource::Unknown;
+    stack.requestExternalPlayback(ScreenStack::ExternalPlaybackSource::Local);
+    CHECK(stack.pollExternalPlayback(source));
+    CHECK(source == ScreenStack::ExternalPlaybackSource::Local);
+    CHECK(!stack.pollExternalPlayback(source));
+
+    stack.requestExternalPlayback(ScreenStack::ExternalPlaybackSource::Jellyfin);
+    CHECK(stack.pollExternalPlayback(source));
+    CHECK(source == ScreenStack::ExternalPlaybackSource::Jellyfin);
+    std::printf("[test] external playback source propagation OK\n");
+}
+
 // B5f3a: PlaybackRequest still writes item_id and item_type (no exit code 42)
 static void testPlaybackRequestStillWorks()
 {

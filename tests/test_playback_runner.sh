@@ -52,3 +52,11 @@ run_case https_with_ca 'server_url=https://jellyfin.example.com' yes
 [ "$(sed -n '2p' "$TMP_ROOT/https_with_ca/bridge-args.txt")" = "$TMP_ROOT/https_with_ca/cacert.pem" ] || fail 'HTTPS route did not pass CA path'
 
 echo '[test] playback runner route-aware CA handling OK'
+
+# Onion's audioserver owns the OSS device.  FFplay must use the existing
+# padsp bridge when it is launched from MiyooFin rather than directly opening
+# /dev/dsp.
+grep -q '^unset SDL_AUDIODRIVER$' "$RUNNER" || fail 'runner does not select Onion DSP audio path'
+grep -q '^LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so ./bin/ffplay \\' "$RUNNER" || fail 'FFplay does not use Onion audio bridge'
+
+echo '[test] playback runner Onion DSP audio setup OK'

@@ -1,6 +1,7 @@
 #include "HttpClient.hpp"
 #include "ClockCheck.hpp"
 #include "TlsConfig.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cstdio>
@@ -63,6 +64,35 @@ static std::string classifyTransportError(CURLcode res)
     return std::string("Transport: ") + curl_easy_strerror(res);
 }
 
+static void recordNetworkRequest(TelemetryTimer &timer, uint8_t method,
+                                 long httpStatus, CURLcode curlCode,
+                                 size_t rxBytes, size_t txBytes,
+                                 bool cancelled, bool truncated) noexcept
+{
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    if (!timer.active() || !telemetry.enabledFast())
+        return;
+
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::NetworkRequest;
+    record.payload.network_request.request_kind = static_cast<uint16_t>(
+        currentRequestKind());
+    record.payload.network_request.route_kind = static_cast<uint8_t>(
+        currentRouteKind());
+    record.payload.network_request.method = method;
+    record.payload.network_request.duration_us = timer.elapsedUs();
+    record.payload.network_request.http_status = static_cast<uint32_t>(
+        httpStatus < 0 ? 0 : httpStatus);
+    record.payload.network_request.curl_code = static_cast<uint32_t>(curlCode);
+    record.payload.network_request.rx_payload_bytes = static_cast<uint64_t>(rxBytes);
+    record.payload.network_request.tx_body_bytes = static_cast<uint64_t>(txBytes);
+    record.payload.network_request.attempt = currentRouteAttempt();
+    record.payload.network_request.cancelled = cancelled ? 1 : 0;
+    record.payload.network_request.truncated = truncated ? 1 : 0;
+    record.payload.network_request.fallback_attempt = currentRouteFallback() ? 1 : 0;
+    telemetry.emitRecord(record);
+}
+
 HttpClient::HttpClient()
 {
     // Global init is handled once in main via curl_global_init
@@ -111,6 +141,7 @@ bool HttpClient::getBinary(const std::string &url,
                            size_t maxSize, const std::atomic<bool> *cancelled)
 {
     response.status = 0;
+    response.transportCode = 0;
     response.data.clear();
     response.truncated = false;
     error.clear();
@@ -150,9 +181,14 @@ bool HttpClient::getBinary(const std::string &url,
     if (headerList)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
+    TelemetryTimer timer;
     CURLcode res = curl_easy_perform(curl);
+    response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
+        recordNetworkRequest(timer, 1, response.status, res,
+                             response.data.size(), 0,
+                             res == CURLE_ABORTED_BY_CALLBACK, ctx.exceeded);
         error = std::string("Transport: ") + curl_easy_strerror(res);
         curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
@@ -167,6 +203,9 @@ bool HttpClient::getBinary(const std::string &url,
         response.truncated = true;
         response.data.clear();
     }
+
+    recordNetworkRequest(timer, 1, response.status, res,
+                         response.data.size(), 0, false, response.truncated);
 
     return true;
 }
@@ -223,10 +262,15 @@ bool HttpClient::perform(const std::string &method,
     if (headerList)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
+    TelemetryTimer timer;
     CURLcode res = curl_easy_perform(curl);
     response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
+        recordNetworkRequest(timer, method == "POST" ? 2 : 1,
+                             response.status, res, response.body.size(),
+                             postBody.size(), res == CURLE_ABORTED_BY_CALLBACK,
+                             false);
         error = classifyTransportError(res);
         curl_slist_free_all(headerList);
         curl_easy_cleanup(curl);
@@ -236,6 +280,10 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
     curl_slist_free_all(headerList);
     curl_easy_cleanup(curl);
+
+    recordNetworkRequest(timer, method == "POST" ? 2 : 1,
+                         response.status, res, response.body.size(),
+                         postBody.size(), false, false);
 
     return true;
 }

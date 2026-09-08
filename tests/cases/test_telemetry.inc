@@ -17,6 +17,7 @@
 #include "../../src/diagnostics/TelemetryTypes.hpp"
 #include "../../src/diagnostics/TelemetryClock.hpp"
 #include "../../src/diagnostics/MftFormat.hpp"
+#include "../../src/diagnostics/TelemetryWriter.hpp"
 
 static void testTelemetryClocks()
 {
@@ -370,6 +371,96 @@ static void testMftV1Codec()
     std::printf("[test] MFT v1 little-endian codec and golden bytes OK\n");
 }
 
+static void testTelemetryWriter()
+{
+    std::printf("[test] buffered telemetry writer header, flush, close, and errors\n");
+    const std::string root = "/tmp/miyoofin-writer-" + std::to_string(static_cast<long long>(getpid()));
+    const std::string path = root + "/telemetry.mft";
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+
+    TelemetryConfig config;
+    config.targetDirectory = root;
+    config.writerBufferBytes = 256;
+    config.flushIntervalMs = 5000;
+    MftFileHeader header{};
+    header.flags = 2;
+    header.pid = static_cast<uint32_t>(getpid());
+    header.session_nonce = 0x12345678ull;
+    header.sample_interval_ms = config.sampleIntervalMs;
+    header.free_space_interval_ms = config.freeSpaceIntervalMs;
+    header.writer_buffer_bytes = config.writerBufferBytes;
+    header.platform_id = static_cast<uint32_t>(PlatformId::Host);
+
+    TelemetryWriter writer;
+    CHECK(writer.open(config, header));
+    CHECK(writer.isOpen());
+    CHECK(writer.logicalBytesWritten() == kMftFileHeaderSize);
+    CHECK(writer.bufferedBytes() == 0);
+    FILE *file = std::fopen(path.c_str(), "rb");
+    CHECK(file != nullptr);
+    if (file != nullptr) {
+        std::array<uint8_t, kMftFileHeaderSize> bytes{};
+        CHECK(std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size());
+        CHECK(bytes[0] == 'M' && bytes[1] == 'F' && bytes[2] == 'T' && bytes[3] == '1');
+        CHECK(bytes[4] == 1 && bytes[5] == 0 && bytes[6] == 80 && bytes[7] == 0);
+        std::fclose(file);
+    }
+
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::SessionEvent;
+    record.header.sequence = 1;
+    record.payload.session_event.kind = static_cast<uint8_t>(SessionEventKind::TelemetryStarted);
+    record.payload.session_event.outcome = static_cast<uint8_t>(Outcome::Success);
+    record.payload.session_event.value0 = config.sampleIntervalMs;
+    CHECK(writer.append(record));
+    CHECK(writer.logicalBytesWritten() == kMftFileHeaderSize + 32);
+    CHECK(writer.bufferedBytes() == 32);
+    file = std::fopen(path.c_str(), "rb");
+    CHECK(file != nullptr);
+    if (file != nullptr) {
+        CHECK(std::fseek(file, 0, SEEK_END) == 0);
+        CHECK(std::ftell(file) == static_cast<long>(kMftFileHeaderSize));
+        std::fclose(file);
+    }
+    CHECK(writer.flushIfDue(4999999));
+    CHECK(writer.bufferedBytes() == 32);
+    CHECK(writer.flushIfDue(5000000));
+    CHECK(writer.bufferedBytes() == 0);
+    file = std::fopen(path.c_str(), "rb");
+    CHECK(file != nullptr);
+    if (file != nullptr) {
+        CHECK(std::fseek(file, 0, SEEK_END) == 0);
+        CHECK(std::ftell(file) == static_cast<long>(kMftFileHeaderSize + 32));
+        std::fclose(file);
+    }
+
+    record.header.sequence = 2;
+    CHECK(writer.append(record));
+    CHECK(writer.bufferedBytes() == 32);
+    CHECK(writer.close());
+    CHECK(!writer.isOpen());
+    CHECK(writer.bufferedBytes() == 0);
+    file = std::fopen(path.c_str(), "rb");
+    CHECK(file != nullptr);
+    if (file != nullptr) {
+        CHECK(std::fseek(file, 0, SEEK_END) == 0);
+        CHECK(std::ftell(file) == static_cast<long>(kMftFileHeaderSize + 64));
+        std::fclose(file);
+    }
+
+    TelemetryConfig invalid = config;
+    invalid.targetDirectory = "/dev/null/miyoofin-writer";
+    TelemetryWriter failed;
+    CHECK(!failed.open(invalid, header));
+    CHECK(!failed.isOpen());
+    CHECK(failed.lastErrorKind() == WriterErrorKind::Open);
+    CHECK(failed.lastErrorNumber() != 0);
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+    std::printf("[test] buffered telemetry writer header, flush, close, and errors OK\n");
+}
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
@@ -378,6 +469,7 @@ static void testTelemetrySchemaTypes()
     testTelemetryContextAndGuards();
     testTelemetryRing();
     testMftV1Codec();
+    testTelemetryWriter();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

@@ -855,6 +855,17 @@ static void testTelemetrySchemaTypes()
     const std::string samplePath = sampleRoot + "/telemetry.mft";
     std::remove(samplePath.c_str());
     ::rmdir(sampleRoot.c_str());
+    constexpr std::streamoff aggregateTickBytes = 88 + 14 * 44 + 80 + 56 + 48;
+    constexpr std::streamoff decodeRecordBytes = 2 * 48;
+    const auto waitForSampleBytes = [&samplePath](std::streamoff expected) {
+        for (int attempt = 0; attempt < 1000; ++attempt) {
+            struct stat status{};
+            if (::stat(samplePath.c_str(), &status) == 0 && status.st_size >= expected)
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+    };
     TelemetryConfig sampleConfig;
     sampleConfig.runtimeEnabled = true;
     sampleConfig.targetDirectory = sampleRoot;
@@ -922,8 +933,7 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.addDownloadSegmentCompleted(2);
     sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(100001, std::memory_order_relaxed);
-    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(waitForSampleBytes(80 + 32 + decodeRecordBytes + aggregateTickBytes));
     sampleTelemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
     sampleTelemetry.addWorkerCompleted(WorkerId::HomeLibraryFetch, 7);
     sampleTelemetry.recordArtworkCacheProbe(false);
@@ -931,19 +941,15 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.addDownloadBytes(300);
     sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(200001, std::memory_order_relaxed);
-    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 3; ++attempt)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(waitForSampleBytes(80 + 32 + decodeRecordBytes + aggregateTickBytes * 2));
     fakeNowUs.store(300001, std::memory_order_relaxed);
-    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 4; ++attempt)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(waitForSampleBytes(80 + 32 + decodeRecordBytes + aggregateTickBytes * 3));
     sampleTelemetry.stop();
     CHECK(fakeMetricSamples.load(std::memory_order_relaxed) == 4);
     CHECK(fakeFreeSamples.load(std::memory_order_relaxed) == 3);
     std::ifstream sampleFile(samplePath, std::ios::binary);
     sampleFile.seekg(0, std::ios::end);
     CHECK(sampleFile.good());
-    constexpr std::streamoff aggregateTickBytes = 88 + 14 * 44 + 80 + 56 + 48;
-    constexpr std::streamoff decodeRecordBytes = 2 * 48;
     CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32
         + decodeRecordBytes + aggregateTickBytes * 3 + 32));
     sampleFile.close();

@@ -4,6 +4,8 @@
 #include "../../cache/LibraryCache.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 
 namespace miyoofin {
 
@@ -17,6 +19,10 @@ void HomeScreen::startDownloadRefresh()
     const std::string journalPath=OfflinePlaybackJournal::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
     const bool valid=m_session.valid();
     m_downloadRefreshThread=std::thread([this,downloads,journalPath,valid] {
+        PerformanceTelemetry &telemetry=performanceTelemetry();
+        telemetry.setWorkerActive(WorkerId::HomeDownloadRefresh, true);
+        telemetry.setWorkerQueueDepth(WorkerId::HomeDownloadRefresh, 1);
+        TelemetryTimer refreshTimer;
         DownloadSnapshot snapshot=downloads->snapshot();
         std::vector<OfflinePlaybackEntry> missing;
         if(valid) {
@@ -26,6 +32,10 @@ void HomeScreen::startDownloadRefresh()
         }
         m_downloadRefreshResult=std::move(snapshot);
         m_downloadJournalResult=std::move(missing);
+        if (refreshTimer.active()) (void)refreshTimer.elapsedUs();
+        telemetry.addWorkerCompleted(WorkerId::HomeDownloadRefresh);
+        telemetry.setWorkerActive(WorkerId::HomeDownloadRefresh, false);
+        telemetry.setWorkerQueueDepth(WorkerId::HomeDownloadRefresh, 0);
         m_downloadRefreshDone=true;
     });
 }
@@ -72,6 +82,10 @@ void HomeScreen::startResumeRefresh()
     LibrarySnapshot snapshot=m_cachedSnapshot;
     const std::string cachePath=LibraryCache::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
     m_resumeRefreshThread = std::thread([this, session, url, token, uid, devId, snapshot, cachePath]() mutable {
+        PerformanceTelemetry &telemetry=performanceTelemetry();
+        telemetry.setWorkerActive(WorkerId::HomeResumeRefresh, true);
+        telemetry.setWorkerQueueDepth(WorkerId::HomeResumeRefresh, 1);
+        TelemetryTimer refreshTimer;
         std::vector<MediaItem> items;
         std::string error;
         if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12,items, error);},error)) {
@@ -83,6 +97,13 @@ void HomeScreen::startResumeRefresh()
         } else {
             m_resumeRefreshError = error;
         }
+        if (refreshTimer.active()) (void)refreshTimer.elapsedUs();
+        if (m_resumeRefreshSucceeded)
+            telemetry.addWorkerCompleted(WorkerId::HomeResumeRefresh);
+        else
+            telemetry.addWorkerFailed(WorkerId::HomeResumeRefresh);
+        telemetry.setWorkerActive(WorkerId::HomeResumeRefresh, false);
+        telemetry.setWorkerQueueDepth(WorkerId::HomeResumeRefresh, 0);
         m_resumeRefreshDone = true;
     });
 }

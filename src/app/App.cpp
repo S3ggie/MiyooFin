@@ -552,6 +552,7 @@ int App::run()
         const bool telemetryEnabled = telemetry.enabledFast();
         const uint64_t frameStartUs = telemetryEnabled
             ? TelemetryClock::monotonicUs() : 0;
+        telemetry.setPlaybackState(PlaybackState::UiActive);
 #endif
         uiDiagnostics().heartbeat();
         uiDiagnostics().setPhase("event/input");
@@ -570,6 +571,9 @@ int App::run()
             if (!m_playbackStarting) {
                 for (Action a : actions) {
                     uiDiagnostics().setLastAction(actionName(a));
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                    telemetry.setAction(PerformanceTelemetry::actionIdFromAction(a));
+#endif
                     if (a == Action::Exit) {
                         m_running = false;
                         break;
@@ -577,6 +581,10 @@ int App::run()
                     Screen *active = m_stack.top();
                     if (active) {
                         uiDiagnostics().setScreen(active->diagnosticName());
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                        telemetry.setScreen(PerformanceTelemetry::screenIdFromDiagnosticName(
+                            active->diagnosticName()));
+#endif
                         UiDiagnostics::Scope scope("Screen::handleAction");
                         active->handleAction(a);
                     }
@@ -593,10 +601,21 @@ int App::run()
             uiDiagnostics().setPhase("update");
             if (active) {
                 uiDiagnostics().setScreen(active->diagnosticName());
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                telemetry.setScreen(PerformanceTelemetry::screenIdFromDiagnosticName(
+                    active->diagnosticName()));
+#endif
                 if (auto *home = dynamic_cast<HomeScreen *>(active)) {
-                    uiDiagnostics().setTab(home->diagnosticTabName());
+                    const char *tabName = home->diagnosticTabName();
+                    uiDiagnostics().setTab(tabName);
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                    telemetry.setTab(PerformanceTelemetry::tabIdFromDiagnosticName(tabName));
+#endif
                 } else {
                     uiDiagnostics().setTab("n/a");
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+                    telemetry.setTab(TabId::NotApplicable);
+#endif
                 }
                 UiDiagnostics::Scope scope("Screen::update");
                 active->update(dt);
@@ -609,6 +628,9 @@ int App::run()
             printf("[App] External playback flagged by screen\n");
             m_playbackStarting = true;
             m_playbackStartingTick = now;
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            telemetry.setPlaybackState(PlaybackState::StartingOverlay);
+#endif
         }
 
         // --- Startup flow transitions ---
@@ -751,6 +773,10 @@ int App::run()
         Screen *renderTop = m_stack.top();
         if (renderTop) {
             uiDiagnostics().setScreen(renderTop->diagnosticName());
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            telemetry.setScreen(PerformanceTelemetry::screenIdFromDiagnosticName(
+                renderTop->diagnosticName()));
+#endif
             UiDiagnostics::Scope scope("Screen::render");
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
             FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::ScreenRender);
@@ -796,8 +822,14 @@ int App::run()
         if (handoffAfterPresent) {
             uiDiagnostics().setSuspended(true);
             uiDiagnostics().event("external playback handoff");
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            telemetry.setPlaybackState(PlaybackState::ExternalPlayback);
+#endif
             handleExternalPlayback();
             uiDiagnostics().setSuspended(false);
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+            telemetry.setPlaybackState(PlaybackState::Resuming);
+#endif
             m_playbackStarting = false;
             // Reset timing so dt doesn't include playback duration.
             m_lastTick = SDL_GetTicks();

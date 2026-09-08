@@ -14,6 +14,7 @@
 #include "TelemetryTypes.hpp"
 #include "TelemetryWriter.hpp"
 #include "LinuxProcessMetrics.hpp"
+#include "../input/Action.hpp"
 
 namespace miyoofin {
 
@@ -49,6 +50,14 @@ public:
     uint32_t rotationCount() const noexcept;
     uint32_t samplingLateCount() const noexcept;
     bool serviceThreadActive() const noexcept;
+
+    static ScreenId screenIdFromDiagnosticName(const char *name) noexcept;
+    static TabId tabIdFromDiagnosticName(const char *name) noexcept;
+    static ActionId actionIdFromAction(Action action) noexcept;
+    void setScreen(ScreenId screen) noexcept;
+    void setTab(TabId tab) noexcept;
+    void setAction(ActionId action) noexcept;
+    void setPlaybackState(PlaybackState state) noexcept;
 
     void setWorkerActive(WorkerId worker, bool active) noexcept;
     void setWorkerQueueDepth(WorkerId worker, uint32_t depth) noexcept;
@@ -96,6 +105,8 @@ private:
     void emitDownloadSample(uint64_t nowUs, uint64_t actualIntervalUs) noexcept;
     void emitFrameTimingSummaries(uint64_t nowUs, uint64_t intervalUs) noexcept;
     void emitTelemetryHealth(uint64_t nowUs) noexcept;
+    void emitStateTransition(StateKind kind, uint16_t previous,
+                             uint16_t current) noexcept;
     void updateQueueHighwater(uint32_t depth) noexcept;
     WorkerSlot *workerSlot(WorkerId worker) noexcept;
 
@@ -108,6 +119,11 @@ private:
     std::atomic<uint64_t> m_writerErrors{0};
     std::atomic<uint32_t> m_rotationCount{0};
     std::atomic<uint32_t> m_samplingLate{0};
+    std::atomic<uint16_t> m_screenId{static_cast<uint16_t>(ScreenId::None)};
+    std::atomic<uint16_t> m_tabId{static_cast<uint16_t>(TabId::NotApplicable)};
+    std::atomic<uint16_t> m_actionId{static_cast<uint16_t>(ActionId::None)};
+    std::atomic<uint16_t> m_playbackState{static_cast<uint16_t>(PlaybackState::Unknown)};
+    std::atomic<uint32_t> m_transitionSequence{0};
     std::atomic<uint32_t> m_queueHighwater{0};
     std::array<WorkerSlot, 14> m_workerSlots{};
     std::array<FramePhaseAccumulator, 7> m_framePhases{};
@@ -156,6 +172,13 @@ public:
     inline uint32_t rotationCount() const noexcept { return 0; }
     inline uint32_t samplingLateCount() const noexcept { return 0; }
     inline bool serviceThreadActive() const noexcept { return false; }
+    static ScreenId screenIdFromDiagnosticName(const char *) noexcept { return ScreenId::Other; }
+    static TabId tabIdFromDiagnosticName(const char *) noexcept { return TabId::Other; }
+    static ActionId actionIdFromAction(Action) noexcept { return ActionId::Other; }
+    inline void setScreen(ScreenId) noexcept {}
+    inline void setTab(TabId) noexcept {}
+    inline void setAction(ActionId) noexcept {}
+    inline void setPlaybackState(PlaybackState) noexcept {}
     inline void setWorkerActive(WorkerId, bool) noexcept {}
     inline void setWorkerQueueDepth(WorkerId, uint32_t) noexcept {}
     inline void addWorkerCompleted(WorkerId, uint32_t = 1) noexcept {}

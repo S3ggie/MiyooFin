@@ -5,6 +5,7 @@
 #include "DownloadSupport.hpp"
 #include "DownloadReconcile.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #include <curl/curl.h>
 #include <sys/stat.h>
 #include <cstdio>
@@ -15,6 +16,39 @@ struct WriteCtx { FILE *f=nullptr; std::uint64_t remain=0; DownloadManager *mana
 bool nonemptyFile(const std::string &path,std::uint64_t &size){struct stat st{};if(::stat(path.c_str(),&st)||st.st_size<=0)return false;size=(std::uint64_t)st.st_size;return true;}
 size_t writeCb(char*p,size_t a,size_t b,void*u){auto*c=(WriteCtx*)u;std::uint64_t n=a*b;if(n>c->remain)return 0;size_t w=std::fwrite(p,1,(size_t)n,c->f);c->remain-=w;return w;}
 int progressCb(void*u,curl_off_t total,curl_off_t,curl_off_t now,curl_off_t){auto*c=(WriteCtx*)u;if(!c->manager)return 1;auto ms=(std::uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();c->manager->recordProgress(c->itemId,c->scope,c->generation,c->baseDownloaded+(now>0?(std::uint64_t)now:0),ms,now>0?(std::uint64_t)now:0,total>0?(std::uint64_t)total:0);return c->manager->shouldAbort(c->itemId,c->scope,c->generation);}
+void recordHlsSegmentAttempt(bool measured, std::uint64_t durationUs,
+                             std::uint32_t jobSequence,
+                             std::uint64_t segmentOrdinal, unsigned attempt,
+                             std::uint16_t retryDelayMs, RouteKind route,
+                             Outcome outcome, bool retryPlanned,
+                             std::uint64_t payloadBytes, long httpStatus,
+                             CURLcode curlCode) noexcept
+{
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    if (!measured || !telemetry.enabledFast())
+        return;
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::DownloadSegmentAttempt;
+    record.payload.download_segment_attempt.telemetry_job_seq = jobSequence;
+    record.payload.download_segment_attempt.segment_ordinal =
+        static_cast<std::uint32_t>(segmentOrdinal);
+    record.payload.download_segment_attempt.attempt_number =
+        static_cast<std::uint16_t>(attempt);
+    record.payload.download_segment_attempt.retry_delay_ms = retryDelayMs;
+    record.payload.download_segment_attempt.route_kind =
+        static_cast<std::uint8_t>(route);
+    record.payload.download_segment_attempt.outcome =
+        static_cast<std::uint8_t>(outcome);
+    record.payload.download_segment_attempt.retry_planned =
+        retryPlanned ? 1u : 0u;
+    record.payload.download_segment_attempt.duration_us = durationUs;
+    record.payload.download_segment_attempt.payload_bytes = payloadBytes;
+    record.payload.download_segment_attempt.http_status = static_cast<std::uint32_t>(
+        httpStatus < 0 ? 0 : httpStatus);
+    record.payload.download_segment_attempt.curl_code =
+        static_cast<std::uint32_t>(curlCode);
+    telemetry.emitRecord(record);
+}
 }}
 namespace miyoofin {
 namespace {
@@ -92,6 +126,8 @@ void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::st
     if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}
     transfer(work,session,scope,generation);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);}}
 bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std::string&scope,std::uint64_t generation){
+    const std::uint32_t telemetryJobSequence = static_cast<std::uint32_t>(
+        performanceTelemetry().nextEphemeralId());
     if(!session.valid()) return false;
     // A v1 payload is only retained when it is already complete.  New work is
     // always HLS and must never issue the original /Download request.
@@ -118,26 +154,36 @@ bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std
     for(std::uint64_t k=m_store.firstIncompleteSegment(scope,item);k<urls.size();++k){
         if(shouldAbort(item.itemId,scope,generation)) return false;
         std::string part=m_store.segmentPath(scope,item.itemId,k,true), done=m_store.segmentPath(scope,item.itemId,k);
-        CURLcode rc=CURLE_OK; long code=0; std::uint64_t bytes=0; bool good=false;
+        CURLcode rc=CURLE_OK; long code=0; std::uint64_t bytes=0; bool good=false, primaryGood=false, fallbackGood=false; std::uint64_t primaryDuration=0, primaryBytes=0, fallbackDuration=0, fallbackBytes=0; long primaryCode=0, fallbackCode=0; CURLcode primaryRc=CURLE_OK, fallbackRc=CURLE_OK; bool primaryMeasured=false, fallbackMeasured=false, fallbackAttempted=false;
         for(unsigned attempt=1;attempt<=HLS_SEGMENT_ATTEMPTS;++attempt){
+            primaryDuration=primaryBytes=fallbackDuration=fallbackBytes=0; primaryCode=fallbackCode=0; primaryRc=fallbackRc=CURLE_OK; primaryMeasured=fallbackMeasured=fallbackAttempted=false; primaryGood=fallbackGood=false;
             // "wb" deliberately replaces a failed response body before every retry.
             FILE *f=std::fopen(part.c_str(),"wb"); if(!f){rc=CURLE_WRITE_ERROR;break;}
             CURL *c=curl_easy_init(); if(!c){std::fclose(f);rc=CURLE_FAILED_INIT;break;}
             auto headers=JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId); curl_slist *sl=nullptr; for(auto &h:headers)sl=curl_slist_append(sl,h.c_str());
             WriteCtx ctx{f,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes};
-            std::string segmentUrl=urls[k]; curl_easy_setopt(c,CURLOPT_URL,segmentUrl.c_str()); curl_easy_setopt(c,CURLOPT_HTTPHEADER,sl); curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L); curl_easy_setopt(c,CURLOPT_MAXREDIRS,5L); curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L); curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,15L); std::string tlsError; if(!configureTls(c,segmentUrl,&tlsError)){rc=CURLE_SSL_CACERT;std::fclose(f);curl_slist_free_all(sl);curl_easy_cleanup(c);break;} curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,64L); curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,180L); curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,writeCb); curl_easy_setopt(c,CURLOPT_WRITEDATA,&ctx); curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L); curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,progressCb); curl_easy_setopt(c,CURLOPT_XFERINFODATA,&ctx);
-            rc=curl_easy_perform(c); code=0; curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&code); std::fflush(f); std::fclose(f); curl_slist_free_all(sl); curl_easy_cleanup(c);
-            good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes);
-            const RouteRequest routes(session); const std::string lanUrl=routes.lan(), publicBase=routes.publicRoute();
-            if(!good && rc!=CURLE_OK && !lanUrl.empty() && !publicBase.empty() && segmentUrl.compare(0,lanUrl.size(),lanUrl)==0){ std::printf("[Route] LAN failed; public fallback\n"); std::remove(part.c_str()); FILE *fallback=std::fopen(part.c_str(),"wb"); if(fallback){ CURL *pc=curl_easy_init(); if(pc){ curl_slist *ps=nullptr;for(const auto &h:JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId))ps=curl_slist_append(ps,h.c_str()); WriteCtx pctx{fallback,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes}; std::string publicUrl=RouteRequest::replaceBase(segmentUrl,lanUrl,publicBase); curl_easy_setopt(pc,CURLOPT_URL,publicUrl.c_str());curl_easy_setopt(pc,CURLOPT_HTTPHEADER,ps);curl_easy_setopt(pc,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(pc,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(pc,CURLOPT_CONNECTTIMEOUT,15L);std::string tlsError;if(!configureTls(pc,publicUrl,&tlsError)){rc=CURLE_SSL_CACERT;curl_slist_free_all(ps);curl_easy_cleanup(pc);}else{curl_easy_setopt(pc,CURLOPT_WRITEFUNCTION,writeCb);curl_easy_setopt(pc,CURLOPT_WRITEDATA,&pctx);curl_easy_setopt(pc,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(pc,CURLOPT_XFERINFOFUNCTION,progressCb);curl_easy_setopt(pc,CURLOPT_XFERINFODATA,&pctx); rc=curl_easy_perform(pc);code=0;curl_easy_getinfo(pc,CURLINFO_RESPONSE_CODE,&code);curl_slist_free_all(ps);curl_easy_cleanup(pc);}} std::fflush(fallback);std::fclose(fallback); good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); } }
+            std::string segmentUrl=urls[k]; const RouteRequest routes(session); const std::string lanUrl=routes.lan(), publicBase=routes.publicRoute(); const RouteKind primaryRoute=(!lanUrl.empty()&&segmentUrl.compare(0,lanUrl.size(),lanUrl)==0)?RouteKind::Lan:RouteKind::Public; curl_easy_setopt(c,CURLOPT_URL,segmentUrl.c_str()); curl_easy_setopt(c,CURLOPT_HTTPHEADER,sl); curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L); curl_easy_setopt(c,CURLOPT_MAXREDIRS,5L); curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L); curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,15L); std::string tlsError; if(!configureTls(c,segmentUrl,&tlsError)){rc=CURLE_SSL_CACERT;std::fclose(f);curl_slist_free_all(sl);curl_easy_cleanup(c);break;} curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,64L); curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,180L); curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,writeCb); curl_easy_setopt(c,CURLOPT_WRITEDATA,&ctx); curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L); curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,progressCb); curl_easy_setopt(c,CURLOPT_XFERINFODATA,&ctx);
+            TelemetryRouteScope primaryRouteScope(primaryRoute,static_cast<std::uint8_t>(attempt),false); TelemetryTimer primaryTimer; rc=curl_easy_perform(c); primaryDuration=primaryTimer.elapsedUs(); primaryMeasured=primaryTimer.active(); code=0; curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&code); std::fflush(f); std::fclose(f); curl_slist_free_all(sl); curl_easy_cleanup(c);
+            good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); primaryRc=rc; primaryCode=code; primaryBytes=good?bytes:0; primaryGood=good;
+            if(!good && rc!=CURLE_OK && !lanUrl.empty() && !publicBase.empty() && segmentUrl.compare(0,lanUrl.size(),lanUrl)==0){ fallbackAttempted=true; std::printf("[Route] LAN failed; public fallback\n"); std::remove(part.c_str()); FILE *fallback=std::fopen(part.c_str(),"wb"); if(fallback){ CURL *pc=curl_easy_init(); if(pc){ curl_slist *ps=nullptr;for(const auto &h:JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId))ps=curl_slist_append(ps,h.c_str()); WriteCtx pctx{fallback,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes}; std::string publicUrl=RouteRequest::replaceBase(segmentUrl,lanUrl,publicBase); curl_easy_setopt(pc,CURLOPT_URL,publicUrl.c_str());curl_easy_setopt(pc,CURLOPT_HTTPHEADER,ps);curl_easy_setopt(pc,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(pc,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(pc,CURLOPT_CONNECTTIMEOUT,15L);std::string tlsError;if(!configureTls(pc,publicUrl,&tlsError)){rc=CURLE_SSL_CACERT;curl_slist_free_all(ps);curl_easy_cleanup(pc);}else{curl_easy_setopt(pc,CURLOPT_WRITEFUNCTION,writeCb);curl_easy_setopt(pc,CURLOPT_WRITEDATA,&pctx);curl_easy_setopt(pc,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(pc,CURLOPT_XFERINFOFUNCTION,progressCb);curl_easy_setopt(pc,CURLOPT_XFERINFODATA,&pctx); TelemetryRouteScope fallbackRouteScope(RouteKind::Public,static_cast<std::uint8_t>(attempt),true); TelemetryTimer fallbackTimer; rc=curl_easy_perform(pc); fallbackDuration=fallbackTimer.elapsedUs(); fallbackMeasured=fallbackTimer.active(); code=0; curl_easy_getinfo(pc,CURLINFO_RESPONSE_CODE,&code); fallbackRc=rc; fallbackCode=code;curl_slist_free_all(ps);curl_easy_cleanup(pc);}} std::fflush(fallback);std::fclose(fallback); good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); } }
+            if(fallbackAttempted){fallbackGood=good;fallbackBytes=good?bytes:0;}
+            bool retry=false;
+            if(!good && rc!=CURLE_ABORTED_BY_CALLBACK)
+                retry=hlsSegmentShouldRetry(code,(int)rc,attempt);
+            const std::uint16_t retryDelayMs=retry?static_cast<std::uint16_t>((1u<<(attempt-1))*1000u):0;
+            recordHlsSegmentAttempt(primaryMeasured,primaryDuration,telemetryJobSequence,k,attempt,retryDelayMs,primaryRoute,primaryGood?Outcome::Success:(primaryRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,primaryBytes,primaryCode,primaryRc);
+            if(fallbackAttempted)recordHlsSegmentAttempt(fallbackMeasured,fallbackDuration,telemetryJobSequence,k,attempt,retryDelayMs,RouteKind::Public,fallbackGood?Outcome::Success:(fallbackRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,fallbackBytes,fallbackCode,fallbackRc);
             if(good){std::printf("[Download] segment=%llu attempt=%u HTTP=%ld\n",(unsigned long long)k,attempt,code);break;}
             if(rc==CURLE_ABORTED_BY_CALLBACK) break;
-            bool retry=hlsSegmentShouldRetry(code,(int)rc,attempt);
             std::printf("[Download] segment=%llu attempt=%u HTTP=%ld%s\n",(unsigned long long)k,attempt,code,retry?" retrying":"");
-            if(!retry||!waitForHlsSegmentRetry(item.itemId,scope,generation,1u<<(attempt-1))) break;
+            if(!retry) break;
+            const bool willRetry=waitForHlsSegmentRetry(item.itemId,scope,generation,1u<<(attempt-1));
+            if(willRetry)performanceTelemetry().addDownloadSegmentRetries();
+            if(!willRetry) break;
         }
         if(!good){std::string detail="segment="+std::to_string(k)+" curl="+std::to_string((int)rc)+" "+curl_easy_strerror(rc)+" HTTP="+std::to_string(code);std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p==m_items.end())return false;if(m_deleteRequested.erase(item.itemId)){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}if(rc==CURLE_ABORTED_BY_CALLBACK){p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}p->state=hlsSegmentFailureState(code,(int)rc);p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);p->lastError=detail;m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}
         if(std::rename(part.c_str(),done.c_str())) return false;
+        performanceTelemetry().addDownloadSegmentCompleted();
         m_store.reconcile(scope,item,nullptr); item.hlsCompletedSegments=k+1; item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0; item.hlsActivePercent=downloadPercent(item); item.state=DownloadState::Downloading; {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i=item;m_store.saveManifest(scope,i,nullptr);persistLocked();}}
     }
     std::lock_guard<std::mutex>l(m_mutex); auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;}); if(p==m_items.end()||!m_store.validateCompletedDownload(scope,item,nullptr))return false; m_store.reconcile(scope,item,nullptr); item.state=DownloadState::Complete; item.recentBytesPerSec=0; item.lastError.clear(); *p=item; m_progressSamples.erase(item.itemId);m_store.saveManifest(scope,item,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return true;

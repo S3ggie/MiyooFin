@@ -863,6 +863,114 @@ static void testTelemetrySchemaTypes()
     ::rmdir(activeLowRoot.c_str());
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] low-storage startup and active shutdown OK\n");
+
+    std::printf("[test] frame timing aggregation boundaries and interval reset\n");
+    static std::atomic<uint64_t> frameNowUs{1};
+    static std::atomic<uint32_t> frameMetricSamples{0};
+    const auto frameClock = []() noexcept -> uint64_t {
+        return frameNowUs.load(std::memory_order_relaxed);
+    };
+    const auto frameMetrics = [](bool) noexcept {
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        frameMetricSamples.fetch_add(1, std::memory_order_relaxed);
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({frameClock, frameMetrics});
+    const std::string frameRoot = "/tmp/miyoofin-frame-aggregation-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string framePath = frameRoot + "/telemetry.mft";
+    std::remove(framePath.c_str());
+    ::rmdir(frameRoot.c_str());
+    TelemetryConfig frameConfig;
+    frameConfig.runtimeEnabled = true;
+    frameConfig.targetDirectory = frameRoot;
+    frameConfig.sampleIntervalMs = 100;
+    frameConfig.flushIntervalMs = 1;
+    PerformanceTelemetry &frameTelemetry = performanceTelemetry();
+    frameTelemetry.stop();
+    frameMetricSamples.store(0, std::memory_order_relaxed);
+    frameTelemetry.start(frameConfig);
+    for (int attempt = 0; attempt < 100 && !frameTelemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const uint64_t boundaryDurations[] = {
+        8333, 16667, 25000, 33333, 50000, 100000, 250000, 500000, 500001
+    };
+    for (uint64_t durationUs : boundaryDurations)
+        frameTelemetry.recordFramePhase(FramePhase::FullFrame, durationUs);
+    frameNowUs.store(100001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && frameMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    frameTelemetry.recordFramePhase(FramePhase::Input, 1234);
+    frameNowUs.store(200001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100
+        && frameMetricSamples.load(std::memory_order_relaxed) < 3; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    frameTelemetry.stop();
+
+    std::ifstream frameFile(framePath, std::ios::binary);
+    const std::vector<uint8_t> frameBytes(
+        (std::istreambuf_iterator<char>(frameFile)), std::istreambuf_iterator<char>());
+    const auto frameReadU16 = [&frameBytes](std::size_t offset) {
+        return static_cast<uint16_t>(frameBytes[offset])
+            | (static_cast<uint16_t>(frameBytes[offset + 1]) << 8);
+    };
+    const auto frameReadU32 = [&frameBytes](std::size_t offset) {
+        return static_cast<uint32_t>(frameBytes[offset])
+            | (static_cast<uint32_t>(frameBytes[offset + 1]) << 8)
+            | (static_cast<uint32_t>(frameBytes[offset + 2]) << 16)
+            | (static_cast<uint32_t>(frameBytes[offset + 3]) << 24);
+    };
+    const auto frameReadU64 = [&frameBytes](std::size_t offset) {
+        uint64_t value = 0;
+        for (unsigned int byte = 0; byte < 8; ++byte)
+            value |= static_cast<uint64_t>(frameBytes[offset + byte]) << (byte * 8);
+        return value;
+    };
+    std::vector<std::size_t> frameSummaryOffsets;
+    for (std::size_t offset = 80; offset + 16 <= frameBytes.size();) {
+        const uint16_t recordType = frameReadU16(offset);
+        const uint16_t recordSize = frameReadU16(offset + 2);
+        CHECK(recordSize >= 16);
+        if (recordSize < 16 || offset + recordSize > frameBytes.size())
+            break;
+        if (recordType == static_cast<uint16_t>(RecordType::FrameTimingSummary))
+            frameSummaryOffsets.push_back(offset);
+        offset += recordSize;
+    }
+    CHECK(frameSummaryOffsets.size() == 2);
+    if (frameSummaryOffsets.size() == 2) {
+        const std::size_t first = frameSummaryOffsets[0] + 16;
+        CHECK(frameBytes[first] == static_cast<uint8_t>(FramePhase::FullFrame));
+        CHECK(frameReadU32(first + 4) == 100000);
+        CHECK(frameReadU32(first + 8) == 9);
+        CHECK(frameReadU64(first + 12)
+              == 8333ull + 16667ull + 25000ull + 33333ull + 50000ull
+                 + 100000ull + 250000ull + 500000ull + 500001ull);
+        CHECK(frameReadU32(first + 20) == 500001);
+        CHECK(frameReadU32(first + 24) == 4);
+        CHECK(frameReadU32(first + 28) == 3);
+        for (uint32_t bin = 0; bin < 9; ++bin)
+            CHECK(frameReadU32(first + 32 + bin * 4) == 1);
+
+        const std::size_t second = frameSummaryOffsets[1] + 16;
+        CHECK(frameBytes[second] == static_cast<uint8_t>(FramePhase::Input));
+        CHECK(frameReadU32(second + 4) == 100000);
+        CHECK(frameReadU32(second + 8) == 1);
+        CHECK(frameReadU64(second + 12) == 1234);
+        CHECK(frameReadU32(second + 20) == 1234);
+        CHECK(frameReadU32(second + 24) == 0);
+        CHECK(frameReadU32(second + 28) == 0);
+        CHECK(frameReadU32(second + 32) == 1);
+        for (uint32_t bin = 1; bin < 9; ++bin)
+            CHECK(frameReadU32(second + 32 + bin * 4) == 0);
+    }
+    std::remove(framePath.c_str());
+    ::rmdir(frameRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] frame timing aggregation boundaries and interval reset OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

@@ -60,6 +60,7 @@ public:
     void recordArtworkCacheRead(bool success, uint64_t compressedBytes) noexcept;
     void recordArtworkCacheWrite(bool success, uint64_t compressedBytes) noexcept;
     void recordArtworkDecode(bool success, uint64_t durationUs) noexcept;
+    void recordFramePhase(FramePhase phase, uint64_t durationUs) noexcept;
 
     void setDownloadGauges(uint32_t activeDownloads,
                            uint32_t queuedDownloads,
@@ -78,12 +79,22 @@ private:
         std::atomic<uint32_t> cancelled{0};
     };
 
+    struct FramePhaseAccumulator {
+        std::atomic<uint32_t> count{0};
+        std::atomic<uint64_t> totalUs{0};
+        std::atomic<uint32_t> maxUs{0};
+        std::atomic<uint32_t> over50Ms{0};
+        std::atomic<uint32_t> over100Ms{0};
+        std::array<std::atomic<uint32_t>, 9> histogram{};
+    };
+
     void serviceLoop() noexcept;
     bool enqueue(TelemetryRecord record) noexcept;
     bool writeServiceRecord(TelemetryRecord record) noexcept;
     void emitWorkerSamples(uint64_t nowUs) noexcept;
     void emitArtworkSummary(uint64_t nowUs) noexcept;
     void emitDownloadSample(uint64_t nowUs, uint64_t actualIntervalUs) noexcept;
+    void emitFrameTimingSummaries(uint64_t nowUs, uint64_t intervalUs) noexcept;
     void emitTelemetryHealth(uint64_t nowUs) noexcept;
     void updateQueueHighwater(uint32_t depth) noexcept;
     WorkerSlot *workerSlot(WorkerId worker) noexcept;
@@ -99,6 +110,7 @@ private:
     std::atomic<uint32_t> m_samplingLate{0};
     std::atomic<uint32_t> m_queueHighwater{0};
     std::array<WorkerSlot, 14> m_workerSlots{};
+    std::array<FramePhaseAccumulator, 7> m_framePhases{};
     std::atomic<uint32_t> m_artworkCacheProbeHits{0};
     std::atomic<uint32_t> m_artworkCacheProbeMisses{0};
     std::atomic<uint32_t> m_artworkCacheReadSuccess{0};
@@ -153,6 +165,7 @@ public:
     inline void recordArtworkCacheRead(bool, uint64_t) noexcept {}
     inline void recordArtworkCacheWrite(bool, uint64_t) noexcept {}
     inline void recordArtworkDecode(bool, uint64_t) noexcept {}
+    inline void recordFramePhase(FramePhase, uint64_t) noexcept {}
     inline void setDownloadGauges(uint32_t, uint32_t, uint32_t) noexcept {}
     inline void addDownloadBytes(uint64_t) noexcept {}
     inline void addDownloadSegmentCompleted(uint32_t = 1) noexcept {}

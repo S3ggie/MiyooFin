@@ -188,7 +188,7 @@ LinuxProcessMetricsSnapshot LinuxProcessMetrics::sampleFromProcText(
     return makeSnapshot(processCpuUs, true, peakRssKib, true, freeStorageBytes, statm, io);
 }
 
-LinuxProcessMetricsSnapshot LinuxProcessMetrics::sample() noexcept
+LinuxProcessMetricsSnapshot LinuxProcessMetrics::sample(bool includeFreeStorage) noexcept
 {
     const uint64_t processCpuUs = TelemetryClock::processCpuUs();
     uint64_t peakRssKib = 0;
@@ -198,9 +198,12 @@ LinuxProcessMetricsSnapshot LinuxProcessMetrics::sample() noexcept
         peakRssKib = static_cast<uint64_t>(usage.ru_maxrss);
 
     uint64_t freeStorageBytes = 0;
-    struct statvfs storage{};
-    const bool freeValid = ::statvfs(m_storagePath.c_str(), &storage) == 0
-        && multiplyFreeBytes(storage.f_bavail, storage.f_frsize, freeStorageBytes);
+    bool freeValid = false;
+    if (includeFreeStorage) {
+        struct statvfs storage{};
+        freeValid = ::statvfs(m_storagePath.c_str(), &storage) == 0
+            && multiplyFreeBytes(storage.f_bavail, storage.f_frsize, freeStorageBytes);
+    }
 
     return makeSnapshot(processCpuUs, peakValid, peakRssKib, freeValid,
                         freeStorageBytes,

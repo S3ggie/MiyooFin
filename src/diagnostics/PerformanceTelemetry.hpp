@@ -12,6 +12,7 @@
 #include "TelemetryRing.hpp"
 #include "TelemetryTypes.hpp"
 #include "TelemetryWriter.hpp"
+#include "LinuxProcessMetrics.hpp"
 
 namespace miyoofin {
 
@@ -20,6 +21,18 @@ namespace miyoofin {
 class PerformanceTelemetry
 {
 public:
+#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
+    using MonotonicUsHook = uint64_t (*)() noexcept;
+    using ProcessMetricsHook = LinuxProcessMetricsSnapshot (*)(bool) noexcept;
+    struct TestHooks {
+        MonotonicUsHook monotonicUs = nullptr;
+        ProcessMetricsHook processMetrics = nullptr;
+    };
+
+    static void setTestHooks(const TestHooks &hooks) noexcept;
+    static void clearTestHooks() noexcept;
+#endif
+
     void start(const TelemetryConfig &config);
     void stop() noexcept;
     bool enabledFast() const noexcept;

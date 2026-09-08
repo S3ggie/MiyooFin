@@ -580,6 +580,69 @@ static void testTelemetrySchemaTypes()
     CHECK((recovered.validity_flags & (ReadBytesValid | WriteBytesValid))
           == (ReadBytesValid | WriteBytesValid));
     std::printf("[test] linux process metrics parsing and validity OK\n");
+
+    std::printf("[test] periodic system samples and fake service hooks\n");
+    static std::atomic<uint64_t> fakeNowUs{1};
+    static std::atomic<uint32_t> fakeMetricSamples{0};
+    static std::atomic<uint32_t> fakeFreeSamples{0};
+    const auto fakeClock = []() noexcept -> uint64_t {
+        return fakeNowUs.load(std::memory_order_relaxed);
+    };
+    const auto fakeMetrics = [](bool includeFreeStorage) noexcept {
+        LinuxProcessMetricsSnapshot snapshot{};
+        snapshot.process_cpu_us_cumulative = 1000;
+        snapshot.rss_kib = 2000;
+        snapshot.peak_rss_kib = 3000;
+        snapshot.process_read_bytes_cumulative = 4000;
+        snapshot.process_write_bytes_cumulative = 5000;
+        snapshot.validity_flags = ProcessCpuValid | RssValid | PeakRssValid
+            | ReadBytesValid | WriteBytesValid;
+        fakeMetricSamples.fetch_add(1, std::memory_order_relaxed);
+        if (includeFreeStorage) {
+            snapshot.free_storage_bytes = 6000;
+            snapshot.validity_flags |= FreeStorageValid;
+            fakeFreeSamples.fetch_add(1, std::memory_order_relaxed);
+        }
+        return snapshot;
+    };
+    PerformanceTelemetry::setTestHooks({fakeClock, fakeMetrics});
+    const std::string sampleRoot = "/tmp/miyoofin-system-sample-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string samplePath = sampleRoot + "/telemetry.mft";
+    std::remove(samplePath.c_str());
+    ::rmdir(sampleRoot.c_str());
+    TelemetryConfig sampleConfig;
+    sampleConfig.runtimeEnabled = true;
+    sampleConfig.targetDirectory = sampleRoot;
+    sampleConfig.sampleIntervalMs = 100;
+    sampleConfig.freeSpaceIntervalMs = 200;
+    sampleConfig.flushIntervalMs = 1;
+    PerformanceTelemetry &sampleTelemetry = performanceTelemetry();
+    sampleTelemetry.stop();
+    sampleTelemetry.start(sampleConfig);
+    for (int attempt = 0; attempt < 100 && !sampleTelemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    fakeNowUs.store(100001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 1; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    fakeNowUs.store(200001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    fakeNowUs.store(300001, std::memory_order_relaxed);
+    for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 3; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    sampleTelemetry.stop();
+    CHECK(fakeMetricSamples.load(std::memory_order_relaxed) == 3);
+    CHECK(fakeFreeSamples.load(std::memory_order_relaxed) == 2);
+    std::ifstream sampleFile(samplePath, std::ios::binary);
+    sampleFile.seekg(0, std::ios::end);
+    CHECK(sampleFile.good());
+    CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32 + 88 * 3 + 32));
+    sampleFile.close();
+    std::remove(samplePath.c_str());
+    ::rmdir(sampleRoot.c_str());
+    PerformanceTelemetry::clearTestHooks();
+    std::printf("[test] periodic system samples and fake service hooks OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

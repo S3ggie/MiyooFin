@@ -2,6 +2,7 @@
 #define MIYOOFIN_PERFORMANCE_TELEMETRY_HPP
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+#include <array>
 #include <atomic>
 #include <thread>
 #endif
@@ -49,10 +50,43 @@ public:
     uint32_t samplingLateCount() const noexcept;
     bool serviceThreadActive() const noexcept;
 
+    void setWorkerActive(WorkerId worker, bool active) noexcept;
+    void setWorkerQueueDepth(WorkerId worker, uint32_t depth) noexcept;
+    void addWorkerCompleted(WorkerId worker, uint32_t count = 1) noexcept;
+    void addWorkerFailed(WorkerId worker, uint32_t count = 1) noexcept;
+    void addWorkerCancelled(WorkerId worker, uint32_t count = 1) noexcept;
+
+    void recordArtworkCacheProbe(bool hit) noexcept;
+    void recordArtworkCacheRead(bool success, uint64_t compressedBytes) noexcept;
+    void recordArtworkCacheWrite(bool success, uint64_t compressedBytes) noexcept;
+    void recordArtworkDecode(bool success, uint64_t durationUs) noexcept;
+
+    void setDownloadGauges(uint32_t activeDownloads,
+                           uint32_t queuedDownloads,
+                           uint32_t plannerQueueDepth) noexcept;
+    void addDownloadBytes(uint64_t bytes) noexcept;
+    void addDownloadSegmentCompleted(uint32_t count = 1) noexcept;
+    void addDownloadSegmentRetries(uint32_t count = 1) noexcept;
+
 private:
+    struct WorkerSlot {
+        std::atomic<uint32_t> active{0};
+        std::atomic<uint32_t> queueDepth{0};
+        std::atomic<uint32_t> queueHighwater{0};
+        std::atomic<uint32_t> completed{0};
+        std::atomic<uint32_t> failed{0};
+        std::atomic<uint32_t> cancelled{0};
+    };
+
     void serviceLoop() noexcept;
     bool enqueue(TelemetryRecord record) noexcept;
     bool writeServiceRecord(TelemetryRecord record) noexcept;
+    void emitWorkerSamples(uint64_t nowUs) noexcept;
+    void emitArtworkSummary(uint64_t nowUs) noexcept;
+    void emitDownloadSample(uint64_t nowUs, uint64_t actualIntervalUs) noexcept;
+    void emitTelemetryHealth(uint64_t nowUs) noexcept;
+    void updateQueueHighwater(uint32_t depth) noexcept;
+    WorkerSlot *workerSlot(WorkerId worker) noexcept;
 
     std::atomic<bool> m_enabled{false};
     std::atomic<bool> m_samplingSuspended{false};
@@ -63,6 +97,26 @@ private:
     std::atomic<uint64_t> m_writerErrors{0};
     std::atomic<uint32_t> m_rotationCount{0};
     std::atomic<uint32_t> m_samplingLate{0};
+    std::atomic<uint32_t> m_queueHighwater{0};
+    std::array<WorkerSlot, 14> m_workerSlots{};
+    std::atomic<uint32_t> m_artworkCacheProbeHits{0};
+    std::atomic<uint32_t> m_artworkCacheProbeMisses{0};
+    std::atomic<uint32_t> m_artworkCacheReadSuccess{0};
+    std::atomic<uint32_t> m_artworkCacheReadFailure{0};
+    std::atomic<uint32_t> m_artworkCacheWriteSuccess{0};
+    std::atomic<uint32_t> m_artworkCacheWriteFailure{0};
+    std::atomic<uint64_t> m_artworkCompressedReadBytes{0};
+    std::atomic<uint64_t> m_artworkCompressedWrittenBytes{0};
+    std::atomic<uint32_t> m_artworkDecodeCount{0};
+    std::atomic<uint32_t> m_artworkDecodeFailures{0};
+    std::atomic<uint64_t> m_artworkDecodeTotalUs{0};
+    std::atomic<uint32_t> m_artworkDecodeMaxUs{0};
+    std::atomic<uint32_t> m_activeDownloads{0};
+    std::atomic<uint32_t> m_queuedDownloads{0};
+    std::atomic<uint32_t> m_plannerQueueDepth{0};
+    std::atomic<uint64_t> m_downloadBytes{0};
+    std::atomic<uint32_t> m_downloadSegmentsCompleted{0};
+    std::atomic<uint32_t> m_downloadSegmentRetries{0};
     TelemetryRing<512> m_ring;
     TelemetryWriter m_writer;
     std::thread m_serviceThread;
@@ -90,6 +144,19 @@ public:
     inline uint32_t rotationCount() const noexcept { return 0; }
     inline uint32_t samplingLateCount() const noexcept { return 0; }
     inline bool serviceThreadActive() const noexcept { return false; }
+    inline void setWorkerActive(WorkerId, bool) noexcept {}
+    inline void setWorkerQueueDepth(WorkerId, uint32_t) noexcept {}
+    inline void addWorkerCompleted(WorkerId, uint32_t = 1) noexcept {}
+    inline void addWorkerFailed(WorkerId, uint32_t = 1) noexcept {}
+    inline void addWorkerCancelled(WorkerId, uint32_t = 1) noexcept {}
+    inline void recordArtworkCacheProbe(bool) noexcept {}
+    inline void recordArtworkCacheRead(bool, uint64_t) noexcept {}
+    inline void recordArtworkCacheWrite(bool, uint64_t) noexcept {}
+    inline void recordArtworkDecode(bool, uint64_t) noexcept {}
+    inline void setDownloadGauges(uint32_t, uint32_t, uint32_t) noexcept {}
+    inline void addDownloadBytes(uint64_t) noexcept {}
+    inline void addDownloadSegmentCompleted(uint32_t = 1) noexcept {}
+    inline void addDownloadSegmentRetries(uint32_t = 1) noexcept {}
 };
 
 inline PerformanceTelemetry &performanceTelemetry() noexcept

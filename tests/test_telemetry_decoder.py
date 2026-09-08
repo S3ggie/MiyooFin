@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "tools" / "telemetry"))
 
 import decode  # noqa: E402
 import analyze  # noqa: E402
+import compare_runs  # noqa: E402
 
 
 FIXTURES = ROOT / "tests" / "fixtures" / "telemetry"
@@ -191,6 +192,26 @@ class TelemetryDecoderTests(unittest.TestCase):
             with (output / "requests.csv").open(newline="") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows[0]["request_kind"], "Artwork")
+
+    def test_compare_runs_reports_medians_spread_and_observer_deltas(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            summaries = []
+            for name, cpu in (("a1", 10), ("a2", 14), ("b", 12), ("c", 22)):
+                summary = compare_runs._sample_summary(cpu, 100, 0)
+                path = directory / (name + ".json")
+                path.write_text(json.dumps(summary))
+                summaries.append(path)
+            result = compare_runs.compare_runs(
+                summaries[:2], [summaries[2]], [summaries[3]]
+            )
+            metric = result["comparisons"]["system.cpu_percent_one_core"]
+            self.assertEqual(metric["A"], 12)
+            self.assertEqual(metric["B_minus_A"], 0)
+            self.assertEqual(metric["C_minus_B"], 10)
+            self.assertEqual(
+                result["groups"]["A"]["system.cpu_percent_one_core"]["spread"], 4
+            )
 
 
 if __name__ == "__main__":

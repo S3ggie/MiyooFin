@@ -21,6 +21,7 @@
 #include "../../src/diagnostics/MftFormat.hpp"
 #include "../../src/diagnostics/TelemetryWriter.hpp"
 #include "../../src/cache/ImageCache.hpp"
+#include "../../src/image/ImageDecoder.hpp"
 #include "../../src/input/Action.hpp"
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
 #include "../../src/diagnostics/LinuxProcessMetrics.hpp"
@@ -635,6 +636,18 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.recordArtworkCacheRead(true, 100);
     sampleTelemetry.recordArtworkCacheWrite(true, 200);
     sampleTelemetry.recordArtworkDecode(true, 50);
+    const std::vector<unsigned char> telemetryValidJpeg = [] {
+        std::ifstream stream("tests/fixtures/tiny.jpg", std::ios::binary);
+        return std::vector<unsigned char>(
+            (std::istreambuf_iterator<char>(stream)),
+            std::istreambuf_iterator<char>());
+    }();
+    const unsigned char telemetryInvalidJpeg[] = {0, 1, 2, 3};
+    const DecodedImage telemetryDecoded = ImageDecoder::decodeJpeg(
+        telemetryValidJpeg.data(), telemetryValidJpeg.size());
+    CHECK(!telemetryDecoded.empty());
+    CHECK(ImageDecoder::decodeJpeg(telemetryInvalidJpeg,
+                                   sizeof(telemetryInvalidJpeg)).empty());
     const std::string oldImageCacheDir = ImageCache::cacheDir();
     const std::string imageCacheRoot = "/tmp/miyoofin-image-cache-metrics-"
         + std::to_string(static_cast<long long>(getpid()));
@@ -689,7 +702,9 @@ static void testTelemetrySchemaTypes()
     sampleFile.seekg(0, std::ios::end);
     CHECK(sampleFile.good());
     constexpr std::streamoff aggregateTickBytes = 88 + 14 * 44 + 80 + 56 + 48;
-    CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32 + aggregateTickBytes * 3 + 32));
+    constexpr std::streamoff decodeRecordBytes = 2 * 48;
+    CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32
+        + decodeRecordBytes + aggregateTickBytes * 3 + 32));
     sampleFile.close();
     std::ifstream sampleBytesFile(samplePath, std::ios::binary);
     const std::vector<uint8_t> sampleBytes(
@@ -710,7 +725,7 @@ static void testTelemetrySchemaTypes()
             value |= static_cast<uint64_t>(sampleBytes[offset + byte]) << (byte * 8);
         return value;
     };
-    const std::size_t tickStart = 80 + 32;
+    const std::size_t tickStart = 80 + 32 + static_cast<std::size_t>(decodeRecordBytes);
     const std::size_t firstWorker = tickStart + 88;
     const std::size_t firstArtwork = firstWorker + 14 * 44;
     const std::size_t firstDownload = firstArtwork + 80;
@@ -732,10 +747,10 @@ static void testTelemetrySchemaTypes()
     CHECK(readU32(firstArtwork + 16 + 20) == 1);
     CHECK(readU64(firstArtwork + 16 + 24) == 103);
     CHECK(readU64(firstArtwork + 16 + 32) == 203);
-    CHECK(readU32(firstArtwork + 16 + 40) == 1);
-    CHECK(readU32(firstArtwork + 16 + 44) == 0);
-    CHECK(readU64(firstArtwork + 16 + 48) == 50);
-    CHECK(readU32(firstArtwork + 16 + 56) == 50);
+    CHECK(readU32(firstArtwork + 16 + 40) == 3);
+    CHECK(readU32(firstArtwork + 16 + 44) == 1);
+    CHECK(readU64(firstArtwork + 16 + 48) >= 50);
+    CHECK(readU32(firstArtwork + 16 + 56) >= 50);
     CHECK(readU16(firstDownload) == static_cast<uint16_t>(RecordType::DownloadSample));
     CHECK(readU32(firstDownload + 16) == 4);
     CHECK(readU32(firstDownload + 16 + 4) == 5);
@@ -754,6 +769,37 @@ static void testTelemetrySchemaTypes()
     CHECK(readU32(secondArtwork + 16 + 44) == 1);
     CHECK(readU64(secondArtwork + 16 + 48) == 20);
     CHECK(readU32(secondArtwork + 16 + 56) == 20);
+    std::size_t artworkDecodeRecords = 0;
+    bool sawValidArtworkDecode = false;
+    bool sawInvalidArtworkDecode = false;
+    for (std::size_t offset = 80; offset + 16 <= sampleBytes.size();) {
+        const uint16_t recordSize = readU16(offset + 2);
+        if (recordSize < 16 || offset + recordSize > sampleBytes.size())
+            break;
+        if (readU16(offset) == static_cast<uint16_t>(RecordType::ArtworkDecode)
+            && recordSize >= 48) {
+            ++artworkDecodeRecords;
+            CHECK(sampleBytes[offset + 16]
+                  == static_cast<uint8_t>(ArtworkContext::Unknown));
+            const uint8_t outcome = sampleBytes[offset + 17];
+            const uint64_t inputBytes = readU64(offset + 28);
+            const uint64_t outputBytes = readU64(offset + 36);
+            if (inputBytes == telemetryValidJpeg.size()) {
+                CHECK(outcome == static_cast<uint8_t>(Outcome::Success));
+                CHECK(outputBytes == 4u * 4u * 4u);
+                sawValidArtworkDecode = true;
+            }
+            if (inputBytes == sizeof(telemetryInvalidJpeg)) {
+                CHECK(outcome == static_cast<uint8_t>(Outcome::Failure));
+                CHECK(outputBytes == 0);
+                sawInvalidArtworkDecode = true;
+            }
+        }
+        offset += recordSize;
+    }
+    CHECK(artworkDecodeRecords == 2);
+    CHECK(sawValidArtworkDecode);
+    CHECK(sawInvalidArtworkDecode);
     CHECK(readU64(secondDownload + 16 + 8) == 300);
     CHECK(readU64(secondDownload + 16 + 16) == 3000);
     CHECK(readU32(secondDownload + 16 + 24) == 0);

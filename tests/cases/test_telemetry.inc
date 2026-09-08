@@ -516,6 +516,125 @@ static void testTelemetryPlaybackEventPayload()
     std::printf("[test] playback milestone payload bookkeeping OK\n");
 }
 
+#if MIYOOFIN_ENABLE_PERF_TELEMETRY
+static void testTelemetrySecretLeakRegression()
+{
+    std::printf("[test] telemetry raw MFT secret redaction regression\n");
+    const std::string accessToken = "SECRET_ACCESS_TOKEN_123";
+    const std::string authenticatedUrl =
+        "https://private.example/Items/SECRET_ITEM?api_key=SECRET_ACCESS_TOKEN_123";
+    const std::string username = "SECRET_USERNAME_456";
+    const std::string password = "SECRET_PASSWORD_789";
+    const std::string serverId = "SECRET_SERVER_ID_ABC";
+    const std::string userId = "SECRET_USER_ID_DEF";
+    const std::string deviceId = "SECRET_DEVICE_ID_GHI";
+    const std::string itemId = "SECRET_ITEM_ID_JKL";
+    const std::string mediaSourceId = "SECRET_MEDIA_SOURCE_MNO";
+    const std::string seriesId = "SECRET_SERIES_ID_PQR";
+    const std::string seasonId = "SECRET_SEASON_ID_STU";
+    const std::string episodeId = "SECRET_EPISODE_ID_VWX";
+    const std::string title = "SECRET_TITLE_YZA";
+    const std::string imageTag = "SECRET_IMAGE_TAG_BCD";
+    const std::string cachePath = "SECRET_CACHE_PATH_EFG";
+    const std::string downloadScope = "SECRET_DOWNLOAD_SCOPE_HIJ";
+    const std::vector<std::string> fakeSecrets = {
+        accessToken, authenticatedUrl, username, password, serverId, userId,
+        deviceId, itemId, mediaSourceId, seriesId, seasonId, episodeId,
+        title, imageTag, cachePath, downloadScope,
+    };
+
+    const std::string root = "/tmp/miyoofin-secret-regression-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string path = root + "/telemetry.mft";
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+
+    TelemetryConfig config;
+    config.runtimeEnabled = true;
+    config.targetDirectory = root;
+    config.sampleIntervalMs = 1;
+    config.freeSpaceIntervalMs = 600000;
+    config.flushIntervalMs = 1;
+    config.minFreeStorageBytes = 0;
+
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+    telemetry.start(config);
+    for (int attempt = 0; attempt < 100 && !telemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(telemetry.serviceThreadActive());
+    CHECK(telemetry.enabledFast());
+
+    telemetry.setScreen(ScreenId::Home);
+    telemetry.setTab(TabId::Downloads);
+    telemetry.setAction(ActionId::Confirm);
+    telemetry.setPlaybackState(PlaybackState::UiActive);
+    telemetry.setWorkerActive(WorkerId::DownloadTransfer, true);
+    telemetry.setWorkerQueueDepth(WorkerId::DownloadTransfer, 2);
+    telemetry.addWorkerCompleted(WorkerId::DownloadTransfer);
+    telemetry.addWorkerFailed(WorkerId::DownloadTransfer);
+    telemetry.addWorkerCancelled(WorkerId::DownloadTransfer);
+    telemetry.recordArtworkCacheProbe(true);
+    telemetry.recordArtworkCacheRead(true, 128);
+    telemetry.recordArtworkCacheWrite(true, 256);
+    telemetry.recordArtworkDecode(true, 512);
+    telemetry.setDownloadGauges(1, 2, 3);
+    telemetry.addDownloadBytes(4096);
+    telemetry.addDownloadSegmentCompleted();
+    telemetry.addDownloadSegmentRetries();
+
+    TelemetryRecord network{};
+    network.header.record_type = RecordType::NetworkRequest;
+    network.payload.network_request.request_kind =
+        static_cast<uint16_t>(RequestKind::PlaybackPosition);
+    network.payload.network_request.route_kind = static_cast<uint8_t>(RouteKind::Public);
+    network.payload.network_request.method = static_cast<uint8_t>(HttpMethod::Post);
+    network.payload.network_request.duration_us = 1000;
+    network.payload.network_request.http_status = 200;
+    network.payload.network_request.rx_payload_bytes = 64;
+    network.payload.network_request.tx_body_bytes = 32;
+    network.payload.network_request.attempt = 1;
+    CHECK(telemetry.emitRecord(network));
+
+    TelemetryRecord playback{};
+    playback.header.record_type = RecordType::PlaybackEvent;
+    playback.payload.playback_event.stage =
+        static_cast<uint8_t>(PlaybackStage::ChildWait);
+    playback.payload.playback_event.source =
+        static_cast<uint8_t>(PlaybackSourceKind::Jellyfin);
+    playback.payload.playback_event.duration_us = 2000;
+    playback.payload.playback_event.playback_seq = 7;
+    CHECK(telemetry.emitRecord(playback));
+
+    CHECK(telemetry.emitSessionEvent(SessionEventKind::SamplingSuspended,
+                                     Outcome::Success,
+                                     static_cast<uint32_t>(SamplingReason::ExternalPlayback),
+                                     0));
+    telemetry.suspendSampling(true, SamplingReason::ExternalPlayback);
+    telemetry.suspendSampling(false, SamplingReason::ExternalPlayback);
+    CHECK(telemetry.emitSessionEvent(SessionEventKind::SamplingResumed,
+                                     Outcome::Success,
+                                     static_cast<uint32_t>(SamplingReason::ExternalPlayback),
+                                     0));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    telemetry.stop();
+
+    std::ifstream stream(path, std::ios::binary);
+    const std::string raw((std::istreambuf_iterator<char>(stream)),
+                          std::istreambuf_iterator<char>());
+    CHECK(!raw.empty());
+    for (const std::string &secret : fakeSecrets)
+        CHECK(raw.find(secret) == std::string::npos);
+    CHECK(raw.find("SECRET_") == std::string::npos);
+    CHECK(raw.find("private.example") == std::string::npos);
+    CHECK(raw.find("api_key=") == std::string::npos);
+
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+    std::printf("[test] telemetry raw MFT secret redaction regression OK\n");
+}
+#endif
+
 static void testTelemetryWriter()
 {
     std::printf("[test] buffered telemetry writer header, flush, close, and errors\n");
@@ -826,6 +945,7 @@ static void testTelemetrySchemaTypes()
     testTelemetryWriter();
     testTelemetrySegmentAttemptPayload();
     testTelemetryPlaybackEventPayload();
+    testTelemetrySecretLeakRegression();
     testTelemetryServiceThread();
     testHttpClientTelemetry();
     std::printf("[test] linux process metrics parsing and validity\n");

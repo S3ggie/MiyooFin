@@ -933,6 +933,159 @@ static void testBuildLibraryItemsUrl()
 }
 
 // -------------------------------------------------------------------
+// Test: ChangedHierarchy uses only the affected-series projection
+// -------------------------------------------------------------------
+static void testChangedHierarchyLightweightProjection()
+{
+    std::printf("[test] ChangedHierarchy lightweight projection\n");
+
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+
+    int reuse = 1;
+    CHECK(::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                       sizeof(reuse)) == 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 2) == 0);
+
+    std::vector<std::string> requests(2);
+    const auto itemJson = [](int index) {
+        if (index == 0) {
+            return std::string(R"({"Id":"series-0","Type":"Series",
+                "Name":"ignored show name","Overview":"ignored overview",
+                "UserData":{"Played":true},"ImageTags":{"Primary":"ignored-tag"}})");
+        }
+        if (index == 1) {
+            return std::string(R"({"Id":"season-1","Type":"Season","SeriesId":"series-0",
+                "Name":"ignored season name","Overview":"ignored season overview",
+                "UserData":{"Played":true},"ImageTags":{"Primary":"ignored-season-tag"},
+                "SeasonId":"ignored-season","RunTimeTicks":123456789})");
+        }
+        if (index == 2) {
+            return std::string(R"({"Id":"episode-2","Type":"Episode","SeriesId":"series-0",
+                "Name":"ignored episode name","Overview":"ignored episode overview",
+                "UserData":{"Played":true},"ImageTags":{"Primary":"ignored-episode-tag"},
+                "SeasonId":"ignored-season","RunTimeTicks":987654321})");
+        }
+        return "{\"Id\":\"episode-" + std::to_string(index) +
+               "\",\"Type\":\"Episode\",\"SeriesId\":\"series-0\"}";
+    };
+    const auto pageBody = [&](int start, int count) {
+        std::string body = R"({"Items":[)";
+        for (int index = start; index < start + count; ++index) {
+            if (index != start) body += ',';
+            body += itemJson(index);
+        }
+        body += "]}";
+        return body;
+    };
+    const std::string firstBody = pageBody(0, 100);
+    const std::string finalBody = pageBody(100, 3);
+    std::thread server([&]() {
+        for (int page = 0; page < 2; ++page) {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client < 0) return;
+            char buffer[4096];
+            std::string captured;
+            while (captured.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+                if (received <= 0) break;
+                captured.append(buffer, static_cast<size_t>(received));
+            }
+            requests[static_cast<size_t>(page)] = captured;
+            const std::string &body = page == 0 ? firstBody : finalBody;
+            const std::string response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) +
+                "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        }
+    });
+
+    const auto port = ntohs(address.sin_port);
+    std::vector<MediaItem> items;
+    std::string error;
+    const bool ok = JellyfinApi::getChangedHierarchyItems(
+        "http://127.0.0.1:" + std::to_string(port), "test-token", "user123",
+        "device123", 1700000000123LL, items, error);
+    server.join();
+    ::close(listener);
+    CHECK(ok);
+    CHECK(error.empty());
+    CHECK(items.size() == 103);
+    if (items.size() == 103) {
+        for (int index = 0; index < 103; ++index) {
+            const std::string expectedId = index == 0 ? "series-0" :
+                index == 1 ? "season-1" :
+                index == 2 ? "episode-2" : "episode-" + std::to_string(index);
+            CHECK_EQ(items[static_cast<size_t>(index)].id, expectedId);
+        }
+
+        // These are the exact inputs used by HomeScreen's affected-series
+        // reduction: Series uses its own ID, while Season/Episode use SeriesId.
+        CHECK_EQ(items[0].id, "series-0");
+        CHECK_EQ(items[0].type, "show");
+        const auto affectedSeriesId = [](const MediaItem &item) {
+            return item.type == "show" ? item.id : item.seriesId;
+        };
+        CHECK_EQ(affectedSeriesId(items[0]), "series-0");
+        CHECK(items[0].title.empty());
+        CHECK(items[0].overview.empty());
+        CHECK(items[0].imageTags.empty());
+        CHECK(!items[0].played);
+
+        CHECK_EQ(items[1].id, "season-1");
+        CHECK_EQ(items[1].type, "season");
+        CHECK_EQ(items[1].seriesId, "series-0");
+        CHECK_EQ(affectedSeriesId(items[1]), "series-0");
+        CHECK(items[1].title.empty());
+        CHECK(items[1].overview.empty());
+        CHECK(items[1].imageTags.empty());
+        CHECK(!items[1].played);
+        CHECK(items[1].seasonId.empty());
+        CHECK(items[1].runTimeTicks == 0);
+
+        CHECK_EQ(items[2].id, "episode-2");
+        CHECK_EQ(items[2].type, "episode");
+        CHECK_EQ(items[2].seriesId, "series-0");
+        CHECK_EQ(affectedSeriesId(items[2]), "series-0");
+        CHECK(items[2].title.empty());
+        CHECK(items[2].overview.empty());
+        CHECK(items[2].imageTags.empty());
+        CHECK(!items[2].played);
+        CHECK(items[2].seasonId.empty());
+        CHECK(items[2].runTimeTicks == 0);
+    }
+    CHECK(requests[0].find("IncludeItemTypes=Series,Season,Episode") != std::string::npos);
+    CHECK(requests[0].find("SortBy=DateLastSaved") != std::string::npos);
+    CHECK(requests[0].find("SortOrder=Ascending") != std::string::npos);
+    CHECK(requests[0].find("MinDateLastSaved=2023-11-14T22:13:20.0000000Z") !=
+          std::string::npos);
+    CHECK(requests[0].find("StartIndex=0") != std::string::npos);
+    CHECK(requests[0].find("Limit=100") != std::string::npos);
+    CHECK(requests[0].find("Fields=SeriesId") != std::string::npos);
+    CHECK(requests[0].find("Fields=Overview") == std::string::npos);
+    CHECK(requests[0].find("UserData") == std::string::npos);
+    CHECK(requests[0].find("ImageTags") == std::string::npos);
+    CHECK(requests[1].find("StartIndex=100") != std::string::npos);
+    CHECK(requests[1].find("Limit=100") != std::string::npos);
+    CHECK(requests[1].find("Fields=SeriesId") != std::string::npos);
+    CHECK(requests[1].find("Fields=Overview") == std::string::npos);
+    CHECK(requests[1].find("UserData") == std::string::npos);
+    CHECK(requests[1].find("ImageTags") == std::string::npos);
+    std::printf("[test] ChangedHierarchy lightweight projection OK\n");
+}
+
+// -------------------------------------------------------------------
 // B5a Test: buildImageUrl — Primary image URL
 // -------------------------------------------------------------------
-

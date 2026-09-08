@@ -25,7 +25,7 @@ class PerformanceTelemetry
 public:
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
     using MonotonicUsHook = uint64_t (*)() noexcept;
-    using ProcessMetricsHook = LinuxProcessMetricsSnapshot (*)(bool) noexcept;
+    using ProcessMetricsHook = LinuxProcessMetricsSnapshot (*)(const LinuxProcessMetrics &, bool) noexcept;
     struct TestHooks {
         MonotonicUsHook monotonicUs = nullptr;
         ProcessMetricsHook processMetrics = nullptr;

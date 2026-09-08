@@ -96,7 +96,8 @@ bool HomeScreen::handleDownloadsAction(Action action)
         const char *type = item.itemType == "episode" ? "episode" : "movie";
         if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(), item.itemId, type,
                 item.playbackPositionTicks, "local", m_downloads->scope(), error))
-            m_stack->requestExternalPlayback();
+            m_stack->requestExternalPlayback(
+                ScreenStack::ExternalPlaybackSource::Local);
         return true;
     }
     default: return true;

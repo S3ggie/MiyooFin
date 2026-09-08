@@ -11,6 +11,12 @@ namespace miyoofin {
 /// Only the topmost screen receives events, updates, and renders.
 class ScreenStack {
 public:
+    enum class ExternalPlaybackSource {
+        Unknown,
+        Jellyfin,
+        Local
+    };
+
     ScreenStack();
     ~ScreenStack();
 
@@ -37,12 +43,25 @@ public:
     /// Sets a flag consumed by App's main loop, which then suspends
     /// SDL, spawns the playback runner, waits, and resumes — without
     /// destroying the ScreenStack.
-    void requestExternalPlayback() { m_externalPlayback = true; }
+    void requestExternalPlayback(ExternalPlaybackSource source = ExternalPlaybackSource::Unknown) {
+        m_externalPlayback = true;
+        m_externalPlaybackSource = source;
+    }
 
     /// Check (and consume) the external playback flag.
     bool pollExternalPlayback() {
         bool v = m_externalPlayback;
         m_externalPlayback = false;
+        m_externalPlaybackSource = ExternalPlaybackSource::Unknown;
+        return v;
+    }
+
+    /// Check (and consume) the external playback flag and selected source.
+    bool pollExternalPlayback(ExternalPlaybackSource &source) {
+        bool v = m_externalPlayback;
+        source = m_externalPlaybackSource;
+        m_externalPlayback = false;
+        m_externalPlaybackSource = ExternalPlaybackSource::Unknown;
         return v;
     }
 
@@ -53,6 +72,7 @@ private:
     std::vector<std::unique_ptr<Screen>> m_stack;
     std::unique_ptr<RetirementQueue> m_retirement;
     bool m_externalPlayback = false;
+    ExternalPlaybackSource m_externalPlaybackSource = ExternalPlaybackSource::Unknown;
 };
 
 } // namespace miyoofin

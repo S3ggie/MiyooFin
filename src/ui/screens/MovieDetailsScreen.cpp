@@ -216,7 +216,10 @@ bool MovieDetailsScreen::handleAction(Action action)
                 m_playbackResultDelayUpdates = 1;
                 printf("[MovieDetailsScreen] Playback request written, "
                        "requesting external playback\n");
-                m_stack->requestExternalPlayback();
+                m_stack->requestExternalPlayback(
+                    source == PlaybackSource::Local
+                        ? ScreenStack::ExternalPlaybackSource::Local
+                        : ScreenStack::ExternalPlaybackSource::Jellyfin);
             } else {
                 printf("[MovieDetailsScreen] Playback request failed: %s\n",
                        error.c_str());

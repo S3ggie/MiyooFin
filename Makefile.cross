@@ -22,7 +22,8 @@ TELEMETRY_SRCS := \
     src/diagnostics/TelemetryConfig.cpp \
     src/diagnostics/PerformanceTelemetry.cpp \
     src/diagnostics/MftFormat.cpp \
-    src/diagnostics/TelemetryWriter.cpp
+    src/diagnostics/TelemetryWriter.cpp \
+    src/diagnostics/LinuxProcessMetrics.cpp
 endif
 SRCS := \
     src/main.cpp \

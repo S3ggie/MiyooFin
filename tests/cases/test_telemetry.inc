@@ -619,12 +619,33 @@ static void testTelemetrySchemaTypes()
     sampleConfig.flushIntervalMs = 1;
     PerformanceTelemetry &sampleTelemetry = performanceTelemetry();
     sampleTelemetry.stop();
+    fakeMetricSamples.store(0, std::memory_order_relaxed);
+    fakeFreeSamples.store(0, std::memory_order_relaxed);
     sampleTelemetry.start(sampleConfig);
     for (int attempt = 0; attempt < 100 && !sampleTelemetry.serviceThreadActive(); ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    sampleTelemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
+    sampleTelemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 3);
+    sampleTelemetry.addWorkerCompleted(WorkerId::HomeLibraryFetch, 2);
+    sampleTelemetry.addWorkerFailed(WorkerId::HomeLibraryFetch);
+    sampleTelemetry.addWorkerCancelled(WorkerId::HomeLibraryFetch);
+    sampleTelemetry.recordArtworkCacheProbe(true);
+    sampleTelemetry.recordArtworkCacheRead(true, 100);
+    sampleTelemetry.recordArtworkCacheWrite(true, 200);
+    sampleTelemetry.recordArtworkDecode(true, 50);
+    sampleTelemetry.setDownloadGauges(4, 5, 6);
+    sampleTelemetry.addDownloadBytes(1000);
+    sampleTelemetry.addDownloadSegmentCompleted(2);
+    sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(100001, std::memory_order_relaxed);
     for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 1; ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    sampleTelemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
+    sampleTelemetry.addWorkerCompleted(WorkerId::HomeLibraryFetch, 7);
+    sampleTelemetry.recordArtworkCacheProbe(false);
+    sampleTelemetry.recordArtworkDecode(false, 20);
+    sampleTelemetry.addDownloadBytes(300);
+    sampleTelemetry.addDownloadSegmentRetries();
     fakeNowUs.store(200001, std::memory_order_relaxed);
     for (int attempt = 0; attempt < 100 && fakeMetricSamples.load(std::memory_order_relaxed) < 2; ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -637,8 +658,72 @@ static void testTelemetrySchemaTypes()
     std::ifstream sampleFile(samplePath, std::ios::binary);
     sampleFile.seekg(0, std::ios::end);
     CHECK(sampleFile.good());
-    CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32 + 88 * 3 + 32));
+    constexpr std::streamoff aggregateTickBytes = 88 + 14 * 44 + 80 + 56 + 48;
+    CHECK(sampleFile.tellg() == static_cast<std::streamoff>(80 + 32 + aggregateTickBytes * 3 + 32));
     sampleFile.close();
+    std::ifstream sampleBytesFile(samplePath, std::ios::binary);
+    const std::vector<uint8_t> sampleBytes(
+        (std::istreambuf_iterator<char>(sampleBytesFile)), std::istreambuf_iterator<char>());
+    const auto readU16 = [&sampleBytes](std::size_t offset) {
+        return static_cast<uint16_t>(sampleBytes[offset])
+            | (static_cast<uint16_t>(sampleBytes[offset + 1]) << 8);
+    };
+    const auto readU32 = [&sampleBytes](std::size_t offset) {
+        return static_cast<uint32_t>(sampleBytes[offset])
+            | (static_cast<uint32_t>(sampleBytes[offset + 1]) << 8)
+            | (static_cast<uint32_t>(sampleBytes[offset + 2]) << 16)
+            | (static_cast<uint32_t>(sampleBytes[offset + 3]) << 24);
+    };
+    const auto readU64 = [&sampleBytes](std::size_t offset) {
+        uint64_t value = 0;
+        for (unsigned int byte = 0; byte < 8; ++byte)
+            value |= static_cast<uint64_t>(sampleBytes[offset + byte]) << (byte * 8);
+        return value;
+    };
+    const std::size_t tickStart = 80 + 32;
+    const std::size_t firstWorker = tickStart + 88;
+    const std::size_t firstArtwork = firstWorker + 14 * 44;
+    const std::size_t firstDownload = firstArtwork + 80;
+    const std::size_t secondTick = tickStart + static_cast<std::size_t>(aggregateTickBytes);
+    const std::size_t secondWorker = secondTick + 88;
+    const std::size_t secondArtwork = secondWorker + 14 * 44;
+    const std::size_t secondDownload = secondArtwork + 80;
+    CHECK(readU16(firstWorker) == static_cast<uint16_t>(RecordType::WorkerSample));
+    CHECK(readU32(firstWorker + 16 + 4) == 3);
+    CHECK(readU32(firstWorker + 16 + 8) == 3);
+    CHECK(readU32(firstWorker + 16 + 12) == 2);
+    CHECK(readU32(firstWorker + 16 + 16) == 1);
+    CHECK(readU32(firstWorker + 16 + 20) == 1);
+    CHECK(readU32(firstArtwork + 16) == 1);
+    CHECK(readU64(firstArtwork + 16 + 24) == 100);
+    CHECK(readU64(firstArtwork + 16 + 32) == 200);
+    CHECK(readU32(firstArtwork + 16 + 40) == 1);
+    CHECK(readU32(firstArtwork + 16 + 44) == 0);
+    CHECK(readU64(firstArtwork + 16 + 48) == 50);
+    CHECK(readU32(firstArtwork + 16 + 56) == 50);
+    CHECK(readU16(firstDownload) == static_cast<uint16_t>(RecordType::DownloadSample));
+    CHECK(readU32(firstDownload + 16) == 4);
+    CHECK(readU32(firstDownload + 16 + 4) == 5);
+    CHECK(readU64(firstDownload + 16 + 8) == 1000);
+    CHECK(readU64(firstDownload + 16 + 16) == 10000);
+    CHECK(readU32(firstDownload + 16 + 24) == 2);
+    CHECK(readU32(firstDownload + 16 + 28) == 1);
+    CHECK(readU32(firstDownload + 16 + 32) == 6);
+    CHECK(readU32(secondWorker + 16 + 4) == 1);
+    CHECK(readU32(secondWorker + 16 + 8) == 1);
+    CHECK(readU32(secondWorker + 16 + 12) == 7);
+    CHECK(readU32(secondWorker + 16 + 16) == 0);
+    CHECK(readU32(secondArtwork + 16) == 0);
+    CHECK(readU32(secondArtwork + 16 + 4) == 1);
+    CHECK(readU32(secondArtwork + 16 + 40) == 1);
+    CHECK(readU32(secondArtwork + 16 + 44) == 1);
+    CHECK(readU64(secondArtwork + 16 + 48) == 20);
+    CHECK(readU32(secondArtwork + 16 + 56) == 20);
+    CHECK(readU64(secondDownload + 16 + 8) == 300);
+    CHECK(readU64(secondDownload + 16 + 16) == 3000);
+    CHECK(readU32(secondDownload + 16 + 24) == 0);
+    CHECK(readU32(secondDownload + 16 + 28) == 1);
+    CHECK(readU32(secondDownload + 16 + 32) == 6);
     std::remove(samplePath.c_str());
     ::rmdir(sampleRoot.c_str());
     PerformanceTelemetry::clearTestHooks();

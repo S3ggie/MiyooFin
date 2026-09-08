@@ -58,6 +58,33 @@ void PerformanceTelemetry::start(const TelemetryConfig &config)
     m_writerErrors.store(0, std::memory_order_relaxed);
     m_rotationCount.store(0, std::memory_order_relaxed);
     m_samplingLate.store(0, std::memory_order_relaxed);
+    m_queueHighwater.store(0, std::memory_order_relaxed);
+    for (WorkerSlot &slot : m_workerSlots) {
+        slot.active.store(0, std::memory_order_relaxed);
+        slot.queueDepth.store(0, std::memory_order_relaxed);
+        slot.queueHighwater.store(0, std::memory_order_relaxed);
+        slot.completed.store(0, std::memory_order_relaxed);
+        slot.failed.store(0, std::memory_order_relaxed);
+        slot.cancelled.store(0, std::memory_order_relaxed);
+    }
+    m_artworkCacheProbeHits.store(0, std::memory_order_relaxed);
+    m_artworkCacheProbeMisses.store(0, std::memory_order_relaxed);
+    m_artworkCacheReadSuccess.store(0, std::memory_order_relaxed);
+    m_artworkCacheReadFailure.store(0, std::memory_order_relaxed);
+    m_artworkCacheWriteSuccess.store(0, std::memory_order_relaxed);
+    m_artworkCacheWriteFailure.store(0, std::memory_order_relaxed);
+    m_artworkCompressedReadBytes.store(0, std::memory_order_relaxed);
+    m_artworkCompressedWrittenBytes.store(0, std::memory_order_relaxed);
+    m_artworkDecodeCount.store(0, std::memory_order_relaxed);
+    m_artworkDecodeFailures.store(0, std::memory_order_relaxed);
+    m_artworkDecodeTotalUs.store(0, std::memory_order_relaxed);
+    m_artworkDecodeMaxUs.store(0, std::memory_order_relaxed);
+    m_activeDownloads.store(0, std::memory_order_relaxed);
+    m_queuedDownloads.store(0, std::memory_order_relaxed);
+    m_plannerQueueDepth.store(0, std::memory_order_relaxed);
+    m_downloadBytes.store(0, std::memory_order_relaxed);
+    m_downloadSegmentsCompleted.store(0, std::memory_order_relaxed);
+    m_downloadSegmentRetries.store(0, std::memory_order_relaxed);
     m_consumerSequence = 0;
     m_sessionNonce = monotonicUs()
         ^ (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this)) * 0x9e3779b97f4a7c15ull)
@@ -83,6 +110,149 @@ void PerformanceTelemetry::stop() noexcept
 bool PerformanceTelemetry::enabledFast() const noexcept
 {
     return m_enabled.load(std::memory_order_relaxed);
+}
+
+PerformanceTelemetry::WorkerSlot *PerformanceTelemetry::workerSlot(WorkerId worker) noexcept
+{
+    const uint16_t value = static_cast<uint16_t>(worker);
+    if (value == 0 || value > m_workerSlots.size())
+        return nullptr;
+    return &m_workerSlots[value - 1];
+}
+
+void PerformanceTelemetry::setWorkerActive(WorkerId worker, bool active) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (WorkerSlot *slot = workerSlot(worker))
+        slot->active.store(active ? 1u : 0u, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::updateQueueHighwater(uint32_t depth) noexcept
+{
+    uint32_t observed = m_queueHighwater.load(std::memory_order_relaxed);
+    while (depth > observed
+        && !m_queueHighwater.compare_exchange_weak(observed, depth,
+                                                    std::memory_order_relaxed,
+                                                    std::memory_order_relaxed)) {
+    }
+}
+
+void PerformanceTelemetry::setWorkerQueueDepth(WorkerId worker, uint32_t depth) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (WorkerSlot *slot = workerSlot(worker)) {
+        slot->queueDepth.store(depth, std::memory_order_relaxed);
+        uint32_t observed = slot->queueHighwater.load(std::memory_order_relaxed);
+        while (depth > observed
+            && !slot->queueHighwater.compare_exchange_weak(observed, depth,
+                                                            std::memory_order_relaxed,
+                                                            std::memory_order_relaxed)) {
+        }
+    }
+}
+
+void PerformanceTelemetry::addWorkerCompleted(WorkerId worker, uint32_t count) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (WorkerSlot *slot = workerSlot(worker))
+        slot->completed.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addWorkerFailed(WorkerId worker, uint32_t count) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (WorkerSlot *slot = workerSlot(worker))
+        slot->failed.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addWorkerCancelled(WorkerId worker, uint32_t count) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (WorkerSlot *slot = workerSlot(worker))
+        slot->cancelled.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::recordArtworkCacheProbe(bool hit) noexcept
+{
+    if (!enabledFast())
+        return;
+    (hit ? m_artworkCacheProbeHits : m_artworkCacheProbeMisses)
+        .fetch_add(1, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::recordArtworkCacheRead(bool success, uint64_t compressedBytes) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (success) {
+        m_artworkCacheReadSuccess.fetch_add(1, std::memory_order_relaxed);
+        m_artworkCompressedReadBytes.fetch_add(compressedBytes, std::memory_order_relaxed);
+    } else {
+        m_artworkCacheReadFailure.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void PerformanceTelemetry::recordArtworkCacheWrite(bool success, uint64_t compressedBytes) noexcept
+{
+    if (!enabledFast())
+        return;
+    if (success) {
+        m_artworkCacheWriteSuccess.fetch_add(1, std::memory_order_relaxed);
+        m_artworkCompressedWrittenBytes.fetch_add(compressedBytes, std::memory_order_relaxed);
+    } else {
+        m_artworkCacheWriteFailure.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void PerformanceTelemetry::recordArtworkDecode(bool success, uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_artworkDecodeCount.fetch_add(1, std::memory_order_relaxed);
+    if (!success)
+        m_artworkDecodeFailures.fetch_add(1, std::memory_order_relaxed);
+    m_artworkDecodeTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    uint32_t observed = m_artworkDecodeMaxUs.load(std::memory_order_relaxed);
+    const uint32_t duration = clampToUint32(durationUs);
+    while (duration > observed
+        && !m_artworkDecodeMaxUs.compare_exchange_weak(observed, duration,
+                                                        std::memory_order_relaxed,
+                                                        std::memory_order_relaxed)) {
+    }
+}
+
+void PerformanceTelemetry::setDownloadGauges(uint32_t activeDownloads,
+                                             uint32_t queuedDownloads,
+                                             uint32_t plannerQueueDepth) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_activeDownloads.store(activeDownloads, std::memory_order_relaxed);
+    m_queuedDownloads.store(queuedDownloads, std::memory_order_relaxed);
+    m_plannerQueueDepth.store(plannerQueueDepth, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addDownloadBytes(uint64_t bytes) noexcept
+{
+    if (enabledFast())
+        m_downloadBytes.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addDownloadSegmentCompleted(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_downloadSegmentsCompleted.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addDownloadSegmentRetries(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_downloadSegmentRetries.fetch_add(count, std::memory_order_relaxed);
 }
 
 void PerformanceTelemetry::suspendSampling(bool suspended, SamplingReason reason) noexcept
@@ -132,6 +302,7 @@ bool PerformanceTelemetry::enqueue(TelemetryRecord record) noexcept
         m_droppedRecords.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
+    updateQueueHighwater(m_ring.approximateDepth());
     return true;
 }
 
@@ -146,6 +317,92 @@ bool PerformanceTelemetry::writeServiceRecord(TelemetryRecord record) noexcept
     }
     m_rotationCount.store(m_writer.rotationCount(), std::memory_order_relaxed);
     return true;
+}
+
+void PerformanceTelemetry::emitWorkerSamples(uint64_t nowUs) noexcept
+{
+    for (std::size_t index = 0; index < m_workerSlots.size(); ++index) {
+        WorkerSlot &slot = m_workerSlots[index];
+        const uint32_t depth = slot.queueDepth.load(std::memory_order_relaxed);
+        uint32_t highwater = slot.queueHighwater.exchange(0, std::memory_order_relaxed);
+        if (highwater < depth)
+            highwater = depth;
+        TelemetryRecord record{};
+        record.header.record_type = RecordType::WorkerSample;
+        record.header.monotonic_us = nowUs;
+        record.payload.worker_sample.worker_id = static_cast<uint16_t>(index + 1);
+        record.payload.worker_sample.active = static_cast<uint8_t>(
+            slot.active.load(std::memory_order_relaxed) != 0);
+        record.payload.worker_sample.queue_depth = depth;
+        record.payload.worker_sample.queue_highwater = highwater;
+        record.payload.worker_sample.completed_delta = slot.completed.exchange(0, std::memory_order_relaxed);
+        record.payload.worker_sample.failed_delta = slot.failed.exchange(0, std::memory_order_relaxed);
+        record.payload.worker_sample.cancelled_delta = slot.cancelled.exchange(0, std::memory_order_relaxed);
+        writeServiceRecord(record);
+    }
+}
+
+void PerformanceTelemetry::emitArtworkSummary(uint64_t nowUs) noexcept
+{
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::ArtworkSummary;
+    record.header.monotonic_us = nowUs;
+    record.payload.artwork_summary.cache_probe_hits = m_artworkCacheProbeHits.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.cache_probe_misses = m_artworkCacheProbeMisses.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.cache_read_success = m_artworkCacheReadSuccess.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.cache_read_failure = m_artworkCacheReadFailure.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.cache_write_success = m_artworkCacheWriteSuccess.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.cache_write_failure = m_artworkCacheWriteFailure.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.compressed_read_bytes = m_artworkCompressedReadBytes.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.compressed_written_bytes = m_artworkCompressedWrittenBytes.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.decode_count = m_artworkDecodeCount.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.decode_failures = m_artworkDecodeFailures.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.decode_total_us = m_artworkDecodeTotalUs.exchange(0, std::memory_order_relaxed);
+    record.payload.artwork_summary.decode_max_us = m_artworkDecodeMaxUs.exchange(0, std::memory_order_relaxed);
+    writeServiceRecord(record);
+}
+
+void PerformanceTelemetry::emitDownloadSample(uint64_t nowUs, uint64_t actualIntervalUs) noexcept
+{
+    const uint64_t bytesDelta = m_downloadBytes.exchange(0, std::memory_order_relaxed);
+    uint64_t bytesPerSecond = 0;
+    if (bytesDelta <= std::numeric_limits<uint64_t>::max() / 1000000ull)
+        bytesPerSecond = (bytesDelta * 1000000ull) / std::max<uint64_t>(1, actualIntervalUs);
+    else
+        bytesPerSecond = std::numeric_limits<uint64_t>::max();
+
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::DownloadSample;
+    record.header.monotonic_us = nowUs;
+    record.payload.download_sample.active_downloads = m_activeDownloads.load(std::memory_order_relaxed);
+    record.payload.download_sample.queued_downloads = m_queuedDownloads.load(std::memory_order_relaxed);
+    record.payload.download_sample.bytes_delta = bytesDelta;
+    record.payload.download_sample.bytes_per_sec = bytesPerSecond;
+    record.payload.download_sample.segments_completed_delta = m_downloadSegmentsCompleted.exchange(0, std::memory_order_relaxed);
+    record.payload.download_sample.segment_retries_delta = m_downloadSegmentRetries.exchange(0, std::memory_order_relaxed);
+    record.payload.download_sample.planner_queue_depth = m_plannerQueueDepth.load(std::memory_order_relaxed);
+    writeServiceRecord(record);
+}
+
+void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
+{
+    const uint32_t depth = m_ring.approximateDepth();
+    uint32_t highwater = m_queueHighwater.exchange(0, std::memory_order_relaxed);
+    if (highwater < depth)
+        highwater = depth;
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::TelemetryHealth;
+    record.header.monotonic_us = nowUs;
+    record.payload.telemetry_health.queue_depth = depth;
+    record.payload.telemetry_health.queue_highwater = highwater;
+    record.payload.telemetry_health.dropped_records_cumulative = clampToUint32(
+        m_droppedRecords.load(std::memory_order_relaxed));
+    record.payload.telemetry_health.writer_errors_cumulative = clampToUint32(
+        m_writerErrors.load(std::memory_order_relaxed));
+    record.payload.telemetry_health.rotation_count = m_rotationCount.load(std::memory_order_relaxed);
+    record.payload.telemetry_health.sampling_late_count = m_samplingLate.load(std::memory_order_relaxed);
+    record.payload.telemetry_health.buffered_bytes = clampToUint32(m_writer.bufferedBytes());
+    writeServiceRecord(record);
 }
 
 void PerformanceTelemetry::serviceLoop() noexcept
@@ -195,6 +452,7 @@ void PerformanceTelemetry::serviceLoop() noexcept
     uint64_t nextFreeSpaceUs = monotonicUs();
     uint64_t lastFreeSpaceSampleUs = 0;
     uint64_t lastFreeStorageBytes = 0;
+    uint64_t lastAggregateSampleUs = 0;
     bool haveFreeStorage = false;
     bool wasSamplingSuspended = false;
 
@@ -265,6 +523,14 @@ void PerformanceTelemetry::serviceLoop() noexcept
                     clampToUint32(freeAgeUs / 1000ull);
                 systemSample.payload.system_sample.validity_flags = snapshot.validity_flags;
                 writeServiceRecord(systemSample);
+                const uint64_t actualIntervalUs = lastAggregateSampleUs != 0
+                    && nowUs > lastAggregateSampleUs
+                    ? nowUs - lastAggregateSampleUs : sampleIntervalUs;
+                emitWorkerSamples(nowUs);
+                emitArtworkSummary(nowUs);
+                emitDownloadSample(nowUs, actualIntervalUs);
+                emitTelemetryHealth(nowUs);
+                lastAggregateSampleUs = nowUs;
                 nextSampleUs = nowUs + sampleIntervalUs;
             }
         }

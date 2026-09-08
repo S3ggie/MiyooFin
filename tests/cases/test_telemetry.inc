@@ -20,6 +20,7 @@
 #include "../../src/diagnostics/TelemetryClock.hpp"
 #include "../../src/diagnostics/MftFormat.hpp"
 #include "../../src/diagnostics/TelemetryWriter.hpp"
+#include "../../src/cache/ImageCache.hpp"
 #include "../../src/input/Action.hpp"
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
 #include "../../src/diagnostics/LinuxProcessMetrics.hpp"
@@ -634,6 +635,34 @@ static void testTelemetrySchemaTypes()
     sampleTelemetry.recordArtworkCacheRead(true, 100);
     sampleTelemetry.recordArtworkCacheWrite(true, 200);
     sampleTelemetry.recordArtworkDecode(true, 50);
+    const std::string oldImageCacheDir = ImageCache::cacheDir();
+    const std::string imageCacheRoot = "/tmp/miyoofin-image-cache-metrics-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string imageCacheItem = "telemetry-cache-item";
+    const std::string imageCacheTag = "telemetry-cache-tag";
+    ImageCache::setCacheDir(imageCacheRoot + "/");
+    const std::string imageCachePath = ImageCache::cachePath(
+        imageCacheItem, ImageType::Primary, imageCacheTag, 64, 96);
+    std::remove(imageCachePath.c_str());
+    const unsigned char imageCacheBytes[] = {1, 2, 3};
+    CHECK(!ImageCache::isCached(imageCacheItem, ImageType::Primary,
+                                imageCacheTag, 64, 96));
+    CHECK(ImageCache::writeToCache(imageCacheItem, ImageType::Primary,
+                                   imageCacheTag, 64, 96,
+                                   imageCacheBytes, sizeof(imageCacheBytes)));
+    CHECK(ImageCache::isCached(imageCacheItem, ImageType::Primary,
+                               imageCacheTag, 64, 96));
+    CHECK(ImageCache::readCached(imageCacheItem, ImageType::Primary,
+                                 imageCacheTag, 64, 96).size()
+          == sizeof(imageCacheBytes));
+    CHECK(ImageCache::readCached("missing-telemetry-cache-item",
+                                 ImageType::Primary, imageCacheTag,
+                                 64, 96).empty());
+    CHECK(!ImageCache::writeToCache(imageCacheItem, ImageType::Primary,
+                                    imageCacheTag, 64, 96, nullptr, 0));
+    std::remove(imageCachePath.c_str());
+    ::rmdir(imageCacheRoot.c_str());
+    ImageCache::setCacheDir(oldImageCacheDir);
     sampleTelemetry.setDownloadGauges(4, 5, 6);
     sampleTelemetry.addDownloadBytes(1000);
     sampleTelemetry.addDownloadSegmentCompleted(2);
@@ -695,9 +724,14 @@ static void testTelemetrySchemaTypes()
     CHECK(readU32(firstWorker + 16 + 12) == 2);
     CHECK(readU32(firstWorker + 16 + 16) == 1);
     CHECK(readU32(firstWorker + 16 + 20) == 1);
-    CHECK(readU32(firstArtwork + 16) == 1);
-    CHECK(readU64(firstArtwork + 16 + 24) == 100);
-    CHECK(readU64(firstArtwork + 16 + 32) == 200);
+    CHECK(readU32(firstArtwork + 16) == 2);
+    CHECK(readU32(firstArtwork + 16 + 4) == 1);
+    CHECK(readU32(firstArtwork + 16 + 8) == 2);
+    CHECK(readU32(firstArtwork + 16 + 12) == 1);
+    CHECK(readU32(firstArtwork + 16 + 16) == 2);
+    CHECK(readU32(firstArtwork + 16 + 20) == 1);
+    CHECK(readU64(firstArtwork + 16 + 24) == 103);
+    CHECK(readU64(firstArtwork + 16 + 32) == 203);
     CHECK(readU32(firstArtwork + 16 + 40) == 1);
     CHECK(readU32(firstArtwork + 16 + 44) == 0);
     CHECK(readU64(firstArtwork + 16 + 48) == 50);

@@ -1,4 +1,5 @@
 #include "ImageCache.hpp"
+#include "../diagnostics/PerformanceTelemetry.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
@@ -83,7 +84,9 @@ bool ImageCache::isCached(const std::string &itemId,
 {
     std::string path = cachePath(itemId, type, imageTag, width, height);
     struct stat st;
-    return stat(path.c_str(), &st) == 0 && st.st_size > 0;
+    const bool hit = stat(path.c_str(), &st) == 0 && st.st_size > 0;
+    performanceTelemetry().recordArtworkCacheProbe(hit);
+    return hit;
 }
 
 std::vector<unsigned char> ImageCache::readCached(const std::string &itemId,
@@ -94,8 +97,10 @@ std::vector<unsigned char> ImageCache::readCached(const std::string &itemId,
 {
     std::string path = cachePath(itemId, type, imageTag, width, height);
     FILE *f = std::fopen(path.c_str(), "rb");
-    if (!f)
+    if (!f) {
+        performanceTelemetry().recordArtworkCacheRead(false, 0);
         return {};
+    }
 
     std::fseek(f, 0, SEEK_END);
     long fileSize = std::ftell(f);
@@ -103,6 +108,7 @@ std::vector<unsigned char> ImageCache::readCached(const std::string &itemId,
 
     if (fileSize <= 0) {
         std::fclose(f);
+        performanceTelemetry().recordArtworkCacheRead(false, 0);
         return {};
     }
 
@@ -110,9 +116,12 @@ std::vector<unsigned char> ImageCache::readCached(const std::string &itemId,
     size_t bytesRead = std::fread(data.data(), 1, data.size(), f);
     std::fclose(f);
 
-    if (bytesRead != data.size())
+    if (bytesRead != data.size()) {
+        performanceTelemetry().recordArtworkCacheRead(false, 0);
         return {};
+    }
 
+    performanceTelemetry().recordArtworkCacheRead(true, data.size());
     return data;
 }
 
@@ -124,21 +133,27 @@ bool ImageCache::writeToCache(const std::string &itemId,
                               const unsigned char *data,
                               size_t size)
 {
-    if (!data || size == 0)
+    if (!data || size == 0) {
+        performanceTelemetry().recordArtworkCacheWrite(false, size);
         return false;
+    }
 
     // Ensure the cache directory exists
     ensureDirRecursive(s_cacheDir);
 
     std::string path = cachePath(itemId, type, imageTag, width, height);
     FILE *f = std::fopen(path.c_str(), "wb");
-    if (!f)
+    if (!f) {
+        performanceTelemetry().recordArtworkCacheWrite(false, size);
         return false;
+    }
 
     size_t written = std::fwrite(data, 1, size, f);
     std::fclose(f);
 
-    return written == size;
+    const bool success = written == size;
+    performanceTelemetry().recordArtworkCacheWrite(success, size);
+    return success;
 }
 
 bool ImageCache::removeCached(const std::string &itemId, ImageType type,

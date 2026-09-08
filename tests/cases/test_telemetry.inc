@@ -1069,6 +1069,41 @@ static void testTelemetrySchemaTypes()
     ::rmdir(stateRoot.c_str());
     PerformanceTelemetry::clearTestHooks();
     std::printf("[test] telemetry state mapping and duplicate suppression OK\n");
+
+    std::printf("[test] UI diagnostics telemetry mappings and worker mask\n");
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("idle/frame boundary")
+          == UiPhaseId::IdleFrameBoundary);
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("event/input") == UiPhaseId::EventInput);
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("update") == UiPhaseId::Update);
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("screen transition")
+          == UiPhaseId::ScreenTransition);
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("render") == UiPhaseId::Render);
+    CHECK(UiDiagnostics::phaseIdFromDiagnosticName("unknown") == UiPhaseId::Unknown);
+    CHECK(UiDiagnostics::scopeIdFromDiagnosticName("Screen::handleAction")
+          == UiScopeId::ScreenHandleAction);
+    CHECK(UiDiagnostics::scopeIdFromDiagnosticName("Screen::update") == UiScopeId::ScreenUpdate);
+    CHECK(UiDiagnostics::scopeIdFromDiagnosticName("ScreenStack::retireScreen")
+          == UiScopeId::ScreenStackRetireScreen);
+    CHECK(UiDiagnostics::scopeIdFromDiagnosticName("DownloadManager::planSnapshot mutex wait")
+          == UiScopeId::DownloadManagerPlanSnapshotMutexWait);
+    CHECK(UiDiagnostics::scopeIdFromDiagnosticName("unknown") == UiScopeId::Unknown);
+    UiDiagnostics diagnostics;
+    diagnostics.setWorker("library", "active");
+    diagnostics.setWorker("hierarchy", "active");
+    diagnostics.setWorker("artwork", "active");
+    diagnostics.setWorker("download", "active");
+    CHECK(diagnostics.activeWorkerMask()
+          == (kWorkerMaskHomeLibraryFetch | kWorkerMaskHomeHierarchy
+              | kWorkerMaskHomePoster | kWorkerMaskDownloadTransfer));
+    diagnostics.setWorker("hierarchy", "idle");
+    CHECK(diagnostics.activeWorkerMask()
+          == (kWorkerMaskHomeLibraryFetch | kWorkerMaskHomePoster
+              | kWorkerMaskDownloadTransfer));
+    diagnostics.setWorker("library", "idle");
+    diagnostics.setWorker("artwork", "idle");
+    diagnostics.setWorker("download", "idle");
+    CHECK(diagnostics.activeWorkerMask() == 0);
+    std::printf("[test] UI diagnostics telemetry mappings and worker mask OK\n");
 #endif
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);

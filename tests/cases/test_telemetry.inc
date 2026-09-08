@@ -432,6 +432,49 @@ static void testMftV1Codec()
     std::printf("[test] MFT v1 little-endian codec and golden bytes OK\n");
 }
 
+static DownloadSegmentAttempt makeTelemetrySegmentAttemptPayload(
+    uint32_t jobSequence, uint32_t segmentOrdinal, uint16_t attemptNumber,
+    uint16_t retryDelayMs, RouteKind route, Outcome outcome,
+    bool retryPlanned, uint64_t durationUs, uint64_t payloadBytes,
+    uint32_t httpStatus, uint32_t curlCode)
+{
+    DownloadSegmentAttempt payload{};
+    payload.telemetry_job_seq = jobSequence;
+    payload.segment_ordinal = segmentOrdinal;
+    payload.attempt_number = attemptNumber;
+    payload.retry_delay_ms = retryDelayMs;
+    payload.route_kind = static_cast<uint8_t>(route);
+    payload.outcome = static_cast<uint8_t>(outcome);
+    payload.retry_planned = retryPlanned ? 1u : 0u;
+    payload.duration_us = durationUs;
+    payload.payload_bytes = payloadBytes;
+    payload.http_status = httpStatus;
+    payload.curl_code = curlCode;
+    return payload;
+}
+
+static void testTelemetrySegmentAttemptPayload()
+{
+    std::printf("[test] HLS segment attempt payload builder\n");
+    const DownloadSegmentAttempt payload = makeTelemetrySegmentAttemptPayload(
+        17, 3, 4, 8000, RouteKind::Lan, Outcome::Failure, true,
+        1234, 5678, 503, 28);
+    CHECK(payload.telemetry_job_seq == 17);
+    CHECK(payload.segment_ordinal == 3);
+    CHECK(payload.attempt_number == 4);
+    CHECK(payload.retry_delay_ms == 8000);
+    CHECK(payload.route_kind == static_cast<uint8_t>(RouteKind::Lan));
+    CHECK(payload.outcome == static_cast<uint8_t>(Outcome::Failure));
+    CHECK(payload.retry_planned == 1);
+    CHECK(payload.duration_us == 1234);
+    CHECK(payload.payload_bytes == 5678);
+    CHECK(payload.http_status == 503);
+    CHECK(payload.curl_code == 28);
+    CHECK(payload.reserved0 == 0);
+    CHECK(payload.reserved1 == 0);
+    std::printf("[test] HLS segment attempt payload builder OK\n");
+}
+
 static void testTelemetryWriter()
 {
     std::printf("[test] buffered telemetry writer header, flush, close, and errors\n");
@@ -740,6 +783,7 @@ static void testTelemetrySchemaTypes()
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
     testMftV1Codec();
     testTelemetryWriter();
+    testTelemetrySegmentAttemptPayload();
     testTelemetryServiceThread();
     testHttpClientTelemetry();
     std::printf("[test] linux process metrics parsing and validity\n");

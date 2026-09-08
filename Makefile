@@ -142,6 +142,7 @@ TEST_TARGET := output/test/test_runner
 TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
+TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 TEST_SRCS   := tests/test_main.cpp \
                src/net/JellyfinApi.cpp \
                src/net/JellyfinApiJson.cpp \
@@ -203,6 +204,7 @@ test: $(TEST_TARGET)
 	@$(TEST_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
+	@python3 $(TELEMETRY_DECODER_TEST)
 
 .PHONY: refactor-check
 refactor-check:

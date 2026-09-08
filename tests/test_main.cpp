@@ -11,6 +11,7 @@
 #include <cstring>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <curl/curl.h>
 #include <string>
 #include "miyoofin/version.hpp"
@@ -53,6 +54,8 @@
 #include "../src/input/InputManager.hpp"
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 using namespace miyoofin;
 
@@ -137,6 +140,7 @@ int main()
     testLatestItemsDirectArray();
     testBuildLatestUrl();
     testBuildLibraryItemsUrl();
+    testChangedHierarchyLightweightProjection();
     testUnicodeEscapeDecoding();
     testBitmapFontMapCodePoint();
     testBitmapFontMapCodePointLatinAccents();

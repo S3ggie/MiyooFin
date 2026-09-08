@@ -407,8 +407,6 @@ void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
 
 void PerformanceTelemetry::serviceLoop() noexcept
 {
-    m_serviceActive.store(true, std::memory_order_release);
-
     MftFileHeader header{};
     header.flags = 2u;
     header.pid = static_cast<uint32_t>(::getpid());
@@ -455,6 +453,7 @@ void PerformanceTelemetry::serviceLoop() noexcept
     uint64_t lastAggregateSampleUs = 0;
     bool haveFreeStorage = false;
     bool wasSamplingSuspended = false;
+    m_serviceActive.store(true, std::memory_order_release);
 
     TelemetryRecord record{};
     while (!m_stopRequested.load(std::memory_order_acquire)

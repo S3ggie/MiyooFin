@@ -7,6 +7,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <cstdint>
 #include "ScreenStack.hpp"
 #include "../input/InputManager.hpp"
 #include "../net/JellyfinApi.hpp"
@@ -64,6 +65,14 @@ private:
     // ownership of the framebuffer.
     bool            m_playbackStarting;
     Uint32          m_playbackStartingTick;
+#if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
+    uint32_t        m_playbackSequence = 0;
+    uint64_t        m_playbackRequestUs = 0;
+    uint64_t        m_playbackResumeUs = 0;
+    bool            m_playbackReturnPending = false;
+    ScreenStack::ExternalPlaybackSource m_playbackSource =
+        ScreenStack::ExternalPlaybackSource::Unknown;
+#endif
 
     // Startup flow state
     std::string     m_serverUrl;   // saved server URL

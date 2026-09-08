@@ -29,7 +29,10 @@ void EpisodeBrowserScreen::startSelectedEpisodePlayback()
         m_playbackEpisodeId = m_episodes[m_selectedEpisode].id;
         printf("[EpisodeBrowserScreen] Playback request "
                "written, requesting external playback\n");
-        m_stack->requestExternalPlayback();
+        m_stack->requestExternalPlayback(
+            source == PlaybackSource::Local
+                ? ScreenStack::ExternalPlaybackSource::Local
+                : ScreenStack::ExternalPlaybackSource::Jellyfin);
     } else {
         printf("[EpisodeBrowserScreen] Playback request "
                "failed: %s\n", error.c_str());

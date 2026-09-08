@@ -4,6 +4,8 @@
 #include "../../net/RouteStatus.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../HomeSyncState.hpp"
 #include <cstdio>
@@ -48,23 +50,55 @@ void HomeScreen::startFetch()
     m_fetchDone = false; m_fetchError.clear(); m_fetchResult.clear(); m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
     Session session=m_session; std::string url=session.serverUrl; std::string token=m_session.accessToken; std::string uid=m_session.userId; std::string devId=m_session.deviceId;
     m_fetchThread = std::thread([this, session, url, token, uid, devId]() {
-        std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();m_fetchDone=true;};
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
+        telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
+        TelemetryTimer syncTimer;
+        uint32_t requestCount = 0;
+        uint32_t changedHierarchyCount = 0;
+        uint32_t mediaCount = 0;
+        bool cacheSaved = false;
+        bool completed = false;
         std::vector<LibraryView> views;
+        auto completeTelemetry = [&](Outcome outcome) noexcept {
+            if (completed)
+                return;
+            completed = true;
+            if (syncTimer.active() && telemetry.enabledFast()) {
+                TelemetryRecord record{};
+                record.header.record_type = RecordType::LibrarySync;
+                record.payload.library_sync.duration_us = syncTimer.elapsedUs();
+                record.payload.library_sync.outcome = static_cast<uint8_t>(outcome);
+                record.payload.library_sync.cache_saved = cacheSaved ? 1 : 0;
+                record.payload.library_sync.views_count = static_cast<uint32_t>(views.size());
+                record.payload.library_sync.media_count = mediaCount;
+                record.payload.library_sync.changed_hierarchy_count = changedHierarchyCount;
+                record.payload.library_sync.request_count = requestCount;
+                telemetry.emitRecord(record);
+            }
+            telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, false);
+            telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
+        };
+        std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();completeTelemetry(Outcome::Failure);m_fetchDone=true;};
+        ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getViews(base, token, uid, devId, views, err);},err)){fail(err);return;}
         printf("[HomeScreen] Got %zu library views\n", views.size());
         std::vector<MediaItem> cw; std::string cwErr;
+        ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr);},cwErr)) printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
         std::vector<MediaItem> ra; std::string raErr;
+        ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr);},raErr)) printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
         std::vector<std::pair<std::string,std::vector<MediaItem>>> moviesByView, showsByView; LibrarySnapshot snapshot; snapshot.continueWatching=cw; snapshot.recentlyAdded=ra;
         for (const auto &v:views) {
-            if (v.collectionType=="movies") { std::vector<MediaItem> items; std::string ie; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Movie",50,items,ie);},ie)){moviesByView.push_back({v.name,std::move(items)});snapshot.movies.push_back({v.id,v.name,v.collectionType,moviesByView.back().second});} else {fail(ie);return;} }
-            else if (v.collectionType=="tvshows") { std::vector<MediaItem> items; std::string ie; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Series",50,items,ie);},ie)){showsByView.push_back({v.name,std::move(items)});snapshot.shows.push_back({v.id,v.name,v.collectionType,showsByView.back().second});} else {fail(ie);return;} }
+            if (v.collectionType=="movies") { std::vector<MediaItem> items; std::string ie; ++requestCount; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Movie",50,items,ie);},ie)){mediaCount += static_cast<uint32_t>(items.size());moviesByView.push_back({v.name,std::move(items)});snapshot.movies.push_back({v.id,v.name,v.collectionType,moviesByView.back().second});} else {fail(ie);return;} }
+            else if (v.collectionType=="tvshows") { std::vector<MediaItem> items; std::string ie; ++requestCount; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Series",50,items,ie);},ie)){mediaCount += static_cast<uint32_t>(items.size());showsByView.push_back({v.name,std::move(items)});snapshot.shows.push_back({v.id,v.name,v.collectionType,showsByView.back().second});} else {fail(ie);return;} }
         }
         m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,moviesByView,showsByView); m_remoteSnapshot=std::move(snapshot); std::set<std::string> changedSeries;
-        if(m_syncState.lastSuccessfulMs>0&&!m_forceHierarchyReconcile){std::vector<MediaItem> changed;std::string changedError;if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)){fail(changedError);return;}for(const auto&i:changed){if(i.type=="show")changedSeries.insert(i.id);else if(!i.seriesId.empty())changedSeries.insert(i.seriesId);}}
+        if(m_syncState.lastSuccessfulMs>0&&!m_forceHierarchyReconcile){std::vector<MediaItem> changed;std::string changedError;++requestCount;if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)){fail(changedError);return;}changedHierarchyCount = static_cast<uint32_t>(changed.size());for(const auto&i:changed){if(i.type=="show")changedSeries.insert(i.id);else if(!i.seriesId.empty())changedSeries.insert(i.seriesId);}}
         std::vector<StalePoster> stale; m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale); const std::string scope=LibraryCache::scopeKey(url,uid);
-        if(LibraryCache::save(LibraryCache::cachePath("cache",scope),m_remoteSnapshot)){m_fetchCacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
+        if(LibraryCache::save(LibraryCache::cachePath("cache",scope),m_remoteSnapshot)){m_fetchCacheSaved=true;cacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
+        completeTelemetry(Outcome::Success);
         m_fetchDone=true;
     });
 }

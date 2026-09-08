@@ -10,6 +10,8 @@
 #include "../../cache/ImageCache.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -214,7 +216,10 @@ bool MovieDetailsScreen::handleAction(Action action)
                 m_playbackResultDelayUpdates = 1;
                 printf("[MovieDetailsScreen] Playback request written, "
                        "requesting external playback\n");
-                m_stack->requestExternalPlayback();
+                m_stack->requestExternalPlayback(
+                    source == PlaybackSource::Local
+                        ? ScreenStack::ExternalPlaybackSource::Local
+                        : ScreenStack::ExternalPlaybackSource::Jellyfin);
             } else {
                 printf("[MovieDetailsScreen] Playback request failed: %s\n",
                        error.c_str());
@@ -338,6 +343,7 @@ void MovieDetailsScreen::prepareWorker()
 // -------------------------------------------------------------------
 DecodedImage MovieDetailsScreen::loadMovieArtwork()
 {
+    TelemetryArtworkScope artworkScope(ArtworkContext::MovieDetails);
 
     auto it = m_movie.imageTags.find("Primary");
     if (it == m_movie.imageTags.end() || it->second.empty()) {
@@ -384,6 +390,7 @@ DecodedImage MovieDetailsScreen::loadMovieArtwork()
             // responsible for the hardware-proven multi-second push stall.
             uiDiagnostics().setWorker("artwork","movie Jellyfin artwork HTTP");
             UiDiagnostics::Scope scope("MovieDetailsScreen::Jellyfin artwork HTTP/curl",false);
+            TelemetryRequestScope request(RequestKind::Artwork);
             fetched=RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,m_movie.id,ImageType::Primary,tag,POSTER_W,POSTER_H),headers,response,error,512*1024,&m_prepareCancelled)&&response.ok();},error);
         }
         if(!fetched){

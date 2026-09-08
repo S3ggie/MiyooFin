@@ -8,6 +8,8 @@
 #include "../../net/RouteRequest.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/PerformanceTelemetry.hpp"
+#include "../../diagnostics/TelemetryGuards.hpp"
 #include "../Theme.hpp"
 #include <cstdio>
 
@@ -164,6 +166,9 @@ void EpisodeBrowserScreen::freePreparedArtwork(PreparedArtwork &artwork)
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::artworkWorkerLoop()
 {
+    PerformanceTelemetry &telemetry=performanceTelemetry();
+    telemetry.setWorkerActive(WorkerId::EpisodeArtwork, false);
+    telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork, 0);
     std::uint64_t observedGeneration = 0;
     while (true) {
         ArtworkJob job;
@@ -175,7 +180,11 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                 return m_workerStop || (!m_workerPaused &&
                     observedGeneration != m_workerGeneration);
             });
-            if (m_workerStop) break;
+            if (m_workerStop) {
+                telemetry.setWorkerActive(WorkerId::EpisodeArtwork, false);
+                telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork, 0);
+                break;
+            }
             generation = m_workerGeneration;
             observedGeneration = generation;
             // wakeArtworkWorker() and this reset share m_workerMutex.  A
@@ -184,11 +193,15 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         }
 
         std::set<int> unavailable;
+        int selected = -1;
         while (true) {
-            int selected;
             {
                 std::lock_guard<std::mutex> lock(m_workerMutex);
-                if (m_workerStop) return;
+                if (m_workerStop) {
+                    telemetry.setWorkerActive(WorkerId::EpisodeArtwork, false);
+                    telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork, 0);
+                    return;
+                }
                 if (m_workerPaused || generation != m_workerGeneration) break;
                 selected = m_workerSelected;
                 candidate = nextPrefetchIndex(selected, m_workerListScroll,
@@ -202,8 +215,14 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                     continue;
                 }
             }
-            const bool cached=ImageCache::isCached(job.itemId, ImageType::Primary,
-                                                   job.imageTag, job.width, job.height);
+            bool cached = false;
+            {
+                TelemetryArtworkScope artwork(candidate == selected
+                    ? ArtworkContext::EpisodeSelected
+                    : ArtworkContext::EpisodePrefetch);
+                cached=ImageCache::isCached(job.itemId, ImageType::Primary,
+                                            job.imageTag, job.width, job.height);
+            }
             if (cached && (candidate != selected || m_workerDecodedKey == job.artworkKey)) {
                 unavailable.insert(candidate);
                 continue;
@@ -212,6 +231,20 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                 std::lock_guard<std::mutex> lock(m_workerMutex);
                 if (m_workerPaused || generation != m_workerGeneration) break;
                 m_workerInProgressKey = job.artworkKey;
+                uint32_t queueDepth = 0;
+                const int first = std::max(0, m_workerListScroll);
+                const int last = std::min((int)m_artworkJobs.size(),
+                                          first + LIST_VISIBLE);
+                for (int i = first; i < last; ++i) {
+                    const ArtworkJob &visibleJob = m_artworkJobs[i];
+                    if (!visibleJob.artworkKey.empty()
+                        && !m_failedKeys.count(visibleJob.artworkKey)
+                        && visibleJob.artworkKey != m_workerInProgressKey)
+                        ++queueDepth;
+                }
+                telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork,
+                                              queueDepth);
+                telemetry.setWorkerActive(WorkerId::EpisodeArtwork, true);
             }
             printf("[EpisodeBrowserScreen] Prefetch: selected=%d candidate=%d\n",
                    selected, candidate);
@@ -229,42 +262,48 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         // --- Execute job (no lock held) ---
         bool success = false;
         DecodedImage decoded;
-        const bool cacheHit = ImageCache::isCached(job.itemId, ImageType::Primary,
-                                                   job.imageTag, job.width, job.height);
-        if (cacheHit)
+        const bool selectedCandidate = candidate == selected;
         {
-            success = true;
-        } else {
-            HttpClient client;
-            client.setTimeoutSec(3);
-            auto headers = JellyfinApi::buildAuthHeaders(
-                m_session.accessToken, m_session.deviceId);
+            TelemetryArtworkScope artwork(selectedCandidate
+                ? ArtworkContext::EpisodeSelected
+                : ArtworkContext::EpisodePrefetch);
+            const bool cacheHit = ImageCache::isCached(job.itemId,
+                ImageType::Primary, job.imageTag, job.width, job.height);
+            if (cacheHit) {
+                success = true;
+            } else {
+                HttpClient client;
+                client.setTimeoutSec(3);
+                auto headers = JellyfinApi::buildAuthHeaders(
+                    m_session.accessToken, m_session.deviceId);
 
-            BinaryHttpResponse response;
-            std::string error;
-            const bool fetched = RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,ImageType::Primary,job.imageTag,job.width,job.height),headers,response,error,512*1024,&m_workerCancelled)&&response.ok();},error);
-            if (fetched)
-            {
-                if (response.ok()) {
-                    const bool cacheWriteSucceeded = ImageCache::writeToCache(
-                        job.itemId, ImageType::Primary, job.imageTag,
-                        job.width, job.height,
-                        response.data.data(), response.data.size());
-                    if (cacheWriteSucceeded) {
-                        printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                               " downloaded episode=%s\n", job.itemId.c_str());
-                        success = true;
+                BinaryHttpResponse response;
+                std::string error;
+                TelemetryRequestScope request(RequestKind::Artwork);
+                const bool fetched = RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,ImageType::Primary,job.imageTag,job.width,job.height),headers,response,error,512*1024,&m_workerCancelled)&&response.ok();},error);
+                if (fetched)
+                {
+                    if (response.ok()) {
+                        const bool cacheWriteSucceeded = ImageCache::writeToCache(
+                            job.itemId, ImageType::Primary, job.imageTag,
+                            job.width, job.height,
+                            response.data.data(), response.data.size());
+                        if (cacheWriteSucceeded) {
+                            printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                                   " downloaded episode=%s\n", job.itemId.c_str());
+                            success = true;
+                        } else {
+                            printf("[EpisodeBrowserScreen] ArtworkWorker:"
+                                   " cache write failed\n");
+                        }
                     } else {
                         printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                               " cache write failed\n");
+                               " HTTP %ld\n", response.status);
                     }
                 } else {
                     printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                           " HTTP %ld\n", response.status);
+                           " network error: %s\n", error.c_str());
                 }
-            } else {
-                printf("[EpisodeBrowserScreen] ArtworkWorker:"
-                       " network error: %s\n", error.c_str());
             }
         }
 
@@ -287,8 +326,9 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         int currentSelected=-1;
         {std::lock_guard<std::mutex> lock(m_workerMutex);currentSelected=m_workerSelected;}
         if(success && !cancelled && candidate==currentSelected) {
+            TelemetryArtworkScope artwork(ArtworkContext::EpisodeSelected);
             auto bytes=ImageCache::readCached(job.itemId,ImageType::Primary,
-                                              job.imageTag,job.width,job.height);
+                                               job.imageTag,job.width,job.height);
             if(!bytes.empty()) {
                 decoded=ImageDecoder::decodeJpeg(bytes.data(),bytes.size());
             }
@@ -296,13 +336,14 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
         }
 
         // --- Publish completion signal (under lock) ---
+        bool stale = false;
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerInProgressKey.clear();
+            stale = artworkRequestCancelled(
+                m_workerCancelled.load(std::memory_order_acquire),
+                generation, m_workerGeneration);
             if (!m_workerStop) {
-                const bool stale = artworkRequestCancelled(
-                    m_workerCancelled.load(std::memory_order_acquire),
-                    generation, m_workerGeneration);
                 if (shouldMarkArtworkFailed(success, stale))
                     m_failedKeys.insert(job.artworkKey);
                 if(!stale && candidate==m_workerSelected) {
@@ -313,7 +354,26 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
                     m_workerHasCompletion=true;
                 }
             }
+            uint32_t queueDepth = 0;
+            const int first = std::max(0, m_workerListScroll);
+            const int last = std::min((int)m_artworkJobs.size(),
+                                      first + LIST_VISIBLE);
+            for (int i = first; i < last; ++i) {
+                const ArtworkJob &visibleJob = m_artworkJobs[i];
+                if (!visibleJob.artworkKey.empty()
+                    && !m_failedKeys.count(visibleJob.artworkKey))
+                    ++queueDepth;
+            }
+            telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork,
+                                          queueDepth);
         }
+        if (stale)
+            telemetry.addWorkerCancelled(WorkerId::EpisodeArtwork);
+        else if (success)
+            telemetry.addWorkerCompleted(WorkerId::EpisodeArtwork);
+        else
+            telemetry.addWorkerFailed(WorkerId::EpisodeArtwork);
+        telemetry.setWorkerActive(WorkerId::EpisodeArtwork, false);
         // Recompute from the current selection after every request.
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);

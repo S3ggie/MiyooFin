@@ -3,6 +3,7 @@
 #include "HttpClient.hpp"
 #include "../download/HlsPlaylist.hpp"
 #include "../download/HlsProfile.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
 
 namespace miyoofin {
@@ -25,6 +26,7 @@ bool JellyfinApi::getDownloadMediaSources(const std::string &baseUrl,
     // empty POST body is rejected as 415 by stricter server versions.
     auto headers = buildAuthHeaders(accessToken, deviceId);
     headers.push_back("Content-Type: application/json");
+    TelemetryRequestScope request(RequestKind::DownloadPlaybackInfo);
     if (!client.perform("POST", url, headers, "{\"UserId\":\"" + userId + "\",\"StartTimeTicks\":0}", response, error)) {
         if (error.empty()) error = "Could not reach server";
         return false;
@@ -71,9 +73,9 @@ bool JellyfinApi::getHlsSegmentUrls(const std::string&b,const std::string&t,cons
     HttpClient c; c.setConnectTimeoutSec(10); c.setTimeoutSec(60); HttpResponse r;
     auto fail=[&](const char *stage){ HlsFailure f=classifyHlsFailure(r.status,r.transportCode); if(failure)*failure=f; if(r.status) e=std::string(stage)+" HTTP "+std::to_string(r.status); else if(f==HlsFailure::Timeout) e="Preparing transcode timed out"; else if(e.empty()) e=std::string(stage)+" request failed"; return false; };
     std::string u=buildHlsMasterUrl(b,i,m); std::printf("[Download] HLS master request...\n");
-    if(!c.perform("GET",u,buildAuthHeaders(t,d),{},r,e)||!r.ok()){std::printf("[Download] HLS master HTTP %ld\n",r.status);return fail("HLS master");}
+    { TelemetryRequestScope request(RequestKind::HlsMaster); if(!c.perform("GET",u,buildAuthHeaders(t,d),{},r,e)||!r.ok()){std::printf("[Download] HLS master HTTP %ld\n",r.status);return fail("HLS master");} }
     std::printf("[Download] HLS master HTTP %ld\n",r.status); auto v=HlsPlaylist::variants(r.body,u);
-    if(!v.empty()){u=v.front();std::printf("[Download] HLS variant request...\n");if(!c.perform("GET",u,buildAuthHeaders(t,d),{},r,e)||!r.ok()){std::printf("[Download] HLS variant HTTP %ld\n",r.status);return fail("HLS variant");}std::printf("[Download] HLS variant HTTP %ld\n",r.status);}
+    if(!v.empty()){u=v.front();std::printf("[Download] HLS variant request...\n");{ TelemetryRequestScope request(RequestKind::HlsVariant); if(!c.perform("GET",u,buildAuthHeaders(t,d),{},r,e)||!r.ok()){std::printf("[Download] HLS variant HTTP %ld\n",r.status);return fail("HLS variant");} }std::printf("[Download] HLS variant HTTP %ld\n",r.status);}
     out=HlsPlaylist::segments(r.body,u);if(out.empty()){if(failure)*failure=HlsFailure::Playlist;e="HLS playlist has no segments";return false;}std::printf("[Download] HLS segments=%zu\n",out.size());return true;
 }
 

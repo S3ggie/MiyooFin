@@ -1,5 +1,6 @@
 #include "JellyfinApi.hpp"
 #include "HttpClient.hpp"
+#include "../diagnostics/TelemetryGuards.hpp"
 
 namespace miyoofin {
 
@@ -23,6 +24,7 @@ PlaybackSyncStatus JellyfinApi::getPlaybackPositionTicks(const std::string &base
 {
     ticks = 0;
     HttpClient client; HttpResponse response;
+    TelemetryRequestScope request(RequestKind::PlaybackPosition);
     const bool transport = client.perform("GET", baseUrl + "/Users/" + userId + "/Items/" + itemId,
         buildAuthHeaders(accessToken, deviceId), {}, response, error);
     PlaybackSyncStatus status = playbackStatus(transport, response.status);
@@ -44,6 +46,7 @@ PlaybackSyncStatus JellyfinApi::reportPlaybackStopped(const std::string &baseUrl
                                                       std::string &error)
 {
     HttpClient client; HttpResponse response;
+    TelemetryRequestScope request(RequestKind::PlaybackStopped);
     const std::string body = "{\"ItemId\":\"" + jsonEscape(itemId) + "\",\"PositionTicks\":" +
         std::to_string(ticks < 0 ? 0 : ticks) + ",\"Failed\":false}";
     const bool transport = client.post(baseUrl + "/Sessions/Playing/Stopped",

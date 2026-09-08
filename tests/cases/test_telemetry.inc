@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <string>
@@ -14,6 +16,7 @@
 #include "../../src/diagnostics/TelemetryIds.hpp"
 #include "../../src/diagnostics/TelemetryTypes.hpp"
 #include "../../src/diagnostics/TelemetryClock.hpp"
+#include "../../src/diagnostics/MftFormat.hpp"
 
 static void testTelemetryClocks()
 {
@@ -257,6 +260,116 @@ static void testTelemetryRing()
     std::printf("[test] bounded telemetry ring FIFO, recovery, wrap, and MPSC stress OK\n");
 }
 
+static void testMftV1Codec()
+{
+    std::printf("[test] MFT v1 little-endian codec and golden bytes\n");
+    MftFileHeader fileHeader{};
+    fileHeader.flags = 0xaabbccddu;
+    fileHeader.pid = 0x01020304u;
+    fileHeader.session_nonce = 0x1122334455667788ull;
+    fileHeader.start_monotonic_us = 0x0102030405060708ull;
+    fileHeader.optional_wall_time_s = 0x1112131415161718ull;
+    fileHeader.sample_interval_ms = 1000;
+    fileHeader.free_space_interval_ms = 10000;
+    fileHeader.rotation_index = 2;
+    fileHeader.writer_buffer_bytes = 32768;
+    fileHeader.app_version_packed = 0x00102030u;
+    fileHeader.build_commit32 = 0xa1b2c3d4u;
+    fileHeader.platform_id = static_cast<uint32_t>(PlatformId::Host);
+
+    std::array<uint8_t, kMftFileHeaderSize> headerBytes{};
+    CHECK(encodeFileHeader(fileHeader, headerBytes.data(), headerBytes.size()));
+    const std::array<uint8_t, kMftFileHeaderSize> expectedHeader = {
+        'M', 'F', 'T', '1', 0x01, 0x00, 0x50, 0x00,
+        0xdd, 0xcc, 0xbb, 0xaa, 0x04, 0x03, 0x02, 0x01,
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
+        0xe8, 0x03, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
+        0x30, 0x20, 0x10, 0x00, 0xd4, 0xc3, 0xb2, 0xa1,
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    CHECK(headerBytes == expectedHeader);
+    CHECK(!encodeFileHeader(fileHeader, headerBytes.data(), kMftFileHeaderSize - 1));
+
+    TelemetryRecord session{};
+    session.header.record_type = RecordType::SessionEvent;
+    session.header.sequence = 0x11223344u;
+    session.header.monotonic_us = 0x0102030405060708ull;
+    session.payload.session_event.kind = static_cast<uint8_t>(SessionEventKind::WriterError);
+    session.payload.session_event.outcome = static_cast<uint8_t>(Outcome::Failure);
+    session.payload.session_event.value0 = 0xaabbccddu;
+    session.payload.session_event.value1 = 0x1122334455667788ull;
+
+    std::array<uint8_t, kMftMaxRecordSize> recordBytes{};
+    uint16_t written = 0;
+    CHECK(encodeRecord(session, recordBytes.data(), recordBytes.size(), written));
+    CHECK(written == 32);
+    const std::array<uint8_t, 32> expectedSession = {
+        0x0e, 0x00, 0x20, 0x00, 0x44, 0x33, 0x22, 0x11,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+        0x06, 0x02, 0x00, 0x00, 0xdd, 0xcc, 0xbb, 0xaa,
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    };
+    CHECK(std::equal(expectedSession.begin(), expectedSession.end(), recordBytes.begin()));
+
+    TelemetryRecord stall{};
+    stall.header.record_type = RecordType::UiStall;
+    stall.header.sequence = 0x01020304u;
+    stall.header.monotonic_us = 0x1112131415161718ull;
+    stall.payload.ui_stall.edge = static_cast<uint8_t>(StallEdge::SlowScope);
+    stall.payload.ui_stall.screen = static_cast<uint16_t>(ScreenId::MovieDetails);
+    stall.payload.ui_stall.tab = static_cast<uint16_t>(TabId::Downloads);
+    stall.payload.ui_stall.action = static_cast<uint16_t>(ActionId::Confirm);
+    stall.payload.ui_stall.phase = static_cast<uint8_t>(UiPhaseId::Render);
+    stall.payload.ui_stall.duration_us = 0x2122232425262728ull;
+    stall.payload.ui_stall.scope_id = static_cast<uint16_t>(UiScopeId::ScreenRender);
+    stall.payload.ui_stall.worker_mask = 0x1234;
+    written = 0;
+    CHECK(encodeRecord(stall, recordBytes.data(), recordBytes.size(), written));
+    CHECK(written == 48);
+    CHECK(recordBytes[0] == 0x0c && recordBytes[1] == 0x00);
+    CHECK(recordBytes[2] == 0x30 && recordBytes[3] == 0x00);
+    CHECK(recordBytes[16] == 0x03 && recordBytes[17] == 0x00);
+    CHECK(recordBytes[18] == 0x09 && recordBytes[19] == 0x00);
+    CHECK(recordBytes[20] == 0x04 && recordBytes[21] == 0x00);
+    CHECK(recordBytes[22] == 0x05 && recordBytes[23] == 0x00);
+    CHECK(recordBytes[24] == 0x05);
+    CHECK(recordBytes[28] == 0x28 && recordBytes[29] == 0x27);
+    CHECK(recordBytes[36] == 0x04 && recordBytes[37] == 0x00);
+    CHECK(recordBytes[38] == 0x34 && recordBytes[39] == 0x12);
+
+    const RecordType recordTypes[] = {
+        RecordType::SystemSample, RecordType::FrameTimingSummary,
+        RecordType::StateTransition, RecordType::WorkerSample,
+        RecordType::NetworkRequest, RecordType::ArtworkSummary,
+        RecordType::ArtworkDecode, RecordType::LibrarySync,
+        RecordType::DownloadSample, RecordType::DownloadSegmentAttempt,
+        RecordType::PlaybackEvent, RecordType::UiStall,
+        RecordType::TelemetryHealth, RecordType::SessionEvent,
+    };
+    const uint16_t expectedSizes[] = {88, 88, 28, 44, 56, 80, 48, 48,
+                                      56, 64, 40, 48, 48, 32};
+    TelemetryRecord zeroRecord{};
+    zeroRecord.header.sequence = 1;
+    for (size_t index = 0; index < sizeof(recordTypes) / sizeof(recordTypes[0]); ++index) {
+        zeroRecord.header.record_type = recordTypes[index];
+        written = 0;
+        CHECK(encodedRecordSize(recordTypes[index]) == expectedSizes[index]);
+        CHECK(encodeRecord(zeroRecord, recordBytes.data(), recordBytes.size(), written));
+        CHECK(written == expectedSizes[index]);
+    }
+    CHECK(!encodeRecord(zeroRecord, recordBytes.data(), 31, written));
+    CHECK(written == 0);
+    zeroRecord.header.record_type = static_cast<RecordType>(0xffff);
+    CHECK(encodedRecordSize(zeroRecord.header.record_type) == 0);
+    CHECK(!encodeRecord(zeroRecord, recordBytes.data(), recordBytes.size(), written));
+    CHECK(written == 0);
+    std::printf("[test] MFT v1 little-endian codec and golden bytes OK\n");
+}
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
@@ -264,6 +377,7 @@ static void testTelemetrySchemaTypes()
     testTelemetryConfigAndFacade();
     testTelemetryContextAndGuards();
     testTelemetryRing();
+    testMftV1Codec();
 
     CHECK(static_cast<uint32_t>(PlatformId::Unknown) == 0);
     CHECK(static_cast<uint32_t>(PlatformId::MiyooMiniPlusOnionOS) == 1);

@@ -31,10 +31,12 @@ TELEMETRY_TEST_SRCS :=
 ifeq ($(PERF_TELEMETRY),1)
 TELEMETRY_SRCS := \
     $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
-    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/MftFormat.cpp
 TELEMETRY_TEST_SRCS := \
     $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
-    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp
+    $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/MftFormat.cpp
 endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \

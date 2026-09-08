@@ -94,6 +94,47 @@ The test harness stays in `tests/test_main.cpp`, while related cases are grouped
 `tests/cases/*.inc` files. They remain one translation unit so shared fixtures, helpers, and test
 behavior stay compatible.
 
+## Performance telemetry architecture
+
+Performance telemetry is a sibling of `UiDiagnostics`. `UiDiagnostics` remains authoritative for
+the watchdog heartbeat, stall edges, slow scopes, human-readable diagnostics, and its recent text
+history. `PerformanceTelemetry` owns the fixed-layout performance trace and does not replace or
+format watchdog output.
+
+The final data path is:
+
+```text
+numeric producers
+  └─ PerformanceTelemetry facade
+       └─ bounded 512-slot MPSC ring
+            └─ service thread
+                 ├─ LinuxProcessMetrics sampling and interval aggregates
+                 ├─ TelemetryWriter buffering, low-storage checks, and rotation
+                 │    └─ explicit little-endian MFT v1 records
+                 └─ trace files under the configured telemetry output directory
+                      └─ laptop decoder / analyzer / comparison tools
+```
+
+The facade is the producer boundary. Application, screen, worker, cache, decoder, networking,
+download, HLS, and playback code publish only fixed POD records, enum context, or atomic gauges.
+Producers do not write files, read process or filesystem metrics, serialize strings, or block for
+telemetry. The bounded ring drops under pressure and exposes cumulative drops through health
+records. The service thread alone drains the ring, samples process metrics, emits the periodic
+aggregates, and owns the writer. `LinuxProcessMetrics` performs `/proc` and `statvfs` work only on
+that service thread; storage sampling follows the filesystem containing the configured output
+directory.
+
+`MftFormat` explicitly encodes the frozen MFT v1 header and records in little-endian order. The
+independent standard-library laptop decoder validates the same header, sizes, record layouts, and
+allowlisted enum values before analysis. The normative contract is
+[`telemetry/SCHEMA_V1.md`](../telemetry/SCHEMA_V1.md).
+
+The proven defaults are a 1000 ms base sample/aggregate cadence, a 10000 ms free-storage refresh,
+a 32768-byte writer buffer, 16 MiB rotation, four retained trace files, and a 128 MiB low-storage
+cutoff. Runtime configuration may only adjust the documented numeric settings and remains
+clamped by the implementation. Real-device observer-effect and low-storage evidence is recorded
+in the [performance telemetry benchmark](performance-telemetry-benchmark.md).
+
 ## Threading, local-first behavior, and persistence
 
 SDL event handling, screen updates, and rendering are nonblocking. HTTP requests, curl transfers,

@@ -30,3 +30,17 @@ python3 tools/telemetry/analyze.py trace.mft --csv-dir trace-analysis --cpu-coun
 
 Plots are optional and only attempted when explicitly requested with `--plot-dir`;
 matplotlib is never required for decoding or analysis.
+
+For repeated A/B/C observer-effect comparisons, first produce one summary JSON
+per run with `analyze.py`, then run:
+
+```sh
+python3 tools/telemetry/compare_runs.py \
+  --a a-1.json a-2.json --b b-1.json b-2.json --c c-1.json c-2.json
+python3 tools/telemetry/compare_runs.py --self-test
+```
+
+The comparison reports medians, min/max spread, B−A compile/variant deltas, and
+C−B runtime observer-effect deltas. The repository benchmark procedure is in
+`docs/performance-telemetry.md` and its initially `NOT RUN` result template is in
+`docs/performance-telemetry-benchmark.md`.

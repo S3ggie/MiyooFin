@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "DisplaySizing.hpp"
 #include "../net/RouteRequest.hpp"
 #include "UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
@@ -166,12 +167,13 @@ bool App::init()
         return false;
     }
 
-    int displayW = SCREEN_W;
-    int displayH = SCREEN_H;
     SDL_DisplayMode dm;
-    if (SDL_GetDesktopDisplayMode(0, &dm) == 0) {
-        displayW = dm.w;
-        displayH = dm.h;
+    const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
+    const auto dimensions = displayDimensionsFor(
+        haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
+    const int displayW = dimensions.width;
+    const int displayH = dimensions.height;
+    if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
         printf("[App] Display mode: %dx%d @ %d Hz\n", displayW, displayH, dm.refresh_rate);
     } else {
         printf("[App] Using fallback dimensions: %dx%d\n", displayW, displayH);
@@ -445,12 +447,16 @@ bool App::resumePlatform()
         return false;
     }
 
-    int displayW = SCREEN_W;
-    int displayH = SCREEN_H;
     SDL_DisplayMode dm;
-    if (SDL_GetDesktopDisplayMode(0, &dm) == 0) {
-        displayW = dm.w;
-        displayH = dm.h;
+    const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
+    const auto dimensions = displayDimensionsFor(
+        haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
+    const int displayW = dimensions.width;
+    const int displayH = dimensions.height;
+    if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
+        printf("[App] Display mode: %dx%d @ %d Hz\n", displayW, displayH, dm.refresh_rate);
+    } else {
+        printf("[App] Using fallback dimensions: %dx%d\n", displayW, displayH);
     }
 
     m_window = SDL_CreateWindow(

@@ -47,6 +47,7 @@
 #include "../src/ui/screens/SeriesScreen.hpp"
 #include "../src/ui/screens/MovieDetailsScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
+#include "../src/app/DisplaySizing.hpp"
 #include "../src/catalog/CatalogDb.hpp"
 #include "../src/app/UiDiagnostics.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
@@ -100,6 +101,23 @@ static void testCatalogDbLifecycle()
         CatalogDb db;
         db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync);
     }
+}
+
+static void testDisplaySizingFallback()
+{
+    std::printf("[test] SDL display sizing fallback\n");
+    const auto fallback = displayDimensionsFor(0, 0);
+    CHECK(fallback.width == SCREEN_W);
+    CHECK(fallback.height == SCREEN_H);
+
+    const auto negative = displayDimensionsFor(-1, 480);
+    CHECK(negative.width == SCREEN_W);
+    CHECK(negative.height == SCREEN_H);
+
+    const auto reported = displayDimensionsFor(640, 480);
+    CHECK(reported.width == 640);
+    CHECK(reported.height == 480);
+    std::printf("[test] SDL display sizing fallback OK\n");
 }
 
 static void testCatalogDbQueue()
@@ -753,6 +771,7 @@ static void testCatalogDbAuthoritativeReconcile()
 #include "cases/test_playback_ui.inc"
 int main()
 {
+    testDisplaySizingFallback();
     testCatalogDbLifecycle();
     testCatalogDbQueue();
     testCatalogDbPriorityOrdering();

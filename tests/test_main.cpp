@@ -120,10 +120,10 @@ static void testCatalogDbPriorityOrdering()
     auto firstBackground = std::make_shared<std::atomic_bool>(false);
     auto secondBackground = std::make_shared<std::atomic_bool>(false);
     CHECK(db.enqueueNoopForTest(
-              CatalogDbPriority::BackgroundSync, {0, firstBackground})
+              CatalogDbPriority::BackgroundSync, {0, 0, firstBackground})
           == CatalogDbEnqueueResult::Accepted);
     CHECK(db.enqueueNoopForTest(
-              CatalogDbPriority::BackgroundSync, {0, secondBackground})
+              CatalogDbPriority::BackgroundSync, {0, 0, secondBackground})
           == CatalogDbEnqueueResult::Accepted);
     CHECK(db.enqueueNoopForTest(CatalogDbPriority::InteractiveRead)
           == CatalogDbEnqueueResult::Accepted);
@@ -149,7 +149,7 @@ static void testCatalogDbCancellationAndGeneration()
     CatalogDb db;
     db.setWorkerPausedForTest(true);
     auto cancellation = std::make_shared<std::atomic_bool>(false);
-    CatalogDbJobMetadata cancelled{1, cancellation};
+    CatalogDbJobMetadata cancelled{1, 0, cancellation};
     CHECK(db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync, cancelled)
           == CatalogDbEnqueueResult::Accepted);
     cancellation->store(true);
@@ -164,7 +164,7 @@ static void testCatalogDbCancellationAndGeneration()
     CatalogDb generationDb;
     generationDb.setWorkerPausedForTest(true);
     generationDb.setGenerationForTest(1);
-    CatalogDbJobMetadata oldGeneration{1, {}};
+    CatalogDbJobMetadata oldGeneration{1, 0, {}};
     CHECK(generationDb.enqueueNoopForTest(CatalogDbPriority::BackgroundSync,
                                            oldGeneration)
           == CatalogDbEnqueueResult::Accepted);
@@ -190,6 +190,94 @@ static void testCatalogDbShutdownWithFullQueue()
     }
 }
 
+static void testCatalogDbScopeLifecycle()
+{
+    CatalogDb db;
+    const auto initialState = db.scopeState();
+    CHECK(initialState.requestedEpoch == 0);
+    CHECK(!initialState.configured && !initialState.ready);
+    CHECK(db.enqueueScopedNoopForTest(CatalogDbPriority::InteractiveRead)
+          == CatalogDbEnqueueResult::RejectedScopeNotReady);
+
+    db.setWorkerPausedForTest(true);
+    const auto epochA = db.configureScope("https://a.example", "user-a");
+    const auto epochB = db.configureScope("https://b.example", "user-a");
+    const auto epochC = db.configureScope("https://c.example", "user-a");
+    CHECK(epochA < epochB && epochB < epochC);
+    CHECK(!db.scopeState().ready);
+    CHECK(!db.canPublishForTest(epochA));
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    auto state = db.scopeState();
+    CHECK(state.requestedEpoch == epochC);
+    CHECK(state.configured && state.ready);
+    CHECK(state.status == CatalogDbScopeStatus::Ready);
+    CHECK(!db.canPublishForTest(epochA));
+    CHECK(db.canPublishForTest(epochC));
+    db.setWorkerPausedForTest(true);
+    const auto repeatedEpoch = db.configureScope("https://c.example", "user-a");
+    CHECK(repeatedEpoch > epochC);
+    CHECK(!db.scopeState().ready);
+    CHECK(!db.canPublishForTest(epochC));
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    state = db.scopeState();
+    CHECK(state.requestedEpoch == repeatedEpoch);
+    CHECK(state.configured && state.ready);
+    CHECK(db.canPublishForTest(repeatedEpoch));
+    db.setWorkerPausedForTest(true);
+    CHECK(db.enqueueScopedNoopForTest(CatalogDbPriority::InteractiveRead)
+          == CatalogDbEnqueueResult::Accepted);
+    const auto nextEpoch = db.configureScope("https://next.example", "user-a");
+    CHECK(nextEpoch > repeatedEpoch);
+    CHECK(!db.canPublishForTest(repeatedEpoch));
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    auto reports = db.jobReportsForTest();
+    CHECK(!reports.empty());
+    if (!reports.empty()) {
+        CHECK(reports.back().metadata.scopeEpoch == repeatedEpoch);
+        CHECK(reports.back().disposition == CatalogDbJobDisposition::Superseded);
+    }
+    state = db.scopeState();
+    CHECK(state.requestedEpoch == nextEpoch && state.ready);
+
+    db.setWorkerPausedForTest(true);
+    const auto deconfigured = db.deconfigureScope();
+    CHECK(deconfigured > nextEpoch);
+    CHECK(!db.scopeState().ready);
+    CHECK(!db.canPublishForTest(epochC));
+    CHECK(db.enqueueScopedNoopForTest(CatalogDbPriority::BackgroundSync)
+          == CatalogDbEnqueueResult::RejectedScopeNotReady);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    state = db.scopeState();
+    CHECK(!state.configured && !state.ready);
+    CHECK(state.status == CatalogDbScopeStatus::Unconfigured);
+}
+
+static void testCatalogDbInvalidScope()
+{
+    CatalogDb db;
+    db.setWorkerPausedForTest(true);
+    const auto epoch = db.configureScope("   ", "user");
+    CHECK(!db.scopeState().ready);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    const auto state = db.scopeState();
+    CHECK(state.requestedEpoch == epoch);
+    CHECK(!state.configured && !state.ready);
+    CHECK(state.status == CatalogDbScopeStatus::InvalidIdentity);
+
+    db.setWorkerPausedForTest(true);
+    const auto blankUserEpoch = db.configureScope("https://valid.example", " \t");
+    CHECK(blankUserEpoch > epoch);
+    CHECK(!db.scopeState().ready);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    CHECK(db.scopeState().status == CatalogDbScopeStatus::InvalidIdentity);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -208,6 +296,8 @@ int main()
     testCatalogDbPriorityOrdering();
     testCatalogDbCancellationAndGeneration();
     testCatalogDbShutdownWithFullQueue();
+    testCatalogDbScopeLifecycle();
+    testCatalogDbInvalidScope();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

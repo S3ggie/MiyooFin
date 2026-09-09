@@ -2,13 +2,14 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 #include <set>
 #define mutex recursive_mutex
 #include <sys/stat.h>
 #include <unistd.h>
 namespace miyoofin { namespace {
-constexpr unsigned V=1, MAX=100000, MAXS=1024*1024; std::recursive_mutex lock;
+constexpr unsigned V=1, MAX=100000, MAXS=1024*1024; std::recursive_mutex lock; std::atomic<unsigned> migrationGuardDepth{0};
 void u32(std::vector<unsigned char>&b,unsigned n){for(int i=0;i<4;i++)b.push_back(n>>(i*8));} void u64(std::vector<unsigned char>&b,unsigned long long n){for(int i=0;i<8;i++)b.push_back(n>>(i*8));}
 bool r32(const std::vector<unsigned char>&b,size_t&p,unsigned&n){if(p+4>b.size())return false;n=0;for(int i=0;i<4;i++)n|=(unsigned)b[p++]<<(i*8);return true;} bool r64(const std::vector<unsigned char>&b,size_t&p,unsigned long long&n){if(p+8>b.size())return false;n=0;for(int i=0;i<8;i++)n|=(unsigned long long)b[p++]<<(i*8);return true;}
 void str(std::vector<unsigned char>&b,const std::string&s){u32(b,s.size());b.insert(b.end(),s.begin(),s.end());} bool rst(const std::vector<unsigned char>&b,size_t&p,std::string&s){unsigned n;return r32(b,p,n)&&n<=MAXS&&p+n<=b.size()?(s.assign((const char*)&b[p],n),p+=n,true):false;}
@@ -19,8 +20,9 @@ void list(std::vector<unsigned char>&b,const std::map<std::string,std::vector<Me
 void mergeItems(std::vector<MediaItem>&into,const std::vector<MediaItem>&from){for(const auto&i:from){if(i.id.empty())continue;bool found=false;for(auto&old:into)if(old.id==i.id){old=i;found=true;break;}if(!found)into.push_back(i);}}
 bool loadForUpdate(const std::string&p,OfflineCatalogSnapshot&x,std::string*e){if(OfflineCatalog::load(p,x,e))return true;return e&&*e=="not found";}
 }
-OfflineCatalog::MigrationGuard::MigrationGuard() : m_lock(lock) {}
-OfflineCatalog::MigrationGuard::~MigrationGuard() = default;
+OfflineCatalog::MigrationGuard::MigrationGuard() : m_lock(lock) { migrationGuardDepth.fetch_add(1); }
+OfflineCatalog::MigrationGuard::~MigrationGuard() { if(m_lock.owns_lock())m_lock.unlock(); migrationGuardDepth.fetch_sub(1); }
+bool OfflineCatalog::MigrationGuard::activeForTest() { return migrationGuardDepth.load()!=0; }
 std::string OfflineCatalog::cachePath(const std::string&r,const std::string&s){return r+"/offline/"+s+"/catalog.v1";}
 bool OfflineCatalog::save(const std::string&p,const OfflineCatalogSnapshot&s,std::string*e){std::lock_guard<std::mutex>g(lock);auto q=p.find_last_of('/');if(q!=std::string::npos&&!dirs(p.substr(0,q))){if(e)*e="mkdir failed";return false;}std::vector<unsigned char>b={'M','F','O','C'};u32(b,V);u32(b,s.series.size());for(auto&a:s.series){str(b,a.first);item(b,a.second);}list(b,s.seasonsBySeries);list(b,s.episodesBySeason);std::string t=p+".tmp."+std::to_string((long long)getpid());FILE*f=fopen(t.c_str(),"wb");bool ok=f&&fwrite(b.data(),1,b.size(),f)==b.size()&&fflush(f)==0&&fsync(fileno(f))==0&&fclose(f)==0;if(!ok||rename(t.c_str(),p.c_str())){if(f)fclose(f);remove(t.c_str());if(e)*e="write failed";return false;}return true;}
 bool OfflineCatalog::load(const std::string&p,OfflineCatalogSnapshot&o,std::string*e){std::lock_guard<std::mutex>g(lock);FILE*f=fopen(p.c_str(),"rb");if(!f){if(e)*e="not found";return false;}fseek(f,0,SEEK_END);long z=ftell(f);fseek(f,0,SEEK_SET);if(z<8||z>128*1024*1024){fclose(f);if(e)*e="invalid size";return false;}std::vector<unsigned char>b(z);bool ok=fread(b.data(),1,b.size(),f)==b.size();fclose(f);size_t x=4;unsigned v,n;OfflineCatalogSnapshot t;if(!ok||memcmp(b.data(),"MFOC",4)||!r32(b,x,v)||v!=V||!r32(b,x,n)||n>MAX){if(e)*e="invalid catalog";return false;}while(n--){std::string k;MediaItem i;if(!rst(b,x,k)||!rit(b,x,i)){if(e)*e="invalid catalog";return false;}t.series[k]=std::move(i);}if(!rlist(b,x,t.seasonsBySeries)||!rlist(b,x,t.episodesBySeason)||x!=b.size()){if(e)*e="invalid catalog";return false;}o=std::move(t);return true;}

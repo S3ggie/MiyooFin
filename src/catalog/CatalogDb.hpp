@@ -247,6 +247,7 @@ public:
     void setLegacyMigrationFailureForTest(int failAfterRows,
                                           bool failValidation = false);
     void setLegacyMigrationAutoActivationForTest(bool enabled);
+    void setLegacyMigrationPauseForTest(bool paused);
     CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
@@ -367,6 +368,7 @@ private:
     int m_testLegacyMigrationFailAfterRows = -1;
     bool m_testLegacyMigrationFailValidation = false;
     bool m_testLegacyMigrationAutoActivation = true;
+    bool m_testLegacyMigrationPause = false;
     bool m_stopping = false;
     std::thread m_worker;
     sqlite3 *m_db = nullptr;

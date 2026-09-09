@@ -26,6 +26,10 @@ public:
         ~MigrationGuard();
         MigrationGuard(const MigrationGuard&) = delete;
         MigrationGuard& operator=(const MigrationGuard&) = delete;
+
+        // Host-test instrumentation for the actual migration critical
+        // section. This does not alter catalog behavior.
+        static bool activeForTest();
     private:
         std::unique_lock<std::recursive_mutex> m_lock;
     };

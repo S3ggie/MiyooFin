@@ -366,6 +366,118 @@ static void testCatalogDbLegacyContainerRelationshipRepair()
     removeCatalogMigrationTestPaths(paths);
 }
 
+static void testCatalogDbLegacyDuplicateEpisodes()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+
+    {
+        const std::string url = "https://sqlite-legacy-duplicate-same-"
+            + suffix + ".example";
+        const std::string user = "legacy-duplicate-same-user";
+        const auto paths = catalogMigrationTestPaths(url, user);
+        removeCatalogMigrationTestPaths(paths);
+        OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+        const MediaItem episode = snapshot.episodesBySeason.at(
+            "__task15_season_one__").front();
+        snapshot.episodesBySeason.at("__task15_season_one__").push_back(
+            episode);
+        MediaItem duplicate = episode;
+        duplicate.seriesId = "stale-series";
+        duplicate.seasonId = "stale-season";
+        snapshot.episodesBySeason.at("__task15_season_one__").push_back(
+            duplicate);
+        CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+        const std::string legacyBefore = readTestBytes(paths.legacyPath);
+        {
+            CatalogDb db;
+            const auto epoch = db.configureScope(url, user);
+            CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+            const auto state = db.scopeState();
+            CHECK(state.requestedEpoch == epoch && state.ready);
+            CHECK(state.migration.attempted && state.migration.succeeded);
+            const auto episodes = db.getEpisodes(
+                "__task15_season_one__").get();
+            CHECK(episodes.success && episodes.items.size() == 1);
+            if (episodes.items.size() == 1) {
+                CHECK(episodes.items.front().seriesId == "__task15_series__");
+                CHECK(episodes.items.front().seasonId
+                      == "__task15_season_one__");
+            }
+        }
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+        removeCatalogMigrationTestPaths(paths);
+    }
+
+    {
+        const std::string url = "https://sqlite-legacy-duplicate-stale-"
+            + suffix + ".example";
+        const std::string user = "legacy-duplicate-stale-user";
+        const auto paths = catalogMigrationTestPaths(url, user);
+        removeCatalogMigrationTestPaths(paths);
+        OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+        const MediaItem episode = snapshot.episodesBySeason.at(
+            "__task15_season_one__").front();
+        MediaItem stale = episode;
+        stale.progress = 0.1f;
+        stale.playbackPositionTicks = 1;
+        snapshot.episodesBySeason.at("__task15_season_two__").push_back(
+            stale);
+        CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+        const std::string legacyBefore = readTestBytes(paths.legacyPath);
+        {
+            CatalogDb db;
+            const auto epoch = db.configureScope(url, user);
+            CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+            const auto state = db.scopeState();
+            CHECK(state.requestedEpoch == epoch && state.ready);
+            CHECK(state.migration.attempted && state.migration.succeeded);
+            const auto firstSeason = db.getEpisodes(
+                "__task15_season_one__").get();
+            const auto staleSeason = db.getEpisodes(
+                "__task15_season_two__").get();
+            CHECK(firstSeason.success && firstSeason.items.size() == 1);
+            CHECK(staleSeason.success && staleSeason.items.empty());
+            if (firstSeason.items.size() == 1) {
+                CHECK(firstSeason.items.front().playbackPositionTicks
+                      == episode.playbackPositionTicks);
+            }
+        }
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+        removeCatalogMigrationTestPaths(paths);
+    }
+
+    {
+        const std::string url = "https://sqlite-legacy-duplicate-conflict-"
+            + suffix + ".example";
+        const std::string user = "legacy-duplicate-conflict-user";
+        const auto paths = catalogMigrationTestPaths(url, user);
+        removeCatalogMigrationTestPaths(paths);
+        OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+        MediaItem duplicate = snapshot.episodesBySeason.at(
+            "__task15_season_one__").front();
+        duplicate.seasonId = "__task15_season_two__";
+        snapshot.episodesBySeason.at("__task15_season_two__").push_back(
+            duplicate);
+        CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+        const std::string legacyBefore = readTestBytes(paths.legacyPath);
+        {
+            CatalogDb db;
+            db.setLegacyMigrationAutoActivationForTest(false);
+            const auto epoch = db.configureScope(url, user);
+            CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+            CHECK(db.scopeState().requestedEpoch == epoch);
+            const auto result = db.runLegacyMigrationForTest();
+            CHECK(!result.success);
+            CHECK(result.message
+                  == "legacy catalog contains duplicate media ID with conflicting hierarchy parents");
+            CHECK(access(paths.migratingPath.c_str(), F_OK) != 0);
+        }
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+        removeCatalogMigrationTestPaths(paths);
+    }
+}
+
 static void testOfflineCatalogMigrationGuardBlocksWriters()
 {
     const std::string suffix =
@@ -396,6 +508,66 @@ static void testOfflineCatalogMigrationGuardBlocksWriters()
     }
     writer.join();
     CHECK(writerFinished.load());
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static void testCatalogDbMigrationGuardCoordinatesActualImport()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const auto paths = catalogMigrationTestPaths(
+        "https://legacy-migration-actual-guard-" + suffix + ".example",
+        "legacy-migration-actual-guard-user");
+    removeCatalogMigrationTestPaths(paths);
+    const auto snapshot = makeCatalogMigrationSnapshot();
+    CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+    const std::string legacyBefore = readTestBytes(paths.legacyPath);
+    {
+        CatalogDb db;
+        db.setLegacyMigrationAutoActivationForTest(false);
+        db.setLegacyMigrationPauseForTest(true);
+        CHECK(db.configureScope(
+                  "https://legacy-migration-actual-guard-" + suffix
+                      + ".example",
+                  "legacy-migration-actual-guard-user") != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+
+        CatalogDbTestResult migration;
+        std::atomic<bool> migrationFinished(false);
+        std::thread migrationThread([&] {
+            migration = db.runLegacyMigrationForTest();
+            migrationFinished.store(true);
+        });
+        bool guardObserved = false;
+        for (int i = 0; i < 1000 && !guardObserved; ++i) {
+            guardObserved = OfflineCatalog::MigrationGuard::activeForTest();
+            if (!guardObserved) {
+                std::this_thread::yield();
+            }
+        }
+        CHECK(guardObserved);
+
+        std::atomic<bool> writerStarted(false);
+        std::atomic<bool> writerFinished(false);
+        std::thread writer([&] {
+            writerStarted.store(true);
+            OfflineCatalog::save(paths.legacyPath, snapshot);
+            writerFinished.store(true);
+        });
+        for (int i = 0; i < 1000 && !writerStarted.load(); ++i) {
+            std::this_thread::yield();
+        }
+        CHECK(writerStarted.load());
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(!writerFinished.load());
+
+        db.setLegacyMigrationPauseForTest(false);
+        migrationThread.join();
+        writer.join();
+        CHECK(migrationFinished.load() && migration.success);
+        CHECK(writerFinished.load());
+    }
+    CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
     removeCatalogMigrationTestPaths(paths);
 }
 

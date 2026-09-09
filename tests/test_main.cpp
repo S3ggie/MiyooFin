@@ -742,6 +742,7 @@ static void testCatalogDbAuthoritativeReconcile()
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
 #include "cases/test_catalog_migration.inc"
+#include "cases/test_catalog_parity.inc"
 #include "cases/test_downloads.inc"
 #include "cases/test_telemetry.inc"
 // -------------------------------------------------------------------
@@ -772,6 +773,10 @@ int main()
     testCatalogDbMigrationPathError();
     testCatalogDbLegacyMigration();
     testCatalogDbLegacyMigrationFailures();
+    testCatalogDbLegacySqliteHierarchyParity();
+    testCatalogDbProjectionParity();
+    testCatalogDbDownloadFallbackParity();
+    testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

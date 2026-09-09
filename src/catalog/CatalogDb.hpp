@@ -107,6 +107,12 @@ struct CatalogDbTestResult {
     bool foreignKeyCascade = false;
     bool checkConstraints = false;
     bool singletonSeeded = false;
+    bool codecPopulatedKinds = false;
+    bool codecDefaults = false;
+    bool codecBoundaries = false;
+    bool codecInvalidKind = false;
+    bool codecMissingId = false;
+    bool codecNullableRelationships = false;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::string foreignKeys;
@@ -158,6 +164,7 @@ public:
     CatalogDbTestResult setSchemaMetadataForTest(std::int64_t applicationId,
                                                  std::int64_t userVersion);
     CatalogDbTestResult runMigrationRollbackForTest();
+    CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
 

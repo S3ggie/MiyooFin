@@ -469,6 +469,24 @@ static void testCatalogDbSchemaOpenPolicy()
     CHECK(created.runStatementReuseForTest().success);
 }
 
+static void testCatalogDbMediaItemCodec()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-media-item-codec.example",
+                                        "codec-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    const auto result = db.runMediaItemCodecForTest();
+    CHECK(result.success && result.workerOwned);
+    CHECK(result.codecPopulatedKinds);
+    CHECK(result.codecDefaults);
+    CHECK(result.codecBoundaries);
+    CHECK(result.codecInvalidKind);
+    CHECK(result.codecMissingId);
+    CHECK(result.codecNullableRelationships);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -492,6 +510,7 @@ int main()
     testCatalogDbSqliteOwnership();
     testCatalogDbSchemaV1();
     testCatalogDbSchemaOpenPolicy();
+    testCatalogDbMediaItemCodec();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

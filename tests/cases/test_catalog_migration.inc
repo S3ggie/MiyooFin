@@ -1,7 +1,9 @@
+#include <atomic>
 #include <cerrno>
 #include <fstream>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 
 #include "../../vendor/sqlite/sqlite3.h"
@@ -316,6 +318,84 @@ static void testCatalogDbLegacyMigration()
         CHECK(access(paths.migratingPath.c_str(), F_OK) != 0);
         CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
     }
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static void testCatalogDbLegacyContainerRelationshipRepair()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url = "https://sqlite-legacy-container-repair-"
+        + suffix + ".example";
+    const std::string user = "legacy-container-repair-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+    for (auto &entry : snapshot.seasonsBySeries) {
+        for (auto &season : entry.second) {
+            season.seriesId.clear();
+        }
+    }
+    for (auto &entry : snapshot.episodesBySeason) {
+        for (auto &episode : entry.second) {
+            episode.seasonId = "legacy-stale-parent";
+        }
+    }
+    CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+    const std::string legacyBefore = readTestBytes(paths.legacyPath);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(url, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && state.ready);
+        CHECK(state.migration.attempted && state.migration.succeeded);
+        const auto seasons = db.getSeasons("__task15_series__").get();
+        CHECK(seasons.success && seasons.items.size() == 2);
+        if (seasons.items.size() == 2) {
+            CHECK(seasons.items[0].seriesId == "__task15_series__");
+            CHECK(seasons.items[1].seriesId == "__task15_series__");
+        }
+        const auto episodes = db.getEpisodes("__task15_season_one__").get();
+        CHECK(episodes.success && episodes.items.size() == 1);
+        if (episodes.items.size() == 1) {
+            CHECK(episodes.items[0].seasonId == "__task15_season_one__");
+        }
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+    }
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static void testOfflineCatalogMigrationGuardBlocksWriters()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const auto paths = catalogMigrationTestPaths(
+        "https://legacy-migration-guard-" + suffix + ".example",
+        "legacy-migration-guard-user");
+    removeCatalogMigrationTestPaths(paths);
+    const auto snapshot = makeCatalogMigrationSnapshot();
+    CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+
+    std::atomic<bool> writerStarted(false);
+    std::atomic<bool> writerFinished(false);
+    std::thread writer;
+    {
+        OfflineCatalog::MigrationGuard guard;
+        writer = std::thread([&] {
+            writerStarted.store(true);
+            OfflineCatalog::save(paths.legacyPath, snapshot);
+            writerFinished.store(true);
+        });
+        for (int i = 0; i < 100 && !writerStarted.load(); ++i) {
+            std::this_thread::yield();
+        }
+        CHECK(writerStarted.load());
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(!writerFinished.load());
+    }
+    writer.join();
+    CHECK(writerFinished.load());
     removeCatalogMigrationTestPaths(paths);
 }
 

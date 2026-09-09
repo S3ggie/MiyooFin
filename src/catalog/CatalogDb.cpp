@@ -2445,6 +2445,7 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
         return result;
     }
 
+    OfflineCatalog::MigrationGuard legacyGuard;
     const std::string legacyPath = OfflineCatalog::cachePath("cache", scopeKey);
     const std::string finalPath = catalogPath(scopeKey);
     const std::string tempPath = migratingPath(scopeKey);
@@ -2473,7 +2474,11 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
             seasons = seasonsIt->second;
         }
         std::map<std::string, std::vector<MediaItem>> episodesBySeason;
-        for (const auto &season : seasons) {
+        for (auto &season : seasons) {
+            // The legacy containers are authoritative for hierarchy links;
+            // older writers did not always populate the denormalized fields.
+            season.seriesId = series.id;
+            season.seasonId.clear();
             seasonIds.insert(season.id);
             const auto episodesIt = snapshot.episodesBySeason.find(season.id);
             if (episodesIt != snapshot.episodesBySeason.end()) {
@@ -2481,6 +2486,10 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
             } else {
                 episodesBySeason.emplace(season.id,
                                          std::vector<MediaItem>());
+            }
+            for (auto &episode : episodesBySeason.at(season.id)) {
+                episode.seriesId = series.id;
+                episode.seasonId = season.id;
             }
         }
         if (!validateHierarchyInput(series, seasons, episodesBySeason, error)) {

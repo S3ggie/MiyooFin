@@ -3,6 +3,7 @@
 
 #include "../data/MediaItem.hpp"
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,18 @@ struct OfflineCatalogSnapshot {
 };
 class OfflineCatalog {
 public:
+    // Blocks legacy catalog readers and writers while a migration imports the
+    // source snapshot.  The guard is recursive with the existing catalog lock
+    // so migration may still use OfflineCatalog::load on the worker thread.
+    class MigrationGuard {
+    public:
+        MigrationGuard();
+        ~MigrationGuard();
+        MigrationGuard(const MigrationGuard&) = delete;
+        MigrationGuard& operator=(const MigrationGuard&) = delete;
+    private:
+        std::unique_lock<std::recursive_mutex> m_lock;
+    };
     static std::string cachePath(const std::string &root, const std::string &scope);
     static bool save(const std::string &path, const OfflineCatalogSnapshot &snapshot, std::string *error=nullptr);
     static bool load(const std::string &path, OfflineCatalogSnapshot &snapshot, std::string *error=nullptr);

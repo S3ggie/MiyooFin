@@ -772,6 +772,8 @@ int main()
     testCatalogDbMigrationFutureFinalPreserved();
     testCatalogDbMigrationPathError();
     testCatalogDbLegacyMigration();
+    testCatalogDbLegacyContainerRelationshipRepair();
+    testOfflineCatalogMigrationGuardBlocksWriters();
     testCatalogDbLegacyMigrationFailures();
     testCatalogDbAutomaticScopeActivation();
     testCatalogDbLegacySqliteHierarchyParity();

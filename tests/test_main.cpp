@@ -11,6 +11,7 @@
 #include <cstring>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <thread>
 #include <curl/curl.h>
 #include <string>
@@ -62,18 +63,6 @@ using namespace miyoofin;
 
 static int g_failures = 0;
 
-static void testCatalogDbLifecycle()
-{
-    for (int i = 0; i < 20; ++i) {
-        CatalogDb db;
-    }
-
-    {
-        CatalogDb db;
-        db.enqueueNoopForTest();
-    }
-}
-
 #define CHECK(cond) \
     do { \
         if (!(cond)) { \
@@ -91,6 +80,116 @@ static void testCatalogDbLifecycle()
         } \
     } while (0)
 
+static void testCatalogDbLifecycle()
+{
+    for (int i = 0; i < 20; ++i) {
+        CatalogDb db;
+    }
+
+    {
+        CatalogDb db;
+        db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync);
+    }
+}
+
+static void testCatalogDbQueue()
+{
+    CatalogDb db;
+    db.setWorkerPausedForTest(true);
+    for (std::size_t i = 0; i < CatalogDb::kMaxPendingJobs; ++i) {
+        CHECK(db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync)
+              == CatalogDbEnqueueResult::Accepted);
+    }
+    CHECK(db.enqueueNoopForTest(CatalogDbPriority::Maintenance)
+          == CatalogDbEnqueueResult::RejectedFull);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+
+    const auto reports = db.jobReportsForTest();
+    CHECK(reports.size() == CatalogDb::kMaxPendingJobs);
+    for (const auto &report : reports) {
+        CHECK(report.priority == CatalogDbPriority::BackgroundSync);
+        CHECK(report.disposition == CatalogDbJobDisposition::Completed);
+    }
+}
+
+static void testCatalogDbPriorityOrdering()
+{
+    CatalogDb db;
+    db.setWorkerPausedForTest(true);
+    auto firstBackground = std::make_shared<std::atomic_bool>(false);
+    auto secondBackground = std::make_shared<std::atomic_bool>(false);
+    CHECK(db.enqueueNoopForTest(
+              CatalogDbPriority::BackgroundSync, {0, firstBackground})
+          == CatalogDbEnqueueResult::Accepted);
+    CHECK(db.enqueueNoopForTest(
+              CatalogDbPriority::BackgroundSync, {0, secondBackground})
+          == CatalogDbEnqueueResult::Accepted);
+    CHECK(db.enqueueNoopForTest(CatalogDbPriority::InteractiveRead)
+          == CatalogDbEnqueueResult::Accepted);
+    CHECK(db.enqueueNoopForTest(CatalogDbPriority::ForegroundMetadataWrite)
+          == CatalogDbEnqueueResult::Accepted);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+
+    const auto reports = db.jobReportsForTest();
+    CHECK(reports.size() == 4);
+    if (reports.size() == 4) {
+        CHECK(reports[0].priority == CatalogDbPriority::InteractiveRead);
+        CHECK(reports[1].priority == CatalogDbPriority::ForegroundMetadataWrite);
+        CHECK(reports[2].priority == CatalogDbPriority::BackgroundSync);
+        CHECK(reports[3].priority == CatalogDbPriority::BackgroundSync);
+        CHECK(reports[2].metadata.cancellation == firstBackground);
+        CHECK(reports[3].metadata.cancellation == secondBackground);
+    }
+}
+
+static void testCatalogDbCancellationAndGeneration()
+{
+    CatalogDb db;
+    db.setWorkerPausedForTest(true);
+    auto cancellation = std::make_shared<std::atomic_bool>(false);
+    CatalogDbJobMetadata cancelled{1, cancellation};
+    CHECK(db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync, cancelled)
+          == CatalogDbEnqueueResult::Accepted);
+    cancellation->store(true);
+    db.setWorkerPausedForTest(false);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(1)));
+    auto reports = db.jobReportsForTest();
+    CHECK(reports.size() == 1);
+    if (reports.size() == 1) {
+        CHECK(reports[0].disposition == CatalogDbJobDisposition::Cancelled);
+    }
+
+    CatalogDb generationDb;
+    generationDb.setWorkerPausedForTest(true);
+    generationDb.setGenerationForTest(1);
+    CatalogDbJobMetadata oldGeneration{1, {}};
+    CHECK(generationDb.enqueueNoopForTest(CatalogDbPriority::BackgroundSync,
+                                           oldGeneration)
+          == CatalogDbEnqueueResult::Accepted);
+    generationDb.setGenerationForTest(2);
+    generationDb.setWorkerPausedForTest(false);
+    CHECK(generationDb.waitForIdleForTest(std::chrono::seconds(1)));
+    reports = generationDb.jobReportsForTest();
+    CHECK(reports.size() == 1);
+    if (reports.size() == 1) {
+        CHECK(reports[0].disposition == CatalogDbJobDisposition::Superseded);
+    }
+}
+
+static void testCatalogDbShutdownWithFullQueue()
+{
+    {
+        CatalogDb db;
+        db.setWorkerPausedForTest(true);
+        for (std::size_t i = 0; i < CatalogDb::kMaxPendingJobs; ++i) {
+            CHECK(db.enqueueNoopForTest(CatalogDbPriority::Maintenance)
+                  == CatalogDbEnqueueResult::Accepted);
+        }
+    }
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -105,6 +204,10 @@ static void testCatalogDbLifecycle()
 int main()
 {
     testCatalogDbLifecycle();
+    testCatalogDbQueue();
+    testCatalogDbPriorityOrdering();
+    testCatalogDbCancellationAndGeneration();
+    testCatalogDbShutdownWithFullQueue();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

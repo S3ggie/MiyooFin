@@ -242,12 +242,13 @@ check-miyoo-libs:
 # OnionOS cross-compilation via Docker
 # -------------------------------------------------------------------
 DOCKER_TAG := miyoofin-toolchain
+DOCKER_USER := $(shell id -u):$(shell id -g)
 ARM_TARGET := output/build-arm/miyoofin
 
 .PHONY: onionos
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
-	docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
+	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
 	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
@@ -318,7 +319,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
 	@echo "  Bundling ARM shared libraries from toolchain..."
-	@docker run --rm -v $(PWD)/$(PACKAGE_DIR)/lib:/out miyoofin-toolchain \
+	@docker run --rm --user $(DOCKER_USER) -v $(PWD)/$(PACKAGE_DIR)/lib:/out miyoofin-toolchain \
 	    bash -c '\
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0 /out/ && \
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0.18.2 /out/ && \

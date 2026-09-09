@@ -240,6 +240,8 @@ public:
     CatalogDbTestResult setSchemaMetadataForTest(std::int64_t applicationId,
                                                  std::int64_t userVersion);
     CatalogDbTestResult runMigrationRollbackForTest();
+    CatalogDbTestResult runLegacyMigrationForTest(int failAfterRows = -1,
+                                                  bool failValidation = false);
     CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
@@ -328,6 +330,9 @@ private:
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
+    CatalogDbTestResult migrateLegacyCatalogForWorker(
+        const std::string &scopeKey, std::uint64_t scopeEpoch,
+        int failAfterRows, bool failValidation);
     CatalogDbTestResult runTestCommand(unsigned char operation,
                                        const std::string &value = {});
 

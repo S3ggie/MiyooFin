@@ -147,7 +147,9 @@ static void testCatalogDbMigrationPathStates()
             CHECK(state.migration.migratingCleanupCandidate
                   == expected[index].cleanupCandidate);
             CHECK(!state.migration.pathError);
-            CHECK(state.ready);
+            CHECK(state.ready == (expected[index].final
+                                  || (!expected[index].legacy
+                                      && !expected[index].migrating)));
         }
         CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
         CHECK(readTestBytes(paths.migratingPath) == migratingBefore);
@@ -215,4 +217,173 @@ static void testCatalogDbMigrationPathError()
     CHECK(state.migration.decision == CatalogDbMigrationDecision::PathError);
     CHECK(state.migration.pathError);
     removeCatalogMigrationTestPaths(paths);
+}
+
+OfflineCatalogSnapshot makeCatalogMigrationSnapshot()
+{
+    OfflineCatalogSnapshot snapshot;
+    MediaItem series;
+    series.id = "__task15_series__";
+    series.type = "show";
+    series.title = "München 世界";
+    series.overview = "A complete migration fixture";
+    series.year = 2025;
+    series.rating = 8.5f;
+    series.genre = "Drama";
+    series.genres = {"Drama", "Science Fiction"};
+    series.etag = "task15-series-etag";
+    series.played = true;
+    series.progress = 0.625f;
+    series.playbackPositionTicks = 1234567;
+    series.imageTags["Primary"] = "series-image-tag";
+    series.artR = 10;
+    series.artG = 20;
+    series.artB = 30;
+
+    MediaItem seasonOne;
+    seasonOne.id = "__task15_season_one__";
+    seasonOne.type = "season";
+    seasonOne.title = "Season One";
+    seasonOne.seriesId = series.id;
+    seasonOne.indexNumber = 1;
+    seasonOne.imageTags["Primary"] = "season-one-tag";
+
+    MediaItem seasonTwo = seasonOne;
+    seasonTwo.id = "__task15_season_two__";
+    seasonTwo.title = "Season Two";
+    seasonTwo.indexNumber = 2;
+
+    MediaItem episode;
+    episode.id = "__task15_episode__";
+    episode.type = "episode";
+    episode.title = "Episode 世界";
+    episode.seriesId = series.id;
+    episode.seasonId = seasonOne.id;
+    episode.indexNumber = 3;
+    episode.parentIndexNumber = 1;
+    episode.runTimeTicks = 9876543;
+    episode.playbackPositionTicks = 3456789;
+    episode.progress = 0.35f;
+    episode.genre = "Mystery";
+    episode.genres = {"Mystery"};
+    episode.imageTags["Primary"] = "episode-tag";
+
+    snapshot.series.emplace(series.id, series);
+    snapshot.seasonsBySeries[series.id] = {seasonOne, seasonTwo};
+    snapshot.episodesBySeason[seasonOne.id] = {episode};
+    snapshot.episodesBySeason[seasonTwo.id] = {};
+    return snapshot;
+}
+
+static void testCatalogDbLegacyMigration()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url = "https://sqlite-legacy-import-" + suffix
+        + ".example";
+    const std::string user = "legacy-import-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    const OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+    CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+    const std::string legacyBefore = readTestBytes(paths.legacyPath);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(url, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        CHECK(!db.scopeState().ready);
+        const auto migration = db.runLegacyMigrationForTest();
+        CHECK(migration.success && migration.workerOwned);
+        CHECK(db.scopeState().requestedEpoch == epoch
+              && db.scopeState().ready);
+        const auto schema = db.runSchemaDiagnosticsForTest();
+        CHECK(schema.success && schema.applicationId == 0x4D59464E
+              && schema.userVersion == 1);
+        const auto seasons = db.getSeasons("__task15_series__").get();
+        CHECK(seasons.success && seasons.items.size() == 2);
+        if (seasons.items.size() == 2) {
+            CHECK(seasons.items[0].id == "__task15_season_one__");
+            CHECK(seasons.items[1].id == "__task15_season_two__");
+            CHECK(seasons.items[0].imageTags.at("Primary") == "season-one-tag");
+        }
+        const auto episodes = db.getEpisodes("__task15_season_one__").get();
+        CHECK(episodes.success && episodes.items.size() == 1);
+        if (episodes.items.size() == 1) {
+            CHECK(episodes.items[0].title == "Episode 世界");
+            CHECK(episodes.items[0].playbackPositionTicks == 3456789);
+            CHECK(episodes.items[0].genres == std::vector<std::string>{"Mystery"});
+            CHECK(episodes.items[0].imageTags.at("Primary") == "episode-tag");
+        }
+        CHECK(access(paths.migratingPath.c_str(), F_OK) != 0);
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+    }
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static void testCatalogDbLegacyMigrationFailures()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const auto runFailure = [&](int index, int failAfterRows,
+                                bool failValidation, bool corruptSource,
+                                bool staleTemp) {
+        const std::string url = "https://sqlite-legacy-failure-" + suffix
+            + "-" + std::to_string(index) + ".example";
+        const std::string user = "legacy-failure-user-" + std::to_string(index);
+        const auto paths = catalogMigrationTestPaths(url, user);
+        removeCatalogMigrationTestPaths(paths);
+        if (corruptSource) {
+            CHECK(makeCatalogMigrationTestDirectory(paths.offlineDirectory));
+            writeCatalogMigrationFile(paths.legacyPath, "truncated legacy");
+        } else {
+            CHECK(OfflineCatalog::save(paths.legacyPath,
+                                       makeCatalogMigrationSnapshot()));
+        }
+        const std::string legacyBefore = readTestBytes(paths.legacyPath);
+        if (staleTemp) {
+            CHECK(makeCatalogMigrationTestDirectory(paths.libraryDirectory));
+            writeCatalogMigrationFile(paths.migratingPath, "interrupted temp");
+        }
+        {
+            CatalogDb db;
+            const auto epoch = db.configureScope(url, user);
+            CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+            CHECK(!db.scopeState().ready);
+            const auto migration = db.runLegacyMigrationForTest(
+                failAfterRows, failValidation);
+            CHECK(!migration.success);
+            CHECK(db.scopeState().requestedEpoch == epoch);
+            CHECK(!db.scopeState().ready);
+            CHECK(access(paths.finalPath.c_str(), F_OK) != 0);
+            CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+            if (staleTemp) {
+                CHECK(readTestBytes(paths.migratingPath) != "");
+            }
+        }
+        removeCatalogMigrationTestPaths(paths);
+    };
+
+    runFailure(0, -1, false, true, false);
+    runFailure(1, 1, false, false, false);
+    runFailure(2, -1, true, false, false);
+
+    const std::string interruptedUrl = "https://sqlite-legacy-interrupted-"
+        + suffix + ".example";
+    const std::string interruptedUser = "legacy-interrupted-user";
+    const auto interrupted =
+        catalogMigrationTestPaths(interruptedUrl, interruptedUser);
+    removeCatalogMigrationTestPaths(interrupted);
+    CHECK(OfflineCatalog::save(interrupted.legacyPath,
+                               makeCatalogMigrationSnapshot()));
+    CHECK(makeCatalogMigrationTestDirectory(interrupted.libraryDirectory));
+    writeCatalogMigrationFile(interrupted.migratingPath, "interrupted temp");
+    {
+        CatalogDb db;
+        CHECK(db.configureScope(interruptedUrl, interruptedUser) != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto migration = db.runLegacyMigrationForTest();
+        CHECK(migration.success && db.scopeState().ready);
+        CHECK(access(interrupted.migratingPath.c_str(), F_OK) != 0);
+    }
+    removeCatalogMigrationTestPaths(interrupted);
 }

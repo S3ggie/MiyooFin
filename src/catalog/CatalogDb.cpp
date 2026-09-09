@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <limits>
 #include <set>
 #include <sys/stat.h>
@@ -38,6 +39,7 @@ constexpr unsigned char kMediaItemCodecOperation = 11;
 constexpr unsigned char kMediaItemCollectionsOperation = 12;
 constexpr unsigned char kSeedHierarchyQueryOperation = 13;
 constexpr unsigned char kClearHierarchyQueryOperation = 14;
+constexpr unsigned char kLegacyMigrationOperation = 15;
 constexpr std::size_t kMaxHierarchyQueryRows = 128;
 constexpr std::size_t kMaxReconcileSeries = 4096;
 
@@ -758,6 +760,14 @@ CatalogDbTestResult CatalogDb::setSchemaMetadataForTest(
 CatalogDbTestResult CatalogDb::runMigrationRollbackForTest()
 {
     return runTestCommand(kMigrationRollbackOperation);
+}
+
+CatalogDbTestResult CatalogDb::runLegacyMigrationForTest(
+    int failAfterRows, bool failValidation)
+{
+    return runTestCommand(
+        kLegacyMigrationOperation,
+        std::to_string(failAfterRows) + ":" + (failValidation ? "1" : "0"));
 }
 
 CatalogDbTestResult CatalogDb::runMediaItemCodecForTest()
@@ -2194,6 +2204,16 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         }
         return false;
     }
+    if (!migrationState.finalPresent
+        && (migrationState.legacyPresent || migrationState.migratingPresent)) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command.epoch == m_requestedEpoch) {
+            m_scopeStatus = CatalogDbScopeStatus::Pending;
+            m_lastError = CatalogDbErrorCategory::None;
+            m_openState = CatalogDbOpenState::NotAttempted;
+        }
+        return false;
+    }
     const std::size_t slash = path.find_last_of('/');
     std::string error;
     if (slash == std::string::npos || !makeDirectories(path.substr(0, slash))) {
@@ -2295,11 +2315,526 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     return true;
 }
 
+CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
+    const std::string &scopeKey, std::uint64_t scopeEpoch,
+    int failAfterRows, bool failValidation)
+{
+    assert(std::this_thread::get_id() == m_worker.get_id());
+    CatalogDbTestResult result;
+    result.workerOwned = true;
+    const auto scopeIsCurrent = [&] {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return !m_stopping && m_requestedEpoch == scopeEpoch
+            && m_requestedScopeKey == scopeKey;
+    };
+    const auto setFailure = [&](CatalogDbErrorCategory error,
+                                const std::string &message) {
+        result.error = error;
+        result.message = message;
+    };
+    if (!scopeIsCurrent()) {
+        setFailure(CatalogDbErrorCategory::Superseded,
+                   "legacy migration scope was superseded");
+        return result;
+    }
+
+    const CatalogDbMigrationState initialState = inspectMigrationState(scopeKey);
+    if (initialState.pathError) {
+        setFailure(CatalogDbErrorCategory::CorruptOrIo,
+                   "catalog migration paths are not accessible");
+        return result;
+    }
+    if (initialState.finalPresent) {
+        setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                   "final catalog database is already authoritative");
+        return result;
+    }
+    if (!initialState.legacyPresent) {
+        setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                   "legacy catalog is not available for import");
+        return result;
+    }
+
+    const std::string legacyPath = OfflineCatalog::cachePath("cache", scopeKey);
+    const std::string finalPath = catalogPath(scopeKey);
+    const std::string tempPath = migratingPath(scopeKey);
+    OfflineCatalogSnapshot snapshot;
+    std::string error;
+    if (!OfflineCatalog::load(legacyPath, snapshot, &error)) {
+        setFailure(CatalogDbErrorCategory::CorruptOrIo,
+                   error.empty() ? "legacy catalog could not be read" : error);
+        return result;
+    }
+
+    std::vector<MediaItem> importItems;
+    std::map<std::string, MediaItem> expectedById;
+    std::set<std::string> seriesIds;
+    std::set<std::string> seasonIds;
+    for (const auto &entry : snapshot.series) {
+        const MediaItem &series = entry.second;
+        if (entry.first != series.id || !seriesIds.insert(series.id).second) {
+            setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                       "legacy catalog contains an invalid series key");
+            return result;
+        }
+        std::vector<MediaItem> seasons;
+        const auto seasonsIt = snapshot.seasonsBySeries.find(series.id);
+        if (seasonsIt != snapshot.seasonsBySeries.end()) {
+            seasons = seasonsIt->second;
+        }
+        std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+        for (const auto &season : seasons) {
+            seasonIds.insert(season.id);
+            const auto episodesIt = snapshot.episodesBySeason.find(season.id);
+            if (episodesIt != snapshot.episodesBySeason.end()) {
+                episodesBySeason.emplace(season.id, episodesIt->second);
+            } else {
+                episodesBySeason.emplace(season.id,
+                                         std::vector<MediaItem>());
+            }
+        }
+        if (!validateHierarchyInput(series, seasons, episodesBySeason, error)) {
+            setFailure(CatalogDbErrorCategory::ConfigurationFailed, error);
+            return result;
+        }
+        const auto addExpected = [&](const MediaItem &item) {
+            return expectedById.emplace(item.id, item).second;
+        };
+        if (!addExpected(series)) {
+            setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                       "legacy catalog contains duplicate media IDs");
+            return result;
+        }
+        importItems.push_back(series);
+        for (const auto &season : seasons) {
+            if (!addExpected(season)) {
+                setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                           "legacy catalog contains duplicate media IDs");
+                return result;
+            }
+            importItems.push_back(season);
+            for (const auto &episode : episodesBySeason.at(season.id)) {
+                if (!addExpected(episode)) {
+                    setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                               "legacy catalog contains duplicate media IDs");
+                    return result;
+                }
+                importItems.push_back(episode);
+            }
+        }
+    }
+    for (const auto &entry : snapshot.seasonsBySeries) {
+        if (!seriesIds.count(entry.first)) {
+            setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                       "legacy catalog contains an orphan season list");
+            return result;
+        }
+    }
+    for (const auto &entry : snapshot.episodesBySeason) {
+        if (!seasonIds.count(entry.first)) {
+            setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                       "legacy catalog contains orphan episodes");
+            return result;
+        }
+    }
+
+    const auto removePathIfPresent = [&](const std::string &path) {
+        if (::remove(path.c_str()) == 0 || errno == ENOENT) {
+            return true;
+        }
+        error = "could not replace stale migration file";
+        return false;
+    };
+    const std::string tempJournal = tempPath + "-journal";
+    const std::string tempWal = tempPath + "-wal";
+    const std::string tempShm = tempPath + "-shm";
+    if (!scopeIsCurrent()) {
+        setFailure(CatalogDbErrorCategory::Superseded,
+                   "legacy migration scope was superseded");
+        return result;
+    }
+    if (!removePathIfPresent(tempPath)
+        || !removePathIfPresent(tempJournal)
+        || !removePathIfPresent(tempWal)
+        || !removePathIfPresent(tempShm)) {
+        setFailure(CatalogDbErrorCategory::CorruptOrIo, error);
+        return result;
+    }
+
+    const std::size_t slash = tempPath.find_last_of('/');
+    if (slash == std::string::npos
+        || !makeDirectories(tempPath.substr(0, slash))) {
+        setFailure(CatalogDbErrorCategory::CorruptOrIo,
+                   "could not create catalog migration directory");
+        return result;
+    }
+    sqlite3 *temporary = nullptr;
+    const int openRc = sqlite3_open_v2(
+        tempPath.c_str(), &temporary,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
+    if (openRc != SQLITE_OK || !temporary) {
+        if (temporary) {
+            sqlite3_close(temporary);
+        }
+        setFailure(CatalogDbErrorCategory::CorruptOrIo,
+                   "could not open temporary catalog database");
+        return result;
+    }
+    sqlite3_extended_result_codes(temporary, 1);
+    const auto closeTemporary = [&] {
+        if (temporary) {
+            sqlite3_close(temporary);
+            temporary = nullptr;
+        }
+    };
+    const auto failTemporary = [&](CatalogDbErrorCategory category,
+                                   const std::string &message) {
+        closeTemporary();
+        removePathIfPresent(tempPath);
+        removePathIfPresent(tempJournal);
+        removePathIfPresent(tempWal);
+        removePathIfPresent(tempShm);
+        setFailure(category, message);
+        return result;
+    };
+    if (!exec(temporary, "PRAGMA foreign_keys = ON;", error)
+        || !exec(temporary, "PRAGMA trusted_schema = OFF;", error)
+        || !exec(temporary, "PRAGMA journal_mode = DELETE;", error)
+        || !exec(temporary, "PRAGMA synchronous = FULL;", error)
+        || !exec(temporary, "PRAGMA locking_mode = NORMAL;", error)) {
+        return failTemporary(CatalogDbErrorCategory::CorruptOrIo, error);
+    }
+    CatalogDbOpenState temporaryOpenState = CatalogDbOpenState::NotAttempted;
+    if (!ensureSchema(temporary, temporaryOpenState, error)
+        || temporaryOpenState != CatalogDbOpenState::CreatedV1) {
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed,
+                             error.empty() ? "temporary schema creation failed"
+                                            : error);
+    }
+
+    sqlite3_stmt *upsert = nullptr;
+    sqlite3_stmt *deleteGenres = nullptr;
+    sqlite3_stmt *insertGenre = nullptr;
+    sqlite3_stmt *deleteImageTags = nullptr;
+    sqlite3_stmt *insertImageTag = nullptr;
+    sqlite3_stmt *markComplete = nullptr;
+    sqlite3_stmt *selectItem = nullptr;
+    sqlite3_stmt *selectGenres = nullptr;
+    sqlite3_stmt *selectImageTags = nullptr;
+    const auto finalize = [](sqlite3_stmt *&statement) {
+        if (statement) {
+            sqlite3_finalize(statement);
+            statement = nullptr;
+        }
+    };
+    const auto finalizeAll = [&] {
+        finalize(upsert);
+        finalize(deleteGenres);
+        finalize(insertGenre);
+        finalize(deleteImageTags);
+        finalize(insertImageTag);
+        finalize(markComplete);
+        finalize(selectItem);
+        finalize(selectGenres);
+        finalize(selectImageTags);
+    };
+    const auto prepare = [&](const char *sql, sqlite3_stmt *&statement) {
+        return sqlite3_prepare_v2(temporary, sql, -1, &statement, nullptr)
+            == SQLITE_OK;
+    };
+    if (!prepare(
+            "INSERT INTO media_items("
+            "id, kind, title, overview, production_year, community_rating,"
+            "etag, played, progress, playback_position_ticks, index_number,"
+            "parent_index_number, runtime_ticks, series_name, series_id,"
+            "season_id, art_r, art_g, art_b) "
+            "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+            "?13, ?14, ?15, ?16, ?17, ?18, ?19)", upsert)
+        || !prepare("DELETE FROM item_genres WHERE item_id=?1", deleteGenres)
+        || !prepare("INSERT INTO item_genres(item_id, ordinal, genre) "
+                    "VALUES(?1, ?2, ?3)", insertGenre)
+        || !prepare("DELETE FROM item_image_tags WHERE item_id=?1",
+                    deleteImageTags)
+        || !prepare("INSERT INTO item_image_tags(item_id, image_type, tag) "
+                    "VALUES(?1, ?2, ?3)", insertImageTag)
+        || !prepare("INSERT INTO hierarchy_state(series_id, complete, "
+                    "last_refresh_ms, last_generation) VALUES(?1, 1, 0, 0)",
+                    markComplete)
+        || !prepare("SELECT id, kind, title, overview, production_year, "
+                    "community_rating, etag, played, progress, "
+                    "playback_position_ticks, index_number, "
+                    "parent_index_number, runtime_ticks, series_name, "
+                    "series_id, season_id, art_r, art_g, art_b "
+                    "FROM media_items WHERE id=?1", selectItem)
+        || !prepare("SELECT ordinal, genre FROM item_genres WHERE item_id=?1 "
+                    "ORDER BY ordinal", selectGenres)
+        || !prepare("SELECT image_type, tag FROM item_image_tags WHERE item_id=?1 "
+                    "ORDER BY image_type", selectImageTags)) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::SqliteError,
+                             "temporary import statement preparation failed");
+    }
+    const MediaItemCollectionStatements collections{
+        deleteGenres, insertGenre, deleteImageTags, insertImageTag,
+        selectGenres, selectImageTags};
+    const auto reset = [](sqlite3_stmt *statement) {
+        sqlite3_reset(statement);
+        sqlite3_clear_bindings(statement);
+    };
+    if (!exec(temporary, "BEGIN IMMEDIATE;", error)) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::SqliteError, error);
+    }
+    bool importOk = true;
+    std::size_t importedRows = 0;
+    const auto writeItem = [&](const MediaItem &item) {
+        MediaItemSqlError bindError = MediaItemSqlError::None;
+        reset(upsert);
+        if (!bindMediaItemScalars(upsert, item, bindError)
+            || sqlite3_step(upsert) != SQLITE_DONE) {
+            error = sqlite3_errmsg(temporary);
+            reset(upsert);
+            return false;
+        }
+        reset(upsert);
+        if (!replaceMediaItemCollections(collections, item, bindError)) {
+            error = "temporary collection import failed";
+            return false;
+        }
+        ++importedRows;
+        if (failAfterRows >= 0
+            && importedRows >= static_cast<std::size_t>(failAfterRows)) {
+            error = "injected legacy import failure";
+            return false;
+        }
+        return true;
+    };
+    for (const auto &item : importItems) {
+        if (!scopeIsCurrent() || !writeItem(item)) {
+            importOk = false;
+            break;
+        }
+    }
+    if (importOk) {
+        for (const auto &series : snapshot.series) {
+            reset(markComplete);
+            if (sqlite3_bind_text(markComplete, 1, series.first.c_str(), -1,
+                                  SQLITE_TRANSIENT) != SQLITE_OK
+                || sqlite3_step(markComplete) != SQLITE_DONE) {
+                error = sqlite3_errmsg(temporary);
+                importOk = false;
+                break;
+            }
+        }
+    }
+    if (!importOk || !scopeIsCurrent()) {
+        std::string ignored;
+        exec(temporary, "ROLLBACK;", ignored);
+        finalizeAll();
+        return failTemporary(
+            importOk ? CatalogDbErrorCategory::Superseded
+                     : CatalogDbErrorCategory::SqliteError,
+            error.empty() ? "legacy import was superseded" : error);
+    }
+    if (!exec(temporary, "COMMIT;", error)) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::SqliteError, error);
+    }
+
+    std::int64_t rowCount = 0;
+    std::int64_t completeCount = 0;
+    if (!scalarInt(temporary, "SELECT COUNT(*) FROM media_items;", rowCount,
+                   error)
+        || !scalarInt(temporary,
+                      "SELECT COUNT(*) FROM hierarchy_state WHERE complete=1;",
+                      completeCount, error)
+        || rowCount != static_cast<std::int64_t>(expectedById.size())
+        || completeCount != static_cast<std::int64_t>(snapshot.series.size())) {
+        if (error.empty()) {
+            error = "temporary import row counts did not match legacy catalog";
+        }
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed, error);
+    }
+    reset(selectItem);
+    reset(selectGenres);
+    reset(selectImageTags);
+    for (const auto &entry : expectedById) {
+        if (sqlite3_bind_text(selectItem, 1, entry.first.c_str(), -1,
+                              SQLITE_TRANSIENT) != SQLITE_OK
+            || sqlite3_step(selectItem) != SQLITE_ROW) {
+            error = "temporary import row lookup failed";
+            break;
+        }
+        MediaItem actual;
+        MediaItemSqlError readError = MediaItemSqlError::None;
+        const bool readScalars = readMediaItemScalars(selectItem, actual,
+                                                      readError);
+        reset(selectItem);
+        if (!readScalars
+            || !readMediaItemCollections(collections, actual, readError)
+            || !mediaItemsEquivalentForCatalog(entry.second, actual)) {
+            error = "temporary import MediaItem parity validation failed: "
+                + entry.first;
+            break;
+        }
+    }
+    if (!error.empty()) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed, error);
+    }
+    std::string quickCheck;
+    if (!scalar(temporary, "PRAGMA quick_check;", quickCheck, error)
+        || quickCheck != "ok") {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed,
+                             error.empty() ? "temporary quick_check failed"
+                                            : error);
+    }
+    sqlite3_stmt *foreignKeyCheck = nullptr;
+    if (!prepare("PRAGMA foreign_key_check;", foreignKeyCheck)) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::SqliteError,
+                             "temporary foreign_key_check preparation failed");
+    }
+    const int foreignKeyRc = sqlite3_step(foreignKeyCheck);
+    const bool foreignKeysClean = foreignKeyRc == SQLITE_DONE;
+    finalize(foreignKeyCheck);
+    if (!foreignKeysClean) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed,
+                             "temporary foreign_key_check failed");
+    }
+    if (failValidation) {
+        finalizeAll();
+        return failTemporary(CatalogDbErrorCategory::ConfigurationFailed,
+                             "injected legacy validation failure");
+    }
+    finalizeAll();
+    if (!scopeIsCurrent()) {
+        return failTemporary(CatalogDbErrorCategory::Superseded,
+                             "legacy migration scope was superseded");
+    }
+    if (sqlite3_close(temporary) != SQLITE_OK) {
+        return failTemporary(CatalogDbErrorCategory::SqliteError,
+                             "temporary catalog database did not close cleanly");
+    }
+    temporary = nullptr;
+    const auto sidecarExists = [&](const std::string &path) {
+        const MigrationPathPresence presence = inspectMigrationPath(path);
+        return presence.error || presence.present;
+    };
+    if (sidecarExists(tempJournal) || sidecarExists(tempWal)
+        || sidecarExists(tempShm)) {
+        return failTemporary(CatalogDbErrorCategory::CorruptOrIo,
+                             "temporary catalog sidecar remained after close");
+    }
+    const int tempFd = ::open(tempPath.c_str(), O_RDONLY);
+    if (tempFd < 0 || ::fsync(tempFd) != 0) {
+        if (tempFd >= 0) {
+            ::close(tempFd);
+        }
+        return failTemporary(CatalogDbErrorCategory::CorruptOrIo,
+                             "temporary catalog fsync failed");
+    }
+    ::close(tempFd);
+    const CatalogDbMigrationState beforePromotion =
+        inspectMigrationState(scopeKey);
+    if (!scopeIsCurrent() || beforePromotion.pathError
+        || beforePromotion.finalPresent
+        || ::rename(tempPath.c_str(), finalPath.c_str()) != 0) {
+        return failTemporary(
+            !scopeIsCurrent() ? CatalogDbErrorCategory::Superseded
+                              : CatalogDbErrorCategory::CorruptOrIo,
+            !scopeIsCurrent() ? "legacy migration scope was superseded"
+                              : "catalog migration promotion failed");
+    }
+    const std::size_t finalSlash = finalPath.find_last_of('/');
+    if (finalSlash != std::string::npos) {
+        const int directoryFd = ::open(finalPath.substr(0, finalSlash).c_str(),
+                                       O_RDONLY);
+        if (directoryFd >= 0) {
+            ::fsync(directoryFd);
+            ::close(directoryFd);
+        }
+    }
+    if (!scopeIsCurrent()
+        || !openConnection({ScopeCommandKind::Configure, scopeEpoch,
+                             scopeKey})) {
+        setFailure(CatalogDbErrorCategory::Superseded,
+                   "legacy migration scope was superseded during reopen");
+        return result;
+    }
+    std::int64_t finalApplicationId = 0;
+    std::int64_t finalUserVersion = 0;
+    std::int64_t finalRowCount = 0;
+    if (!scalarInt(m_db, "PRAGMA application_id;", finalApplicationId, error)
+        || !scalarInt(m_db, "PRAGMA user_version;", finalUserVersion, error)
+        || !scalarInt(m_db, "SELECT COUNT(*) FROM media_items;",
+                      finalRowCount, error)
+        || finalApplicationId != kCatalogApplicationId
+        || finalUserVersion != 1
+        || finalRowCount != static_cast<std::int64_t>(expectedById.size())) {
+        closeConnection();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_scopeReady = false;
+        m_scopeConfigured = false;
+        m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
+        m_lastError = CatalogDbErrorCategory::ConfigurationFailed;
+        m_openState = CatalogDbOpenState::CorruptOrIo;
+        setFailure(CatalogDbErrorCategory::ConfigurationFailed,
+                   error.empty() ? "promoted catalog verification failed"
+                                  : error);
+        return result;
+    }
+    result.success = true;
+    return result;
+}
+
 void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
 {
     assert(std::this_thread::get_id() == m_worker.get_id());
     CatalogDbTestResult result;
     result.workerOwned = std::this_thread::get_id() == m_worker.get_id();
+    if (command->operation == kLegacyMigrationOperation) {
+        const std::size_t separator = command->value.find(':');
+        if (separator == std::string::npos) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            result.message = "invalid legacy migration test options";
+            command->result.set_value(std::move(result));
+            return;
+        }
+        char *end = nullptr;
+        const long failAfterRows = std::strtol(
+            command->value.substr(0, separator).c_str(), &end, 10);
+        const std::string validation = command->value.substr(separator + 1);
+        if (end == nullptr || *end != '\0'
+            || (validation != "0" && validation != "1")) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            result.message = "invalid legacy migration test options";
+            command->result.set_value(std::move(result));
+            return;
+        }
+        std::string scopeKey;
+        std::uint64_t scopeEpoch = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            scopeKey = m_requestedScopeKey;
+            scopeEpoch = m_requestedEpoch;
+        }
+        if (scopeKey.empty() || scopeEpoch == 0) {
+            result.error = CatalogDbErrorCategory::ScopeNotReady;
+            result.message = "CatalogDb has no current migration scope";
+            command->result.set_value(std::move(result));
+            return;
+        }
+        result = migrateLegacyCatalogForWorker(
+            scopeKey, scopeEpoch, static_cast<int>(failAfterRows),
+            validation == "1");
+        result.workerOwned = true;
+        command->result.set_value(std::move(result));
+        return;
+    }
     if (!m_db) {
         result.error = CatalogDbErrorCategory::ScopeNotReady;
         result.message = "CatalogDb has no ready scoped connection";

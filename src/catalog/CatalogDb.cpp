@@ -1,14 +1,18 @@
 #include "CatalogDb.hpp"
 
 #include "../cache/LibraryCache.hpp"
+#include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
+#include "MediaItemSql.hpp"
 #include "../../vendor/sqlite/sqlite3.h"
 
 #include <cassert>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <set>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,6 +31,7 @@ constexpr unsigned char kWriteSchemaMarkerOperation = 7;
 constexpr unsigned char kReadSchemaMarkerOperation = 8;
 constexpr unsigned char kSetSchemaMetadataOperation = 9;
 constexpr unsigned char kMigrationRollbackOperation = 10;
+constexpr unsigned char kMediaItemCodecOperation = 11;
 
 // Checked against SQLite's current magic.txt application-ID registry on
 // 2026-09-09. No MYFN entry is assigned; the value is the ASCII tag "MYFN".
@@ -346,6 +351,24 @@ bool schemaConstraints(sqlite3 *db, bool &foreignKeyCascade,
     return true;
 }
 
+bool sameMediaItemScalars(const MediaItem &expected, const MediaItem &actual)
+{
+    return expected.id == actual.id && expected.type == actual.type
+        && expected.title == actual.title
+        && expected.overview == actual.overview && expected.year == actual.year
+        && std::fabs(expected.rating - actual.rating) < 0.000001f
+        && expected.etag == actual.etag && expected.played == actual.played
+        && std::fabs(expected.progress - actual.progress) < 0.000001f
+        && expected.playbackPositionTicks == actual.playbackPositionTicks
+        && expected.indexNumber == actual.indexNumber
+        && expected.parentIndexNumber == actual.parentIndexNumber
+        && expected.runTimeTicks == actual.runTimeTicks
+        && expected.seriesName == actual.seriesName
+        && expected.seriesId == actual.seriesId
+        && expected.seasonId == actual.seasonId && expected.artR == actual.artR
+        && expected.artG == actual.artG && expected.artB == actual.artB;
+}
+
 } // namespace
 
 struct CatalogDb::TestCommand {
@@ -503,6 +526,11 @@ CatalogDbTestResult CatalogDb::setSchemaMetadataForTest(
 CatalogDbTestResult CatalogDb::runMigrationRollbackForTest()
 {
     return runTestCommand(kMigrationRollbackOperation);
+}
+
+CatalogDbTestResult CatalogDb::runMediaItemCodecForTest()
+{
+    return runTestCommand(kMediaItemCodecOperation);
 }
 
 CatalogDbTestResult CatalogDb::writeSentinelForTest(const std::string &value)
@@ -1007,6 +1035,182 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
                                     : CatalogDbErrorCategory::ConfigurationFailed;
         result.message = sqliteFailed ? sqlite3_errmsg(m_db)
                                       : "expected SQLite error was not returned";
+        break;
+    }
+
+    case kMediaItemCodecOperation: {
+        sqlite3_stmt *insert = nullptr;
+        sqlite3_stmt *select = nullptr;
+        if (!prepareNamed(
+                "media_item_scalar_insert",
+                "INSERT OR REPLACE INTO media_items("
+                "id, kind, title, overview, production_year, community_rating,"
+                "etag, played, progress, playback_position_ticks, index_number,"
+                "parent_index_number, runtime_ticks, series_name, series_id,"
+                "season_id, art_r, art_g, art_b) "
+                "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+                "?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                insert)
+            || !prepareNamed(
+                "media_item_scalar_select",
+                "SELECT id, kind, title, overview, production_year, "
+                "community_rating, etag, played, progress, "
+                "playback_position_ticks, index_number, parent_index_number, "
+                "runtime_ticks, series_name, series_id, season_id, art_r, "
+                "art_g, art_b FROM media_items WHERE id=?1",
+                select)) {
+            break;
+        }
+
+        auto reset = [](sqlite3_stmt *statement) {
+            sqlite3_reset(statement);
+            sqlite3_clear_bindings(statement);
+        };
+        auto roundTrip = [&](const MediaItem &expected,
+                             bool nullableRelationships) {
+            MediaItemSqlError bindError = MediaItemSqlError::None;
+            if (!bindMediaItemScalars(insert, expected, bindError)) {
+                result.message = "MediaItem scalar bind failed";
+                reset(insert);
+                return false;
+            }
+            if (nullableRelationships
+                && (sqlite3_bind_null(insert, 15) != SQLITE_OK
+                    || sqlite3_bind_null(insert, 16) != SQLITE_OK)) {
+                result.message = "MediaItem nullable bind failed";
+                reset(insert);
+                return false;
+            }
+            const int insertRc = sqlite3_step(insert);
+            reset(insert);
+            if (insertRc != SQLITE_DONE) {
+                result.message = expected.id + ": " + sqlite3_errmsg(m_db);
+                return false;
+            }
+
+            if (sqlite3_bind_text(select, 1, expected.id.c_str(), -1,
+                                  SQLITE_TRANSIENT) != SQLITE_OK) {
+                result.message = "MediaItem scalar lookup bind failed";
+                reset(select);
+                return false;
+            }
+            const int selectRc = sqlite3_step(select);
+            if (selectRc != SQLITE_ROW) {
+                result.message = expected.id + ": " + sqlite3_errmsg(m_db);
+                reset(select);
+                return false;
+            }
+            MediaItem actual;
+            MediaItemSqlError readError = MediaItemSqlError::None;
+            const bool readOk = readMediaItemScalars(select, actual, readError);
+            reset(select);
+            if (!readOk) {
+                result.message = expected.id + ": scalar read failed";
+                return false;
+            }
+            if (!sameMediaItemScalars(expected, actual)) {
+                result.message = expected.id + ": scalar comparison failed";
+                return false;
+            }
+            return true;
+        };
+
+        MediaItem series;
+        series.id = "__task08_series__";
+        series.type = "show";
+        series.title = "Full Series";
+        series.overview = "Series overview";
+        series.year = 2024;
+        series.rating = 8.25f;
+        series.etag = "series-etag";
+        series.played = true;
+        series.progress = 0.75f;
+        series.playbackPositionTicks = 123456789;
+        series.indexNumber = 7;
+        series.parentIndexNumber = 8;
+        series.runTimeTicks = 987654321;
+        series.seriesName = "Series name";
+        series.artR = 10;
+        series.artG = 20;
+        series.artB = 30;
+
+        MediaItem season = series;
+        season.id = "__task08_season__";
+        season.type = "season";
+        season.seriesId = series.id;
+        season.title = "Full Season";
+
+        MediaItem episode = season;
+        episode.id = "__task08_episode__";
+        episode.type = "episode";
+        episode.seasonId = season.id;
+        episode.title = "Full Episode";
+
+        MediaItem movie = series;
+        movie.id = "__task08_movie__";
+        movie.type = "movie";
+        movie.seriesName.clear();
+        movie.seriesId.clear();
+        movie.seasonId.clear();
+        movie.title = "Full Movie";
+
+        result.codecPopulatedKinds = roundTrip(series, false)
+            && roundTrip(season, false) && roundTrip(episode, false)
+            && roundTrip(movie, false);
+
+        MediaItem defaults;
+        defaults.id = "__task08_defaults__";
+        defaults.type = "movie";
+        result.codecDefaults = roundTrip(defaults, true);
+        result.codecNullableRelationships = result.codecDefaults
+            && defaults.seriesId.empty() && defaults.seasonId.empty();
+
+        MediaItem boundaries;
+        boundaries.id = "__task08_boundaries__";
+        boundaries.type = "episode";
+        boundaries.year = std::numeric_limits<int>::min();
+        boundaries.rating = 10.0f;
+        boundaries.progress = 1.0f;
+        boundaries.playbackPositionTicks = std::numeric_limits<long long>::min();
+        boundaries.indexNumber = std::numeric_limits<int>::min();
+        boundaries.parentIndexNumber = std::numeric_limits<int>::max();
+        boundaries.runTimeTicks = std::numeric_limits<long long>::max();
+        boundaries.artR = 0;
+        boundaries.artG = 1;
+        boundaries.artB = 255;
+        result.codecBoundaries = roundTrip(boundaries, false);
+
+        MediaItem invalidKind;
+        invalidKind.id = "__task08_invalid_kind__";
+        invalidKind.type = "unknown";
+        MediaItemSqlError invalidError = MediaItemSqlError::None;
+        MediaItemSqlError invalidReadError = MediaItemSqlError::None;
+        result.codecInvalidKind = !bindMediaItemScalars(insert, invalidKind,
+                                                         invalidError)
+            && invalidError == MediaItemSqlError::InvalidKind
+            && mediaItemKindFromSql(99, invalidReadError).empty()
+            && invalidReadError == MediaItemSqlError::InvalidKind;
+        reset(insert);
+
+        MediaItem missingId;
+        missingId.type = "movie";
+        MediaItemSqlError missingError = MediaItemSqlError::None;
+        result.codecMissingId = !bindMediaItemScalars(insert, missingId,
+                                                       missingError)
+            && missingError == MediaItemSqlError::MissingId;
+        reset(insert);
+
+        exec(m_db, "DELETE FROM media_items WHERE id LIKE '__task08_%';",
+             result.message);
+        result.success = result.codecPopulatedKinds && result.codecDefaults
+            && result.codecBoundaries && result.codecInvalidKind
+            && result.codecMissingId && result.codecNullableRelationships;
+        if (!result.success) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            if (result.message.empty()) {
+                result.message = "MediaItem scalar codec checks failed";
+            }
+        }
         break;
     }
 

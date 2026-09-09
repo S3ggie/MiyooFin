@@ -36,6 +36,7 @@ SRCS := \
     src/main.cpp \
     src/app/App.cpp \
     src/catalog/CatalogDb.cpp \
+    src/catalog/MediaItemSql.cpp \
     src/app/UiDiagnostics.cpp \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \

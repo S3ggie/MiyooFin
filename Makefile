@@ -53,6 +53,7 @@ SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
     $(SRC_DIR)/catalog/CatalogDb.cpp \
+    $(SRC_DIR)/catalog/MediaItemSql.cpp \
     $(SRC_DIR)/app/UiDiagnostics.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
     $(SRC_DIR)/data/MockData.cpp \
@@ -176,6 +177,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/net/Session.cpp \
                src/net/DeviceIdentity.cpp \
                src/catalog/CatalogDb.cpp \
+               src/catalog/MediaItemSql.cpp \
                src/image/stb_image_impl.cpp \
                src/image/ImageDecoder.cpp \
                src/cache/ImageCache.cpp \

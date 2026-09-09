@@ -10,6 +10,7 @@
 #include "../../vendor/sqlite/sqlite3.h"
 
 #include <cassert>
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
@@ -494,6 +495,28 @@ bool sameMediaItemScalars(const MediaItem &expected, const MediaItem &actual)
         && expected.artG == actual.artG && expected.artB == actual.artB;
 }
 
+// During legacy import, container ownership supplies the two denormalized
+// relationship fields. Every other field must agree before duplicate rows can
+// be treated as the same logical media item.
+bool sameMigrationPayload(const MediaItem &left, const MediaItem &right)
+{
+    return left.id == right.id && left.type == right.type
+        && left.title == right.title && left.overview == right.overview
+        && left.year == right.year
+        && std::fabs(left.rating - right.rating) < 0.000001f
+        && left.genre == right.genre && left.etag == right.etag
+        && left.genres == right.genres && left.played == right.played
+        && std::fabs(left.progress - right.progress) < 0.000001f
+        && left.playbackPositionTicks == right.playbackPositionTicks
+        && left.imageTags == right.imageTags
+        && left.indexNumber == right.indexNumber
+        && left.parentIndexNumber == right.parentIndexNumber
+        && left.runTimeTicks == right.runTimeTicks
+        && left.seriesName == right.seriesName
+        && left.artR == right.artR && left.artG == right.artG
+        && left.artB == right.artB;
+}
+
 bool validateHierarchyInput(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
     const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -782,6 +805,12 @@ void CatalogDb::setLegacyMigrationAutoActivationForTest(bool enabled)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_testLegacyMigrationAutoActivation = enabled;
+}
+
+void CatalogDb::setLegacyMigrationPauseForTest(bool paused)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_testLegacyMigrationPause = paused;
 }
 
 CatalogDbTestResult CatalogDb::runMediaItemCodecForTest()
@@ -2446,6 +2475,17 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
     }
 
     OfflineCatalog::MigrationGuard legacyGuard;
+    for (;;) {
+        bool paused = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            paused = m_testLegacyMigrationPause;
+        }
+        if (!paused) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const std::string legacyPath = OfflineCatalog::cachePath("cache", scopeKey);
     const std::string finalPath = catalogPath(scopeKey);
     const std::string tempPath = migratingPath(scopeKey);
@@ -2459,6 +2499,13 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
 
     std::vector<MediaItem> importItems;
     std::map<std::string, MediaItem> expectedById;
+    struct LegacyEpisodeCandidate {
+        MediaItem item;
+        std::pair<std::string, std::string> parent;
+        bool embeddedParentMatches = false;
+    };
+    std::map<std::string, std::vector<LegacyEpisodeCandidate>>
+        episodeCandidates;
     std::set<std::string> seriesIds;
     std::set<std::string> seasonIds;
     for (const auto &entry : snapshot.series) {
@@ -2473,7 +2520,6 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
         if (seasonsIt != snapshot.seasonsBySeries.end()) {
             seasons = seasonsIt->second;
         }
-        std::map<std::string, std::vector<MediaItem>> episodesBySeason;
         for (auto &season : seasons) {
             // The legacy containers are authoritative for hierarchy links;
             // older writers did not always populate the denormalized fields.
@@ -2482,14 +2528,88 @@ CatalogDbTestResult CatalogDb::migrateLegacyCatalogForWorker(
             seasonIds.insert(season.id);
             const auto episodesIt = snapshot.episodesBySeason.find(season.id);
             if (episodesIt != snapshot.episodesBySeason.end()) {
-                episodesBySeason.emplace(season.id, episodesIt->second);
-            } else {
-                episodesBySeason.emplace(season.id,
-                                         std::vector<MediaItem>());
+                for (const auto &sourceEpisode : episodesIt->second) {
+                    LegacyEpisodeCandidate candidate;
+                    candidate.item = sourceEpisode;
+                    candidate.embeddedParentMatches =
+                        sourceEpisode.seriesId == series.id
+                        && sourceEpisode.seasonId == season.id;
+                    candidate.item.seriesId = series.id;
+                    candidate.item.seasonId = season.id;
+                    candidate.parent = {series.id, season.id};
+                    episodeCandidates[candidate.item.id].push_back(
+                        std::move(candidate));
+                }
             }
-            for (auto &episode : episodesBySeason.at(season.id)) {
-                episode.seriesId = series.id;
-                episode.seasonId = season.id;
+        }
+    }
+
+    std::map<std::string, MediaItem> canonicalEpisodes;
+    std::map<std::string, std::pair<std::string, std::string>>
+        canonicalEpisodeParents;
+    for (const auto &entry : episodeCandidates) {
+        const auto &candidates = entry.second;
+        const LegacyEpisodeCandidate *selected = nullptr;
+        std::size_t consistentCount = 0;
+        for (const auto &candidate : candidates) {
+            if (candidate.embeddedParentMatches) {
+                selected = &candidate;
+                ++consistentCount;
+            }
+        }
+        if (consistentCount == 1) {
+            // A unique container-consistent embedded relationship identifies
+            // stale copies left by the legacy merge behavior. The selected
+            // occurrence supplies the canonical payload and parent.
+        } else {
+            selected = &candidates.front();
+            for (const auto &candidate : candidates) {
+                if (candidate.parent != selected->parent) {
+                    setFailure(
+                        CatalogDbErrorCategory::ConfigurationFailed,
+                        "legacy catalog contains duplicate media ID with conflicting hierarchy parents");
+                    return result;
+                }
+                if (!sameMigrationPayload(selected->item, candidate.item)) {
+                    setFailure(
+                        CatalogDbErrorCategory::ConfigurationFailed,
+                        "legacy catalog contains duplicate media ID with conflicting payload");
+                    return result;
+                }
+            }
+        }
+        canonicalEpisodes.emplace(entry.first, selected->item);
+        canonicalEpisodeParents.emplace(entry.first, selected->parent);
+    }
+
+    for (const auto &entry : snapshot.series) {
+        const MediaItem &series = entry.second;
+        std::vector<MediaItem> seasons;
+        const auto seasonsIt = snapshot.seasonsBySeries.find(series.id);
+        if (seasonsIt != snapshot.seasonsBySeries.end()) {
+            seasons = seasonsIt->second;
+        }
+        for (auto &season : seasons) {
+            season.seriesId = series.id;
+            season.seasonId.clear();
+        }
+        std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+        for (const auto &season : seasons) {
+            std::set<std::string> included;
+            auto &canonicalEpisodesForSeason = episodesBySeason[season.id];
+            const auto episodesIt = snapshot.episodesBySeason.find(season.id);
+            if (episodesIt != snapshot.episodesBySeason.end()) {
+                for (const auto &sourceEpisode : episodesIt->second) {
+                    const auto canonical = canonicalEpisodes.find(
+                        sourceEpisode.id);
+                    if (canonical == canonicalEpisodes.end()
+                        || canonicalEpisodeParents.at(sourceEpisode.id)
+                               != std::make_pair(series.id, season.id)
+                        || !included.insert(sourceEpisode.id).second) {
+                        continue;
+                    }
+                    canonicalEpisodesForSeason.push_back(canonical->second);
+                }
             }
         }
         if (!validateHierarchyInput(series, seasons, episodesBySeason, error)) {

@@ -55,9 +55,21 @@ enum class CatalogDbErrorCategory : unsigned char {
     InvalidIdentity,
     ScopeNotReady,
     OpenFailed,
+    WrongApplicationId,
+    UnsupportedVersion,
+    CorruptOrIo,
     ConfigurationFailed,
     SqliteError,
     Superseded,
+};
+
+enum class CatalogDbOpenState : unsigned char {
+    NotAttempted,
+    CreatedV1,
+    SupportedV1,
+    WrongApplicationId,
+    UnsupportedVersion,
+    CorruptOrIo,
 };
 
 struct CatalogDbScopeState {
@@ -66,6 +78,7 @@ struct CatalogDbScopeState {
     bool ready = false;
     CatalogDbScopeStatus status = CatalogDbScopeStatus::Unconfigured;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
 };
 
 struct CatalogDbJobMetadata {
@@ -142,6 +155,9 @@ public:
     CatalogDbTestResult runSchemaDiagnosticsForTest();
     CatalogDbTestResult writeSchemaMarkerForTest(const std::string &value);
     CatalogDbTestResult readSchemaMarkerForTest();
+    CatalogDbTestResult setSchemaMetadataForTest(std::int64_t applicationId,
+                                                 std::int64_t userVersion);
+    CatalogDbTestResult runMigrationRollbackForTest();
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
 
@@ -181,6 +197,7 @@ private:
     static std::size_t priorityIndex(CatalogDbPriority priority);
     void processScopeCommand(ScopeCommand command);
     void processTestCommand(const std::shared_ptr<TestCommand> &command);
+    void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
     CatalogDbTestResult runTestCommand(unsigned char operation,
@@ -204,6 +221,7 @@ private:
     bool m_scopeReady = false;
     CatalogDbScopeStatus m_scopeStatus = CatalogDbScopeStatus::Unconfigured;
     CatalogDbErrorCategory m_lastError = CatalogDbErrorCategory::None;
+    CatalogDbOpenState m_openState = CatalogDbOpenState::NotAttempted;
     bool m_stopping = false;
     std::thread m_worker;
     sqlite3 *m_db = nullptr;

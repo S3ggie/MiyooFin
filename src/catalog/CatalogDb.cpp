@@ -25,6 +25,8 @@ constexpr unsigned char kReadSentinelOperation = 5;
 constexpr unsigned char kSchemaDiagnosticsOperation = 6;
 constexpr unsigned char kWriteSchemaMarkerOperation = 7;
 constexpr unsigned char kReadSchemaMarkerOperation = 8;
+constexpr unsigned char kSetSchemaMetadataOperation = 9;
+constexpr unsigned char kMigrationRollbackOperation = 10;
 
 // Checked against SQLite's current magic.txt application-ID registry on
 // 2026-09-09. No MYFN entry is assigned; the value is the ASCII tag "MYFN".
@@ -158,16 +160,29 @@ bool collectObjects(sqlite3 *db, std::set<std::string> &objects,
     return true;
 }
 
-bool ensureSchema(sqlite3 *db, std::string &error)
+bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
+                  std::string &error)
 {
     std::int64_t applicationId = 0;
     std::int64_t userVersion = 0;
     if (!scalarInt(db, "PRAGMA application_id;", applicationId, error)
         || !scalarInt(db, "PRAGMA user_version;", userVersion, error)) {
+        openState = CatalogDbOpenState::CorruptOrIo;
+        return false;
+    }
+    if (applicationId == kCatalogApplicationId && userVersion == 1) {
+        openState = CatalogDbOpenState::SupportedV1;
+        return true;
+    }
+    if (applicationId != 0 && applicationId != kCatalogApplicationId) {
+        openState = CatalogDbOpenState::WrongApplicationId;
+        error = "catalog database application ID is not recognized";
         return false;
     }
     if (applicationId != 0 || userVersion != 0) {
-        return true;
+        openState = CatalogDbOpenState::UnsupportedVersion;
+        error = "catalog database schema version is not supported";
+        return false;
     }
 
     if (!exec(db, "BEGIN IMMEDIATE;", error)) {
@@ -246,6 +261,7 @@ bool ensureSchema(sqlite3 *db, std::string &error)
         exec(db, "ROLLBACK;", ignored);
         return false;
     }
+    openState = CatalogDbOpenState::CreatedV1;
     return true;
 }
 
@@ -399,6 +415,9 @@ std::uint64_t CatalogDb::configureScope(const std::string &serverUrl,
         m_scopeReady = false;
         m_scopeStatus = validIdentity ? CatalogDbScopeStatus::Pending
                                       : CatalogDbScopeStatus::InvalidIdentity;
+        m_lastError = validIdentity ? CatalogDbErrorCategory::None
+                                    : CatalogDbErrorCategory::InvalidIdentity;
+        m_openState = CatalogDbOpenState::NotAttempted;
         m_scopeCommands.clear();
         m_scopeCommands.push_back({
             validIdentity ? ScopeCommandKind::Configure
@@ -420,6 +439,8 @@ std::uint64_t CatalogDb::deconfigureScope()
         m_scopeConfigured = false;
         m_scopeReady = false;
         m_scopeStatus = CatalogDbScopeStatus::Unconfigured;
+        m_lastError = CatalogDbErrorCategory::None;
+        m_openState = CatalogDbOpenState::NotAttempted;
         m_scopeCommands.clear();
         m_scopeCommands.push_back({ScopeCommandKind::Deconfigure, epoch, {}});
     }
@@ -431,7 +452,7 @@ CatalogDbScopeState CatalogDb::scopeState() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return {m_requestedEpoch, m_scopeConfigured, m_scopeReady, m_scopeStatus,
-            m_lastError};
+            m_lastError, m_openState};
 }
 
 CatalogDbConnectionState CatalogDb::connectionStateForTest() const
@@ -469,6 +490,19 @@ CatalogDbTestResult CatalogDb::writeSchemaMarkerForTest(const std::string &value
 CatalogDbTestResult CatalogDb::readSchemaMarkerForTest()
 {
     return runTestCommand(kReadSchemaMarkerOperation);
+}
+
+CatalogDbTestResult CatalogDb::setSchemaMetadataForTest(
+    std::int64_t applicationId, std::int64_t userVersion)
+{
+    return runTestCommand(kSetSchemaMetadataOperation,
+                          std::to_string(applicationId) + ":"
+                              + std::to_string(userVersion));
+}
+
+CatalogDbTestResult CatalogDb::runMigrationRollbackForTest()
+{
+    return runTestCommand(kMigrationRollbackOperation);
 }
 
 CatalogDbTestResult CatalogDb::writeSentinelForTest(const std::string &value)
@@ -652,6 +686,7 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
         m_lastError = command.kind == ScopeCommandKind::InvalidIdentity
             ? CatalogDbErrorCategory::InvalidIdentity
             : CatalogDbErrorCategory::None;
+        m_openState = CatalogDbOpenState::NotAttempted;
     }
 
     closeConnection();
@@ -689,15 +724,26 @@ void CatalogDb::closeConnection()
         return;
     }
 
-    for (auto &entry : m_statements) {
-        sqlite3_finalize(entry.second);
-    }
-    m_statements.clear();
+    finalizeStatements();
     sqlite3_close(m_db);
     m_db = nullptr;
     std::lock_guard<std::mutex> lock(m_mutex);
     m_connectionOpen = false;
     m_connectionWorkerOwned = false;
+    m_preparedStatementCount = 0;
+}
+
+void CatalogDb::finalizeStatements()
+{
+    // Future schema migrations must use this worker-only boundary, then run
+    // BEGIN IMMEDIATE, migrate, set user_version, COMMIT, and rebuild the
+    // registry before publishing the new schema-ready state.
+    assert(std::this_thread::get_id() == m_worker.get_id());
+    for (auto &entry : m_statements) {
+        sqlite3_finalize(entry.second);
+    }
+    m_statements.clear();
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_preparedStatementCount = 0;
 }
 
@@ -718,7 +764,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
-            m_lastError = CatalogDbErrorCategory::OpenFailed;
+            m_lastError = CatalogDbErrorCategory::CorruptOrIo;
+            m_openState = CatalogDbOpenState::CorruptOrIo;
         }
         return false;
     }
@@ -733,7 +780,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
-            m_lastError = CatalogDbErrorCategory::OpenFailed;
+            m_lastError = CatalogDbErrorCategory::CorruptOrIo;
+            m_openState = CatalogDbOpenState::CorruptOrIo;
         }
         return false;
     }
@@ -748,7 +796,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
-            m_lastError = CatalogDbErrorCategory::ConfigurationFailed;
+            m_lastError = CatalogDbErrorCategory::CorruptOrIo;
+            m_openState = CatalogDbOpenState::CorruptOrIo;
         }
         return false;
     }
@@ -775,12 +824,18 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         return false;
     }
 
-    if (!ensureSchema(db, error)) {
+    CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
+    if (!ensureSchema(db, openState, error)) {
         sqlite3_close(db);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
-            m_lastError = CatalogDbErrorCategory::ConfigurationFailed;
+            m_openState = openState;
+            m_lastError = openState == CatalogDbOpenState::WrongApplicationId
+                ? CatalogDbErrorCategory::WrongApplicationId
+                : openState == CatalogDbOpenState::UnsupportedVersion
+                    ? CatalogDbErrorCategory::UnsupportedVersion
+                    : CatalogDbErrorCategory::CorruptOrIo;
         }
         return false;
     }
@@ -799,6 +854,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         m_scopeReady = true;
         m_scopeStatus = CatalogDbScopeStatus::Ready;
         m_lastError = CatalogDbErrorCategory::None;
+        m_openState = openState;
     }
     return true;
 }
@@ -1023,6 +1079,70 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             result.message = sqlite3_errmsg(m_db);
         }
         reset(statement);
+        break;
+    }
+
+    case kSetSchemaMetadataOperation: {
+        const std::size_t separator = command->value.find(':');
+        if (separator == std::string::npos) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            result.message = "invalid schema metadata fixture";
+            break;
+        }
+        const std::string applicationId = command->value.substr(0, separator);
+        const std::string userVersion = command->value.substr(separator + 1);
+        const std::string applicationIdPragma =
+            "PRAGMA application_id = " + applicationId + ";";
+        const std::string userVersionPragma =
+            "PRAGMA user_version = " + userVersion + ";";
+        result.success = exec(m_db, applicationIdPragma.c_str(), result.message)
+            && exec(m_db, userVersionPragma.c_str(), result.message);
+        if (!result.success) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+        }
+        break;
+    }
+
+    case kMigrationRollbackOperation: {
+        finalizeStatements();
+        std::string migrationError;
+        const bool began = exec(m_db, "BEGIN IMMEDIATE;", migrationError);
+        const int failedMigration = began
+            ? execResult(m_db,
+                         "CREATE TABLE catalog_task07_rollback_probe(value TEXT);"
+                         "INSERT INTO catalog_task07_missing(value) VALUES(1);",
+                         migrationError)
+            : SQLITE_ERROR;
+        std::string rollbackError;
+        const bool rolledBack = began
+            && exec(m_db, "ROLLBACK;", rollbackError);
+        std::int64_t probeCount = 1;
+        const bool inspected = scalarInt(
+            m_db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE name="
+            "'catalog_task07_rollback_probe';",
+            probeCount, result.message);
+        sqlite3_stmt *probe = nullptr;
+        const int prepareRc = sqlite3_prepare_v2(m_db, "SELECT 1", -1,
+                                                 &probe, nullptr);
+        if (prepareRc == SQLITE_OK && probe) {
+            sqlite3_step(probe);
+            sqlite3_reset(probe);
+            sqlite3_clear_bindings(probe);
+            m_statements.emplace("migration_probe", probe);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_preparedStatementCount = m_statements.size();
+        }
+        result.statementReused = prepareRc == SQLITE_OK && probe != nullptr;
+        result.success = failedMigration != SQLITE_OK && rolledBack
+            && inspected && probeCount == 0 && result.statementReused;
+        if (!result.success) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            if (result.message.empty()) {
+                result.message = migrationError.empty() ? rollbackError
+                                                        : migrationError;
+            }
+        }
         break;
     }
 

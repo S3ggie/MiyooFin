@@ -11,6 +11,8 @@
 #include <cstring>
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <thread>
 #include <curl/curl.h>
@@ -62,6 +64,13 @@
 using namespace miyoofin;
 
 static int g_failures = 0;
+
+static std::string readTestBytes(const std::string &path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>()};
+}
 
 #define CHECK(cond) \
     do { \
@@ -365,6 +374,101 @@ static void testCatalogDbSchemaV1()
     CHECK(marker.success && marker.sentinel == "preserved");
 }
 
+static void testCatalogDbSchemaOpenPolicy()
+{
+    const std::string suffix = std::to_string(static_cast<long long>(getpid()));
+    const std::string createdUrl =
+        "https://sqlite-policy-created-" + suffix + ".example";
+    const std::string createdUser = "policy-created";
+    CatalogDb created;
+    const auto createdEpoch = created.configureScope(createdUrl, createdUser);
+    CHECK(created.waitForIdleForTest(std::chrono::seconds(2)));
+    auto state = created.scopeState();
+    CHECK(state.requestedEpoch == createdEpoch && state.ready);
+    CHECK(state.openState == CatalogDbOpenState::CreatedV1);
+
+    const auto supportedEpoch = created.configureScope(createdUrl, createdUser);
+    CHECK(supportedEpoch > createdEpoch);
+    CHECK(created.waitForIdleForTest(std::chrono::seconds(2)));
+    state = created.scopeState();
+    CHECK(state.ready && state.openState == CatalogDbOpenState::SupportedV1);
+
+    const std::string wrongUrl = "https://sqlite-policy-wrong-" + suffix
+        + ".example";
+    CatalogDb wrong;
+    const auto wrongEpoch = wrong.configureScope(wrongUrl, "policy-wrong");
+    CHECK(wrong.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(wrong.scopeState().openState == CatalogDbOpenState::CreatedV1);
+    CHECK(wrong.setSchemaMetadataForTest(0x4D59464F, 1).success);
+    const std::string wrongPath = "cache/library/"
+        + LibraryCache::scopeKey(wrongUrl, "policy-wrong") + "/catalog.sqlite3";
+    const std::string wrongBefore = readTestBytes(wrongPath);
+    const auto wrongRejectedEpoch = wrong.configureScope(wrongUrl, "policy-wrong");
+    CHECK(wrongRejectedEpoch > wrongEpoch);
+    CHECK(wrong.waitForIdleForTest(std::chrono::seconds(2)));
+    state = wrong.scopeState();
+    CHECK(!state.ready && state.openState == CatalogDbOpenState::WrongApplicationId);
+    CHECK(state.error == CatalogDbErrorCategory::WrongApplicationId);
+    CHECK(readTestBytes(wrongPath) == wrongBefore);
+
+    const std::string futureUrl = "https://sqlite-policy-future-" + suffix
+        + ".example";
+    CatalogDb future;
+    const auto futureEpoch = future.configureScope(futureUrl, "policy-future");
+    CHECK(future.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(future.setSchemaMetadataForTest(0x4D59464E, 99).success);
+    const std::string futurePath = "cache/library/"
+        + LibraryCache::scopeKey(futureUrl, "policy-future") + "/catalog.sqlite3";
+    const std::string futureBefore = readTestBytes(futurePath);
+    const auto futureRejectedEpoch = future.configureScope(futureUrl,
+                                                            "policy-future");
+    CHECK(futureRejectedEpoch > futureEpoch);
+    CHECK(future.waitForIdleForTest(std::chrono::seconds(2)));
+    state = future.scopeState();
+    CHECK(!state.ready && state.openState == CatalogDbOpenState::UnsupportedVersion);
+    CHECK(state.error == CatalogDbErrorCategory::UnsupportedVersion);
+    CHECK(readTestBytes(futurePath) == futureBefore);
+
+    const std::string zeroVersionUrl = "https://sqlite-policy-zero-" + suffix
+        + ".example";
+    CatalogDb zeroVersion;
+    const auto zeroEpoch = zeroVersion.configureScope(zeroVersionUrl,
+                                                       "policy-zero");
+    CHECK(zeroVersion.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(zeroVersion.setSchemaMetadataForTest(0x4D59464E, 0).success);
+    const auto zeroRejectedEpoch = zeroVersion.configureScope(zeroVersionUrl,
+                                                               "policy-zero");
+    CHECK(zeroRejectedEpoch > zeroEpoch);
+    CHECK(zeroVersion.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(zeroVersion.scopeState().openState
+          == CatalogDbOpenState::UnsupportedVersion);
+
+    const std::string corruptUrl = "https://sqlite-policy-corrupt-" + suffix
+        + ".example";
+    CatalogDb corrupt;
+    const auto corruptEpoch = corrupt.configureScope(corruptUrl,
+                                                      "policy-corrupt");
+    CHECK(corrupt.waitForIdleForTest(std::chrono::seconds(2)));
+    const std::string corruptPath = "cache/library/"
+        + LibraryCache::scopeKey(corruptUrl, "policy-corrupt")
+        + "/catalog.sqlite3";
+    CHECK(corrupt.deconfigureScope() > corruptEpoch);
+    CHECK(corrupt.waitForIdleForTest(std::chrono::seconds(2)));
+    std::ofstream corruptFile(corruptPath, std::ios::binary | std::ios::trunc);
+    corruptFile << "not a SQLite database";
+    corruptFile.close();
+    CHECK(corrupt.configureScope(corruptUrl, "policy-corrupt")
+          > corruptEpoch);
+    CHECK(corrupt.waitForIdleForTest(std::chrono::seconds(2)));
+    state = corrupt.scopeState();
+    CHECK(!state.ready && state.openState == CatalogDbOpenState::CorruptOrIo);
+    CHECK(state.error == CatalogDbErrorCategory::CorruptOrIo);
+
+    CHECK(created.runMigrationRollbackForTest().success);
+    CHECK(created.connectionStateForTest().preparedStatements > 0);
+    CHECK(created.runStatementReuseForTest().success);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -387,6 +491,7 @@ int main()
     testCatalogDbInvalidScope();
     testCatalogDbSqliteOwnership();
     testCatalogDbSchemaV1();
+    testCatalogDbSchemaOpenPolicy();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

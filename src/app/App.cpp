@@ -123,6 +123,7 @@ App::App()
     , m_renderer(nullptr)
     , m_fb(nullptr)
     , m_fbTex(nullptr)
+    , m_catalogDb(std::make_unique<CatalogDb>())
     , m_running(false)
     , m_lastTick(0)
     , m_playbackStarting(false)
@@ -143,6 +144,7 @@ App::~App()
         m_downloadManager.reset();
         printf("[App] Download manager stopped\n");
     }
+    m_catalogDb.reset();
     if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
     if (m_fb)     SDL_FreeSurface(m_fb);
     if (m_renderer) SDL_DestroyRenderer(m_renderer);

@@ -52,6 +52,7 @@ endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
+    $(SRC_DIR)/catalog/CatalogDb.cpp \
     $(SRC_DIR)/app/UiDiagnostics.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
     $(SRC_DIR)/data/MockData.cpp \
@@ -117,7 +118,7 @@ OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OBJS        += $(SQLITE_HOST_OBJ)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
-               output/build/download \
+               output/build/download output/build/catalog \
                output/build/diagnostics \
                output/build/ui output/build/ui/screens \
                output/build/playback
@@ -174,6 +175,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/net/HttpClient.cpp \
                src/net/Session.cpp \
                src/net/DeviceIdentity.cpp \
+               src/catalog/CatalogDb.cpp \
                src/image/stb_image_impl.cpp \
                src/image/ImageDecoder.cpp \
                src/cache/ImageCache.cpp \

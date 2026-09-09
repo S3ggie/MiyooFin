@@ -504,6 +504,60 @@ static void testCatalogDbMediaItemCollections()
     CHECK(result.collectionsParity);
 }
 
+static void testCatalogDbHierarchyQueries()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-hierarchy-query.example",
+                                        "hierarchy-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    const auto fixture = db.seedHierarchyQueryFixturesForTest();
+    CHECK(fixture.success && fixture.workerOwned);
+    CHECK(fixture.hierarchyFixture && fixture.hierarchyIndexes);
+
+    auto seasons = db.getSeasons("__task10_series__").get();
+    CHECK(seasons.success && seasons.workerOwned && !seasons.superseded);
+    CHECK(seasons.items.size() == 3);
+    if (seasons.items.size() == 3) {
+        CHECK(seasons.items[0].id == "__task10_season_a__");
+        CHECK(seasons.items[1].id == "__task10_season_z__");
+        CHECK(seasons.items[2].id == "__task10_season_b__");
+        CHECK(seasons.items[0].genre == "Drama");
+        CHECK(seasons.items[0].imageTags["Primary"] == "season-tag");
+    }
+
+    auto episodes = db.getEpisodes("__task10_season_a__").get();
+    CHECK(episodes.success && episodes.workerOwned && !episodes.superseded);
+    CHECK(episodes.items.size() == 3);
+    if (episodes.items.size() == 3) {
+        CHECK(episodes.items[0].id == "__task10_episode_a__");
+        CHECK(episodes.items[1].id == "__task10_episode_z__");
+        CHECK(episodes.items[2].id == "__task10_episode_b__");
+        CHECK(episodes.items[0].imageTags["Primary"] == "episode-tag");
+    }
+
+    auto empty = db.getSeasons("__task10_missing_series__").get();
+    CHECK(empty.success && empty.items.empty());
+
+    auto cancelledToken = std::make_shared<std::atomic_bool>(true);
+    CatalogDbJobMetadata cancelledMetadata;
+    cancelledMetadata.cancellation = cancelledToken;
+    auto cancelled = db.getEpisodes("__task10_season_a__", cancelledMetadata).get();
+    CHECK(cancelled.cancelled && !cancelled.success && cancelled.items.empty());
+
+    db.setWorkerPausedForTest(true);
+    auto stale = db.getSeasons("__task10_series__");
+    db.setGenerationForTest(1);
+    db.setWorkerPausedForTest(false);
+    const auto staleResult = stale.get();
+    CHECK(staleResult.superseded && !staleResult.success
+          && staleResult.items.empty());
+
+    const auto cleared = db.clearHierarchyQueryFixturesForTest();
+    CHECK(cleared.success && cleared.workerOwned);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -529,6 +583,7 @@ int main()
     testCatalogDbSchemaOpenPolicy();
     testCatalogDbMediaItemCodec();
     testCatalogDbMediaItemCollections();
+    testCatalogDbHierarchyQueries();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

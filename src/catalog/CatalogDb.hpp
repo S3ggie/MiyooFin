@@ -144,6 +144,16 @@ struct CatalogDbHierarchyResult {
     std::vector<MediaItem> items;
 };
 
+struct CatalogDbHierarchyWriteResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t rowsWritten = 0;
+};
+
 /// App-scoped owner for CatalogDb work. Database behavior is added by later
 /// migration tasks; this shell only proves the worker lifecycle.
 class CatalogDb {
@@ -196,6 +206,17 @@ public:
     std::future<CatalogDbHierarchyResult> getEpisodes(
         const std::string &seasonId,
         const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyWriteResult> upsertSeriesHierarchy(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, std::int64_t refreshMs,
+        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyWriteResult>
+    upsertSeriesHierarchyForTest(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, std::int64_t refreshMs,
+        int failAfterRows, int cancelAfterRows);
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -227,6 +248,7 @@ private:
 
     struct TestCommand;
     struct QueryCommand;
+    struct HierarchyWriteCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -235,6 +257,14 @@ private:
     void processScopeCommand(ScopeCommand command);
     void processTestCommand(const std::shared_ptr<TestCommand> &command);
     void processHierarchyQuery(const std::shared_ptr<QueryCommand> &command);
+    void processHierarchyWrite(
+        const std::shared_ptr<HierarchyWriteCommand> &command);
+    std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, std::int64_t refreshMs,
+        const CatalogDbJobMetadata &metadata, int failAfterRows,
+        int cancelAfterRows);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -248,6 +278,7 @@ private:
     std::deque<ScopeCommand> m_scopeCommands;
     std::deque<std::shared_ptr<TestCommand>> m_testCommands;
     std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
+    std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

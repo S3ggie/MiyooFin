@@ -373,6 +373,50 @@ bool sameMediaItemScalars(const MediaItem &expected, const MediaItem &actual)
         && expected.artG == actual.artG && expected.artB == actual.artB;
 }
 
+bool validateHierarchyInput(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::string &error)
+{
+    if (series.id.empty() || series.type != "show"
+        || !series.seriesId.empty() || !series.seasonId.empty()) {
+        error = "invalid series hierarchy root";
+        return false;
+    }
+    std::set<std::string> seasonIds;
+    std::set<std::string> itemIds;
+    itemIds.insert(series.id);
+    for (const auto &season : seasons) {
+        if (season.id.empty() || season.type != "season"
+            || season.seriesId != series.id || !season.seasonId.empty()
+            || !seasonIds.insert(season.id).second
+            || !itemIds.insert(season.id).second) {
+            error = "invalid season hierarchy relationship";
+            return false;
+        }
+    }
+    if (episodesBySeason.size() != seasonIds.size()) {
+        error = "episode map does not match returned seasons";
+        return false;
+    }
+    for (const auto &entry : episodesBySeason) {
+        if (!seasonIds.count(entry.first)) {
+            error = "episode map contains an unknown season";
+            return false;
+        }
+        for (const auto &episode : entry.second) {
+            if (episode.id.empty() || episode.type != "episode"
+                || episode.seriesId != series.id
+                || episode.seasonId != entry.first
+                || !itemIds.insert(episode.id).second) {
+                error = "invalid episode hierarchy relationship";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 struct CatalogDb::TestCommand {
@@ -393,6 +437,18 @@ struct CatalogDb::QueryCommand {
     std::promise<CatalogDbHierarchyResult> result;
 };
 
+struct CatalogDb::HierarchyWriteCommand {
+    MediaItem series;
+    std::vector<MediaItem> seasons;
+    std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+    std::uint64_t generation = 0;
+    std::int64_t refreshMs = 0;
+    CatalogDbJobMetadata metadata;
+    int failAfterRows = -1;
+    int cancelAfterRows = -1;
+    std::promise<CatalogDbHierarchyWriteResult> result;
+};
+
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
 {
@@ -409,6 +465,7 @@ CatalogDb::~CatalogDb()
         m_scopeCommands.clear();
         m_testCommands.clear();
         m_queryCommands.clear();
+        m_writeCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
@@ -665,6 +722,83 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
     return result;
 }
 
+std::future<CatalogDbHierarchyWriteResult> CatalogDb::upsertSeriesHierarchy(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, std::int64_t refreshMs,
+    const CatalogDbJobMetadata &metadata)
+{
+    return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
+                                 refreshMs, metadata, -1, -1);
+}
+
+std::future<CatalogDbHierarchyWriteResult>
+CatalogDb::upsertSeriesHierarchyForTest(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, std::int64_t refreshMs, int failAfterRows,
+    int cancelAfterRows)
+{
+    return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
+                                 refreshMs, {}, failAfterRows,
+                                 cancelAfterRows);
+}
+
+std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, std::int64_t refreshMs,
+    const CatalogDbJobMetadata &metadata, int failAfterRows,
+    int cancelAfterRows)
+{
+    auto command = std::make_shared<HierarchyWriteCommand>();
+    command->series = series;
+    command->seasons = seasons;
+    command->episodesBySeason = episodesBySeason;
+    command->generation = generation;
+    command->refreshMs = refreshMs;
+    command->metadata = metadata;
+    command->failAfterRows = failAfterRows;
+    command->cancelAfterRows = cancelAfterRows;
+    std::future<CatalogDbHierarchyWriteResult> result =
+        command->result.get_future();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_stopping) {
+            CatalogDbHierarchyWriteResult stopped;
+            stopped.error = CatalogDbErrorCategory::ScopeNotReady;
+            stopped.message = "CatalogDb is stopping";
+            command->result.set_value(std::move(stopped));
+            return result;
+        }
+        if (metadata.cancellation && metadata.cancellation->load()) {
+            CatalogDbHierarchyWriteResult cancelled;
+            cancelled.cancelled = true;
+            cancelled.error = CatalogDbErrorCategory::Superseded;
+            cancelled.message = "CatalogDb hierarchy write cancelled";
+            command->result.set_value(std::move(cancelled));
+            return result;
+        }
+        if (m_pendingJobs >= kMaxPendingJobs) {
+            CatalogDbHierarchyWriteResult full;
+            full.error = CatalogDbErrorCategory::OpenFailed;
+            full.message = "CatalogDb write queue is full";
+            command->result.set_value(std::move(full));
+            return result;
+        }
+        if (command->metadata.generation == 0) {
+            command->metadata.generation = m_generation;
+        }
+        if (command->metadata.scopeEpoch == 0) {
+            command->metadata.scopeEpoch = m_requestedEpoch;
+        }
+        m_writeCommands.push_back(command);
+        ++m_pendingJobs;
+    }
+    m_wake.notify_one();
+    return result;
+}
+
 CatalogDbEnqueueResult CatalogDb::enqueueScopedNoopForTest(
     CatalogDbPriority priority)
 {
@@ -773,6 +907,20 @@ void CatalogDb::workerLoop()
             m_runningJob = true;
             lock.unlock();
             processHierarchyQuery(command);
+            lock.lock();
+            m_runningJob = false;
+            m_idle.notify_all();
+            continue;
+        }
+
+        if (!m_writeCommands.empty()) {
+            std::shared_ptr<HierarchyWriteCommand> command =
+                std::move(m_writeCommands.front());
+            m_writeCommands.pop_front();
+            --m_pendingJobs;
+            m_runningJob = true;
+            lock.unlock();
+            processHierarchyWrite(command);
             lock.lock();
             m_runningJob = false;
             m_idle.notify_all();
@@ -1062,6 +1210,277 @@ void CatalogDb::processHierarchyQuery(
     if (const QueryState queryState = state(); queryState != QueryState::Valid) {
         result.items.clear();
         rejectState(queryState);
+        finish();
+        return;
+    }
+    result.success = true;
+    finish();
+}
+
+void CatalogDb::processHierarchyWrite(
+    const std::shared_ptr<HierarchyWriteCommand> &command)
+{
+    assert(std::this_thread::get_id() == m_worker.get_id());
+    CatalogDbHierarchyWriteResult result;
+    result.workerOwned = true;
+    auto finish = [&] {
+        command->result.set_value(std::move(result));
+    };
+    if (!m_db) {
+        result.error = CatalogDbErrorCategory::ScopeNotReady;
+        result.message = "CatalogDb has no ready scoped connection";
+        finish();
+        return;
+    }
+    if (!validateHierarchyInput(command->series, command->seasons,
+                                command->episodesBySeason, result.message)) {
+        result.error = CatalogDbErrorCategory::ConfigurationFailed;
+        finish();
+        return;
+    }
+
+    enum class WriteState : unsigned char {
+        Valid,
+        Cancelled,
+        Superseded,
+    };
+    auto state = [&] {
+        if (command->cancelAfterRows >= 0
+            && result.rowsWritten >= static_cast<std::size_t>(
+                                         command->cancelAfterRows)) {
+            return WriteState::Cancelled;
+        }
+        if (command->metadata.cancellation
+            && command->metadata.cancellation->load()) {
+            return WriteState::Cancelled;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command->metadata.generation != m_generation
+            || command->metadata.scopeEpoch != m_requestedEpoch
+            || !m_scopeConfigured || !m_scopeReady) {
+            return WriteState::Superseded;
+        }
+        return WriteState::Valid;
+    };
+    auto rejectState = [&](WriteState writeState) {
+        result.error = CatalogDbErrorCategory::Superseded;
+        if (writeState == WriteState::Cancelled) {
+            result.cancelled = true;
+            result.message = "CatalogDb hierarchy write cancelled";
+        } else {
+            result.superseded = true;
+            result.message = "CatalogDb hierarchy write superseded";
+        }
+    };
+    auto validState = [&] {
+        const WriteState writeState = state();
+        if (writeState != WriteState::Valid) {
+            rejectState(writeState);
+            return false;
+        }
+        return true;
+    };
+    if (!validState()) {
+        finish();
+        return;
+    }
+
+    auto prepareCached = [&](const char *name, const char *sql,
+                             sqlite3_stmt *&statement) {
+        auto existing = m_statements.find(name);
+        if (existing != m_statements.end()) {
+            statement = existing->second;
+            return true;
+        }
+        if (sqlite3_prepare_v2(m_db, sql, -1, &statement, nullptr) != SQLITE_OK) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            return false;
+        }
+        m_statements.emplace(name, statement);
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_preparedStatementCount = m_statements.size();
+        }
+        return true;
+    };
+    sqlite3_stmt *upsert = nullptr;
+    sqlite3_stmt *deleteSeasons = nullptr;
+    sqlite3_stmt *deleteEpisodes = nullptr;
+    sqlite3_stmt *markComplete = nullptr;
+    sqlite3_stmt *deleteGenres = nullptr;
+    sqlite3_stmt *insertGenre = nullptr;
+    sqlite3_stmt *deleteImageTags = nullptr;
+    sqlite3_stmt *insertImageTag = nullptr;
+    sqlite3_stmt *selectGenres = nullptr;
+    sqlite3_stmt *selectImageTags = nullptr;
+    if (!prepareCached(
+            "hierarchy_upsert_item",
+            "INSERT INTO media_items("
+            "id, kind, title, overview, production_year, community_rating,"
+            "etag, played, progress, playback_position_ticks, index_number,"
+            "parent_index_number, runtime_ticks, series_name, series_id,"
+            "season_id, art_r, art_g, art_b) "
+            "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+            "?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+            "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
+            "title=excluded.title, overview=excluded.overview, "
+            "production_year=excluded.production_year, "
+            "community_rating=excluded.community_rating, etag=excluded.etag, "
+            "played=excluded.played, progress=excluded.progress, "
+            "playback_position_ticks=excluded.playback_position_ticks, "
+            "index_number=excluded.index_number, "
+            "parent_index_number=excluded.parent_index_number, "
+            "runtime_ticks=excluded.runtime_ticks, "
+            "series_name=excluded.series_name, series_id=excluded.series_id, "
+            "season_id=excluded.season_id, art_r=excluded.art_r, "
+            "art_g=excluded.art_g, art_b=excluded.art_b",
+            upsert)
+        || !prepareCached(
+               "hierarchy_delete_seasons",
+               "DELETE FROM media_items WHERE kind=3 AND series_id=?1",
+               deleteSeasons)
+        || !prepareCached(
+               "hierarchy_delete_episodes",
+               "DELETE FROM media_items WHERE kind=4 AND season_id=?1",
+               deleteEpisodes)
+        || !prepareCached(
+               "hierarchy_mark_complete",
+               "INSERT INTO hierarchy_state(series_id, complete, "
+               "last_refresh_ms, last_generation) VALUES(?1, 1, ?2, ?3) "
+               "ON CONFLICT(series_id) DO UPDATE SET complete=1, "
+               "last_refresh_ms=excluded.last_refresh_ms, "
+               "last_generation=excluded.last_generation",
+               markComplete)
+        || !prepareCached("media_item_genres_delete",
+                          "DELETE FROM item_genres WHERE item_id=?1",
+                          deleteGenres)
+        || !prepareCached(
+               "media_item_genre_insert",
+               "INSERT INTO item_genres(item_id, ordinal, genre) "
+               "VALUES(?1, ?2, ?3)",
+               insertGenre)
+        || !prepareCached("media_item_image_tags_delete",
+                          "DELETE FROM item_image_tags WHERE item_id=?1",
+                          deleteImageTags)
+        || !prepareCached(
+               "media_item_image_tag_insert",
+               "INSERT INTO item_image_tags(item_id, image_type, tag) "
+               "VALUES(?1, ?2, ?3)",
+               insertImageTag)
+        || !prepareCached(
+               "media_item_genres_select",
+               "SELECT ordinal, genre FROM item_genres WHERE item_id=?1 "
+               "ORDER BY ordinal",
+               selectGenres)
+        || !prepareCached(
+               "media_item_image_tags_select",
+               "SELECT image_type, tag FROM item_image_tags WHERE item_id=?1 "
+               "ORDER BY image_type",
+               selectImageTags)) {
+        finish();
+        return;
+    }
+
+    auto reset = [](sqlite3_stmt *statement) {
+        sqlite3_reset(statement);
+        sqlite3_clear_bindings(statement);
+    };
+    const MediaItemCollectionStatements collections{
+        deleteGenres, insertGenre, deleteImageTags, insertImageTag,
+        selectGenres, selectImageTags};
+    auto rollback = [&] {
+        std::string ignored;
+        exec(m_db, "ROLLBACK;", ignored);
+    };
+    auto deleteById = [&](sqlite3_stmt *statement, const std::string &id) {
+        reset(statement);
+        const bool ok = sqlite3_bind_text(statement, 1, id.c_str(), -1,
+                                          SQLITE_TRANSIENT) == SQLITE_OK
+            && sqlite3_step(statement) == SQLITE_DONE;
+        if (!ok) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+        }
+        reset(statement);
+        return ok;
+    };
+    auto writeItem = [&](const MediaItem &item) {
+        if (!validState()) {
+            return false;
+        }
+        MediaItemSqlError error = MediaItemSqlError::None;
+        reset(upsert);
+        const bool bound = bindMediaItemScalars(upsert, item, error);
+        const bool stepped = bound && sqlite3_step(upsert) == SQLITE_DONE;
+        if (!stepped) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            reset(upsert);
+            return false;
+        }
+        reset(upsert);
+        if (!replaceMediaItemCollections(collections, item, error)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "hierarchy collection write failed";
+            return false;
+        }
+        ++result.rowsWritten;
+        if (command->failAfterRows >= 0
+            && result.rowsWritten >= static_cast<std::size_t>(
+                                         command->failAfterRows)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "injected hierarchy write failure";
+            return false;
+        }
+        return true;
+    };
+
+    if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)
+        || !writeItem(command->series)
+        || !deleteById(deleteSeasons, command->series.id)) {
+        rollback();
+        finish();
+        return;
+    }
+    for (const auto &season : command->seasons) {
+        if (!deleteById(deleteEpisodes, season.id)
+            || !writeItem(season)) {
+            rollback();
+            finish();
+            return;
+        }
+        for (const auto &episode : command->episodesBySeason.at(season.id)) {
+            if (!writeItem(episode)) {
+                rollback();
+                finish();
+                return;
+            }
+        }
+    }
+    if (!validState()) {
+        rollback();
+        finish();
+        return;
+    }
+    reset(markComplete);
+    if (sqlite3_bind_text(markComplete, 1, command->series.id.c_str(), -1,
+                          SQLITE_TRANSIENT) != SQLITE_OK
+        || sqlite3_bind_int64(markComplete, 2, command->refreshMs) != SQLITE_OK
+        || sqlite3_bind_int64(markComplete, 3,
+                              static_cast<sqlite3_int64>(command->generation))
+               != SQLITE_OK
+        || sqlite3_step(markComplete) != SQLITE_DONE) {
+        result.error = CatalogDbErrorCategory::SqliteError;
+        result.message = sqlite3_errmsg(m_db);
+        reset(markComplete);
+        rollback();
+        finish();
+        return;
+    }
+    reset(markComplete);
+    if (!exec(m_db, "COMMIT;", result.message)) {
+        rollback();
         finish();
         return;
     }

@@ -558,6 +558,109 @@ static void testCatalogDbHierarchyQueries()
     CHECK(cleared.success && cleared.workerOwned);
 }
 
+static void testCatalogDbAtomicHierarchyWrite()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-hierarchy-write.example",
+                                        "hierarchy-write-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    MediaItem series;
+    series.id = "__task11_series__";
+    series.type = "show";
+    series.title = "Atomic Series";
+    MediaItem seasonOne;
+    seasonOne.id = "__task11_season_one__";
+    seasonOne.type = "season";
+    seasonOne.seriesId = series.id;
+    seasonOne.indexNumber = 1;
+    seasonOne.title = "Season One";
+    MediaItem seasonTwo = seasonOne;
+    seasonTwo.id = "__task11_season_two__";
+    seasonTwo.indexNumber = 2;
+    seasonTwo.title = "Season Two";
+    MediaItem episodeOne;
+    episodeOne.id = "__task11_episode_one__";
+    episodeOne.type = "episode";
+    episodeOne.seriesId = series.id;
+    episodeOne.seasonId = seasonOne.id;
+    episodeOne.indexNumber = 1;
+    episodeOne.title = "Episode One";
+    MediaItem episodeTwo = episodeOne;
+    episodeTwo.id = "__task11_episode_two__";
+    episodeTwo.indexNumber = 2;
+    episodeTwo.title = "Episode Two";
+    MediaItem episodeThree = episodeTwo;
+    episodeThree.id = "__task11_episode_three__";
+    episodeThree.seasonId = seasonTwo.id;
+    episodeThree.indexNumber = 1;
+    episodeThree.title = "Episode Three";
+
+    const std::vector<MediaItem> initialSeasons = {seasonOne, seasonTwo};
+    const std::map<std::string, std::vector<MediaItem>> initialEpisodes = {
+        {seasonOne.id, {episodeOne, episodeTwo}},
+        {seasonTwo.id, {episodeThree}},
+    };
+    auto first = db.upsertSeriesHierarchy(series, initialSeasons,
+                                          initialEpisodes, 10, 100).get();
+    CHECK(first.success && first.workerOwned && first.rowsWritten == 6);
+
+    auto initialRead = db.getEpisodes(seasonOne.id).get();
+    CHECK(initialRead.success && initialRead.items.size() == 2);
+
+    const std::vector<MediaItem> reducedSeasons = {seasonOne};
+    const std::map<std::string, std::vector<MediaItem>> reducedEpisodes = {
+        {seasonOne.id, {episodeOne}},
+    };
+    MediaItem updatedSeries = series;
+    updatedSeries.title = "Updated Atomic Series";
+    auto reduced = db.upsertSeriesHierarchy(updatedSeries, reducedSeasons,
+                                             reducedEpisodes, 11, 200).get();
+    CHECK(reduced.success && reduced.rowsWritten == 3);
+    auto reducedSeasonsRead = db.getSeasons(series.id).get();
+    CHECK(reducedSeasonsRead.success && reducedSeasonsRead.items.size() == 1
+          && reducedSeasonsRead.items[0].id == seasonOne.id);
+    auto reducedEpisodesRead = db.getEpisodes(seasonOne.id).get();
+    CHECK(reducedEpisodesRead.success && reducedEpisodesRead.items.size() == 1
+          && reducedEpisodesRead.items[0].id == episodeOne.id);
+    auto staleSeasonRead = db.getEpisodes(seasonTwo.id).get();
+    CHECK(staleSeasonRead.success && staleSeasonRead.items.empty());
+
+    auto repeated = db.upsertSeriesHierarchy(updatedSeries, reducedSeasons,
+                                              reducedEpisodes, 11, 200).get();
+    CHECK(repeated.success && repeated.rowsWritten == 3);
+
+    MediaItem malformedSeason = seasonOne;
+    malformedSeason.seriesId = "__task11_wrong_series__";
+    auto malformed = db.upsertSeriesHierarchy(
+        updatedSeries, {malformedSeason}, {{malformedSeason.id, {}}}, 12, 300)
+        .get();
+    CHECK(!malformed.success && !malformed.superseded);
+    auto preservedAfterMalformed = db.getSeasons(series.id).get();
+    CHECK(preservedAfterMalformed.success
+          && preservedAfterMalformed.items.size() == 1);
+
+    auto injected = db.upsertSeriesHierarchyForTest(
+        updatedSeries, initialSeasons, initialEpisodes, 13, 400, 2, -1).get();
+    CHECK(!injected.success && !injected.cancelled);
+    auto preservedAfterFailure = db.getEpisodes(seasonOne.id).get();
+    CHECK(preservedAfterFailure.success && preservedAfterFailure.items.size() == 1
+          && preservedAfterFailure.items[0].id == episodeOne.id);
+
+    auto cancelled = db.upsertSeriesHierarchyForTest(
+        updatedSeries, initialSeasons, initialEpisodes, 14, 500, -1, 2).get();
+    CHECK(!cancelled.success && cancelled.cancelled);
+    auto preservedAfterCancel = db.getEpisodes(seasonOne.id).get();
+    CHECK(preservedAfterCancel.success && preservedAfterCancel.items.size() == 1
+          && preservedAfterCancel.items[0].id == episodeOne.id);
+
+    auto empty = db.upsertSeriesHierarchy(updatedSeries, {}, {}, 15, 600).get();
+    CHECK(empty.success && empty.rowsWritten == 1);
+    auto emptyRead = db.getSeasons(series.id).get();
+    CHECK(emptyRead.success && emptyRead.items.empty());
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -584,6 +687,7 @@ int main()
     testCatalogDbMediaItemCodec();
     testCatalogDbMediaItemCollections();
     testCatalogDbHierarchyQueries();
+    testCatalogDbAtomicHierarchyWrite();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

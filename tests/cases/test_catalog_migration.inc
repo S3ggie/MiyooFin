@@ -134,6 +134,7 @@ static void testCatalogDbMigrationPathStates()
         const std::string migratingBefore = readTestBytes(paths.migratingPath);
         {
             CatalogDb db;
+            db.setLegacyMigrationAutoActivationForTest(false);
             const auto epoch = db.configureScope(url, user);
             CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
             const auto state = db.scopeState();
@@ -291,11 +292,9 @@ static void testCatalogDbLegacyMigration()
         CatalogDb db;
         const auto epoch = db.configureScope(url, user);
         CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-        CHECK(!db.scopeState().ready);
-        const auto migration = db.runLegacyMigrationForTest();
-        CHECK(migration.success && migration.workerOwned);
-        CHECK(db.scopeState().requestedEpoch == epoch
-              && db.scopeState().ready);
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && state.ready);
+        CHECK(state.migration.attempted && state.migration.succeeded);
         const auto schema = db.runSchemaDiagnosticsForTest();
         CHECK(schema.success && schema.applicationId == 0x4D59464E
               && schema.userVersion == 1);
@@ -346,14 +345,13 @@ static void testCatalogDbLegacyMigrationFailures()
         }
         {
             CatalogDb db;
+            db.setLegacyMigrationFailureForTest(failAfterRows, failValidation);
             const auto epoch = db.configureScope(url, user);
             CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-            CHECK(!db.scopeState().ready);
-            const auto migration = db.runLegacyMigrationForTest(
-                failAfterRows, failValidation);
-            CHECK(!migration.success);
-            CHECK(db.scopeState().requestedEpoch == epoch);
-            CHECK(!db.scopeState().ready);
+            const auto state = db.scopeState();
+            CHECK(state.requestedEpoch == epoch);
+            CHECK(!state.ready && state.migration.attempted
+                  && !state.migration.succeeded);
             CHECK(access(paths.finalPath.c_str(), F_OK) != 0);
             CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
             if (staleTemp) {
@@ -381,9 +379,141 @@ static void testCatalogDbLegacyMigrationFailures()
         CatalogDb db;
         CHECK(db.configureScope(interruptedUrl, interruptedUser) != 0);
         CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-        const auto migration = db.runLegacyMigrationForTest();
-        CHECK(migration.success && db.scopeState().ready);
+        const auto state = db.scopeState();
+        CHECK(state.ready && state.migration.attempted
+              && state.migration.succeeded);
         CHECK(access(interrupted.migratingPath.c_str(), F_OK) != 0);
     }
     removeCatalogMigrationTestPaths(interrupted);
+}
+
+static void testCatalogDbAutomaticScopeActivation()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url = "https://sqlite-auto-activation-" + suffix
+        + ".example";
+    const std::string user = "automatic-activation-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    const OfflineCatalogSnapshot snapshot = makeCatalogMigrationSnapshot();
+    CHECK(OfflineCatalog::save(paths.legacyPath, snapshot));
+    const std::string legacyBefore = readTestBytes(paths.legacyPath);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(url, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && state.ready);
+        CHECK(state.migration.attempted && state.migration.succeeded);
+        CHECK(state.migration.finalPresent && state.migration.legacyPresent);
+        CHECK(state.migration.finalWins);
+        CHECK(readTestBytes(paths.legacyPath) == legacyBefore);
+    }
+    removeCatalogMigrationTestPaths(paths);
+
+    const std::string freshUrl = "https://sqlite-auto-fresh-" + suffix
+        + ".example";
+    const auto freshPaths = catalogMigrationTestPaths(freshUrl, user);
+    removeCatalogMigrationTestPaths(freshPaths);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(freshUrl, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && state.ready);
+        CHECK(!state.migration.attempted && !state.migration.succeeded);
+        CHECK(access(freshPaths.finalPath.c_str(), F_OK) == 0
+              && !state.migration.legacyPresent);
+    }
+    removeCatalogMigrationTestPaths(freshPaths);
+
+    const std::string finalUrl = "https://sqlite-auto-final-" + suffix
+        + ".example";
+    const auto finalPaths = catalogMigrationTestPaths(finalUrl, user);
+    removeCatalogMigrationTestPaths(finalPaths);
+    {
+        CatalogDb db;
+        CHECK(db.configureScope(finalUrl, user) != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    }
+    writeCatalogMigrationFile(finalPaths.legacyPath, "must remain legacy");
+    const std::string legacyFinalBefore = readTestBytes(finalPaths.legacyPath);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(finalUrl, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && state.ready);
+        CHECK(!state.migration.attempted && !state.migration.succeeded
+              && state.migration.finalWins);
+        CHECK(readTestBytes(finalPaths.legacyPath) == legacyFinalBefore);
+    }
+    removeCatalogMigrationTestPaths(finalPaths);
+
+    const std::string failedUrl = "https://sqlite-auto-failed-" + suffix
+        + ".example";
+    const auto failedPaths = catalogMigrationTestPaths(failedUrl, user);
+    removeCatalogMigrationTestPaths(failedPaths);
+    CHECK(makeCatalogMigrationTestDirectory(failedPaths.offlineDirectory));
+    writeCatalogMigrationFile(failedPaths.legacyPath, "invalid legacy source");
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(failedUrl, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epoch && !state.ready);
+        CHECK(state.status == CatalogDbScopeStatus::OpenFailed
+              && state.error == CatalogDbErrorCategory::CorruptOrIo);
+        CHECK(state.migration.attempted && !state.migration.succeeded);
+        CHECK(!state.migration.finalPresent);
+    }
+    removeCatalogMigrationTestPaths(failedPaths);
+
+    const std::string rapidA = "https://sqlite-auto-rapid-a-" + suffix
+        + ".example";
+    const std::string rapidB = "https://sqlite-auto-rapid-b-" + suffix
+        + ".example";
+    const std::string rapidC = "https://sqlite-auto-rapid-c-" + suffix
+        + ".example";
+    const auto pathsA = catalogMigrationTestPaths(rapidA, user);
+    const auto pathsB = catalogMigrationTestPaths(rapidB, user);
+    const auto pathsC = catalogMigrationTestPaths(rapidC, user);
+    removeCatalogMigrationTestPaths(pathsA);
+    removeCatalogMigrationTestPaths(pathsB);
+    removeCatalogMigrationTestPaths(pathsC);
+    {
+        CatalogDb db;
+        db.setWorkerPausedForTest(true);
+        const auto epochA = db.configureScope(rapidA, user);
+        const auto epochB = db.configureScope(rapidB, user);
+        const auto epochC = db.configureScope(rapidC, user);
+        db.setWorkerPausedForTest(false);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == epochC && state.ready);
+        CHECK(!db.canPublishForTest(epochA) && !db.canPublishForTest(epochB)
+              && db.canPublishForTest(epochC));
+    }
+    removeCatalogMigrationTestPaths(pathsA);
+    removeCatalogMigrationTestPaths(pathsB);
+    removeCatalogMigrationTestPaths(pathsC);
+
+    const std::string logoutUrl = "https://sqlite-auto-logout-" + suffix
+        + ".example";
+    const auto logoutPaths = catalogMigrationTestPaths(logoutUrl, user);
+    removeCatalogMigrationTestPaths(logoutPaths);
+    {
+        CatalogDb db;
+        db.setWorkerPausedForTest(true);
+        const auto oldEpoch = db.configureScope(logoutUrl, user);
+        const auto clearedEpoch = db.deconfigureScope();
+        db.setWorkerPausedForTest(false);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.requestedEpoch == clearedEpoch
+              && state.status == CatalogDbScopeStatus::Unconfigured
+              && !state.ready && !db.canPublishForTest(oldEpoch));
+    }
+    removeCatalogMigrationTestPaths(logoutPaths);
 }

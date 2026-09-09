@@ -230,6 +230,7 @@ bool App::init()
         // Cached UI is useful even without Wi-Fi. Validation continues in the
         // background and only an explicit authorization rejection logs out.
         m_savedFastPath = true;
+        configureCatalogScopeForSession();
         goToHome();
         startSavedSessionValidation();
         scheduleJournalSync();
@@ -301,6 +302,15 @@ void App::loadSavedUrl()
         m_serverUrl = buf;
     }
     fclose(f);
+}
+
+void App::configureCatalogScopeForSession()
+{
+    if (m_catalogDb && m_session.valid()) {
+        m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
+    } else if (m_catalogDb) {
+        m_catalogDb->deconfigureScope();
+    }
 }
 
 void App::loadSavedSession()
@@ -398,6 +408,7 @@ void App::goToLogin(const std::string &initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
+    if (m_catalogDb) m_catalogDb->deconfigureScope();
     if (m_downloadManager) m_downloadManager->configure(Session{});
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_session.clear(); }
     Session::remove();
@@ -800,6 +811,7 @@ int App::run()
                         goToHome();
                     } else {
                         printf("[App] AuthCheckScreen invalid -> Login\n");
+                        logout();
                         m_stack.pop();
                         m_stack.push(
                             std::make_unique<LoginScreen>(
@@ -820,6 +832,7 @@ int App::run()
                         m_session.userName    = login->result().userName;
                         m_session.deviceId    = m_deviceId;
                         m_session.save();
+                        configureCatalogScopeForSession();
                         if (m_downloadManager) m_downloadManager->configure(m_session);
 
                         // Also save server URL for standalone use

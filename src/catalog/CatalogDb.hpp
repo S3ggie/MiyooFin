@@ -90,6 +90,10 @@ struct CatalogDbTestResult {
     bool success = false;
     bool workerOwned = false;
     bool statementReused = false;
+    bool exactSchema = false;
+    bool foreignKeyCascade = false;
+    bool checkConstraints = false;
+    bool singletonSeeded = false;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::string foreignKeys;
@@ -98,6 +102,8 @@ struct CatalogDbTestResult {
     std::string synchronous;
     std::string lockingMode;
     std::string sentinel;
+    std::int64_t applicationId = 0;
+    std::int64_t userVersion = 0;
 };
 
 /// App-scoped owner for CatalogDb work. Database behavior is added by later
@@ -133,6 +139,9 @@ public:
     CatalogDbTestResult runSqliteDiagnosticsForTest();
     CatalogDbTestResult runStatementReuseForTest();
     CatalogDbTestResult runSqlErrorForTest();
+    CatalogDbTestResult runSchemaDiagnosticsForTest();
+    CatalogDbTestResult writeSchemaMarkerForTest(const std::string &value);
+    CatalogDbTestResult readSchemaMarkerForTest();
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
 

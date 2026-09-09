@@ -741,6 +741,7 @@ static void testCatalogDbAuthoritativeReconcile()
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
+#include "cases/test_catalog_migration.inc"
 #include "cases/test_downloads.inc"
 #include "cases/test_telemetry.inc"
 // -------------------------------------------------------------------
@@ -766,6 +767,9 @@ int main()
     testCatalogDbHierarchyQueries();
     testCatalogDbAtomicHierarchyWrite();
     testCatalogDbAuthoritativeReconcile();
+    testCatalogDbMigrationPathStates();
+    testCatalogDbMigrationFutureFinalPreserved();
+    testCatalogDbMigrationPathError();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

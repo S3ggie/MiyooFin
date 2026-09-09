@@ -74,6 +74,39 @@ enum class CatalogDbOpenState : unsigned char {
     CorruptOrIo,
 };
 
+enum class CatalogDbMigrationFileState : unsigned char {
+    NoFiles,
+    LegacyOnly,
+    FinalOnly,
+    MigratingOnly,
+    LegacyAndFinal,
+    LegacyAndMigrating,
+    FinalAndMigrating,
+    LegacyFinalAndMigrating,
+    PathError,
+};
+
+enum class CatalogDbMigrationDecision : unsigned char {
+    CreateEmptyFinal,
+    StageLegacyImport,
+    RebuildMigratingAtMigrationStart,
+    FinalDatabaseWins,
+    FinalDatabaseWinsCleanupCandidate,
+    PathError,
+};
+
+struct CatalogDbMigrationState {
+    CatalogDbMigrationFileState files = CatalogDbMigrationFileState::NoFiles;
+    CatalogDbMigrationDecision decision =
+        CatalogDbMigrationDecision::CreateEmptyFinal;
+    bool finalPresent = false;
+    bool legacyPresent = false;
+    bool migratingPresent = false;
+    bool finalWins = false;
+    bool migratingCleanupCandidate = false;
+    bool pathError = false;
+};
+
 struct CatalogDbScopeState {
     std::uint64_t requestedEpoch = 0;
     bool configured = false;
@@ -81,6 +114,7 @@ struct CatalogDbScopeState {
     CatalogDbScopeStatus status = CatalogDbScopeStatus::Unconfigured;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
+    CatalogDbMigrationState migration;
 };
 
 struct CatalogDbJobMetadata {
@@ -319,6 +353,7 @@ private:
     CatalogDbScopeStatus m_scopeStatus = CatalogDbScopeStatus::Unconfigured;
     CatalogDbErrorCategory m_lastError = CatalogDbErrorCategory::None;
     CatalogDbOpenState m_openState = CatalogDbOpenState::NotAttempted;
+    CatalogDbMigrationState m_migrationState;
     bool m_stopping = false;
     std::thread m_worker;
     sqlite3 *m_db = nullptr;

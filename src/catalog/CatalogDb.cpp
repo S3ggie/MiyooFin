@@ -1,6 +1,7 @@
 #include "CatalogDb.hpp"
 
 #include "../cache/LibraryCache.hpp"
+#include "../cache/OfflineCatalog.hpp"
 #include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "MediaItemSql.hpp"
@@ -72,6 +73,93 @@ std::string catalogPath(const std::string &scopeKey)
     const std::string snapshot = LibraryCache::cachePath("cache", scopeKey);
     const std::size_t slash = snapshot.find_last_of('/');
     return snapshot.substr(0, slash + 1) + "catalog.sqlite3";
+}
+
+std::string migratingPath(const std::string &scopeKey)
+{
+    return catalogPath(scopeKey) + ".migrating";
+}
+
+struct MigrationPathPresence {
+    bool present = false;
+    bool error = false;
+};
+
+MigrationPathPresence inspectMigrationPath(const std::string &path)
+{
+    struct stat information {
+    };
+    if (::stat(path.c_str(), &information) == 0) {
+        return {true, false};
+    }
+    return {false, errno != ENOENT};
+}
+
+CatalogDbMigrationState inspectMigrationState(const std::string &scopeKey)
+{
+    const MigrationPathPresence legacy = inspectMigrationPath(
+        OfflineCatalog::cachePath("cache", scopeKey));
+    const MigrationPathPresence final = inspectMigrationPath(
+        catalogPath(scopeKey));
+    const MigrationPathPresence migrating = inspectMigrationPath(
+        migratingPath(scopeKey));
+
+    CatalogDbMigrationState state;
+    state.legacyPresent = legacy.present;
+    state.finalPresent = final.present;
+    state.migratingPresent = migrating.present;
+    state.pathError = legacy.error || final.error || migrating.error;
+    if (state.pathError) {
+        state.files = CatalogDbMigrationFileState::PathError;
+        state.decision = CatalogDbMigrationDecision::PathError;
+        return state;
+    }
+
+    const unsigned mask = (state.legacyPresent ? 1u : 0u)
+        | (state.finalPresent ? 2u : 0u)
+        | (state.migratingPresent ? 4u : 0u);
+    switch (mask) {
+    case 0:
+        state.files = CatalogDbMigrationFileState::NoFiles;
+        state.decision = CatalogDbMigrationDecision::CreateEmptyFinal;
+        break;
+    case 1:
+        state.files = CatalogDbMigrationFileState::LegacyOnly;
+        state.decision = CatalogDbMigrationDecision::StageLegacyImport;
+        break;
+    case 2:
+        state.files = CatalogDbMigrationFileState::FinalOnly;
+        state.decision = CatalogDbMigrationDecision::FinalDatabaseWins;
+        break;
+    case 4:
+        state.files = CatalogDbMigrationFileState::MigratingOnly;
+        state.decision =
+            CatalogDbMigrationDecision::RebuildMigratingAtMigrationStart;
+        break;
+    case 3:
+        state.files = CatalogDbMigrationFileState::LegacyAndFinal;
+        state.decision = CatalogDbMigrationDecision::FinalDatabaseWins;
+        break;
+    case 5:
+        state.files = CatalogDbMigrationFileState::LegacyAndMigrating;
+        state.decision =
+            CatalogDbMigrationDecision::RebuildMigratingAtMigrationStart;
+        break;
+    case 6:
+        state.files = CatalogDbMigrationFileState::FinalAndMigrating;
+        state.decision =
+            CatalogDbMigrationDecision::FinalDatabaseWinsCleanupCandidate;
+        break;
+    case 7:
+        state.files = CatalogDbMigrationFileState::LegacyFinalAndMigrating;
+        state.decision =
+            CatalogDbMigrationDecision::FinalDatabaseWinsCleanupCandidate;
+        break;
+    }
+    state.finalWins = state.finalPresent;
+    state.migratingCleanupCandidate =
+        state.finalPresent && state.migratingPresent;
+    return state;
 }
 
 uint64_t telemetryNowIfEnabled() noexcept
@@ -583,6 +671,7 @@ std::uint64_t CatalogDb::configureScope(const std::string &serverUrl,
         m_lastError = validIdentity ? CatalogDbErrorCategory::None
                                     : CatalogDbErrorCategory::InvalidIdentity;
         m_openState = CatalogDbOpenState::NotAttempted;
+        m_migrationState = {};
         m_scopeCommands.clear();
         m_scopeCommands.push_back({
             validIdentity ? ScopeCommandKind::Configure
@@ -606,6 +695,7 @@ std::uint64_t CatalogDb::deconfigureScope()
         m_scopeStatus = CatalogDbScopeStatus::Unconfigured;
         m_lastError = CatalogDbErrorCategory::None;
         m_openState = CatalogDbOpenState::NotAttempted;
+        m_migrationState = {};
         m_scopeCommands.clear();
         m_scopeCommands.push_back({ScopeCommandKind::Deconfigure, epoch, {}});
     }
@@ -617,7 +707,7 @@ CatalogDbScopeState CatalogDb::scopeState() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return {m_requestedEpoch, m_scopeConfigured, m_scopeReady, m_scopeStatus,
-            m_lastError, m_openState};
+            m_lastError, m_openState, m_migrationState};
 }
 
 CatalogDbConnectionState CatalogDb::connectionStateForTest() const
@@ -1200,6 +1290,7 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
             ? CatalogDbErrorCategory::InvalidIdentity
             : CatalogDbErrorCategory::None;
         m_openState = CatalogDbOpenState::NotAttempted;
+        m_migrationState = {};
     }
 
     closeConnection();
@@ -2086,6 +2177,23 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     }
 
     const std::string path = catalogPath(command.scopeKey);
+    const CatalogDbMigrationState migrationState =
+        inspectMigrationState(command.scopeKey);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command.epoch == m_requestedEpoch) {
+            m_migrationState = migrationState;
+        }
+    }
+    if (migrationState.pathError) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command.epoch == m_requestedEpoch) {
+            m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
+            m_lastError = CatalogDbErrorCategory::CorruptOrIo;
+            m_openState = CatalogDbOpenState::CorruptOrIo;
+        }
+        return false;
+    }
     const std::size_t slash = path.find_last_of('/');
     std::string error;
     if (slash == std::string::npos || !makeDirectories(path.substr(0, slash))) {

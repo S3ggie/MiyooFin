@@ -15,6 +15,7 @@
 #include <iterator>
 #include <memory>
 #include <thread>
+#include <tuple>
 #include <curl/curl.h>
 #include <string>
 #include "miyoofin/version.hpp"
@@ -661,6 +662,82 @@ static void testCatalogDbAtomicHierarchyWrite()
     CHECK(emptyRead.success && emptyRead.items.empty());
 }
 
+static void testCatalogDbAuthoritativeReconcile()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-reconcile.example",
+                                        "reconcile-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    auto makeSeries = [&](const std::string &seriesId,
+                          const std::string &seasonId,
+                          const std::string &episodeId) {
+        MediaItem series;
+        series.id = seriesId;
+        series.type = "show";
+        series.title = seriesId;
+        MediaItem season;
+        season.id = seasonId;
+        season.type = "season";
+        season.seriesId = seriesId;
+        season.title = seasonId;
+        MediaItem episode;
+        episode.id = episodeId;
+        episode.type = "episode";
+        episode.seriesId = seriesId;
+        episode.seasonId = seasonId;
+        episode.title = episodeId;
+        return std::tuple<MediaItem, std::vector<MediaItem>,
+                          std::map<std::string, std::vector<MediaItem>>>(
+            series, {season}, {{seasonId, {episode}}});
+    };
+    const auto keep = makeSeries("__task12_keep__", "__task12_keep_season__",
+                                 "__task12_keep_episode__");
+    const auto remove = makeSeries("__task12_remove__",
+                                   "__task12_remove_season__",
+                                   "__task12_remove_episode__");
+    const auto downloaded = makeSeries(
+        "__task12_downloaded_series__", "__task12_downloaded_season__",
+        "__task12_downloaded_episode__");
+    auto seed = [&](const auto &fixture) {
+        return db.upsertSeriesHierarchy(std::get<0>(fixture), std::get<1>(fixture),
+                                        std::get<2>(fixture), 1, 100).get();
+    };
+    CHECK(seed(keep).success);
+    CHECK(seed(remove).success);
+    CHECK(seed(downloaded).success);
+
+    auto nonAuthoritative = db.reconcileSeries({}, false).get();
+    CHECK(nonAuthoritative.success && nonAuthoritative.skipped
+          && !nonAuthoritative.authoritative);
+    CHECK(db.getSeasons(std::get<0>(remove).id).get().items.size() == 1);
+
+    auto injected = db.reconcileSeriesForTest(
+        {std::get<0>(keep), std::get<0>(downloaded)}, true, 1).get();
+    CHECK(!injected.success && !injected.cancelled);
+    CHECK(db.getSeasons(std::get<0>(remove).id).get().items.size() == 1);
+
+    auto reconciled = db.reconcileSeries(
+        {std::get<0>(keep), std::get<0>(downloaded)}, true).get();
+    CHECK(reconciled.success && reconciled.authoritative
+          && reconciled.seriesUpserted == 2 && reconciled.seriesDeleted == 1);
+    auto removed = db.getSeasons(std::get<0>(remove).id).get();
+    CHECK(removed.success && removed.items.empty());
+    auto downloadedEpisodes = db.getEpisodes(std::get<1>(downloaded)[0].id).get();
+    CHECK(downloadedEpisodes.success && downloadedEpisodes.items.size() == 1
+          && downloadedEpisodes.items[0].id == "__task12_downloaded_episode__");
+
+    auto noOp = db.reconcileSeries(
+        {std::get<0>(keep), std::get<0>(downloaded)}, true).get();
+    CHECK(noOp.success && noOp.authoritative && noOp.seriesDeleted == 0);
+
+    const auto cleared = db.reconcileSeries({}, true).get();
+    CHECK(cleared.success && cleared.seriesUpserted == 0
+          && cleared.seriesDeleted == 2);
+    CHECK(db.getSeasons(std::get<0>(keep).id).get().items.empty());
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -688,6 +765,7 @@ int main()
     testCatalogDbMediaItemCollections();
     testCatalogDbHierarchyQueries();
     testCatalogDbAtomicHierarchyWrite();
+    testCatalogDbAuthoritativeReconcile();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

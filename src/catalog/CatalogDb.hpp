@@ -154,6 +154,19 @@ struct CatalogDbHierarchyWriteResult {
     std::size_t rowsWritten = 0;
 };
 
+struct CatalogDbReconcileResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool authoritative = false;
+    bool skipped = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t seriesUpserted = 0;
+    std::size_t seriesDeleted = 0;
+};
+
 /// App-scoped owner for CatalogDb work. Database behavior is added by later
 /// migration tasks; this shell only proves the worker lifecycle.
 class CatalogDb {
@@ -217,6 +230,12 @@ public:
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         int failAfterRows, int cancelAfterRows);
+    std::future<CatalogDbReconcileResult> reconcileSeries(
+        const std::vector<MediaItem> &series, bool authoritative,
+        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbReconcileResult> reconcileSeriesForTest(
+        const std::vector<MediaItem> &series, bool authoritative,
+        int failAfterRows);
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -249,6 +268,7 @@ private:
     struct TestCommand;
     struct QueryCommand;
     struct HierarchyWriteCommand;
+    struct ReconcileCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -259,12 +279,17 @@ private:
     void processHierarchyQuery(const std::shared_ptr<QueryCommand> &command);
     void processHierarchyWrite(
         const std::shared_ptr<HierarchyWriteCommand> &command);
+    void processReconcile(
+        const std::shared_ptr<ReconcileCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         const CatalogDbJobMetadata &metadata, int failAfterRows,
         int cancelAfterRows);
+    std::future<CatalogDbReconcileResult> enqueueReconcile(
+        const std::vector<MediaItem> &series, bool authoritative,
+        const CatalogDbJobMetadata &metadata, int failAfterRows);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -279,6 +304,7 @@ private:
     std::deque<std::shared_ptr<TestCommand>> m_testCommands;
     std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
     std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
+    std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

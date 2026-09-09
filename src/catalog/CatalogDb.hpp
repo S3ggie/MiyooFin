@@ -113,6 +113,11 @@ struct CatalogDbTestResult {
     bool codecInvalidKind = false;
     bool codecMissingId = false;
     bool codecNullableRelationships = false;
+    bool collectionsZero = false;
+    bool collectionsMultiple = false;
+    bool collectionsUpdateRemoval = false;
+    bool collectionsDeleteCascade = false;
+    bool collectionsParity = false;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::string foreignKeys;
@@ -165,6 +170,7 @@ public:
                                                  std::int64_t userVersion);
     CatalogDbTestResult runMigrationRollbackForTest();
     CatalogDbTestResult runMediaItemCodecForTest();
+    CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
 

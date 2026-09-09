@@ -32,6 +32,7 @@ constexpr unsigned char kReadSchemaMarkerOperation = 8;
 constexpr unsigned char kSetSchemaMetadataOperation = 9;
 constexpr unsigned char kMigrationRollbackOperation = 10;
 constexpr unsigned char kMediaItemCodecOperation = 11;
+constexpr unsigned char kMediaItemCollectionsOperation = 12;
 
 // Checked against SQLite's current magic.txt application-ID registry on
 // 2026-09-09. No MYFN entry is assigned; the value is the ASCII tag "MYFN".
@@ -531,6 +532,11 @@ CatalogDbTestResult CatalogDb::runMigrationRollbackForTest()
 CatalogDbTestResult CatalogDb::runMediaItemCodecForTest()
 {
     return runTestCommand(kMediaItemCodecOperation);
+}
+
+CatalogDbTestResult CatalogDb::runMediaItemCollectionsForTest()
+{
+    return runTestCommand(kMediaItemCollectionsOperation);
 }
 
 CatalogDbTestResult CatalogDb::writeSentinelForTest(const std::string &value)
@@ -1209,6 +1215,191 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             result.error = CatalogDbErrorCategory::ConfigurationFailed;
             if (result.message.empty()) {
                 result.message = "MediaItem scalar codec checks failed";
+            }
+        }
+        break;
+    }
+
+    case kMediaItemCollectionsOperation: {
+        sqlite3_stmt *insert = nullptr;
+        sqlite3_stmt *select = nullptr;
+        sqlite3_stmt *deleteGenres = nullptr;
+        sqlite3_stmt *insertGenre = nullptr;
+        sqlite3_stmt *deleteImageTags = nullptr;
+        sqlite3_stmt *insertImageTag = nullptr;
+        sqlite3_stmt *selectGenres = nullptr;
+        sqlite3_stmt *selectImageTags = nullptr;
+        sqlite3_stmt *deleteItem = nullptr;
+        if (!prepareNamed(
+                "media_item_scalar_insert",
+                "INSERT OR REPLACE INTO media_items("
+                "id, kind, title, overview, production_year, community_rating,"
+                "etag, played, progress, playback_position_ticks, index_number,"
+                "parent_index_number, runtime_ticks, series_name, series_id,"
+                "season_id, art_r, art_g, art_b) "
+                "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+                "?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                insert)
+            || !prepareNamed(
+                "media_item_scalar_select",
+                "SELECT id, kind, title, overview, production_year, "
+                "community_rating, etag, played, progress, "
+                "playback_position_ticks, index_number, parent_index_number, "
+                "runtime_ticks, series_name, series_id, season_id, art_r, "
+                "art_g, art_b FROM media_items WHERE id=?1",
+                select)
+            || !prepareNamed(
+                "media_item_genres_delete",
+                "DELETE FROM item_genres WHERE item_id=?1", deleteGenres)
+            || !prepareNamed(
+                "media_item_genre_insert",
+                "INSERT INTO item_genres(item_id, ordinal, genre) "
+                "VALUES(?1, ?2, ?3)", insertGenre)
+            || !prepareNamed(
+                "media_item_image_tags_delete",
+                "DELETE FROM item_image_tags WHERE item_id=?1",
+                deleteImageTags)
+            || !prepareNamed(
+                "media_item_image_tag_insert",
+                "INSERT INTO item_image_tags(item_id, image_type, tag) "
+                "VALUES(?1, ?2, ?3)", insertImageTag)
+            || !prepareNamed(
+                "media_item_genres_select",
+                "SELECT ordinal, genre FROM item_genres WHERE item_id=?1 "
+                "ORDER BY ordinal", selectGenres)
+            || !prepareNamed(
+                "media_item_image_tags_select",
+                "SELECT image_type, tag FROM item_image_tags WHERE item_id=?1 "
+                "ORDER BY image_type", selectImageTags)
+            || !prepareNamed(
+                "media_item_delete",
+                "DELETE FROM media_items WHERE id=?1", deleteItem)) {
+            break;
+        }
+
+        const MediaItemCollectionStatements collections{
+            deleteGenres, insertGenre, deleteImageTags, insertImageTag,
+            selectGenres, selectImageTags};
+        auto reset = [](sqlite3_stmt *statement) {
+            sqlite3_reset(statement);
+            sqlite3_clear_bindings(statement);
+        };
+        auto rollback = [&] {
+            std::string ignored;
+            exec(m_db, "ROLLBACK;", ignored);
+        };
+        auto insertAndRead = [&](const MediaItem &expected) {
+            if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)) {
+                return false;
+            }
+            MediaItemSqlError error = MediaItemSqlError::None;
+            reset(insert);
+            if (!bindMediaItemScalars(insert, expected, error)
+                || sqlite3_step(insert) != SQLITE_DONE) {
+                result.message = sqlite3_errmsg(m_db);
+                reset(insert);
+                rollback();
+                return false;
+            }
+            reset(insert);
+            if (!replaceMediaItemCollections(collections, expected, error)) {
+                result.message = "MediaItem collection replacement failed";
+                rollback();
+                return false;
+            }
+            if (!exec(m_db, "COMMIT;", result.message)) {
+                rollback();
+                return false;
+            }
+
+            reset(select);
+            if (sqlite3_bind_text(select, 1, expected.id.c_str(), -1,
+                                  SQLITE_TRANSIENT) != SQLITE_OK
+                || sqlite3_step(select) != SQLITE_ROW) {
+                result.message = sqlite3_errmsg(m_db);
+                reset(select);
+                return false;
+            }
+            MediaItem actual;
+            MediaItemSqlError readError = MediaItemSqlError::None;
+            const bool readOk = readMediaItemScalars(select, actual, readError);
+            reset(select);
+            if (!readOk || !readMediaItemCollections(collections, actual,
+                                                     readError)) {
+                result.message = "MediaItem collection read failed";
+                return false;
+            }
+            return mediaItemsEquivalentForCatalog(expected, actual);
+        };
+
+        MediaItem item;
+        item.id = "__task09_item__";
+        item.type = "movie";
+        item.title = "Collection Fixture";
+
+        result.collectionsZero = insertAndRead(item);
+
+        item.genres = {"Drama", "Science Fiction", "Thriller"};
+        item.genre = item.genres.front();
+        item.imageTags = {{"Backdrop", "backdrop-tag"},
+                          {"Primary", "primary-tag"},
+                          {"Thumb", "thumb-tag"}};
+        result.collectionsMultiple = insertAndRead(item);
+
+        MediaItem updated = item;
+        updated.genres = {"Updated"};
+        updated.genre = updated.genres.front();
+        updated.imageTags.clear();
+        result.collectionsUpdateRemoval = insertAndRead(updated);
+        if (result.collectionsUpdateRemoval) {
+            result.collectionsUpdateRemoval = updated.imageTags.empty()
+                && updated.genres.size() == 1
+                && updated.genre == updated.genres.front();
+        }
+
+        result.collectionsParity = result.collectionsZero
+            && result.collectionsMultiple && result.collectionsUpdateRemoval;
+
+        if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)) {
+            result.collectionsDeleteCascade = false;
+        } else {
+            reset(deleteItem);
+            const bool deleteOk = sqlite3_bind_text(
+                                    deleteItem, 1, item.id.c_str(), -1,
+                                    SQLITE_TRANSIENT) == SQLITE_OK
+                && sqlite3_step(deleteItem) == SQLITE_DONE;
+            reset(deleteItem);
+            if (!deleteOk) {
+                result.message = sqlite3_errmsg(m_db);
+                rollback();
+                result.collectionsDeleteCascade = false;
+            } else if (!exec(m_db, "COMMIT;", result.message)) {
+                rollback();
+                result.collectionsDeleteCascade = false;
+            } else {
+                MediaItem deleted;
+                deleted.id = item.id;
+                MediaItemSqlError readError = MediaItemSqlError::None;
+                const bool childrenEmpty = readMediaItemCollections(
+                    collections, deleted, readError)
+                    && deleted.genres.empty() && deleted.genre.empty()
+                    && deleted.imageTags.empty();
+                std::int64_t remaining = 1;
+                const bool rowGone = scalarInt(
+                    m_db,
+                    "SELECT COUNT(*) FROM media_items "
+                    "WHERE id='__task09_item__';",
+                    remaining, result.message) && remaining == 0;
+                result.collectionsDeleteCascade = childrenEmpty && rowGone;
+            }
+        }
+
+        result.success = result.collectionsParity
+            && result.collectionsDeleteCascade;
+        if (!result.success) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            if (result.message.empty()) {
+                result.message = "MediaItem collection checks failed";
             }
         }
         break;

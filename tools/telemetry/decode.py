@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode MFT v1 traces using only Python's standard library."""
+"""Decode MFT v1/v2 traces using only Python's standard library."""
 
 import argparse
 import csv
@@ -24,7 +24,7 @@ def _header(data):
     if data[:4] != schema.MAGIC:
         raise MftDecodeError("invalid MFT magic")
     version, header_size = struct.unpack_from("<HH", data, 4)
-    if version != schema.SCHEMA_VERSION:
+    if version not in schema.SUPPORTED_SCHEMA_VERSIONS:
         raise MftDecodeError("unsupported MFT schema version {}".format(version))
     if header_size != schema.FILE_HEADER_SIZE:
         raise MftDecodeError("invalid MFT header size {}".format(header_size))
@@ -48,7 +48,7 @@ def _unpack(fmt, payload):
     return struct.unpack(fmt, payload)
 
 
-def _decode_payload(record_type, payload):
+def _decode_payload(record_type, payload, version):
     if record_type == 1:
         values = _unpack("<7Q4I", payload)
         names = (
@@ -88,12 +88,18 @@ def _decode_payload(record_type, payload):
         }
     if record_type == 4:
         values = _unpack("<HBB6I", payload)
-        return {
-            "worker_id": values[0], "active": values[1],
+        if version == 1 and values[0] in schema.V2_WORKER_IDS:
+            raise MftDecodeError("v2-only CatalogDb worker in v1 trace")
+        result = {
+            "worker_id": values[0],
+            "active": values[1],
             "queue_depth": values[3], "queue_highwater": values[4],
             "completed_delta": values[5], "failed_delta": values[6],
             "cancelled_delta": values[7], "reserved": values[8],
         }
+        if version == 2 and values[0] in schema.V2_WORKER_IDS:
+            result["worker"] = schema.V2_WORKER_IDS[values[0]]
+        return result
     if record_type == 5:
         values = _unpack("<HBBQIIQQBBBB", payload)
         return {
@@ -181,6 +187,18 @@ def _decode_payload(record_type, payload):
             "outcome_id": outcome, "outcome": _enum(schema.OUTCOMES, outcome),
             "value0": value0, "value1": value1,
         }
+    if record_type == 15 and version == 2:
+        values = _unpack("<IQIIQIIQIQIIIIIIIIIIQQ", payload)
+        names = (
+            "query_count", "query_total_us", "query_max_us",
+            "transaction_count", "transaction_total_us", "transaction_max_us",
+            "commit_count", "commit_total_us", "commit_max_us",
+            "queue_wait_total_us", "queue_wait_max_us", "enqueue_rejected_delta",
+            "rows_inserted", "rows_updated", "rows_deleted",
+            "sqlite_busy_family_delta", "sqlite_ioerr_family_delta",
+            "sqlite_corrupt_notadb_delta", "reserved0", "reserved1", "reserved2", "reserved3",
+        )
+        return dict(zip(names, values))
     raise MftDecodeError("unknown record type {}".format(record_type))
 
 
@@ -216,7 +234,10 @@ def decode_bytes(data):
         if end > len(data):
             warnings.append("partial record tail ignored")
             break
-        definition = schema.RECORD_TYPES.get(record_type)
+        definitions = schema.RECORD_TYPES.copy()
+        if header["schema_version"] == 2:
+            definitions.update(schema.V2_RECORD_TYPES)
+        definition = definitions.get(record_type)
         if definition is not None:
             name, expected_size = definition
             if record_size != expected_size:
@@ -229,9 +250,11 @@ def decode_bytes(data):
                 "record_size": record_size,
                 "sequence": sequence,
                 "monotonic_us": monotonic,
-                "payload": _decode_payload(record_type, payload),
+                "payload": _decode_payload(record_type, payload, header["schema_version"]),
             })
         else:
+            if header["schema_version"] == 1 and record_type in schema.V2_RECORD_TYPES:
+                raise MftDecodeError("v2-only record type {} in v1 trace".format(record_type))
             warnings.append("unknown record type {} skipped".format(record_type))
         offset = end
     return {"header": header, "records": records, "warnings": warnings}

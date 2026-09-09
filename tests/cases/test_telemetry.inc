@@ -432,6 +432,141 @@ static void testMftV1Codec()
     std::printf("[test] MFT v1 little-endian codec and golden bytes OK\n");
 }
 
+static void testMftV2CatalogDbTelemetry()
+{
+    std::printf("[test] MFT v2 CatalogDb format and aggregation\n");
+    MftFileHeader header{};
+    header.schema_version = 2;
+    std::array<uint8_t, kMftFileHeaderSize> headerBytes{};
+    CHECK(encodeFileHeader(header, headerBytes.data(), headerBytes.size()));
+    CHECK(headerBytes[4] == 2 && headerBytes[5] == 0);
+
+    CatalogDbSummaryRecord summary{};
+    summary.sequence = 7;
+    summary.monotonic_us = 0x0102030405060708ull;
+    summary.payload.query_count = 2;
+    summary.payload.query_total_us = 300;
+    summary.payload.query_max_us = 200;
+    summary.payload.transaction_count = 1;
+    summary.payload.transaction_total_us = 400;
+    summary.payload.transaction_max_us = 400;
+    summary.payload.commit_count = 1;
+    summary.payload.commit_total_us = 25;
+    summary.payload.commit_max_us = 25;
+    summary.payload.queue_wait_total_us = 50;
+    summary.payload.queue_wait_max_us = 40;
+    summary.payload.enqueue_rejected_delta = 1;
+    summary.payload.rows_inserted = 3;
+    summary.payload.rows_updated = 4;
+    summary.payload.rows_deleted = 5;
+    summary.payload.sqlite_busy_family_delta = 6;
+    summary.payload.sqlite_ioerr_family_delta = 7;
+    summary.payload.sqlite_corrupt_notadb_delta = 8;
+    std::array<uint8_t, kMftMaxRecordSize> summaryBytes{};
+    uint16_t written = 0;
+    CHECK(encodeCatalogDbSummaryRecord(summary, summaryBytes.data(),
+                                       summaryBytes.size(), written));
+    CHECK(written == kMftV2CatalogDbSummarySize);
+    CHECK(summaryBytes[0] == 15 && summaryBytes[1] == 0);
+    CHECK(summaryBytes[2] == 128 && summaryBytes[3] == 0);
+    CHECK(summaryBytes[16] == 2 && summaryBytes[20] == 44);
+    CHECK(std::all_of(summaryBytes.begin() + 104, summaryBytes.end(),
+                      [](uint8_t value) { return value == 0; }));
+
+    TelemetryRecord worker{};
+    worker.header.record_type = RecordType::WorkerSample;
+    worker.payload.worker_sample.worker_id = kMftV2CatalogDbWorkerId;
+    CHECK(encodeRecord(worker, summaryBytes.data(), summaryBytes.size(), written));
+    CHECK(written == 44);
+    CHECK(summaryBytes[16] == kMftV2CatalogDbWorkerId);
+
+    PerformanceTelemetry::setSchemaVersionForTest(2);
+    PerformanceTelemetry &telemetry = performanceTelemetry();
+    telemetry.stop();
+    const std::string root = "/tmp/miyoofin-v2-catalog-"
+        + std::to_string(static_cast<long long>(getpid()));
+    const std::string path = root + "/telemetry.mft";
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+    TelemetryConfig config;
+    config.runtimeEnabled = true;
+    config.targetDirectory = root;
+    config.sampleIntervalMs = 1;
+    config.flushIntervalMs = 1;
+    config.minFreeStorageBytes = 0;
+    telemetry.start(config);
+    for (int attempt = 0; attempt < 100 && !telemetry.serviceThreadActive(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(telemetry.serviceThreadActive());
+    telemetry.setCatalogDbActive(true);
+    telemetry.setCatalogDbQueueDepth(3);
+    telemetry.addCatalogDbCompleted(2);
+    telemetry.addCatalogDbFailed();
+    telemetry.addCatalogDbCancelled();
+    telemetry.recordCatalogDbQuery(100);
+    telemetry.recordCatalogDbQuery(200);
+    telemetry.recordCatalogDbTransaction(400);
+    telemetry.recordCatalogDbCommit(25);
+    telemetry.recordCatalogDbQueueWait(40);
+    telemetry.addCatalogDbEnqueueRejected();
+    telemetry.addCatalogDbRows(3, 4, 5);
+    telemetry.recordCatalogDbSqliteError(5);
+    telemetry.recordCatalogDbSqliteError(10);
+    telemetry.recordCatalogDbSqliteError(11);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    telemetry.stop();
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<uint8_t> bytes(
+        (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    CHECK(bytes.size() >= kMftFileHeaderSize);
+    if (bytes.size() >= kMftFileHeaderSize) {
+        CHECK(bytes[4] == 2 && bytes[5] == 0);
+        bool sawWorker = false;
+        bool sawSummary = false;
+        for (std::size_t offset = kMftFileHeaderSize;
+             offset + kMftRecordHeaderSize <= bytes.size();) {
+            const uint16_t type = static_cast<uint16_t>(bytes[offset])
+                | (static_cast<uint16_t>(bytes[offset + 1]) << 8);
+            const uint16_t size = static_cast<uint16_t>(bytes[offset + 2])
+                | (static_cast<uint16_t>(bytes[offset + 3]) << 8);
+            if (size < kMftRecordHeaderSize || offset + size > bytes.size())
+                break;
+            if (type == static_cast<uint16_t>(RecordType::WorkerSample)
+                && bytes[offset + 16] == kMftV2CatalogDbWorkerId) {
+                sawWorker = true;
+                CHECK(bytes[offset + 18] == 1);
+                CHECK(bytes[offset + 20] == 3);
+            }
+            if (type == static_cast<uint16_t>(MftV2RecordType::CatalogDbSummary)
+                && size == kMftV2CatalogDbSummarySize) {
+                const std::size_t payload = offset + 16;
+                if (bytes[payload] == 2 && bytes[payload + 4] == 44) {
+                    sawSummary = true;
+                    CHECK(bytes[payload + 32] == 1);
+                    CHECK(bytes[payload + 36] == 25);
+                    CHECK(bytes[payload + 48] == 40);
+                    CHECK(bytes[payload + 60] == 1);
+                    CHECK(bytes[payload + 64] == 3);
+                    CHECK(bytes[payload + 68] == 4);
+                    CHECK(bytes[payload + 72] == 5);
+                    CHECK(bytes[payload + 76] == 1);
+                    CHECK(bytes[payload + 80] == 1);
+                    CHECK(bytes[payload + 84] == 1);
+                    CHECK(bytes[payload + 88] == 0);
+                    CHECK(bytes[payload + 92] == 0);
+                }
+            }
+            offset += size;
+        }
+        CHECK(sawWorker);
+        CHECK(sawSummary);
+    }
+    std::remove(path.c_str());
+    ::rmdir(root.c_str());
+    PerformanceTelemetry::setSchemaVersionForTest(1);
+    std::printf("[test] MFT v2 CatalogDb format and aggregation OK\n");
+}
+
 static DownloadSegmentAttempt makeTelemetrySegmentAttemptPayload(
     uint32_t jobSequence, uint32_t segmentOrdinal, uint16_t attemptNumber,
     uint16_t retryDelayMs, RouteKind route, Outcome outcome,
@@ -942,6 +1077,7 @@ static void testTelemetrySchemaTypes()
     testTelemetryRing();
 #if MIYOOFIN_ENABLE_PERF_TELEMETRY
     testMftV1Codec();
+    testMftV2CatalogDbTelemetry();
     testTelemetryWriter();
     testTelemetrySegmentAttemptPayload();
     testTelemetryPlaybackEventPayload();

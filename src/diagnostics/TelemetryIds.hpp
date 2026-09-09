@@ -163,7 +163,13 @@ enum class WorkerId : uint16_t {
     ScreenRetirement = 12,
     SavedSessionValidation = 13,
     PlaybackJournalSync = 14,
+    // MFT v2-only worker identity; v1 traces never emit this value.
+    CatalogDb = 15,
 };
+
+// MFT v2-only identity. The v1 WorkerId values 1-14 remain frozen.
+constexpr uint16_t kMftV2CatalogDbWorkerId =
+    static_cast<uint16_t>(WorkerId::CatalogDb);
 
 constexpr uint16_t kWorkerMaskHomeLibraryFetch = uint16_t{1} << 0;
 constexpr uint16_t kWorkerMaskHomeHierarchy = uint16_t{1} << 1;
@@ -271,6 +277,10 @@ enum class RecordType : uint16_t {
     UiStall = 12,
     TelemetryHealth = 13,
     SessionEvent = 14,
+};
+
+enum class MftV2RecordType : uint16_t {
+    CatalogDbSummary = 15,
 };
 
 } // namespace miyoofin

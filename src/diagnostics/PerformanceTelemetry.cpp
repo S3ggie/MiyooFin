@@ -19,6 +19,7 @@ namespace {
 
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
 PerformanceTelemetry::TestHooks g_testHooks{};
+uint16_t g_testSchemaVersion = 1;
 #endif
 
 uint64_t monotonicUs() noexcept
@@ -34,6 +35,17 @@ uint32_t clampToUint32(uint64_t value) noexcept
 {
     return value > std::numeric_limits<uint32_t>::max()
         ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(value);
+}
+
+void updateMaximum(std::atomic<uint32_t> &maximum, uint64_t value) noexcept
+{
+    const uint32_t clamped = clampToUint32(value);
+    uint32_t observed = maximum.load(std::memory_order_relaxed);
+    while (clamped > observed
+        && !maximum.compare_exchange_weak(observed, clamped,
+                                           std::memory_order_relaxed,
+                                           std::memory_order_relaxed)) {
+    }
 }
 
 LinuxProcessMetricsSnapshot sampleProcessMetrics(LinuxProcessMetrics &metrics,
@@ -59,6 +71,11 @@ void PerformanceTelemetry::setTestHooks(const TestHooks &hooks) noexcept
 void PerformanceTelemetry::clearTestHooks() noexcept
 {
     g_testHooks = TestHooks{};
+}
+
+void PerformanceTelemetry::setSchemaVersionForTest(uint16_t version) noexcept
+{
+    g_testSchemaVersion = version;
 }
 #endif
 
@@ -135,6 +152,11 @@ ActionId PerformanceTelemetry::actionIdFromAction(Action action) noexcept
 void PerformanceTelemetry::start(const TelemetryConfig &config)
 {
     stop();
+#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
+    m_schemaVersion = g_testSchemaVersion;
+#else
+    m_schemaVersion = 2;
+#endif
     m_config = config;
     m_samplingSuspended.store(false, std::memory_order_relaxed);
     m_stopRequested.store(false, std::memory_order_relaxed);
@@ -183,6 +205,30 @@ void PerformanceTelemetry::start(const TelemetryConfig &config)
     m_downloadBytes.store(0, std::memory_order_relaxed);
     m_downloadSegmentsCompleted.store(0, std::memory_order_relaxed);
     m_downloadSegmentRetries.store(0, std::memory_order_relaxed);
+    m_catalogDbActive.store(0, std::memory_order_relaxed);
+    m_catalogDbQueueDepth.store(0, std::memory_order_relaxed);
+    m_catalogDbQueueHighwater.store(0, std::memory_order_relaxed);
+    m_catalogDbCompleted.store(0, std::memory_order_relaxed);
+    m_catalogDbFailed.store(0, std::memory_order_relaxed);
+    m_catalogDbCancelled.store(0, std::memory_order_relaxed);
+    m_catalogDbQueryCount.store(0, std::memory_order_relaxed);
+    m_catalogDbQueryTotalUs.store(0, std::memory_order_relaxed);
+    m_catalogDbQueryMaxUs.store(0, std::memory_order_relaxed);
+    m_catalogDbTransactionCount.store(0, std::memory_order_relaxed);
+    m_catalogDbTransactionTotalUs.store(0, std::memory_order_relaxed);
+    m_catalogDbTransactionMaxUs.store(0, std::memory_order_relaxed);
+    m_catalogDbCommitCount.store(0, std::memory_order_relaxed);
+    m_catalogDbCommitTotalUs.store(0, std::memory_order_relaxed);
+    m_catalogDbCommitMaxUs.store(0, std::memory_order_relaxed);
+    m_catalogDbQueueWaitTotalUs.store(0, std::memory_order_relaxed);
+    m_catalogDbQueueWaitMaxUs.store(0, std::memory_order_relaxed);
+    m_catalogDbEnqueueRejected.store(0, std::memory_order_relaxed);
+    m_catalogDbRowsInserted.store(0, std::memory_order_relaxed);
+    m_catalogDbRowsUpdated.store(0, std::memory_order_relaxed);
+    m_catalogDbRowsDeleted.store(0, std::memory_order_relaxed);
+    m_catalogDbBusyFamily.store(0, std::memory_order_relaxed);
+    m_catalogDbIoerrFamily.store(0, std::memory_order_relaxed);
+    m_catalogDbCorruptNotadb.store(0, std::memory_order_relaxed);
     m_consumerSequence = 0;
     m_sessionNonce = monotonicUs()
         ^ (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this)) * 0x9e3779b97f4a7c15ull)
@@ -450,6 +496,113 @@ void PerformanceTelemetry::addDownloadSegmentRetries(uint32_t count) noexcept
         m_downloadSegmentRetries.fetch_add(count, std::memory_order_relaxed);
 }
 
+void PerformanceTelemetry::setCatalogDbActive(bool active) noexcept
+{
+    if (enabledFast())
+        m_catalogDbActive.store(active ? 1u : 0u, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::updateCatalogDbQueueHighwater(uint32_t depth) noexcept
+{
+    uint32_t observed = m_catalogDbQueueHighwater.load(std::memory_order_relaxed);
+    while (depth > observed
+        && !m_catalogDbQueueHighwater.compare_exchange_weak(
+               observed, depth, std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+
+void PerformanceTelemetry::setCatalogDbQueueDepth(uint32_t depth) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbQueueDepth.store(depth, std::memory_order_relaxed);
+    updateCatalogDbQueueHighwater(depth);
+}
+
+void PerformanceTelemetry::addCatalogDbCompleted(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_catalogDbCompleted.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addCatalogDbFailed(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_catalogDbFailed.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addCatalogDbCancelled(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_catalogDbCancelled.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::recordCatalogDbQuery(uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbQueryCount.fetch_add(1, std::memory_order_relaxed);
+    m_catalogDbQueryTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    updateMaximum(m_catalogDbQueryMaxUs, durationUs);
+}
+
+void PerformanceTelemetry::recordCatalogDbTransaction(uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbTransactionCount.fetch_add(1, std::memory_order_relaxed);
+    m_catalogDbTransactionTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    updateMaximum(m_catalogDbTransactionMaxUs, durationUs);
+}
+
+void PerformanceTelemetry::recordCatalogDbCommit(uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbCommitCount.fetch_add(1, std::memory_order_relaxed);
+    m_catalogDbCommitTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    updateMaximum(m_catalogDbCommitMaxUs, durationUs);
+}
+
+void PerformanceTelemetry::recordCatalogDbQueueWait(uint64_t durationUs) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbQueueWaitTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
+    updateMaximum(m_catalogDbQueueWaitMaxUs, durationUs);
+}
+
+void PerformanceTelemetry::addCatalogDbEnqueueRejected(uint32_t count) noexcept
+{
+    if (enabledFast())
+        m_catalogDbEnqueueRejected.fetch_add(count, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::addCatalogDbRows(uint32_t inserted, uint32_t updated,
+                                            uint32_t deleted) noexcept
+{
+    if (!enabledFast())
+        return;
+    m_catalogDbRowsInserted.fetch_add(inserted, std::memory_order_relaxed);
+    m_catalogDbRowsUpdated.fetch_add(updated, std::memory_order_relaxed);
+    m_catalogDbRowsDeleted.fetch_add(deleted, std::memory_order_relaxed);
+}
+
+void PerformanceTelemetry::recordCatalogDbSqliteError(int resultCode) noexcept
+{
+    if (!enabledFast())
+        return;
+    const int primary = resultCode & 0xff;
+    if (primary == 5) {
+        m_catalogDbBusyFamily.fetch_add(1, std::memory_order_relaxed);
+    } else if (primary == 10) {
+        m_catalogDbIoerrFamily.fetch_add(1, std::memory_order_relaxed);
+    } else if (primary == 11 || primary == 26) {
+        m_catalogDbCorruptNotadb.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void PerformanceTelemetry::suspendSampling(bool suspended, SamplingReason reason) noexcept
 {
     (void)reason;
@@ -631,6 +784,64 @@ void PerformanceTelemetry::emitTelemetryHealth(uint64_t nowUs) noexcept
     writeServiceRecord(record);
 }
 
+void PerformanceTelemetry::emitCatalogDbWorkerSample(uint64_t nowUs) noexcept
+{
+    if (m_schemaVersion != 2)
+        return;
+    TelemetryRecord record{};
+    record.header.record_type = RecordType::WorkerSample;
+    record.header.monotonic_us = nowUs;
+    record.payload.worker_sample.worker_id = kMftV2CatalogDbWorkerId;
+    record.payload.worker_sample.active = static_cast<uint8_t>(
+        m_catalogDbActive.load(std::memory_order_relaxed) != 0);
+    record.payload.worker_sample.queue_depth =
+        m_catalogDbQueueDepth.load(std::memory_order_relaxed);
+    record.payload.worker_sample.queue_highwater =
+        m_catalogDbQueueHighwater.exchange(0, std::memory_order_relaxed);
+    if (record.payload.worker_sample.queue_highwater
+        < record.payload.worker_sample.queue_depth) {
+        record.payload.worker_sample.queue_highwater =
+            record.payload.worker_sample.queue_depth;
+    }
+    record.payload.worker_sample.completed_delta =
+        m_catalogDbCompleted.exchange(0, std::memory_order_relaxed);
+    record.payload.worker_sample.failed_delta =
+        m_catalogDbFailed.exchange(0, std::memory_order_relaxed);
+    record.payload.worker_sample.cancelled_delta =
+        m_catalogDbCancelled.exchange(0, std::memory_order_relaxed);
+    writeServiceRecord(record);
+}
+
+void PerformanceTelemetry::emitCatalogDbSummary(uint64_t nowUs) noexcept
+{
+    if (m_schemaVersion != 2)
+        return;
+    CatalogDbSummaryRecord record{};
+    record.sequence = ++m_consumerSequence;
+    record.monotonic_us = nowUs;
+    record.payload.query_count = m_catalogDbQueryCount.exchange(0, std::memory_order_relaxed);
+    record.payload.query_total_us = m_catalogDbQueryTotalUs.exchange(0, std::memory_order_relaxed);
+    record.payload.query_max_us = m_catalogDbQueryMaxUs.exchange(0, std::memory_order_relaxed);
+    record.payload.transaction_count = m_catalogDbTransactionCount.exchange(0, std::memory_order_relaxed);
+    record.payload.transaction_total_us = m_catalogDbTransactionTotalUs.exchange(0, std::memory_order_relaxed);
+    record.payload.transaction_max_us = m_catalogDbTransactionMaxUs.exchange(0, std::memory_order_relaxed);
+    record.payload.commit_count = m_catalogDbCommitCount.exchange(0, std::memory_order_relaxed);
+    record.payload.commit_total_us = m_catalogDbCommitTotalUs.exchange(0, std::memory_order_relaxed);
+    record.payload.commit_max_us = m_catalogDbCommitMaxUs.exchange(0, std::memory_order_relaxed);
+    record.payload.queue_wait_total_us = m_catalogDbQueueWaitTotalUs.exchange(0, std::memory_order_relaxed);
+    record.payload.queue_wait_max_us = m_catalogDbQueueWaitMaxUs.exchange(0, std::memory_order_relaxed);
+    record.payload.enqueue_rejected_delta = m_catalogDbEnqueueRejected.exchange(0, std::memory_order_relaxed);
+    record.payload.rows_inserted = m_catalogDbRowsInserted.exchange(0, std::memory_order_relaxed);
+    record.payload.rows_updated = m_catalogDbRowsUpdated.exchange(0, std::memory_order_relaxed);
+    record.payload.rows_deleted = m_catalogDbRowsDeleted.exchange(0, std::memory_order_relaxed);
+    record.payload.sqlite_busy_family_delta = m_catalogDbBusyFamily.exchange(0, std::memory_order_relaxed);
+    record.payload.sqlite_ioerr_family_delta = m_catalogDbIoerrFamily.exchange(0, std::memory_order_relaxed);
+    record.payload.sqlite_corrupt_notadb_delta = m_catalogDbCorruptNotadb.exchange(0, std::memory_order_relaxed);
+    if (!m_writer.appendCatalogDbSummary(record))
+        m_writerErrors.fetch_add(1, std::memory_order_relaxed);
+    m_rotationCount.store(m_writer.rotationCount(), std::memory_order_relaxed);
+}
+
 void PerformanceTelemetry::serviceLoop() noexcept
 {
     LinuxProcessMetrics metrics("/proc", m_config.targetDirectory);
@@ -645,6 +856,7 @@ void PerformanceTelemetry::serviceLoop() noexcept
 
     MftFileHeader header{};
     header.flags = 2u;
+    header.schema_version = m_schemaVersion;
     header.pid = static_cast<uint32_t>(::getpid());
     header.session_nonce = m_sessionNonce;
     header.start_monotonic_us = monotonicUs();
@@ -786,6 +998,8 @@ void PerformanceTelemetry::serviceLoop() noexcept
                 emitArtworkSummary(nowUs);
                 emitDownloadSample(nowUs, actualIntervalUs);
                 emitTelemetryHealth(nowUs);
+                emitCatalogDbWorkerSample(nowUs);
+                emitCatalogDbSummary(nowUs);
                 lastAggregateSampleUs = nowUs;
                 nextSampleUs = nowUs + sampleIntervalUs;
             }

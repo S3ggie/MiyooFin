@@ -23,6 +23,7 @@ public:
 
     bool open(const TelemetryConfig &config, const MftFileHeader &header);
     bool append(const TelemetryRecord &record);
+    bool appendCatalogDbSummary(const CatalogDbSummaryRecord &record);
     bool flushIfDue(uint64_t monotonicUs) noexcept;
     bool flush() noexcept;
     bool close() noexcept;

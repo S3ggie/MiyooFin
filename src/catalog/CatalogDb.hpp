@@ -251,6 +251,7 @@ private:
     struct Job {
         CatalogDbPriority priority;
         CatalogDbJobMetadata metadata;
+        std::uint64_t enqueuedMonotonicUs = 0;
     };
 
     enum class ScopeCommandKind : unsigned char {

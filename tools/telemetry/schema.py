@@ -1,10 +1,11 @@
-"""Independent, standard-library definitions for MFT v1."""
+"""Independent, standard-library definitions for MFT v1 and v2."""
 
 FILE_HEADER_SIZE = 80
 RECORD_HEADER_SIZE = 16
 MAX_RECORD_SIZE = 256
 MAGIC = b"MFT1"
 SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 FILE_HEADER_FORMAT = "<IIQQQIIIIIIIIQ"
 RECORD_HEADER_FORMAT = "<HHIQ"
 
@@ -210,6 +211,22 @@ RECORD_LAYOUTS = {
     12: {"name": "UiStall", "payload_size": 32, "format": "<BBHHHB3xQHHQ"},
     13: {"name": "TelemetryHealth", "payload_size": 32, "format": "<8I"},
     14: {"name": "SessionEvent", "payload_size": 16, "format": "<BBHIQ"},
+}
+
+V2_RECORD_TYPES = {
+    15: ("CatalogDbSummary", 128),
+}
+
+V2_RECORD_LAYOUTS = {
+    15: {
+        "name": "CatalogDbSummary",
+        "payload_size": 112,
+        "format": "<IQIIQIIQIQIIIIIIIIIIQQ",
+    },
+}
+
+V2_WORKER_IDS = {
+    15: "CatalogDb",
 }
 
 

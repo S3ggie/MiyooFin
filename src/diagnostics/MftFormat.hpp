@@ -12,6 +12,7 @@ constexpr std::size_t kMftRecordHeaderSize = 16;
 constexpr std::size_t kMftMaxRecordSize = 256;
 
 struct MftFileHeader {
+    uint16_t schema_version = 1;
     uint32_t flags;
     uint32_t pid;
     uint64_t session_nonce;
@@ -36,5 +37,12 @@ bool encodeRecord(const TelemetryRecord &record,
                   uint8_t *destination,
                   std::size_t capacity,
                   uint16_t &written) noexcept;
+
+constexpr uint16_t kMftV2CatalogDbSummarySize = 128;
+
+bool encodeCatalogDbSummaryRecord(const CatalogDbSummaryRecord &record,
+                                  uint8_t *destination,
+                                  std::size_t capacity,
+                                  uint16_t &written) noexcept;
 
 } // namespace miyoofin

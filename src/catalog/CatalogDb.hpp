@@ -16,6 +16,8 @@
 #include <thread>
 #include <vector>
 
+#include "../data/MediaItem.hpp"
+
 struct sqlite3;
 struct sqlite3_stmt;
 
@@ -118,6 +120,8 @@ struct CatalogDbTestResult {
     bool collectionsUpdateRemoval = false;
     bool collectionsDeleteCascade = false;
     bool collectionsParity = false;
+    bool hierarchyFixture = false;
+    bool hierarchyIndexes = false;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::string foreignKeys;
@@ -128,6 +132,16 @@ struct CatalogDbTestResult {
     std::string sentinel;
     std::int64_t applicationId = 0;
     std::int64_t userVersion = 0;
+};
+
+struct CatalogDbHierarchyResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::vector<MediaItem> items;
 };
 
 /// App-scoped owner for CatalogDb work. Database behavior is added by later
@@ -171,8 +185,17 @@ public:
     CatalogDbTestResult runMigrationRollbackForTest();
     CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult runMediaItemCollectionsForTest();
+    CatalogDbTestResult seedHierarchyQueryFixturesForTest();
+    CatalogDbTestResult clearHierarchyQueryFixturesForTest();
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
+
+    std::future<CatalogDbHierarchyResult> getSeasons(
+        const std::string &seriesId,
+        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyResult> getEpisodes(
+        const std::string &seasonId,
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -203,6 +226,7 @@ private:
     };
 
     struct TestCommand;
+    struct QueryCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -210,6 +234,7 @@ private:
     static std::size_t priorityIndex(CatalogDbPriority priority);
     void processScopeCommand(ScopeCommand command);
     void processTestCommand(const std::shared_ptr<TestCommand> &command);
+    void processHierarchyQuery(const std::shared_ptr<QueryCommand> &command);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -222,6 +247,7 @@ private:
     std::array<std::deque<Job>, 4> m_queues;
     std::deque<ScopeCommand> m_scopeCommands;
     std::deque<std::shared_ptr<TestCommand>> m_testCommands;
+    std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

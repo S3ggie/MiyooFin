@@ -14,6 +14,13 @@ AR  := $(CROSS_PREFIX)ar
 PERF_TELEMETRY ?= 1
 CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -g -O2 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
+SQLITE_DIR := vendor/sqlite
+SQLITE_SRC := $(SQLITE_DIR)/sqlite3.c
+SQLITE_DEFINES := -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+                  -DSQLITE_DQS=0 -DSQLITE_TRUSTED_SCHEMA=0 \
+                  -DSQLITE_OMIT_LOAD_EXTENSION
+SQLITE_CFLAGS := -Os $(SQLITE_DEFINES)
+SQLITE_ARM_OBJ := output/build-arm/sqlite/sqlite3.o
 
 # Source files
 TELEMETRY_SRCS :=
@@ -90,6 +97,7 @@ SRCS := \
     $(TELEMETRY_SRCS)
 
 OBJS      := $(SRCS:src/%.cpp=output/build-arm/%.o)
+OBJS      += $(SQLITE_ARM_OBJ)
 DEPS      := $(OBJS:.o=.d)
 .DEFAULT_GOAL := all
 -include $(DEPS)
@@ -97,7 +105,7 @@ TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
              output/build-arm/download \
-             output/build-arm/diagnostics \
+             output/build-arm/diagnostics output/build-arm/sqlite \
              output/build-arm/ui/screens output/build-arm/playback
 
 .PHONY: all bridge reporter
@@ -112,6 +120,10 @@ $(TARGET): $(OBJS) | output/build-arm
 
 output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)
 	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) -c -o $@ $<
+	@echo "  [CC]   $@"
+
+$(SQLITE_ARM_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build-arm/sqlite
+	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 $(OUT_DIRS):

@@ -15,6 +15,13 @@ PERF_TELEMETRY ?= 1
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 INCLUDES    := -I. -Iinclude
+SQLITE_DIR  := vendor/sqlite
+SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
+SQLITE_DEFINES := -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+                 -DSQLITE_DQS=0 -DSQLITE_TRUSTED_SCHEMA=0 \
+                 -DSQLITE_OMIT_LOAD_EXTENSION
+SQLITE_CFLAGS := -Os $(SQLITE_DEFINES)
+SQLITE_HOST_OBJ := output/build/sqlite/sqlite3.o
 
 # SDL2 flags from pkg-config
 SDL_CFLAGS  := $(shell pkg-config --cflags sdl2 2>/dev/null || echo '-I/usr/include/SDL2')
@@ -107,6 +114,7 @@ SRCS        := \
     $(TELEMETRY_SRCS)
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
+OBJS        += $(SQLITE_HOST_OBJ)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
                output/build/download \
@@ -130,6 +138,10 @@ output/build/%.o: src/%.cpp | $(OUT_DIRS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
+$(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
+	$(CC) $(SQLITE_CFLAGS) -I$(SQLITE_DIR) -c -o $@ $<
+	@echo "  [CC]   $@"
+
 # Create output directories
 $(OUT_DIRS):
 	@mkdir -p $@
@@ -137,10 +149,15 @@ $(OUT_DIRS):
 output/build:
 	@mkdir -p $@
 
+output/build/sqlite:
+	@mkdir -p $@
+
 # -------------------------------------------------------------------
 # Test
 # -------------------------------------------------------------------
 TEST_TARGET := output/test/test_runner
+SQLITE_TEST_TARGET := output/test/test_sqlite_build
+SQLITE_TEST_SRC := tests/test_sqlite_build.cpp
 TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
@@ -202,8 +219,9 @@ TEST_SRCS   := tests/test_main.cpp \
                $(TELEMETRY_TEST_SRCS)
 
 .PHONY: test
-test: $(TEST_TARGET)
+test: $(TEST_TARGET) $(SQLITE_TEST_TARGET)
 	@$(TEST_TARGET)
+	@$(SQLITE_TEST_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
 	@python3 $(TELEMETRY_DECODER_TEST)
@@ -212,8 +230,12 @@ test: $(TEST_TARGET)
 refactor-check:
 	@sh tools/refactor-check.sh
 
-$(TEST_TARGET): $(TEST_SRCS) | output/test
+$(TEST_TARGET): $(TEST_SRCS) $(SQLITE_HOST_OBJ) | output/test
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
+	@echo "  [LINK] $@"
+
+$(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^
 	@echo "  [LINK] $@"
 
 output/test:

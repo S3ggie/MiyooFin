@@ -487,6 +487,23 @@ static void testCatalogDbMediaItemCodec()
     CHECK(result.codecNullableRelationships);
 }
 
+static void testCatalogDbMediaItemCollections()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-media-item-collections.example",
+                                        "collections-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    const auto result = db.runMediaItemCollectionsForTest();
+    CHECK(result.success && result.workerOwned);
+    CHECK(result.collectionsZero);
+    CHECK(result.collectionsMultiple);
+    CHECK(result.collectionsUpdateRemoval);
+    CHECK(result.collectionsDeleteCascade);
+    CHECK(result.collectionsParity);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -511,6 +528,7 @@ int main()
     testCatalogDbSchemaV1();
     testCatalogDbSchemaOpenPolicy();
     testCatalogDbMediaItemCodec();
+    testCatalogDbMediaItemCollections();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

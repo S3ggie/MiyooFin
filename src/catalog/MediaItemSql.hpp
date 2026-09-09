@@ -15,6 +15,17 @@ enum class MediaItemSqlError : unsigned char {
     InvalidKind,
     BindFailed,
     ColumnReadFailed,
+    StepFailed,
+    InvalidOrdinal,
+};
+
+struct MediaItemCollectionStatements {
+    sqlite3_stmt *deleteGenres = nullptr;
+    sqlite3_stmt *insertGenre = nullptr;
+    sqlite3_stmt *deleteImageTags = nullptr;
+    sqlite3_stmt *insertImageTag = nullptr;
+    sqlite3_stmt *selectGenres = nullptr;
+    sqlite3_stmt *selectImageTags = nullptr;
 };
 
 int mediaItemKindToSql(const std::string &type, MediaItemSqlError &error);
@@ -24,6 +35,13 @@ bool bindMediaItemScalars(sqlite3_stmt *statement, const MediaItem &item,
                           MediaItemSqlError &error);
 bool readMediaItemScalars(sqlite3_stmt *statement, MediaItem &item,
                           MediaItemSqlError &error);
+bool replaceMediaItemCollections(const MediaItemCollectionStatements &statements,
+                                 const MediaItem &item,
+                                 MediaItemSqlError &error);
+bool readMediaItemCollections(const MediaItemCollectionStatements &statements,
+                              MediaItem &item, MediaItemSqlError &error);
+bool mediaItemsEquivalentForCatalog(const MediaItem &expected,
+                                    const MediaItem &actual);
 
 } // namespace miyoofin
 

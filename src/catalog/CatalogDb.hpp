@@ -8,11 +8,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+struct sqlite3;
+struct sqlite3_stmt;
 
 namespace miyoofin {
 
@@ -42,6 +47,17 @@ enum class CatalogDbScopeStatus : unsigned char {
     Pending,
     Ready,
     InvalidIdentity,
+    OpenFailed,
+};
+
+enum class CatalogDbErrorCategory : unsigned char {
+    None,
+    InvalidIdentity,
+    ScopeNotReady,
+    OpenFailed,
+    ConfigurationFailed,
+    SqliteError,
+    Superseded,
 };
 
 struct CatalogDbScopeState {
@@ -49,6 +65,7 @@ struct CatalogDbScopeState {
     bool configured = false;
     bool ready = false;
     CatalogDbScopeStatus status = CatalogDbScopeStatus::Unconfigured;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
 };
 
 struct CatalogDbJobMetadata {
@@ -61,6 +78,26 @@ struct CatalogDbJobReport {
     CatalogDbPriority priority;
     CatalogDbJobMetadata metadata;
     CatalogDbJobDisposition disposition;
+};
+
+struct CatalogDbConnectionState {
+    bool open = false;
+    bool workerOwned = false;
+    std::size_t preparedStatements = 0;
+};
+
+struct CatalogDbTestResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool statementReused = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::string foreignKeys;
+    std::string trustedSchema;
+    std::string journalMode;
+    std::string synchronous;
+    std::string lockingMode;
+    std::string sentinel;
 };
 
 /// App-scoped owner for CatalogDb work. Database behavior is added by later
@@ -92,6 +129,12 @@ public:
     CatalogDbEnqueueResult enqueueScopedNoopForTest(
         CatalogDbPriority priority);
     bool canPublishForTest(std::uint64_t scopeEpoch) const;
+    CatalogDbConnectionState connectionStateForTest() const;
+    CatalogDbTestResult runSqliteDiagnosticsForTest();
+    CatalogDbTestResult runStatementReuseForTest();
+    CatalogDbTestResult runSqlErrorForTest();
+    CatalogDbTestResult writeSentinelForTest(const std::string &value);
+    CatalogDbTestResult readSentinelForTest();
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -121,17 +164,25 @@ private:
         std::string scopeKey;
     };
 
+    struct TestCommand;
+
     void workerLoop();
     bool hasPendingJobsLocked() const;
     Job takeNextJobLocked();
     static std::size_t priorityIndex(CatalogDbPriority priority);
     void processScopeCommand(ScopeCommand command);
+    void processTestCommand(const std::shared_ptr<TestCommand> &command);
+    void closeConnection();
+    bool openConnection(const ScopeCommand &command);
+    CatalogDbTestResult runTestCommand(unsigned char operation,
+                                       const std::string &value = {});
 
     mutable std::mutex m_mutex;
     std::condition_variable m_wake;
     std::condition_variable m_idle;
     std::array<std::deque<Job>, 4> m_queues;
     std::deque<ScopeCommand> m_scopeCommands;
+    std::deque<std::shared_ptr<TestCommand>> m_testCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;
@@ -143,8 +194,14 @@ private:
     bool m_scopeConfigured = false;
     bool m_scopeReady = false;
     CatalogDbScopeStatus m_scopeStatus = CatalogDbScopeStatus::Unconfigured;
+    CatalogDbErrorCategory m_lastError = CatalogDbErrorCategory::None;
     bool m_stopping = false;
     std::thread m_worker;
+    sqlite3 *m_db = nullptr;
+    std::map<std::string, sqlite3_stmt *> m_statements;
+    bool m_connectionOpen = false;
+    bool m_connectionWorkerOwned = false;
+    std::size_t m_preparedStatementCount = 0;
 };
 
 } // namespace miyoofin

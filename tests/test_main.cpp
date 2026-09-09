@@ -278,6 +278,67 @@ static void testCatalogDbInvalidScope()
     CHECK(db.scopeState().status == CatalogDbScopeStatus::InvalidIdentity);
 }
 
+static void testCatalogDbSqliteOwnership()
+{
+    CatalogDb db;
+    CHECK(!db.connectionStateForTest().open);
+
+    const auto epochA = db.configureScope("https://sqlite-a.example", "user-a");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    auto state = db.scopeState();
+    CHECK(state.requestedEpoch == epochA && state.ready);
+    CHECK(state.error == CatalogDbErrorCategory::None);
+    auto connection = db.connectionStateForTest();
+    CHECK(connection.open && connection.workerOwned);
+    CHECK(db.runSqliteDiagnosticsForTest().success);
+
+    const auto diagnostics = db.runSqliteDiagnosticsForTest();
+    CHECK(diagnostics.workerOwned);
+    CHECK(diagnostics.foreignKeys == "1");
+    CHECK(diagnostics.trustedSchema == "0");
+    CHECK(diagnostics.journalMode == "delete");
+    CHECK(diagnostics.synchronous == "2");
+    CHECK(diagnostics.lockingMode == "normal");
+
+    const auto statement = db.runStatementReuseForTest();
+    CHECK(statement.success && statement.workerOwned && statement.statementReused);
+    CHECK(db.connectionStateForTest().preparedStatements == 1);
+
+    const auto sqliteError = db.runSqlErrorForTest();
+    CHECK(!sqliteError.success);
+    CHECK(sqliteError.error == CatalogDbErrorCategory::SqliteError);
+    CHECK(!sqliteError.message.empty());
+    CHECK(db.writeSentinelForTest("scope-a").success);
+    auto sentinel = db.readSentinelForTest();
+    CHECK(sentinel.success && sentinel.sentinel == "scope-a");
+
+    const auto epochB = db.configureScope("https://sqlite-b.example", "user-a");
+    CHECK(epochB > epochA);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    state = db.scopeState();
+    CHECK(state.ready && state.requestedEpoch == epochB);
+    CHECK(db.connectionStateForTest().preparedStatements == 0);
+    CHECK(db.writeSentinelForTest("scope-b").success);
+    sentinel = db.readSentinelForTest();
+    CHECK(sentinel.success && sentinel.sentinel == "scope-b");
+
+    const auto epochAReopen = db.configureScope("https://sqlite-a.example", "user-a");
+    CHECK(epochAReopen > epochB);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    sentinel = db.readSentinelForTest();
+    CHECK(sentinel.success && sentinel.sentinel == "scope-a");
+
+    const auto deconfigured = db.deconfigureScope();
+    CHECK(deconfigured > epochAReopen);
+    CHECK(!db.scopeState().ready);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    state = db.scopeState();
+    CHECK(!state.configured && !state.ready);
+    CHECK(db.connectionStateForTest().open == false);
+    CHECK(db.enqueueScopedNoopForTest(CatalogDbPriority::InteractiveRead)
+          == CatalogDbEnqueueResult::RejectedScopeNotReady);
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -298,6 +359,7 @@ int main()
     testCatalogDbShutdownWithFullQueue();
     testCatalogDbScopeLifecycle();
     testCatalogDbInvalidScope();
+    testCatalogDbSqliteOwnership();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

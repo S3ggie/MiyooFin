@@ -43,6 +43,7 @@
 #include "../src/ui/screens/SeriesScreen.hpp"
 #include "../src/ui/screens/MovieDetailsScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
+#include "../src/catalog/CatalogDb.hpp"
 #include "../src/app/UiDiagnostics.hpp"
 #include "../src/playback/PlaybackRequest.hpp"
 #include "../src/playback/OfflinePlaybackJournal.hpp"
@@ -60,6 +61,18 @@
 using namespace miyoofin;
 
 static int g_failures = 0;
+
+static void testCatalogDbLifecycle()
+{
+    for (int i = 0; i < 20; ++i) {
+        CatalogDb db;
+    }
+
+    {
+        CatalogDb db;
+        db.enqueueNoopForTest();
+    }
+}
 
 #define CHECK(cond) \
     do { \
@@ -91,6 +104,7 @@ static int g_failures = 0;
 #include "cases/test_playback_ui.inc"
 int main()
 {
+    testCatalogDbLifecycle();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

@@ -35,6 +35,7 @@ endif
 SRCS := \
     src/main.cpp \
     src/app/App.cpp \
+    src/catalog/CatalogDb.cpp \
     src/app/UiDiagnostics.cpp \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \
@@ -104,7 +105,7 @@ DEPS      := $(OBJS:.o=.d)
 TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
-             output/build-arm/download \
+             output/build-arm/download output/build-arm/catalog \
              output/build-arm/diagnostics output/build-arm/sqlite \
              output/build-arm/ui/screens output/build-arm/playback
 

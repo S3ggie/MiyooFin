@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include "ScreenStack.hpp"
+#include "../catalog/CatalogDb.hpp"
 #include "../input/InputManager.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/Session.hpp"
@@ -57,6 +58,7 @@ private:
 
     ScreenStack     m_stack;
     InputManager    m_input;
+    std::unique_ptr<CatalogDb> m_catalogDb;
 
     bool            m_running;
     Uint32          m_lastTick;

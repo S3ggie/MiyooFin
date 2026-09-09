@@ -30,6 +30,7 @@ Vendor the official SQLite 3.53.4 amalgamation and make host/ARM/test builds com
 - `vendor/sqlite/README.md` (provenance/checksums)
 - `Makefile`
 - `Makefile.cross`
+- `tests/test_sqlite_build.cpp` — focused host assertions for the pinned SQLite header/runtime version and required compile options; no database I/O.
 - `THIRD_PARTY_NOTICES.md` if needed for provenance/public-domain notice
 
 ## Forbidden Scope
@@ -39,6 +40,8 @@ Vendor the official SQLite 3.53.4 amalgamation and make host/ARM/test builds com
 - No application call site may include/use SQLite yet.
 - No system SQLite dependency or `-lsqlite3`.
 - No Docker/toolchain package dependency on distro SQLite.
+
+The permitted `Makefile` change may add only the minimal host test entry needed to compile and run `tests/test_sqlite_build.cpp` against the vendored `sqlite3.c`; no other application source is permitted.
 
 ## Pre-change checks
 
@@ -61,7 +64,7 @@ git status --short
 4. Apply exactly: `SQLITE_THREADSAFE=2`, `SQLITE_DEFAULT_MEMSTATUS=0`, `SQLITE_DQS=0`, `SQLITE_TRUSTED_SCHEMA=0`, `SQLITE_OMIT_LOAD_EXTENSION`.
 5. Use the exact same vendored source for host, tests, and ARM.
 6. Link the object into test/application binaries only as a dormant dependency; do not open a DB.
-7. Add a tiny host test/assertion for `sqlite3_libversion_number()==3053004`, `sqlite3_threadsafe()==2`, and expected compile options.
+7. Add a tiny host test/assertion using `SQLITE_VERSION`, `sqlite3_libversion_number()`, and `sqlite3_libversion()` to verify pinned 3.53.4 (`3053004`), plus `sqlite3_compileoption_used()` checks for the required compile-time options, including `THREADSAFE=2` and each selected configuration option where SQLite exposes it through compile-option diagnostics.
 8. Keep existing application behavior and packaging otherwise unchanged.
 9. After vendoring/linking, rebuild ARM/package and record the same executable/package byte measurements for an initial size delta. CP-A will repeat/confirm the final post-core/schema numbers after Task 07.
 

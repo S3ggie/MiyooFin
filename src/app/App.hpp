@@ -105,6 +105,9 @@ private:
     /// Transition to the login screen (pop stack to root first).
     void goToLogin(const std::string &initialMessage = {});
 
+    /// Request the current authenticated scope without waiting for CatalogDb.
+    void configureCatalogScopeForSession();
+
     /// Discard the current session (logout).
     void logout();
     void startSavedSessionValidation();

@@ -105,6 +105,8 @@ struct CatalogDbMigrationState {
     bool finalWins = false;
     bool migratingCleanupCandidate = false;
     bool pathError = false;
+    bool attempted = false;
+    bool succeeded = false;
 };
 
 struct CatalogDbScopeState {
@@ -242,6 +244,9 @@ public:
     CatalogDbTestResult runMigrationRollbackForTest();
     CatalogDbTestResult runLegacyMigrationForTest(int failAfterRows = -1,
                                                   bool failValidation = false);
+    void setLegacyMigrationFailureForTest(int failAfterRows,
+                                          bool failValidation = false);
+    void setLegacyMigrationAutoActivationForTest(bool enabled);
     CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
@@ -359,6 +364,9 @@ private:
     CatalogDbErrorCategory m_lastError = CatalogDbErrorCategory::None;
     CatalogDbOpenState m_openState = CatalogDbOpenState::NotAttempted;
     CatalogDbMigrationState m_migrationState;
+    int m_testLegacyMigrationFailAfterRows = -1;
+    bool m_testLegacyMigrationFailValidation = false;
+    bool m_testLegacyMigrationAutoActivation = true;
     bool m_stopping = false;
     std::thread m_worker;
     sqlite3 *m_db = nullptr;

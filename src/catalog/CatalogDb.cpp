@@ -770,6 +770,20 @@ CatalogDbTestResult CatalogDb::runLegacyMigrationForTest(
         std::to_string(failAfterRows) + ":" + (failValidation ? "1" : "0"));
 }
 
+void CatalogDb::setLegacyMigrationFailureForTest(int failAfterRows,
+                                                 bool failValidation)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_testLegacyMigrationFailAfterRows = failAfterRows;
+    m_testLegacyMigrationFailValidation = failValidation;
+}
+
+void CatalogDb::setLegacyMigrationAutoActivationForTest(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_testLegacyMigrationAutoActivation = enabled;
+}
+
 CatalogDbTestResult CatalogDb::runMediaItemCodecForTest()
 {
     return runTestCommand(kMediaItemCodecOperation);
@@ -1321,6 +1335,78 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
         }
         m_idle.notify_all();
         return;
+    }
+
+    CatalogDbMigrationState migrationState =
+        inspectMigrationState(command.scopeKey);
+    bool autoMigration = false;
+    int failAfterRows = -1;
+    bool failValidation = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command.epoch == m_requestedEpoch) {
+            m_migrationState = migrationState;
+            autoMigration = m_testLegacyMigrationAutoActivation;
+            if (autoMigration && !migrationState.finalPresent
+                && migrationState.legacyPresent) {
+                m_migrationState.attempted = true;
+                failAfterRows = m_testLegacyMigrationFailAfterRows;
+                failValidation = m_testLegacyMigrationFailValidation;
+                m_testLegacyMigrationFailAfterRows = -1;
+                m_testLegacyMigrationFailValidation = false;
+            }
+        }
+    }
+    if (autoMigration && !migrationState.finalPresent
+        && migrationState.legacyPresent) {
+        const CatalogDbTestResult migration = migrateLegacyCatalogForWorker(
+            command.scopeKey, command.epoch, failAfterRows, failValidation);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command.epoch == m_requestedEpoch) {
+            const CatalogDbMigrationState current =
+                inspectMigrationState(command.scopeKey);
+            m_migrationState = current;
+            m_migrationState.attempted = true;
+            m_migrationState.succeeded = migration.success;
+            if (!migration.success) {
+                m_scopeConfigured = false;
+                m_scopeReady = false;
+                m_activeScopeKey.clear();
+                m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
+                m_lastError = migration.error == CatalogDbErrorCategory::None
+                    ? CatalogDbErrorCategory::CorruptOrIo : migration.error;
+                m_openState = CatalogDbOpenState::CorruptOrIo;
+            }
+        }
+        m_idle.notify_all();
+        return;
+    }
+    if (autoMigration && !migrationState.finalPresent
+        && !migrationState.legacyPresent && migrationState.migratingPresent) {
+        const std::string migratingPath = catalogPath(command.scopeKey)
+            + ".migrating";
+        const std::string sidecars[] = {
+            migratingPath, migratingPath + "-journal",
+            migratingPath + "-wal", migratingPath + "-shm"};
+        bool removed = true;
+        for (const auto &path : sidecars) {
+            if (std::remove(path.c_str()) != 0 && errno != ENOENT) {
+                removed = false;
+                break;
+            }
+        }
+        if (!removed) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (command.epoch == m_requestedEpoch) {
+                m_scopeConfigured = false;
+                m_scopeReady = false;
+                m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
+                m_lastError = CatalogDbErrorCategory::CorruptOrIo;
+                m_openState = CatalogDbOpenState::CorruptOrIo;
+            }
+            m_idle.notify_all();
+            return;
+        }
     }
 
     openConnection(command);
@@ -2192,7 +2278,11 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
+            const bool attempted = m_migrationState.attempted;
+            const bool succeeded = m_migrationState.succeeded;
             m_migrationState = migrationState;
+            m_migrationState.attempted = attempted;
+            m_migrationState.succeeded = succeeded;
         }
     }
     if (migrationState.pathError) {

@@ -4,6 +4,8 @@
 #include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "MediaItemSql.hpp"
+#include "../diagnostics/PerformanceTelemetry.hpp"
+#include "../diagnostics/TelemetryClock.hpp"
 #include "../../vendor/sqlite/sqlite3.h"
 
 #include <cassert>
@@ -70,6 +72,34 @@ std::string catalogPath(const std::string &scopeKey)
     const std::string snapshot = LibraryCache::cachePath("cache", scopeKey);
     const std::size_t slash = snapshot.find_last_of('/');
     return snapshot.substr(0, slash + 1) + "catalog.sqlite3";
+}
+
+uint64_t telemetryNowIfEnabled() noexcept
+{
+    return performanceTelemetry().enabledFast()
+        ? TelemetryClock::monotonicUs() : 0;
+}
+
+bool mediaItemRowExists(sqlite3 *db, const std::string &id, bool &exists,
+                        std::string &error)
+{
+    sqlite3_stmt *statement = nullptr;
+    const int prepareRc = sqlite3_prepare_v2(
+        db, "SELECT 1 FROM media_items WHERE id=?1", -1, &statement, nullptr);
+    if (prepareRc != SQLITE_OK) {
+        error = sqlite3_errmsg(db);
+        return false;
+    }
+    const int bindRc = sqlite3_bind_text(statement, 1, id.c_str(), -1,
+                                         SQLITE_TRANSIENT);
+    const int stepRc = bindRc == SQLITE_OK ? sqlite3_step(statement) : bindRc;
+    exists = stepRc == SQLITE_ROW;
+    const int finalRc = sqlite3_finalize(statement);
+    if ((stepRc != SQLITE_ROW && stepRc != SQLITE_DONE) || finalRc != SQLITE_OK) {
+        error = sqlite3_errmsg(db);
+        return false;
+    }
+    return true;
 }
 
 struct ScalarValue {
@@ -454,6 +484,7 @@ struct CatalogDb::QueryCommand {
     Kind kind;
     std::string parentId;
     CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
     std::promise<CatalogDbHierarchyResult> result;
 };
 
@@ -464,6 +495,7 @@ struct CatalogDb::HierarchyWriteCommand {
     std::uint64_t generation = 0;
     std::int64_t refreshMs = 0;
     CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
     int failAfterRows = -1;
     int cancelAfterRows = -1;
     std::promise<CatalogDbHierarchyWriteResult> result;
@@ -473,6 +505,7 @@ struct CatalogDb::ReconcileCommand {
     std::vector<MediaItem> series;
     bool authoritative = false;
     CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
     int failAfterRows = -1;
     std::promise<CatalogDbReconcileResult> result;
 };
@@ -510,16 +543,22 @@ CatalogDbEnqueueResult CatalogDb::enqueueNoopForTest(
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             return CatalogDbEnqueueResult::RejectedStopping;
         }
         if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             return CatalogDbEnqueueResult::RejectedCancelled;
         }
         if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             return CatalogDbEnqueueResult::RejectedFull;
         }
-        m_queues[priorityIndex(priority)].push_back({priority, metadata});
+        m_queues[priorityIndex(priority)].push_back(
+            {priority, metadata, telemetryNowIfEnabled()});
         ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
     }
     m_wake.notify_one();
     return CatalogDbEnqueueResult::Accepted;
@@ -671,6 +710,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getSeasons(
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult stopped;
             stopped.error = CatalogDbErrorCategory::ScopeNotReady;
             stopped.message = "CatalogDb is stopping";
@@ -678,6 +718,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getSeasons(
             return result;
         }
         if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult cancelled;
             cancelled.cancelled = true;
             cancelled.error = CatalogDbErrorCategory::Superseded;
@@ -686,6 +727,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getSeasons(
             return result;
         }
         if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult full;
             full.error = CatalogDbErrorCategory::OpenFailed;
             full.message = "CatalogDb query queue is full";
@@ -693,6 +735,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getSeasons(
             return result;
         }
         command->metadata = metadata;
+        command->enqueuedMonotonicUs = telemetryNowIfEnabled();
         if (command->metadata.generation == 0) {
             command->metadata.generation = m_generation;
         }
@@ -701,6 +744,8 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getSeasons(
         }
         m_queryCommands.push_back(command);
         ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
     }
     m_wake.notify_one();
     return result;
@@ -716,6 +761,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult stopped;
             stopped.error = CatalogDbErrorCategory::ScopeNotReady;
             stopped.message = "CatalogDb is stopping";
@@ -723,6 +769,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
             return result;
         }
         if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult cancelled;
             cancelled.cancelled = true;
             cancelled.error = CatalogDbErrorCategory::Superseded;
@@ -731,6 +778,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
             return result;
         }
         if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyResult full;
             full.error = CatalogDbErrorCategory::OpenFailed;
             full.message = "CatalogDb query queue is full";
@@ -738,6 +786,7 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
             return result;
         }
         command->metadata = metadata;
+        command->enqueuedMonotonicUs = telemetryNowIfEnabled();
         if (command->metadata.generation == 0) {
             command->metadata.generation = m_generation;
         }
@@ -746,6 +795,8 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
         }
         m_queryCommands.push_back(command);
         ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
     }
     m_wake.notify_one();
     return result;
@@ -787,6 +838,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     command->generation = generation;
     command->refreshMs = refreshMs;
     command->metadata = metadata;
+    command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     command->failAfterRows = failAfterRows;
     command->cancelAfterRows = cancelAfterRows;
     std::future<CatalogDbHierarchyWriteResult> result =
@@ -794,6 +846,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyWriteResult stopped;
             stopped.error = CatalogDbErrorCategory::ScopeNotReady;
             stopped.message = "CatalogDb is stopping";
@@ -801,6 +854,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
             return result;
         }
         if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyWriteResult cancelled;
             cancelled.cancelled = true;
             cancelled.error = CatalogDbErrorCategory::Superseded;
@@ -809,6 +863,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
             return result;
         }
         if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbHierarchyWriteResult full;
             full.error = CatalogDbErrorCategory::OpenFailed;
             full.message = "CatalogDb write queue is full";
@@ -823,6 +878,8 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
         }
         m_writeCommands.push_back(command);
         ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
     }
     m_wake.notify_one();
     return result;
@@ -850,11 +907,13 @@ std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
     command->series = series;
     command->authoritative = authoritative;
     command->metadata = metadata;
+    command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     command->failAfterRows = failAfterRows;
     std::future<CatalogDbReconcileResult> result = command->result.get_future();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbReconcileResult stopped;
             stopped.error = CatalogDbErrorCategory::ScopeNotReady;
             stopped.message = "CatalogDb is stopping";
@@ -862,6 +921,7 @@ std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
             return result;
         }
         if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbReconcileResult cancelled;
             cancelled.cancelled = true;
             cancelled.error = CatalogDbErrorCategory::Superseded;
@@ -870,6 +930,7 @@ std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
             return result;
         }
         if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
             CatalogDbReconcileResult full;
             full.error = CatalogDbErrorCategory::OpenFailed;
             full.message = "CatalogDb reconciliation queue is full";
@@ -884,6 +945,8 @@ std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
         }
         m_reconcileCommands.push_back(command);
         ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
     }
     m_wake.notify_one();
     return result;
@@ -894,19 +957,25 @@ CatalogDbEnqueueResult CatalogDb::enqueueScopedNoopForTest(
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_stopping) {
+        performanceTelemetry().addCatalogDbEnqueueRejected();
         return CatalogDbEnqueueResult::RejectedStopping;
     }
     if (!m_scopeConfigured || !m_scopeReady) {
+        performanceTelemetry().addCatalogDbEnqueueRejected();
         return CatalogDbEnqueueResult::RejectedScopeNotReady;
     }
     if (m_pendingJobs >= kMaxPendingJobs) {
+        performanceTelemetry().addCatalogDbEnqueueRejected();
         return CatalogDbEnqueueResult::RejectedFull;
     }
     CatalogDbJobMetadata metadata;
     metadata.generation = m_generation;
     metadata.scopeEpoch = m_requestedEpoch;
-    m_queues[priorityIndex(priority)].push_back({priority, metadata});
+    m_queues[priorityIndex(priority)].push_back(
+        {priority, metadata, telemetryNowIfEnabled()});
     ++m_pendingJobs;
+    performanceTelemetry().setCatalogDbQueueDepth(
+        static_cast<uint32_t>(m_pendingJobs));
     m_wake.notify_one();
     return CatalogDbEnqueueResult::Accepted;
 }
@@ -970,9 +1039,11 @@ void CatalogDb::workerLoop()
             ScopeCommand command = std::move(m_scopeCommands.front());
             m_scopeCommands.pop_front();
             m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processScopeCommand(std::move(command));
             lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
             m_idle.notify_all();
             continue;
@@ -982,9 +1053,11 @@ void CatalogDb::workerLoop()
             std::shared_ptr<TestCommand> command = std::move(m_testCommands.front());
             m_testCommands.pop_front();
             m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processTestCommand(command);
             lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
             m_idle.notify_all();
             continue;
@@ -994,10 +1067,14 @@ void CatalogDb::workerLoop()
             std::shared_ptr<QueryCommand> command = std::move(m_queryCommands.front());
             m_queryCommands.pop_front();
             --m_pendingJobs;
+            performanceTelemetry().setCatalogDbQueueDepth(
+                static_cast<uint32_t>(m_pendingJobs));
             m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processHierarchyQuery(command);
             lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
             m_idle.notify_all();
             continue;
@@ -1008,10 +1085,14 @@ void CatalogDb::workerLoop()
                 std::move(m_writeCommands.front());
             m_writeCommands.pop_front();
             --m_pendingJobs;
+            performanceTelemetry().setCatalogDbQueueDepth(
+                static_cast<uint32_t>(m_pendingJobs));
             m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processHierarchyWrite(command);
             lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
             m_idle.notify_all();
             continue;
@@ -1022,17 +1103,24 @@ void CatalogDb::workerLoop()
                 std::move(m_reconcileCommands.front());
             m_reconcileCommands.pop_front();
             --m_pendingJobs;
+            performanceTelemetry().setCatalogDbQueueDepth(
+                static_cast<uint32_t>(m_pendingJobs));
             m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processReconcile(command);
             lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
             m_idle.notify_all();
             continue;
         }
 
         Job job = takeNextJobLocked();
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
         m_runningJob = true;
+        performanceTelemetry().setCatalogDbActive(true);
         lock.unlock();
 
         CatalogDbJobDisposition disposition = CatalogDbJobDisposition::Completed;
@@ -1049,6 +1137,16 @@ void CatalogDb::workerLoop()
         }
 
         lock.lock();
+        performanceTelemetry().setCatalogDbActive(false);
+        const uint64_t completedUs = telemetryNowIfEnabled();
+        if (job.enqueuedMonotonicUs != 0 && completedUs >= job.enqueuedMonotonicUs)
+            performanceTelemetry().recordCatalogDbQueueWait(
+                completedUs - job.enqueuedMonotonicUs);
+        if (disposition == CatalogDbJobDisposition::Completed)
+            performanceTelemetry().addCatalogDbCompleted();
+        else if (disposition == CatalogDbJobDisposition::Cancelled
+                 || disposition == CatalogDbJobDisposition::Superseded)
+            performanceTelemetry().addCatalogDbCancelled();
         if (m_jobReports.size() == kMaxPendingJobs) {
             m_jobReports.pop_front();
         }
@@ -1134,7 +1232,20 @@ void CatalogDb::processHierarchyQuery(
     assert(std::this_thread::get_id() == m_worker.get_id());
     CatalogDbHierarchyResult result;
     result.workerOwned = true;
+    const uint64_t operationStartUs = telemetryNowIfEnabled();
     auto finish = [&] {
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        const uint64_t endUs = telemetryNowIfEnabled();
+        if (operationStartUs != 0 && endUs >= operationStartUs)
+            telemetry.recordCatalogDbQuery(endUs - operationStartUs);
+        if (command->enqueuedMonotonicUs != 0 && endUs >= command->enqueuedMonotonicUs)
+            telemetry.recordCatalogDbQueueWait(endUs - command->enqueuedMonotonicUs);
+        if (result.cancelled || result.superseded)
+            telemetry.addCatalogDbCancelled();
+        else if (result.success)
+            telemetry.addCatalogDbCompleted();
+        else
+            telemetry.addCatalogDbFailed();
         command->result.set_value(std::move(result));
     };
     if (!m_db) {
@@ -1327,7 +1438,23 @@ void CatalogDb::processHierarchyWrite(
     assert(std::this_thread::get_id() == m_worker.get_id());
     CatalogDbHierarchyWriteResult result;
     result.workerOwned = true;
+    uint64_t transactionStartUs = 0;
+    bool transactionActive = false;
     auto finish = [&] {
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        const uint64_t endUs = telemetryNowIfEnabled();
+        if (command->enqueuedMonotonicUs != 0 && endUs >= command->enqueuedMonotonicUs)
+            telemetry.recordCatalogDbQueueWait(endUs - command->enqueuedMonotonicUs);
+        if (transactionActive && endUs >= transactionStartUs) {
+            telemetry.recordCatalogDbTransaction(endUs - transactionStartUs);
+            transactionActive = false;
+        }
+        if (result.cancelled || result.superseded)
+            telemetry.addCatalogDbCancelled();
+        else if (result.success)
+            telemetry.addCatalogDbCompleted();
+        else
+            telemetry.addCatalogDbFailed();
         command->result.set_value(std::move(result));
     };
     if (!m_db) {
@@ -1505,6 +1632,11 @@ void CatalogDb::processHierarchyWrite(
         if (!ok) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
+            performanceTelemetry().recordCatalogDbSqliteError(
+                sqlite3_extended_errcode(m_db));
+        } else {
+            performanceTelemetry().addCatalogDbRows(
+                0, 0, static_cast<uint32_t>(sqlite3_changes(m_db)));
         }
         reset(statement);
         return ok;
@@ -1514,15 +1646,27 @@ void CatalogDb::processHierarchyWrite(
             return false;
         }
         MediaItemSqlError error = MediaItemSqlError::None;
+        bool existed = false;
+        if (performanceTelemetry().enabledFast()
+            && !mediaItemRowExists(m_db, item.id, existed, result.message)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            performanceTelemetry().recordCatalogDbSqliteError(
+                sqlite3_extended_errcode(m_db));
+            return false;
+        }
         reset(upsert);
         const bool bound = bindMediaItemScalars(upsert, item, error);
         const bool stepped = bound && sqlite3_step(upsert) == SQLITE_DONE;
         if (!stepped) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
+            performanceTelemetry().recordCatalogDbSqliteError(
+                sqlite3_extended_errcode(m_db));
             reset(upsert);
             return false;
         }
+        performanceTelemetry().addCatalogDbRows(existed ? 0u : 1u,
+                                                existed ? 1u : 0u, 0u);
         reset(upsert);
         if (!replaceMediaItemCollections(collections, item, error)) {
             result.error = CatalogDbErrorCategory::SqliteError;
@@ -1540,7 +1684,13 @@ void CatalogDb::processHierarchyWrite(
         return true;
     };
 
-    if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)
+    const uint64_t beginUs = telemetryNowIfEnabled();
+    const bool began = exec(m_db, "BEGIN IMMEDIATE;", result.message);
+    if (began) {
+        transactionStartUs = beginUs;
+        transactionActive = true;
+    }
+    if (!began
         || !writeItem(command->series)
         || !deleteById(deleteSeasons, command->series.id)) {
         rollback();
@@ -1583,10 +1733,23 @@ void CatalogDb::processHierarchyWrite(
         return;
     }
     reset(markComplete);
+    const uint64_t commitStartUs = telemetryNowIfEnabled();
     if (!exec(m_db, "COMMIT;", result.message)) {
         rollback();
         finish();
         return;
+    }
+    transactionActive = false;
+    if (commitStartUs != 0) {
+        const uint64_t commitEndUs = telemetryNowIfEnabled();
+        if (commitEndUs >= commitStartUs)
+            performanceTelemetry().recordCatalogDbCommit(commitEndUs - commitStartUs);
+    }
+    if (transactionStartUs != 0) {
+        const uint64_t transactionEndUs = telemetryNowIfEnabled();
+        if (transactionEndUs >= transactionStartUs)
+            performanceTelemetry().recordCatalogDbTransaction(
+                transactionEndUs - transactionStartUs);
     }
     result.success = true;
     finish();
@@ -1599,7 +1762,23 @@ void CatalogDb::processReconcile(
     CatalogDbReconcileResult result;
     result.workerOwned = true;
     result.authoritative = command->authoritative;
+    uint64_t transactionStartUs = 0;
+    bool transactionActive = false;
     auto finish = [&] {
+        PerformanceTelemetry &telemetry = performanceTelemetry();
+        const uint64_t endUs = telemetryNowIfEnabled();
+        if (command->enqueuedMonotonicUs != 0 && endUs >= command->enqueuedMonotonicUs)
+            telemetry.recordCatalogDbQueueWait(endUs - command->enqueuedMonotonicUs);
+        if (transactionActive && endUs >= transactionStartUs) {
+            telemetry.recordCatalogDbTransaction(endUs - transactionStartUs);
+            transactionActive = false;
+        }
+        if (result.cancelled || result.superseded)
+            telemetry.addCatalogDbCancelled();
+        else if (result.success)
+            telemetry.addCatalogDbCompleted();
+        else
+            telemetry.addCatalogDbFailed();
         command->result.set_value(std::move(result));
     };
     if (!m_db) {
@@ -1756,15 +1935,27 @@ void CatalogDb::processReconcile(
             return false;
         }
         MediaItemSqlError error = MediaItemSqlError::None;
+        bool existed = false;
+        if (performanceTelemetry().enabledFast()
+            && !mediaItemRowExists(m_db, item.id, existed, result.message)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            performanceTelemetry().recordCatalogDbSqliteError(
+                sqlite3_extended_errcode(m_db));
+            return false;
+        }
         reset(upsert);
         const bool ok = bindMediaItemScalars(upsert, item, error)
             && sqlite3_step(upsert) == SQLITE_DONE;
         if (!ok) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
+            performanceTelemetry().recordCatalogDbSqliteError(
+                sqlite3_extended_errcode(m_db));
             reset(upsert);
             return false;
         }
+        performanceTelemetry().addCatalogDbRows(existed ? 0u : 1u,
+                                                existed ? 1u : 0u, 0u);
         reset(upsert);
         if (!replaceMediaItemCollections(collections, item, error)) {
             result.error = CatalogDbErrorCategory::SqliteError;
@@ -1791,7 +1982,13 @@ void CatalogDb::processReconcile(
         return staged;
     };
 
-    if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)
+    const uint64_t beginUs = telemetryNowIfEnabled();
+    const bool began = exec(m_db, "BEGIN IMMEDIATE;", result.message);
+    if (began) {
+        transactionStartUs = beginUs;
+        transactionActive = true;
+    }
+    if (!began
         || !executeNoParameter(clearIds)) {
         rollback();
         finish();
@@ -1819,11 +2016,26 @@ void CatalogDb::processReconcile(
         return;
     }
     result.seriesDeleted = static_cast<std::size_t>(sqlite3_changes(m_db));
+    performanceTelemetry().addCatalogDbRows(
+        0, 0, static_cast<uint32_t>(result.seriesDeleted));
     reset(deleteAbsent);
+    const uint64_t commitStartUs = telemetryNowIfEnabled();
     if (!exec(m_db, "COMMIT;", result.message)) {
         rollback();
         finish();
         return;
+    }
+    transactionActive = false;
+    if (commitStartUs != 0) {
+        const uint64_t commitEndUs = telemetryNowIfEnabled();
+        if (commitEndUs >= commitStartUs)
+            performanceTelemetry().recordCatalogDbCommit(commitEndUs - commitStartUs);
+    }
+    if (transactionStartUs != 0) {
+        const uint64_t transactionEndUs = telemetryNowIfEnabled();
+        if (transactionEndUs >= transactionStartUs)
+            performanceTelemetry().recordCatalogDbTransaction(
+                transactionEndUs - transactionStartUs);
     }
     result.success = true;
     finish();

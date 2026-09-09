@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize and correlate decoded MFT v1 telemetry on a desktop."""
+"""Summarize and correlate decoded MFT v1/v2 telemetry on a desktop."""
 
 import argparse
 import csv
@@ -239,6 +239,18 @@ def _health_summary(records):
     }
 
 
+def _catalog_db_summary(records):
+    rows = [_record_view(record) for record in records]
+    totals = {}
+    for row in rows:
+        for key, value in row.items():
+            if key in ("record_type", "record_type_id", "sequence", "monotonic_us"):
+                continue
+            if isinstance(value, (int, float)) and not key.startswith("reserved"):
+                totals[key] = totals.get(key, 0) + value
+    return {"records": rows, "totals": totals}
+
+
 def _state_summary(records):
     rows = [_record_view(record) for record in records]
     latest = {}
@@ -343,6 +355,10 @@ def summarize(decoded, cpu_count=None):
         "state": _state_summary(_records(decoded, "StateTransition")),
         "session": _session_summary(_records(decoded, "SessionEvent")),
     }
+    if decoded.get("header", {}).get("schema_version") == 2:
+        result["catalog_db"] = _catalog_db_summary(
+            _records(decoded, "CatalogDbSummary")
+        )
     result["correlations"] = correlate(decoded)
     return result
 
@@ -357,6 +373,8 @@ _TABLE_FIELDS = {
     "downloads": ["monotonic_us", "record_type", "active_downloads", "bytes_delta", "duration_us"],
     "playback": ["monotonic_us", "stage", "source", "duration_us", "playback_seq"],
     "health": ["monotonic_us", "queue_depth", "dropped_records_cumulative", "writer_errors_cumulative"],
+    "catalog_db": ["monotonic_us", "query_count", "transaction_count", "commit_count",
+                   "queue_wait_total_us", "rows_inserted", "rows_updated", "rows_deleted"],
     "state": ["monotonic_us", "state_kind", "previous", "current", "transition_seq"],
     "session": ["monotonic_us", "kind", "outcome", "value0", "value1"],
     "correlations": ["source", "monotonic_us", "duration_us", "state", "workers", "network", "downloads"],
@@ -383,13 +401,16 @@ def _write_table(directory, name, rows):
 
 def _export_rows(summary):
     timeline = []
-    for section in ("system", "frames", "workers", "requests", "artwork", "downloads",
-                    "playback", "health", "state", "session"):
+    sections = ["system", "frames", "workers", "requests", "artwork", "downloads",
+                "playback", "health", "state", "session"]
+    if "catalog_db" in summary:
+        sections.insert(8, "catalog_db")
+    for section in sections:
         for row in _rows_for_section(summary, section):
             timeline.append(row)
     artwork_rows = summary["artwork"]["summary_records"] + summary["artwork"]["decode_records"]
     download_rows = summary["downloads"]["samples"] + summary["downloads"]["segment_attempts"]
-    return {
+    result = {
         "timeline": sorted(timeline, key=lambda row: row.get("monotonic_us", 0)),
         "system": summary["system"]["samples"],
         "frames": summary["frames"]["samples"],
@@ -403,6 +424,9 @@ def _export_rows(summary):
         "session": summary["session"]["events"],
         "correlations": summary["correlations"],
     }
+    if "catalog_db" in summary:
+        result["catalog_db"] = summary["catalog_db"]["records"]
+    return result
 
 
 def _rows_for_section(summary, section):
@@ -418,6 +442,8 @@ def _rows_for_section(summary, section):
         return summary[section]["summary_records"] + summary[section]["decode_records"]
     if section == "downloads":
         return summary[section]["samples"] + summary[section]["segment_attempts"]
+    if section == "catalog_db" and "catalog_db" in summary:
+        return summary[section]["records"]
     if section == "playback":
         return summary[section]["events"]
     if section == "health":

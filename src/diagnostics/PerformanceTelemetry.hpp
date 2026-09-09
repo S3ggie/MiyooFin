@@ -33,6 +33,7 @@ public:
 
     static void setTestHooks(const TestHooks &hooks) noexcept;
     static void clearTestHooks() noexcept;
+    static void setSchemaVersionForTest(uint16_t version) noexcept;
 #endif
 
     void start(const TelemetryConfig &config);
@@ -78,6 +79,20 @@ public:
     void addDownloadSegmentCompleted(uint32_t count = 1) noexcept;
     void addDownloadSegmentRetries(uint32_t count = 1) noexcept;
 
+    void setCatalogDbActive(bool active) noexcept;
+    void setCatalogDbQueueDepth(uint32_t depth) noexcept;
+    void addCatalogDbCompleted(uint32_t count = 1) noexcept;
+    void addCatalogDbFailed(uint32_t count = 1) noexcept;
+    void addCatalogDbCancelled(uint32_t count = 1) noexcept;
+    void recordCatalogDbQuery(uint64_t durationUs) noexcept;
+    void recordCatalogDbTransaction(uint64_t durationUs) noexcept;
+    void recordCatalogDbCommit(uint64_t durationUs) noexcept;
+    void recordCatalogDbQueueWait(uint64_t durationUs) noexcept;
+    void addCatalogDbEnqueueRejected(uint32_t count = 1) noexcept;
+    void addCatalogDbRows(uint32_t inserted, uint32_t updated,
+                          uint32_t deleted) noexcept;
+    void recordCatalogDbSqliteError(int resultCode) noexcept;
+
 private:
     struct WorkerSlot {
         std::atomic<uint32_t> active{0};
@@ -105,9 +120,12 @@ private:
     void emitDownloadSample(uint64_t nowUs, uint64_t actualIntervalUs) noexcept;
     void emitFrameTimingSummaries(uint64_t nowUs, uint64_t intervalUs) noexcept;
     void emitTelemetryHealth(uint64_t nowUs) noexcept;
+    void emitCatalogDbSummary(uint64_t nowUs) noexcept;
+    void emitCatalogDbWorkerSample(uint64_t nowUs) noexcept;
     void emitStateTransition(StateKind kind, uint16_t previous,
                              uint16_t current) noexcept;
     void updateQueueHighwater(uint32_t depth) noexcept;
+    void updateCatalogDbQueueHighwater(uint32_t depth) noexcept;
     WorkerSlot *workerSlot(WorkerId worker) noexcept;
 
     std::atomic<bool> m_enabled{false};
@@ -145,12 +163,37 @@ private:
     std::atomic<uint64_t> m_downloadBytes{0};
     std::atomic<uint32_t> m_downloadSegmentsCompleted{0};
     std::atomic<uint32_t> m_downloadSegmentRetries{0};
+    std::atomic<uint32_t> m_catalogDbActive{0};
+    std::atomic<uint32_t> m_catalogDbQueueDepth{0};
+    std::atomic<uint32_t> m_catalogDbQueueHighwater{0};
+    std::atomic<uint32_t> m_catalogDbCompleted{0};
+    std::atomic<uint32_t> m_catalogDbFailed{0};
+    std::atomic<uint32_t> m_catalogDbCancelled{0};
+    std::atomic<uint32_t> m_catalogDbQueryCount{0};
+    std::atomic<uint64_t> m_catalogDbQueryTotalUs{0};
+    std::atomic<uint32_t> m_catalogDbQueryMaxUs{0};
+    std::atomic<uint32_t> m_catalogDbTransactionCount{0};
+    std::atomic<uint64_t> m_catalogDbTransactionTotalUs{0};
+    std::atomic<uint32_t> m_catalogDbTransactionMaxUs{0};
+    std::atomic<uint32_t> m_catalogDbCommitCount{0};
+    std::atomic<uint64_t> m_catalogDbCommitTotalUs{0};
+    std::atomic<uint32_t> m_catalogDbCommitMaxUs{0};
+    std::atomic<uint64_t> m_catalogDbQueueWaitTotalUs{0};
+    std::atomic<uint32_t> m_catalogDbQueueWaitMaxUs{0};
+    std::atomic<uint32_t> m_catalogDbEnqueueRejected{0};
+    std::atomic<uint32_t> m_catalogDbRowsInserted{0};
+    std::atomic<uint32_t> m_catalogDbRowsUpdated{0};
+    std::atomic<uint32_t> m_catalogDbRowsDeleted{0};
+    std::atomic<uint32_t> m_catalogDbBusyFamily{0};
+    std::atomic<uint32_t> m_catalogDbIoerrFamily{0};
+    std::atomic<uint32_t> m_catalogDbCorruptNotadb{0};
     TelemetryRing<512> m_ring;
     TelemetryWriter m_writer;
     std::thread m_serviceThread;
     uint32_t m_consumerSequence = 0;
     uint64_t m_sessionNonce = 0;
     TelemetryConfig m_config;
+    uint16_t m_schemaVersion = 1;
 };
 
 PerformanceTelemetry &performanceTelemetry() noexcept;
@@ -193,6 +236,18 @@ public:
     inline void addDownloadBytes(uint64_t) noexcept {}
     inline void addDownloadSegmentCompleted(uint32_t = 1) noexcept {}
     inline void addDownloadSegmentRetries(uint32_t = 1) noexcept {}
+    inline void setCatalogDbActive(bool) noexcept {}
+    inline void setCatalogDbQueueDepth(uint32_t) noexcept {}
+    inline void addCatalogDbCompleted(uint32_t = 1) noexcept {}
+    inline void addCatalogDbFailed(uint32_t = 1) noexcept {}
+    inline void addCatalogDbCancelled(uint32_t = 1) noexcept {}
+    inline void recordCatalogDbQuery(uint64_t) noexcept {}
+    inline void recordCatalogDbTransaction(uint64_t) noexcept {}
+    inline void recordCatalogDbCommit(uint64_t) noexcept {}
+    inline void recordCatalogDbQueueWait(uint64_t) noexcept {}
+    inline void addCatalogDbEnqueueRejected(uint32_t = 1) noexcept {}
+    inline void addCatalogDbRows(uint32_t, uint32_t, uint32_t) noexcept {}
+    inline void recordCatalogDbSqliteError(int) noexcept {}
 };
 
 inline PerformanceTelemetry &performanceTelemetry() noexcept

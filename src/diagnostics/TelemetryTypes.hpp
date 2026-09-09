@@ -181,6 +181,37 @@ struct SessionEvent {
     uint64_t value1;
 };
 
+struct CatalogDbSummary {
+    uint32_t query_count;
+    uint64_t query_total_us;
+    uint32_t query_max_us;
+    uint32_t transaction_count;
+    uint64_t transaction_total_us;
+    uint32_t transaction_max_us;
+    uint32_t commit_count;
+    uint64_t commit_total_us;
+    uint32_t commit_max_us;
+    uint64_t queue_wait_total_us;
+    uint32_t queue_wait_max_us;
+    uint32_t enqueue_rejected_delta;
+    uint32_t rows_inserted;
+    uint32_t rows_updated;
+    uint32_t rows_deleted;
+    uint32_t sqlite_busy_family_delta;
+    uint32_t sqlite_ioerr_family_delta;
+    uint32_t sqlite_corrupt_notadb_delta;
+    uint32_t reserved0;
+    uint32_t reserved1;
+    uint64_t reserved2;
+    uint64_t reserved3;
+};
+
+struct CatalogDbSummaryRecord {
+    uint32_t sequence;
+    uint64_t monotonic_us;
+    CatalogDbSummary payload;
+};
+
 struct TelemetryRecordHeader {
     RecordType record_type;
     uint16_t record_size;
@@ -226,6 +257,9 @@ static_assert(sizeof(PlaybackEvent) == 24, "PlaybackEvent schema size");
 static_assert(sizeof(UiStall) == 32, "UiStall schema size");
 static_assert(sizeof(TelemetryHealth) == 32, "TelemetryHealth schema size");
 static_assert(sizeof(SessionEvent) == 16, "SessionEvent schema size");
+static_assert(sizeof(CatalogDbSummary) == 112, "CatalogDbSummary schema size");
+static_assert(sizeof(CatalogDbSummaryRecord) == 124,
+              "CatalogDbSummaryRecord schema size");
 static_assert(sizeof(TelemetryRecordHeader) == 16, "TelemetryRecordHeader schema size");
 
 #define MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(type) \
@@ -245,6 +279,8 @@ MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(PlaybackEvent);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(UiStall);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(TelemetryHealth);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(SessionEvent);
+MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(CatalogDbSummary);
+MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(CatalogDbSummaryRecord);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(TelemetryRecordHeader);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(TelemetryPayload);
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(TelemetryRecord);

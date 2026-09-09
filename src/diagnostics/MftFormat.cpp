@@ -70,13 +70,15 @@ bool encodeFileHeader(const MftFileHeader &header,
 {
     if (destination == nullptr || capacity < kMftFileHeaderSize)
         return false;
+    if (header.schema_version != 1 && header.schema_version != 2)
+        return false;
 
     LittleEndianWriter writer(destination, capacity);
     return writer.putU8('M')
         && writer.putU8('F')
         && writer.putU8('T')
         && writer.putU8('1')
-        && writer.putU16(1)
+        && writer.putU16(header.schema_version)
         && writer.putU16(static_cast<uint16_t>(kMftFileHeaderSize))
         && writer.putU32(header.flags)
         && writer.putU32(header.pid)
@@ -93,6 +95,50 @@ bool encodeFileHeader(const MftFileHeader &header,
         && writer.putU32(0)
         && writer.putU64(0)
         && writer.offset() == kMftFileHeaderSize;
+}
+
+bool encodeCatalogDbSummaryRecord(const CatalogDbSummaryRecord &record,
+                                  uint8_t *destination,
+                                  std::size_t capacity,
+                                  uint16_t &written) noexcept
+{
+    written = 0;
+    if (destination == nullptr || capacity < kMftV2CatalogDbSummarySize)
+        return false;
+
+    LittleEndianWriter writer(destination, capacity);
+    const CatalogDbSummary &value = record.payload;
+    const bool success = writer.putU16(static_cast<uint16_t>(
+            MftV2RecordType::CatalogDbSummary))
+        && writer.putU16(kMftV2CatalogDbSummarySize)
+        && writer.putU32(record.sequence)
+        && writer.putU64(record.monotonic_us)
+        && writer.putU32(value.query_count)
+        && writer.putU64(value.query_total_us)
+        && writer.putU32(value.query_max_us)
+        && writer.putU32(value.transaction_count)
+        && writer.putU64(value.transaction_total_us)
+        && writer.putU32(value.transaction_max_us)
+        && writer.putU32(value.commit_count)
+        && writer.putU64(value.commit_total_us)
+        && writer.putU32(value.commit_max_us)
+        && writer.putU64(value.queue_wait_total_us)
+        && writer.putU32(value.queue_wait_max_us)
+        && writer.putU32(value.enqueue_rejected_delta)
+        && writer.putU32(value.rows_inserted)
+        && writer.putU32(value.rows_updated)
+        && writer.putU32(value.rows_deleted)
+        && writer.putU32(value.sqlite_busy_family_delta)
+        && writer.putU32(value.sqlite_ioerr_family_delta)
+        && writer.putU32(value.sqlite_corrupt_notadb_delta)
+        && writer.putU32(value.reserved0)
+        && writer.putU32(value.reserved1)
+        && writer.putU64(value.reserved2)
+        && writer.putU64(value.reserved3);
+    if (!success || writer.offset() != kMftV2CatalogDbSummarySize)
+        return false;
+    written = kMftV2CatalogDbSummarySize;
+    return true;
 }
 
 uint16_t encodedRecordSize(RecordType type) noexcept

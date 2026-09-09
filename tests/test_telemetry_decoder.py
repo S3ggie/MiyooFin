@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import csv
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools" / "telemetry"))
 import decode  # noqa: E402
 import analyze  # noqa: E402
 import compare_runs  # noqa: E402
+import schema  # noqa: E402
 
 
 FIXTURES = ROOT / "tests" / "fixtures" / "telemetry"
@@ -64,6 +66,48 @@ class TelemetryDecoderTests(unittest.TestCase):
 
         self.assertEqual(len(result["records"]), 14)
         self.assertEqual(result["records"][0]["record_type"], "SystemSample")
+
+    def test_v2_catalog_db_records_and_analyzer(self):
+        original = (FIXTURES / "valid_v1.mft").read_bytes()
+        header = bytearray(original[:80])
+        header[4:6] = struct.pack("<H", 2)
+        worker = struct.pack("<HHIQHBB6I", 4, 44, 15, 200, 15, 1, 0, 3, 4, 5, 6, 7, 8)
+        values = (2, 300, 200, 1, 400, 400, 1, 25, 25, 50, 40, 1,
+                  3, 4, 5, 6, 7, 8, 0, 0, 0, 0)
+        summary = struct.pack(
+            "<HHIQ" + schema.V2_RECORD_LAYOUTS[15]["format"][1:],
+            15, 128, 16, 300, *values
+        )
+        result = decode.decode_bytes(bytes(header) + worker + summary)
+
+        self.assertEqual(result["header"]["schema_version"], 2)
+        self.assertEqual(result["records"][0]["payload"]["worker"], "CatalogDb")
+        self.assertEqual(result["records"][1]["record_type"], "CatalogDbSummary")
+        self.assertEqual(result["records"][1]["payload"]["rows_deleted"], 5)
+        analyzed = analyze.summarize(result)
+        self.assertEqual(analyzed["catalog_db"]["totals"]["query_count"], 2)
+        self.assertEqual(analyzed["catalog_db"]["totals"]["rows_updated"], 4)
+
+    def test_v1_rejects_v2_only_worker_and_record(self):
+        original = (FIXTURES / "valid_v1.mft").read_bytes()
+        worker = struct.pack("<HHIQHBB6I", 4, 44, 15, 200, 15, 1, 0, 0, 0, 0, 0, 0, 0)
+        with self.assertRaises(decode.MftDecodeError):
+            decode.decode_bytes(original[:80] + worker)
+        summary = struct.pack("<HHIQ", 15, 128, 1, 1) + bytes(112)
+        with self.assertRaises(decode.MftDecodeError):
+            decode.decode_bytes(original[:80] + summary)
+
+    def test_v2_unknown_record_and_corrupt_known_record_are_safe(self):
+        original = bytearray((FIXTURES / "valid_v1.mft").read_bytes())
+        original[4:6] = struct.pack("<H", 2)
+        unknown = struct.pack("<HHIQ", 99, 20, 7, 8) + b"ABCD"
+        result = decode.decode_bytes(bytes(original[:80]) + unknown + bytes(original[80:]))
+        self.assertEqual(len(result["records"]), 14)
+        self.assertTrue(any("unknown record type 99" in warning for warning in result["warnings"]))
+        corrupt = bytearray(original)
+        corrupt[80 + 2:80 + 4] = struct.pack("<H", 87)
+        corrupted = decode.decode_bytes(bytes(corrupt))
+        self.assertTrue(any("invalid SystemSample size" in warning for warning in corrupted["warnings"]))
 
     def test_partial_tail_preserves_prior_complete_records(self):
         full = decode.decode_file(FIXTURES / "valid_v1.mft")

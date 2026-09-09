@@ -193,6 +193,72 @@ bool TelemetryWriter::append(const TelemetryRecord &record)
     return true;
 }
 
+bool TelemetryWriter::appendCatalogDbSummary(const CatalogDbSummaryRecord &record)
+{
+    if (!isOpen() || header_.schema_version != 2) {
+        setError(WriterErrorKind::Write, EINVAL);
+        return false;
+    }
+
+    std::array<uint8_t, kMftV2CatalogDbSummarySize> encoded{};
+    uint16_t encodedSize = 0;
+    if (!encodeCatalogDbSummaryRecord(record, encoded.data(), encoded.size(), encodedSize)) {
+        setError(WriterErrorKind::Write, EINVAL);
+        return false;
+    }
+    if (config_.rotateBytes != 0
+        && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
+        const std::string previousPath = path_;
+        const uint32_t previousIndex = header_.rotation_index;
+        const uint32_t nextIndex = previousIndex + 1;
+        if (!close())
+            return false;
+
+        const std::string rotatedPath = config_.targetDirectory + "/telemetry-"
+            + std::to_string(previousIndex) + ".mft";
+        std::remove(rotatedPath.c_str());
+        if (std::rename(previousPath.c_str(), rotatedPath.c_str()) != 0) {
+            setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
+            return false;
+        }
+        const uint32_t retainFiles = config_.retainFiles == 0 ? 1 : config_.retainFiles;
+        if (nextIndex >= retainFiles) {
+            const uint32_t expiredIndex = nextIndex - retainFiles;
+            const std::string expiredPath = config_.targetDirectory + "/telemetry-"
+                + std::to_string(expiredIndex) + ".mft";
+            std::remove(expiredPath.c_str());
+        }
+
+        MftFileHeader nextHeader = header_;
+        nextHeader.rotation_index = nextIndex;
+        const uint32_t rotations = rotationCount_;
+        if (!open(config_, nextHeader)) {
+            if (lastErrorKind_ == WriterErrorKind::Unknown)
+                setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
+            return false;
+        }
+        rotationCount_ = rotations + 1;
+    }
+    if (encodedSize > buffer_.size()) {
+        if (!flush())
+            return false;
+        if (std::fwrite(encoded.data(), 1, encodedSize, file_) != encodedSize) {
+            setError(WriterErrorKind::Write, currentErrorOr(EIO));
+            return false;
+        }
+        logicalBytesWritten_ += encodedSize;
+        return true;
+    }
+    if (buffered_ + encodedSize > buffer_.size() && !flush())
+        return false;
+    std::copy(encoded.begin(), encoded.end(), buffer_.begin() + buffered_);
+    buffered_ += encodedSize;
+    logicalBytesWritten_ += encodedSize;
+    if (buffered_ == buffer_.size())
+        return flush();
+    return true;
+}
+
 bool TelemetryWriter::flushIfDue(uint64_t monotonicUs) noexcept
 {
     if (!isOpen())

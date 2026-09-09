@@ -770,6 +770,8 @@ int main()
     testCatalogDbMigrationPathStates();
     testCatalogDbMigrationFutureFinalPreserved();
     testCatalogDbMigrationPathError();
+    testCatalogDbLegacyMigration();
+    testCatalogDbLegacyMigrationFailures();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

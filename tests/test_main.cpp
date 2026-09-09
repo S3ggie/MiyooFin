@@ -339,6 +339,32 @@ static void testCatalogDbSqliteOwnership()
           == CatalogDbEnqueueResult::RejectedScopeNotReady);
 }
 
+static void testCatalogDbSchemaV1()
+{
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://sqlite-schema.example",
+                                        "schema-user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.scopeState().requestedEpoch == epoch && db.scopeState().ready);
+
+    auto schema = db.runSchemaDiagnosticsForTest();
+    CHECK(schema.success && schema.workerOwned && schema.exactSchema);
+    CHECK(schema.applicationId == 0x4D59464E);
+    CHECK(schema.userVersion == 1);
+    CHECK(schema.singletonSeeded && schema.foreignKeyCascade);
+    CHECK(schema.checkConstraints);
+
+    CHECK(db.writeSchemaMarkerForTest("preserved").success);
+    const auto reopened = db.configureScope("https://sqlite-schema.example",
+                                            "schema-user");
+    CHECK(reopened > epoch);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    schema = db.runSchemaDiagnosticsForTest();
+    CHECK(schema.success && schema.exactSchema);
+    const auto marker = db.readSchemaMarkerForTest();
+    CHECK(marker.success && marker.sentinel == "preserved");
+}
+
 #include "cases/test_misc_regressions.inc"
 #include "cases/test_ui_foundation.inc"
 #include "cases/test_cache_offline.inc"
@@ -360,6 +386,7 @@ int main()
     testCatalogDbScopeLifecycle();
     testCatalogDbInvalidScope();
     testCatalogDbSqliteOwnership();
+    testCatalogDbSchemaV1();
     testRouteRequest();
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();

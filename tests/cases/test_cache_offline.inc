@@ -53,6 +53,14 @@ static void testOfflineLibraryProjection(){
     for(int n=0;n<8;++n) { DownloadItem extra=dm; extra.itemId="extra-"+std::to_string(n); extra.title="Extra"; extra.updatedAt=40+n; d.items.push_back(extra); }
     OfflineLibraryProjection p(l,c,d);
     CHECK(p.movies().size()==1&&p.movies()[0].id==movie.id); CHECK(p.series().size()==1&&p.series()[0].id==show.id); CHECK(p.seasons(show.id).size()==1&&p.seasons(show.id)[0].id==season.id); CHECK(p.episodes(season.id).size()==2&&p.episodes(season.id)[1].id==ep3.id); CHECK(!p.playable(partial.id));
+    // A fresh SQLite database has no legacy hierarchy to project.  Durable
+    // DownloadStore metadata alone still reconstructs downloaded branches.
+    OfflineCatalogSnapshot emptyCatalog;
+    OfflineLibraryProjection downloadedOnly(l,emptyCatalog,d);
+    CHECK(downloadedOnly.series().size()==1&&downloadedOnly.series()[0].id==show.id);
+    CHECK(downloadedOnly.seasons(show.id).size()==1
+          && downloadedOnly.seasons(show.id)[0].id==season.id);
+    CHECK(downloadedOnly.episodes(season.id).size()==2);
     // Online retains Home; offline has no Home projection or curation surface.
     auto online=tabsFromSnapshot(l);
     auto offline=offlineTabsFromSnapshot(l);

@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "../../cache/OfflineLibraryProjection.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../net/RouteStatus.hpp"
@@ -16,12 +17,14 @@ namespace miyoofin {
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
-void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; const bool catalogLoaded=OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); if(catalogLoaded){std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);m_catalogSnapshot=catalog;m_catalogSnapshotReady=true;} OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
+void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
 void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
 void HomeScreen::applyPresentationProjection() {
     if (!m_haveCachedSnapshot) return;
+    // Offline hierarchy comes from durable DownloadStore metadata.  The
+    // legacy catalog is not a runtime authority; an empty catalog lets the
+    // projection synthesize only the downloaded branches it needs.
     OfflineCatalogSnapshot catalog;
-    { std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex); catalog=m_catalogSnapshot; }
     OfflineLibraryProjection projection(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
     m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);
     m_fetchOfflineMovies=projection.movies();

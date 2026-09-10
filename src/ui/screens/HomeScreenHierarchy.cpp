@@ -36,33 +36,6 @@ bool HomeScreen::publishHierarchyCheckpoint(std::uint64_t generation)
     return true;
 }
 
-std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &seriesId) const
-{
-    std::vector<MediaItem> seasons;
-    OfflineCatalogSnapshot catalog;
-    {
-        std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
-        if (!m_catalogSnapshotReady) return {};
-        const auto seasonsIt=m_catalogSnapshot.seasonsBySeries.find(seriesId);
-        if (seasonsIt==m_catalogSnapshot.seasonsBySeries.end()) return {};
-        seasons=seasonsIt->second;
-        if (presentationOffline()) {
-            catalog.seasonsBySeries.emplace(seriesId,seasons);
-            for (const auto &season:seasons) {
-                const auto episodesIt=m_catalogSnapshot.episodesBySeason.find(season.id);
-                if (episodesIt!=m_catalogSnapshot.episodesBySeason.end())
-                    catalog.episodesBySeason.emplace(season.id,episodesIt->second);
-            }
-        }
-    }
-    if (presentationOffline()) {
-        LibrarySnapshot library;
-        OfflineLibraryProjection projection(library,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
-        return projection.seasons(seriesId);
-    }
-    return seasons;
-}
-
 void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
 {
     queuePosterJobs(collectPosterJobs(snapshot));

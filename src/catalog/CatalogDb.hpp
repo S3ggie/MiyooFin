@@ -274,6 +274,12 @@ public:
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         bool complete, const CatalogDbJobMetadata &metadata = {});
+    /// Reconcile exactly one season from an authoritative Jellyfin response.
+    /// Only that season's episodes are replaced; the series remains incomplete.
+    std::future<CatalogDbHierarchyWriteResult> reconcileSeasonHierarchy(
+        const MediaItem &series, const MediaItem &season,
+        const std::vector<MediaItem> &episodes, std::uint64_t generation,
+        std::int64_t refreshMs, const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbHierarchyWriteResult>
     upsertSeriesHierarchyForTest(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
@@ -346,8 +352,8 @@ private:
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
-        bool complete, const CatalogDbJobMetadata &metadata, int failAfterRows,
-        int cancelAfterRows);
+        bool complete, bool seasonScoped, const CatalogDbJobMetadata &metadata,
+        int failAfterRows, int cancelAfterRows);
     std::future<CatalogDbReconcileResult> enqueueReconcile(
         const std::vector<MediaItem> &series, bool authoritative,
         const CatalogDbJobMetadata &metadata, int failAfterRows);

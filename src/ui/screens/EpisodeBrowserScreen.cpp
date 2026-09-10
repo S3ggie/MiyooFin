@@ -1,15 +1,14 @@
 #include "EpisodeBrowserScreen.hpp"
-#include "../../cache/OfflineLibraryProjection.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/RouteRequest.hpp"
-#include "../../cache/OfflineCatalog.hpp"
-#include "../../cache/LibraryCache.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
+#include <algorithm>
 #include <cstdio>
+#include <ctime>
 
 namespace miyoofin {
 
@@ -93,15 +92,21 @@ static std::vector<std::string> wrapText(const char *text, int wrapCols)
 EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
                                            const MediaItem &season,
-                                           const std::string &initialEpisodeId, std::shared_ptr<DownloadManager> downloads, bool networkOffline, bool downloadedOnly)
+                                           const std::string &initialEpisodeId,
+                                           std::shared_ptr<DownloadManager> downloads,
+                                           bool networkOffline, bool downloadedOnly,
+                                           std::shared_ptr<CatalogDb> catalogDb,
+                                           std::uint64_t catalogScopeEpoch)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
     , m_downloads(std::move(downloads))
+    , m_catalogDb(std::move(catalogDb))
     , m_networkOffline(networkOffline)
     , m_downloadedOnly(downloadedOnly)
 {
+    m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
 }
 
 // -------------------------------------------------------------------
@@ -218,20 +223,34 @@ void EpisodeBrowserScreen::leave()
 }
 
 // -------------------------------------------------------------------
-// fetchEpisodes — synchronous fetch via JellyfinApi
+// fetchEpisodes — worker-side indexed cache read and Jellyfin refresh
 // -------------------------------------------------------------------
 void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
 {
-    if(m_fetchThread.joinable()){std::lock_guard<std::mutex>g(m_fetchMutex);if(!m_fetchDone)return; m_fetchThread.join();} if(m_episodes.empty())m_loadState = LoadState::Loading;
+    if(m_fetchThread.joinable()){
+        std::lock_guard<std::mutex>g(m_fetchMutex);
+        if(!m_fetchDone)return;
+        m_fetchThread.join();
+    }
+    if(m_episodes.empty())m_loadState = LoadState::Loading;
     m_error.clear();
-    {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;m_cachedEpisodesDone=false;}
+    {std::lock_guard<std::mutex>g(m_fetchMutex);
+        m_fetchDone=false;
+        m_cachedEpisodesDone=false;
+    }
     m_fetchCancelled.store(false, std::memory_order_release);
-    const Session s=m_session; const MediaItem seriesItem=m_series, seasonItem=m_season;
+    const Session s=m_session;
+    const MediaItem seriesItem=m_series, seasonItem=m_season;
     const std::string sid=m_series.id, season=m_season.id;
-    const bool networkOffline=m_networkOffline, downloadedOnly=m_downloadedOnly, loadCached=loadCachedEpisodes;
-    const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
-    std::shared_ptr<DownloadManager> downloads=m_downloads;
-    m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,networkOffline,downloadedOnly,loadCached,catalogPath,downloads](){
+    const bool networkOffline=m_networkOffline;
+    const bool downloadedOnly=m_downloadedOnly;
+    const bool loadCached=loadCachedEpisodes;
+    const std::shared_ptr<CatalogDb> catalogDb=m_catalogDb;
+    const CatalogDbJobMetadata catalogMetadata=m_catalogMetadata;
+    const std::shared_ptr<DownloadManager> downloads=m_downloads;
+    m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,
+                               networkOffline,downloadedOnly,loadCached,
+                               catalogDb,catalogMetadata,downloads](){
         PerformanceTelemetry &telemetry=performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::EpisodeFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 1);
@@ -252,22 +271,88 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
             telemetry.setWorkerActive(WorkerId::EpisodeFetch, false);
             telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 0);
         };
+        auto isComplete = [](DownloadState state) {
+            return state == DownloadState::Complete
+                || state == DownloadState::LocalOnly
+                || state == DownloadState::UpdateAvailable;
+        };
+        auto downloadedEpisodes = [&](std::vector<MediaItem> items) {
+            const DownloadSnapshot snapshot = downloads
+                ? downloads->snapshot() : DownloadSnapshot{};
+            std::set<std::string> completeIds;
+            for (const auto &download : snapshot.items) {
+                if (isComplete(download.state)
+                    && download.itemType == "episode"
+                    && !download.itemId.empty()
+                    && download.seasonId == season
+                    && (download.seriesId.empty()
+                        || download.seriesId == seriesItem.id)) {
+                    completeIds.insert(download.itemId);
+                }
+            }
+            std::set<std::string> seen;
+            std::vector<MediaItem> filtered;
+            for (auto &item : items) {
+                if (completeIds.count(item.id) && seen.insert(item.id).second)
+                    filtered.push_back(std::move(item));
+            }
+            // A completed download may predate the hierarchy cache.  Rebuild
+            // only the minimum episode metadata needed by this season view.
+            for (const auto &download : snapshot.items) {
+                if (!isComplete(download.state)
+                    || download.itemType != "episode"
+                    || download.itemId.empty()
+                    || download.seasonId != season
+                    || (!download.seriesId.empty()
+                        && download.seriesId != seriesItem.id)
+                    || !seen.insert(download.itemId).second) {
+                    continue;
+                }
+                MediaItem item;
+                item.id = download.itemId;
+                item.type = "episode";
+                item.title = download.title.empty()
+                    ? "Episode " + std::to_string(download.episodeNumber)
+                    : download.title;
+                item.seriesId = download.seriesId;
+                item.seriesName = download.seriesName;
+                item.seasonId = download.seasonId;
+                item.indexNumber = download.episodeNumber;
+                item.parentIndexNumber = download.seasonNumber;
+                item.playbackPositionTicks = download.playbackPositionTicks;
+                item.runTimeTicks = download.runtimeTicks;
+                filtered.push_back(std::move(item));
+            }
+            std::sort(filtered.begin(), filtered.end(),
+                      [](const MediaItem &left, const MediaItem &right) {
+                if (left.indexNumber != right.indexNumber)
+                    return left.indexNumber < right.indexNumber;
+                if (left.title != right.title)
+                    return left.title < right.title;
+                return left.id < right.id;
+            });
+            return filtered;
+        };
         std::vector<MediaItem> cached;
+        bool cacheReadOk = true;
         if(loadCached) {
-            OfflineCatalogSnapshot catalog;
-            OfflineCatalog::load(catalogPath,catalog,nullptr);
+            if (catalogDb) {
+                const CatalogDbHierarchyResult cacheResult =
+                    catalogDb->getEpisodes(season, catalogMetadata).get();
+                cacheReadOk = cacheResult.success;
+                if (cacheResult.success)
+                    cached = cacheResult.items;
+                else if (cacheResult.cancelled || cacheResult.superseded) {
+                    completeTelemetry(Outcome::Cancelled);
+                    return;
+                }
+            }
             if(m_fetchCancelled.load(std::memory_order_acquire)) {
                 completeTelemetry(Outcome::Cancelled);
                 return;
             }
-            if(downloadedOnly) {
-                LibrarySnapshot library;
-                OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
-                cached=projection.episodes(season);
-            } else {
-                auto it=catalog.episodesBySeason.find(season);
-                if(it!=catalog.episodesBySeason.end()) cached=it->second;
-            }
+            if (downloadedOnly)
+                cached = downloadedEpisodes(std::move(cached));
             {
                 std::lock_guard<std::mutex>g(m_fetchMutex);
                 m_cachedEpisodes=cached;
@@ -276,9 +361,12 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
             if(networkOffline) {
                 {
                     std::lock_guard<std::mutex>g(m_fetchMutex);
-                    m_fetchOk=true;m_fetchEpisodes=std::move(cached);m_fetchDone=true;
+                    m_fetchOk=cacheReadOk;
+                    m_fetchEpisodes=std::move(cached);
+                    m_fetchError=cacheReadOk ? "" : "CatalogDb episode read failed";
+                    m_fetchDone=true;
                 }
-                completeTelemetry(Outcome::Success);
+                completeTelemetry(cacheReadOk ? Outcome::Success : Outcome::Failure);
                 return;
             }
         }
@@ -288,11 +376,21 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         }
         std::vector<MediaItem>v;std::string e;
         bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);},e);
-        // storeEpisodes reads, merges, serializes, fsyncs and renames the full
-        // catalog.  Complete it here before publishing a cheap UI result.
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
-            OfflineCatalog::storeEpisodes(catalogPath,seriesItem,seasonItem,v,nullptr);
-            if (downloadedOnly) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(catalogPath,catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{}); v=projection.episodes(season); }
+            if (catalogDb) {
+                const CatalogDbHierarchyWriteResult writeResult =
+                    catalogDb->reconcileSeasonHierarchy(
+                        seriesItem, seasonItem, v, catalogMetadata.generation,
+                        static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                        catalogMetadata).get();
+                if (!writeResult.success) {
+                    ok = false;
+                    e = writeResult.message.empty()
+                        ? "CatalogDb episode write failed" : writeResult.message;
+                }
+            }
+            if (ok && downloadedOnly)
+                v = downloadedEpisodes(std::move(v));
         }
         {
             std::lock_guard<std::mutex>g(m_fetchMutex);

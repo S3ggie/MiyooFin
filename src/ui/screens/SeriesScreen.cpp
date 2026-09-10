@@ -439,7 +439,8 @@ bool SeriesScreen::handleAction(Action action)
         printf("[SeriesScreen] Select season: %s index=%d\n",
                season.title.c_str(), season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-            m_session, m_series, season, "", m_downloads, m_networkOffline, m_downloadedOnly));
+            m_session, m_series, season, "", m_downloads, m_networkOffline,
+            m_downloadedOnly, m_catalogDb, m_catalogMetadata.scopeEpoch));
         return true;
     }
 

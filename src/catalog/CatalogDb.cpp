@@ -582,6 +582,7 @@ struct CatalogDb::HierarchyWriteCommand {
     std::uint64_t generation = 0;
     std::int64_t refreshMs = 0;
     bool complete = true;
+    bool seasonScoped = false;
     CatalogDbJobMetadata metadata;
     std::uint64_t enqueuedMonotonicUs = 0;
     int failAfterRows = -1;
@@ -915,7 +916,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::upsertSeriesHierarchy(
     const CatalogDbJobMetadata &metadata)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, true, metadata, -1, -1);
+                                 refreshMs, true, false, metadata, -1, -1);
 }
 
 std::future<CatalogDbHierarchyWriteResult> CatalogDb::stageSeriesHierarchy(
@@ -925,7 +926,18 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::stageSeriesHierarchy(
     const CatalogDbJobMetadata &metadata)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, complete, metadata, -1, -1);
+                                 refreshMs, complete, false, metadata, -1, -1);
+}
+
+std::future<CatalogDbHierarchyWriteResult>
+CatalogDb::reconcileSeasonHierarchy(
+    const MediaItem &series, const MediaItem &season,
+    const std::vector<MediaItem> &episodes, std::uint64_t generation,
+    std::int64_t refreshMs, const CatalogDbJobMetadata &metadata)
+{
+    return enqueueHierarchyWrite(
+        series, {season}, {{season.id, episodes}}, generation, refreshMs,
+        false, true, metadata, -1, -1);
 }
 
 std::future<CatalogDbHierarchyWriteResult>
@@ -936,7 +948,7 @@ CatalogDb::upsertSeriesHierarchyForTest(
     int cancelAfterRows)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, true, {}, failAfterRows,
+                                 refreshMs, true, false, {}, failAfterRows,
                                  cancelAfterRows);
 }
 
@@ -944,8 +956,8 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
     const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
     std::uint64_t generation, std::int64_t refreshMs,
-    bool complete, const CatalogDbJobMetadata &metadata, int failAfterRows,
-    int cancelAfterRows)
+    bool complete, bool seasonScoped, const CatalogDbJobMetadata &metadata,
+    int failAfterRows, int cancelAfterRows)
 {
     auto command = std::make_shared<HierarchyWriteCommand>();
     command->series = series;
@@ -954,6 +966,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     command->generation = generation;
     command->refreshMs = refreshMs;
     command->complete = complete;
+    command->seasonScoped = seasonScoped;
     command->metadata = metadata;
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     command->failAfterRows = failAfterRows;
@@ -1748,6 +1761,12 @@ void CatalogDb::processHierarchyWrite(
         finish();
         return;
     }
+    if (command->seasonScoped && command->seasons.size() != 1) {
+        result.error = CatalogDbErrorCategory::ConfigurationFailed;
+        result.message = "season reconciliation must contain one season";
+        finish();
+        return;
+    }
 
     enum class WriteState : unsigned char {
         Valid,
@@ -1977,7 +1996,8 @@ void CatalogDb::processHierarchyWrite(
         return;
     }
     for (const auto &season : command->seasons) {
-        if ((command->complete && !deleteById(deleteEpisodes, season.id))
+        if (((command->complete || command->seasonScoped)
+             && !deleteById(deleteEpisodes, season.id))
             || !writeItem(season)) {
             rollback();
             finish();
@@ -1999,7 +2019,8 @@ void CatalogDb::processHierarchyWrite(
     reset(markComplete);
     if (sqlite3_bind_text(markComplete, 1, command->series.id.c_str(), -1,
                           SQLITE_TRANSIENT) != SQLITE_OK
-        || sqlite3_bind_int(markComplete, 2, command->complete ? 1 : 0)
+        || sqlite3_bind_int(markComplete, 2,
+                            command->complete && !command->seasonScoped ? 1 : 0)
                != SQLITE_OK
         || sqlite3_bind_int64(markComplete, 3, command->refreshMs) != SQLITE_OK
         || sqlite3_bind_int64(markComplete, 4,

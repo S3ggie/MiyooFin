@@ -380,4 +380,30 @@ void testCatalogDbLibrarySnapshotSeed()
     removeCatalogMigrationTestPaths(paths);
 }
 
+void testLibraryCacheHomeParityHarness()
+{
+    LibrarySnapshot snapshot;
+    MediaItem a = catalogParityItem("__task30_a__", "movie", "The apple");
+    MediaItem b = catalogParityItem("__task30_b__", "movie", "APPLE");
+    MediaItem c = catalogParityItem("__task30_c__", "movie", "Apple");
+    snapshot.movies = {{"v1", "Primary Movies", "movies", {a, b}},
+                       {"v2", "Secondary Movies", "movies", {c}}};
+    snapshot.shows = {{"shows", "Shows", "tvshows", {a}}};
+    snapshot.continueWatching = {c, a};
+    snapshot.recentlyAdded = {b, c};
+    const auto tabs = tabsFromSnapshot(snapshot);
+    CHECK(tabs.size() == 5 && tabs[0].rows.size() == 2);
+    CHECK(tabs[0].rows[0].label == "Continue Watching"
+          && tabs[0].rows[0].items[0].id == c.id);
+    CHECK(tabs[0].rows[1].label == "Recently Added"
+          && tabs[0].rows[1].items[1].id == c.id);
+    CHECK(tabs[1].rows[0].items.size() == 3);
+    CHECK(tabs[1].rows[0].items[0].id == b.id
+          && tabs[1].rows[0].items[1].id == c.id
+          && tabs[1].rows[0].items[2].id == a.id);
+    CHECK(tabs[2].rows.size() == 1 && tabs[2].rows[0].label == "Shows"
+          && tabs[2].rows[0].items[0].id == a.id);
+    CHECK(offlineTabsFromSnapshot(snapshot).size() == 4);
+}
+
 } // namespace

@@ -3,6 +3,7 @@
 #include "../cache/LibraryCache.hpp"
 #include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
+#include "../download/DownloadStore.hpp"
 #include "MediaItemSql.hpp"
 #include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
@@ -657,6 +658,13 @@ struct CatalogDb::ReconcileCommand {
     std::promise<CatalogDbReconcileResult> result;
 };
 
+struct CatalogDb::OfflineRebuildCommand {
+    std::string downloadRoot;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    std::promise<CatalogDbOfflineRebuildResult> result;
+};
+
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
 {
@@ -676,6 +684,7 @@ CatalogDb::~CatalogDb()
         m_queryCommands.clear();
         m_writeCommands.clear();
         m_reconcileCommands.clear();
+        m_offlineCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
@@ -1067,6 +1076,13 @@ std::future<CatalogDbReconcileResult> CatalogDb::reconcileSeriesForTest(
     return enqueueReconcile(series, authoritative, {}, failAfterRows);
 }
 
+std::future<CatalogDbOfflineRebuildResult>
+CatalogDb::reconstructOfflineDownloads(
+    const std::string &downloadRoot, const CatalogDbJobMetadata &metadata)
+{
+    return enqueueOfflineRebuild(downloadRoot, metadata);
+}
+
 std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
     const std::vector<MediaItem> &series, bool authoritative,
     const CatalogDbJobMetadata &metadata, int failAfterRows)
@@ -1112,6 +1128,54 @@ std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
             command->metadata.scopeEpoch = m_requestedEpoch;
         }
         m_reconcileCommands.push_back(command);
+        ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
+    }
+    m_wake.notify_one();
+    return result;
+}
+
+std::future<CatalogDbOfflineRebuildResult> CatalogDb::enqueueOfflineRebuild(
+    const std::string &downloadRoot, const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<OfflineRebuildCommand>();
+    command->downloadRoot = downloadRoot;
+    command->metadata = metadata;
+    command->enqueuedMonotonicUs = telemetryNowIfEnabled();
+    std::future<CatalogDbOfflineRebuildResult> result =
+        command->result.get_future();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_stopping) {
+            CatalogDbOfflineRebuildResult stopped;
+            stopped.error = CatalogDbErrorCategory::ScopeNotReady;
+            stopped.message = "CatalogDb is stopping";
+            command->result.set_value(std::move(stopped));
+            return result;
+        }
+        if (metadata.cancellation && metadata.cancellation->load()) {
+            CatalogDbOfflineRebuildResult cancelled;
+            cancelled.cancelled = true;
+            cancelled.error = CatalogDbErrorCategory::Superseded;
+            cancelled.message = "offline catalog reconstruction cancelled";
+            command->result.set_value(std::move(cancelled));
+            return result;
+        }
+        if (m_pendingJobs >= kMaxPendingJobs) {
+            CatalogDbOfflineRebuildResult full;
+            full.error = CatalogDbErrorCategory::OpenFailed;
+            full.message = "CatalogDb offline reconstruction queue is full";
+            command->result.set_value(std::move(full));
+            return result;
+        }
+        if (command->metadata.generation == 0) {
+            command->metadata.generation = m_generation;
+        }
+        if (command->metadata.scopeEpoch == 0) {
+            command->metadata.scopeEpoch = m_requestedEpoch;
+        }
+        m_offlineCommands.push_back(command);
         ++m_pendingJobs;
         performanceTelemetry().setCatalogDbQueueDepth(
             static_cast<uint32_t>(m_pendingJobs));
@@ -1194,7 +1258,7 @@ void CatalogDb::workerLoop()
         m_wake.wait(lock, [this] {
             return m_stopping || (!m_pausedForTest
                 && (!m_scopeCommands.empty() || !m_testCommands.empty()
-                    || hasPendingJobsLocked()));
+                    || !m_offlineCommands.empty() || hasPendingJobsLocked()));
         });
 
         if (m_stopping) {
@@ -1277,6 +1341,24 @@ void CatalogDb::workerLoop()
             performanceTelemetry().setCatalogDbActive(true);
             lock.unlock();
             processReconcile(command);
+            lock.lock();
+            performanceTelemetry().setCatalogDbActive(false);
+            m_runningJob = false;
+            m_idle.notify_all();
+            continue;
+        }
+
+        if (!m_offlineCommands.empty()) {
+            std::shared_ptr<OfflineRebuildCommand> command =
+                std::move(m_offlineCommands.front());
+            m_offlineCommands.pop_front();
+            --m_pendingJobs;
+            performanceTelemetry().setCatalogDbQueueDepth(
+                static_cast<uint32_t>(m_pendingJobs));
+            m_runningJob = true;
+            performanceTelemetry().setCatalogDbActive(true);
+            lock.unlock();
+            processOfflineRebuild(command);
             lock.lock();
             performanceTelemetry().setCatalogDbActive(false);
             m_runningJob = false;
@@ -2282,6 +2364,314 @@ void CatalogDb::processReconcile(
                 transactionEndUs - transactionStartUs);
     }
     result.success = true;
+    finish();
+}
+
+void CatalogDb::processOfflineRebuild(
+    const std::shared_ptr<OfflineRebuildCommand> &command)
+{
+    assert(std::this_thread::get_id() == m_worker.get_id());
+    CatalogDbOfflineRebuildResult result;
+    result.workerOwned = true;
+    uint64_t transactionStartUs = 0;
+    const auto finish = [&] {
+        const uint64_t endUs = telemetryNowIfEnabled();
+        if (command->enqueuedMonotonicUs != 0 && endUs >= command->enqueuedMonotonicUs) {
+            performanceTelemetry().recordCatalogDbQueueWait(
+                endUs - command->enqueuedMonotonicUs);
+        }
+        if (result.cancelled || result.superseded) {
+            performanceTelemetry().addCatalogDbCancelled();
+        } else if (result.success) {
+            performanceTelemetry().addCatalogDbCompleted();
+        } else {
+            performanceTelemetry().addCatalogDbFailed();
+        }
+        command->result.set_value(std::move(result));
+    };
+    const auto stateIsValid = [&] {
+        if (command->metadata.cancellation
+            && command->metadata.cancellation->load()) {
+            result.cancelled = true;
+            result.error = CatalogDbErrorCategory::Superseded;
+            result.message = "offline catalog reconstruction cancelled";
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command->metadata.generation != m_generation
+            || command->metadata.scopeEpoch != m_requestedEpoch
+            || !m_scopeConfigured || !m_scopeReady) {
+            result.superseded = true;
+            result.error = CatalogDbErrorCategory::Superseded;
+            result.message = "offline catalog reconstruction superseded";
+            return false;
+        }
+        return true;
+    };
+    if (!m_db) {
+        result.error = CatalogDbErrorCategory::ScopeNotReady;
+        result.message = "CatalogDb has no ready scoped connection";
+        finish();
+        return;
+    }
+    if (!stateIsValid()) {
+        finish();
+        return;
+    }
+
+    std::string scopeKey;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        scopeKey = m_requestedScopeKey;
+    }
+    DownloadStore store(command->downloadRoot);
+    std::vector<DownloadItem> downloads;
+    std::string error;
+    if (!store.loadCompleteMetadata(scopeKey, downloads, &error)) {
+        const std::string indexPath = store.scopePath(scopeKey) + "/index.v1";
+        if (::access(indexPath.c_str(), F_OK) != 0 && errno == ENOENT) {
+            result.success = true;
+            result.skipped = true;
+            result.message = "no durable download metadata";
+            finish();
+            return;
+        }
+        result.error = CatalogDbErrorCategory::CorruptOrIo;
+        result.message = error.empty() ? "download metadata could not be read"
+                                       : error;
+        finish();
+        return;
+    }
+    std::sort(downloads.begin(), downloads.end(),
+              [](const DownloadItem &left, const DownloadItem &right) {
+                  return left.itemId < right.itemId;
+              });
+
+    std::map<std::string, MediaItem> seriesById;
+    std::map<std::string, MediaItem> seasonsById;
+    std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+    std::vector<MediaItem> movies;
+    const auto addContainer = [](std::map<std::string, MediaItem> &items,
+                                 const std::string &id,
+                                 const std::string &type,
+                                 const std::string &title,
+                                 const std::string &seriesId,
+                                 std::int32_t index) {
+        auto found = items.find(id);
+        if (found == items.end()) {
+            MediaItem item;
+            item.id = id;
+            item.type = type;
+            item.title = title.empty() ? id : title;
+            item.seriesId = seriesId;
+            item.indexNumber = index;
+            items.emplace(id, std::move(item));
+        } else if (found->second.title > title && !title.empty()) {
+            found->second.title = title;
+        }
+    };
+    for (const auto &download : downloads) {
+        if (!stateIsValid()) {
+            finish();
+            return;
+        }
+        if (download.itemId.empty()) {
+            continue;
+        }
+        if (download.itemType == "movie") {
+            MediaItem movie;
+            movie.id = download.itemId;
+            movie.type = "movie";
+            movie.title = download.title.empty() ? download.itemId
+                                                   : download.title;
+            movie.runTimeTicks = download.runtimeTicks;
+            movie.playbackPositionTicks = download.playbackPositionTicks;
+            movie.progress = movie.runTimeTicks > 0
+                ? static_cast<float>(movie.playbackPositionTicks)
+                    / static_cast<float>(movie.runTimeTicks)
+                : 0.0f;
+            movies.push_back(std::move(movie));
+            continue;
+        }
+        if (download.itemType != "episode") {
+            continue;
+        }
+        if (download.seriesId.empty() || download.seasonId.empty()) {
+            continue;
+        }
+        addContainer(seriesById, download.seriesId, "show",
+                     download.seriesName, {}, 0);
+        addContainer(seasonsById, download.seasonId, "season",
+                     download.seasonName, download.seriesId,
+                     download.seasonNumber);
+        MediaItem episode;
+        episode.id = download.itemId;
+        episode.type = "episode";
+        episode.title = download.title.empty() ? download.itemId
+                                                 : download.title;
+        episode.seriesName = download.seriesName;
+        episode.seriesId = download.seriesId;
+        episode.seasonId = download.seasonId;
+        episode.indexNumber = download.episodeNumber;
+        episode.parentIndexNumber = download.seasonNumber;
+        episode.runTimeTicks = download.runtimeTicks;
+        episode.playbackPositionTicks = download.playbackPositionTicks;
+        episode.progress = episode.runTimeTicks > 0
+            ? static_cast<float>(episode.playbackPositionTicks)
+                / static_cast<float>(episode.runTimeTicks)
+            : 0.0f;
+        episodesBySeason[download.seasonId].push_back(std::move(episode));
+    }
+    for (auto &entry : episodesBySeason) {
+        std::sort(entry.second.begin(), entry.second.end(),
+                  [](const MediaItem &left, const MediaItem &right) {
+                      if (left.indexNumber != right.indexNumber) {
+                          return left.indexNumber < right.indexNumber;
+                      }
+                      return left.id < right.id;
+                  });
+    }
+
+    sqlite3_stmt *upsert = nullptr;
+    sqlite3_stmt *markIncomplete = nullptr;
+    const auto finalize = [&] {
+        if (upsert) sqlite3_finalize(upsert);
+        if (markIncomplete) sqlite3_finalize(markIncomplete);
+        upsert = nullptr;
+        markIncomplete = nullptr;
+    };
+    if (sqlite3_prepare_v2(
+            m_db,
+            "INSERT INTO media_items(id, kind, title, overview, "
+            "production_year, community_rating, etag, played, progress, "
+            "playback_position_ticks, index_number, parent_index_number, "
+            "runtime_ticks, series_name, series_id, season_id, art_r, art_g, "
+            "art_b) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, "
+            "?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+            "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
+            "title=excluded.title, progress=excluded.progress, "
+            "playback_position_ticks=excluded.playback_position_ticks, "
+            "index_number=excluded.index_number, "
+            "parent_index_number=excluded.parent_index_number, "
+            "runtime_ticks=excluded.runtime_ticks, series_id=excluded.series_id, "
+            "season_id=excluded.season_id", -1, &upsert, nullptr) != SQLITE_OK
+        || sqlite3_prepare_v2(
+               m_db,
+               "INSERT INTO hierarchy_state(series_id, complete, "
+               "last_refresh_ms, last_generation) VALUES(?1, 0, 0, ?2) "
+               "ON CONFLICT(series_id) DO UPDATE SET complete=0, "
+               "last_refresh_ms=0, last_generation=excluded.last_generation",
+               -1, &markIncomplete, nullptr) != SQLITE_OK) {
+        result.error = CatalogDbErrorCategory::SqliteError;
+        result.message = sqlite3_errmsg(m_db);
+        finalize();
+        finish();
+        return;
+    }
+    const auto reset = [](sqlite3_stmt *statement) {
+        sqlite3_reset(statement);
+        sqlite3_clear_bindings(statement);
+    };
+    const auto writeItem = [&](const MediaItem &item) {
+        MediaItemSqlError bindError = MediaItemSqlError::None;
+        reset(upsert);
+        if (!bindMediaItemScalars(upsert, item, bindError)
+            || sqlite3_step(upsert) != SQLITE_DONE) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            reset(upsert);
+            return false;
+        }
+        reset(upsert);
+        ++result.itemsUpserted;
+        return true;
+    };
+    const uint64_t beginUs = telemetryNowIfEnabled();
+    if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)) {
+        result.error = CatalogDbErrorCategory::SqliteError;
+        finalize();
+        finish();
+        return;
+    }
+    transactionStartUs = beginUs;
+    bool writeOk = true;
+    for (const auto &movie : movies) {
+        if (!writeItem(movie)) {
+            writeOk = false;
+            break;
+        }
+    }
+    for (const auto &entry : seriesById) {
+        if (!writeOk || !writeItem(entry.second)) {
+            writeOk = false;
+            break;
+        }
+        ++result.containersSynthesized;
+    }
+    for (const auto &entry : seasonsById) {
+        if (!writeOk || !writeItem(entry.second)) {
+            writeOk = false;
+            break;
+        }
+        ++result.containersSynthesized;
+    }
+    for (const auto &entry : episodesBySeason) {
+        for (const auto &episode : entry.second) {
+            if (!writeOk || !writeItem(episode)) {
+                writeOk = false;
+                break;
+            }
+        }
+    }
+    if (writeOk) {
+        for (const auto &entry : seriesById) {
+            reset(markIncomplete);
+            if (sqlite3_bind_text(markIncomplete, 1, entry.first.c_str(), -1,
+                                  SQLITE_TRANSIENT) != SQLITE_OK
+                || sqlite3_bind_int64(
+                       markIncomplete, 2,
+                       static_cast<sqlite3_int64>(command->metadata.generation))
+                       != SQLITE_OK
+                || sqlite3_step(markIncomplete) != SQLITE_DONE) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = sqlite3_errmsg(m_db);
+                writeOk = false;
+                break;
+            }
+        }
+    }
+    if (writeOk && !stateIsValid()) {
+        writeOk = false;
+    }
+    if (!writeOk) {
+        std::string ignored;
+        exec(m_db, "ROLLBACK;", ignored);
+        finalize();
+        if (result.error == CatalogDbErrorCategory::None) {
+            result.error = result.cancelled || result.superseded
+                ? CatalogDbErrorCategory::Superseded
+                : CatalogDbErrorCategory::SqliteError;
+        }
+        finish();
+        return;
+    }
+    if (!exec(m_db, "COMMIT;", result.message)) {
+        result.error = CatalogDbErrorCategory::SqliteError;
+        std::string ignored;
+        exec(m_db, "ROLLBACK;", ignored);
+        finalize();
+        finish();
+        return;
+    }
+    finalize();
+    result.success = true;
+    if (transactionStartUs != 0) {
+        const uint64_t endUs = telemetryNowIfEnabled();
+        if (endUs >= transactionStartUs) {
+            performanceTelemetry().recordCatalogDbTransaction(
+                endUs - transactionStartUs);
+        }
+    }
     finish();
 }
 

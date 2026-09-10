@@ -197,6 +197,18 @@ struct CatalogDbReconcileResult {
     std::size_t seriesDeleted = 0;
 };
 
+struct CatalogDbOfflineRebuildResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool skipped = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t itemsUpserted = 0;
+    std::size_t containersSynthesized = 0;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -274,6 +286,13 @@ public:
     std::future<CatalogDbReconcileResult> reconcileSeriesForTest(
         const std::vector<MediaItem> &series, bool authoritative,
         int failAfterRows);
+    /// Rebuild the minimum browsable hierarchy from durable download
+    /// metadata. This is read-only with respect to DownloadStore and remains
+    /// incomplete until a later authoritative Jellyfin reconciliation.
+    std::future<CatalogDbOfflineRebuildResult>
+    reconstructOfflineDownloads(
+        const std::string &downloadRoot = "downloads",
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -308,6 +327,7 @@ private:
     struct QueryCommand;
     struct HierarchyWriteCommand;
     struct ReconcileCommand;
+    struct OfflineRebuildCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -320,6 +340,8 @@ private:
         const std::shared_ptr<HierarchyWriteCommand> &command);
     void processReconcile(
         const std::shared_ptr<ReconcileCommand> &command);
+    void processOfflineRebuild(
+        const std::shared_ptr<OfflineRebuildCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -329,6 +351,9 @@ private:
     std::future<CatalogDbReconcileResult> enqueueReconcile(
         const std::vector<MediaItem> &series, bool authoritative,
         const CatalogDbJobMetadata &metadata, int failAfterRows);
+    std::future<CatalogDbOfflineRebuildResult> enqueueOfflineRebuild(
+        const std::string &downloadRoot,
+        const CatalogDbJobMetadata &metadata);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -346,6 +371,7 @@ private:
     std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
     std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
     std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
+    std::deque<std::shared_ptr<OfflineRebuildCommand>> m_offlineCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

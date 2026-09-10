@@ -22,13 +22,39 @@ Replace eager whole-library materialization with bounded indexed Home/Movies/Sho
 ## Depends On
 
 - Task 31
+- Task 30's application-comparator parity evidence.
+- Existing schema-version/migration rules; any schema change remains limited
+  to this task's derived-key representation and must be idempotent and
+  recoverable.
 
 ## Allowed Files
 
 - Home screen/model units
-- CatalogDb library query DAL
-- Schema migration only if CP-G pre-review explicitly approved a derived organizational key
-- Focused tests
+- `src/catalog/CatalogDbSchema.hpp` — the narrow schema-version migration and
+  index for a MiyooFin-generated materialized organizational key, if required
+  by the existing schema rules.
+- `src/catalog/CatalogDb.hpp` and `src/catalog/CatalogDb.cpp` — only the
+  worker-owned write/update maintenance and bounded keyset query APIs needed
+  for Home paging, including scope/epoch handling.
+- Home screen/model units and pure Home projection helpers — only bounded
+  window state, continuation keys, cancellation, and UI publication wiring.
+- `tests/test_main.cpp` and focused catalog/Home test case include(s).
+- this task file and narrowly related SQLite migration documentation.
+
+The canonical ordering design is settled for this task: MiyooFin generates a
+deterministic materialized organizational key using the existing application
+comparator semantics (ASCII-only case folding after removing a leading
+ASCII-case-insensitive `The `), while retaining original title and ID as
+separate tie-break columns. The key and indexes must be maintained atomically
+whenever title data changes and used by deterministic bounded keyset queries.
+
+An application-defined SQLite collation was considered but is not preferred:
+it would make the index dependent on connection-local runtime registration and
+collation implementation availability, complicate migration/recovery and
+cross-build parity, and still would not provide an explicit continuation key.
+A materialized key is durable, inspectable, migration-safe, and lets the
+existing comparator remain the single source of truth without locale or
+SQLite `NOCASE` behavior.
 
 ## Forbidden Scope
 
@@ -54,7 +80,9 @@ git status --short
 1. Startup requests only tab/view metadata, Home rows, and first needed visible data.
 2. Movies queries bounded page/window around visible grid with bounded prefetch.
 3. Shows queries bounded page/window with current show/anime/alphabet behavior preserved.
-4. Alphabet filter uses indexed/derived semantics only if exact parity is proven; otherwise keep bounded compatible filtering without full-library load.
+4. Alphabet filter uses the reviewed materialized key and bounded keyset
+   semantics only after exact parity is proven; never substitute SQLite
+   `NOCASE` or locale-dependent Unicode folding.
 5. Selection/scroll identity survives page refresh by item ID.
 6. Prefetch is lower priority than current interactive page.
 7. Cancel stale page requests on tab/filter/generation changes.
@@ -77,6 +105,11 @@ git status --short
 - Selection preservation.
 - Offline show/movie filtering.
 - No duplicates/gaps at page boundaries.
+- Adversarial canonical ordering: mixed-case `The ` prefixes, ASCII-case
+  equivalents, identical normalized keys and title/ID ties, arbitrary UTF-8,
+  ASCII/UTF-8 mixtures, prefix relationships, empty/short titles, and equal
+  keys split across page boundaries.
+- Different page sizes concatenate to exactly the same global order.
 
 ## Complete validation commands
 

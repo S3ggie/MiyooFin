@@ -100,11 +100,11 @@ static void testCatalogDbFreshBootstrapPathStates()
     }
     uiDiagnostics().stop();
     const std::string diagnostics = readTestBytes(diagnosticPath);
-    const auto temporaryOpenStarted = diagnostics.find(
+    const auto temporaryOpenStarted = diagnostics.rfind(
         "[CatalogDb] bootstrap_temp_open_started");
-    const auto temporaryCreated = diagnostics.find(
+    const auto temporaryCreated = diagnostics.rfind(
         "[CatalogDb] bootstrap_temp_created");
-    const auto temporaryFinalized = diagnostics.find(
+    const auto temporaryFinalized = diagnostics.rfind(
         "[CatalogDb] bootstrap_temp_finalized final_present=1");
     CHECK(temporaryOpenStarted != std::string::npos);
     CHECK(temporaryCreated != std::string::npos);

@@ -160,6 +160,11 @@ output/build/sqlite:
 TEST_TARGET := output/test/test_runner
 SQLITE_TEST_TARGET := output/test/test_sqlite_build
 SQLITE_TEST_SRC := tests/test_sqlite_build.cpp
+CATALOG_BENCHMARK_TARGET := output/test/test_catalog_journal_benchmark
+CATALOG_BENCHMARK_TEST_SRC := tests/test_catalog_journal_benchmark.cpp
+CATALOG_BENCHMARK_SRC := tools/catalog_journal_benchmark.cpp
+CATALOG_BENCHMARK_MAIN := tools/catalog_journal_benchmark_main.cpp
+CATALOG_BENCHMARK_RUNNER := output/build/catalog-journal-benchmark
 TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
@@ -223,9 +228,10 @@ TEST_SRCS   := tests/test_main.cpp \
                $(TELEMETRY_TEST_SRCS)
 
 .PHONY: test
-test: $(TEST_TARGET) $(SQLITE_TEST_TARGET)
+test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@$(TEST_TARGET)
 	@$(SQLITE_TEST_TARGET)
+	@$(CATALOG_BENCHMARK_TARGET)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
 	@python3 $(TELEMETRY_DECODER_TEST)
@@ -240,6 +246,21 @@ $(TEST_TARGET): $(TEST_SRCS) $(SQLITE_HOST_OBJ) | output/test
 
 $(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^
+	@echo "  [LINK] $@"
+
+$(CATALOG_BENCHMARK_TARGET): $(CATALOG_BENCHMARK_TEST_SRC) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/test
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ -lpthread
+	@echo "  [LINK] $@"
+
+.PHONY: catalog-journal-benchmark-test catalog-journal-benchmark
+catalog-journal-benchmark-test: $(CATALOG_BENCHMARK_TARGET)
+	@$(CATALOG_BENCHMARK_TARGET)
+
+catalog-journal-benchmark: $(CATALOG_BENCHMARK_RUNNER)
+	@$(CATALOG_BENCHMARK_RUNNER) --help
+
+$(CATALOG_BENCHMARK_RUNNER): $(CATALOG_BENCHMARK_MAIN) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/build
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ -lpthread
 	@echo "  [LINK] $@"
 
 output/test:
@@ -275,7 +296,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter
+	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image

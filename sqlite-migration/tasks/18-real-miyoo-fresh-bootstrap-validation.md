@@ -38,7 +38,10 @@ playability of complete downloads through DownloadStore metadata.
 
 1. Start with no final SQLite DB; record any `catalog.v1` only as an untouched
    rollback artifact and verify the bootstrap path does not read it.
-2. Launch through the normal OnionOS path with a valid saved session.
+2. Launch through the normal OnionOS path with a valid saved session. For
+   benchmark evidence, enable the existing telemetry explicitly while keeping
+   normal menu launches unchanged:
+   `MIYOOFIN_TELEMETRY=1 ./launch.sh`
 3. Verify fresh `.migrating` creation/lifecycle, final DB promotion, schema,
    `quick_check`, `foreign_key_check`, and clean reopen.
 4. With network available, verify current Jellyfin hierarchy population and that

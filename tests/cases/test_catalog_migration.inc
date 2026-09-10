@@ -320,6 +320,107 @@ static void testCatalogDbJellyfinHierarchyStaging()
     removeCatalogMigrationTestPaths(paths);
 }
 
+static void testHomeCatalogHierarchyIntegration()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-home-catalog-integration-" + suffix + ".example";
+    const std::string user = "home-catalog-integration-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    MediaItem series;
+    series.id = "__task17_home_series__";
+    series.type = "show";
+    series.title = "Authoritative Series";
+    MediaItem season;
+    season.id = "__task17_home_season__";
+    season.type = "season";
+    season.seriesId = series.id;
+    season.title = "Authoritative Season";
+    MediaItem episode;
+    episode.id = "__task17_home_episode__";
+    episode.type = "episode";
+    episode.seriesId = series.id;
+    episode.seasonId = season.id;
+    episode.title = "Authoritative Episode";
+    const std::map<std::string, std::vector<MediaItem>> episodes = {
+        {season.id, {episode}}};
+
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->scopeState().ready);
+
+    Session session;
+    session.serverUrl = url;
+    session.accessToken = "synthetic-token";
+    session.userId = user;
+    {
+        HomeScreen home(session, {}, db, epoch);
+
+        auto online = home.submitCatalogHierarchyForTest(
+            series, {season}, episodes, 1, true).get();
+        CHECK(online.success && online.workerOwned);
+        bool complete = false;
+        std::int64_t generation = 0;
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      complete, generation));
+        CHECK(complete && generation == 1);
+
+        MediaItem invalidSeries = series;
+        invalidSeries.type = "movie";
+        auto failed = home.submitCatalogHierarchyForTest(
+            invalidSeries, {season}, episodes, 2, true).get();
+        CHECK(!failed.success && !failed.cancelled && !failed.superseded);
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      complete, generation));
+        CHECK(complete && generation == 1);
+
+        MediaItem offlineEpisode = episode;
+        offlineEpisode.title = "Synthetic Offline Episode";
+        CHECK(db->stageSeriesHierarchy(
+                  series, {season}, {{season.id, {offlineEpisode}}},
+                  2, 2000, false).get().success);
+        auto authoritative = home.submitCatalogHierarchyForTest(
+            series, {season}, episodes, 3, true).get();
+        CHECK(authoritative.success);
+        auto reconciled = db->getEpisodes(season.id).get();
+        CHECK(reconciled.success && reconciled.items.size() == 1
+              && reconciled.items[0].title == episode.title);
+
+        auto repeated = home.submitCatalogHierarchyForTest(
+            series, {season}, episodes, 4, true).get();
+        CHECK(repeated.success);
+        auto repeatedRead = db->getEpisodes(season.id).get();
+        CHECK(repeatedRead.success && repeatedRead.items.size() == 1);
+
+        auto incomplete = home.submitCatalogHierarchyForTest(
+            series, {season}, {{season.id, {}}}, 5, false).get();
+        CHECK(!incomplete.success && !incomplete.cancelled
+              && !incomplete.superseded);
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      complete, generation));
+        CHECK(complete && generation == 4);
+
+        const std::string otherUrl =
+            "https://sqlite-home-catalog-other-" + suffix + ".example";
+        const std::string otherUser = "home-catalog-other-user";
+        const auto otherEpoch = db->configureScope(otherUrl, otherUser);
+        CHECK(otherEpoch != epoch);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        auto stale = home.submitCatalogHierarchyForTest(
+            series, {season}, episodes, 6, true).get();
+        CHECK(!stale.success && stale.superseded);
+        auto otherRead = db->getSeasons(series.id).get();
+        CHECK(otherRead.success && otherRead.items.empty());
+        removeCatalogMigrationTestPaths(
+            catalogMigrationTestPaths(otherUrl, otherUser));
+    }
+    removeCatalogMigrationTestPaths(paths);
+}
+
 static bool readOfflineMovie(const std::string &path, const std::string &id,
                              std::string &title, std::int64_t &position)
 {

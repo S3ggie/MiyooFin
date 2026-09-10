@@ -13,6 +13,7 @@
 #include "../../download/DownloadUi.hpp"
 #include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
+#include "../../catalog/CatalogDb.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
 #include "../HomeSettingsModel.hpp"
@@ -26,6 +27,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <map>
 #include <mutex>
 #include <set>
@@ -43,7 +45,10 @@ public:
     using SettingsRowAction = HomeSettingsRowAction;
     using SettingsAddressRow = HomeSettingsAddressRow;
     using PosterJob = HomePosterJob;
-    explicit HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads={});
+    explicit HomeScreen(const Session &session,
+                        std::shared_ptr<DownloadManager> downloads={},
+                        std::shared_ptr<CatalogDb> catalogDb={},
+                        std::uint64_t catalogScopeEpoch=0);
     ~HomeScreen() override;
 
     void enter() override;
@@ -62,6 +67,13 @@ public:
     static int settingsRowCount(const Session &session);
     static SettingsRowAction settingsRowAction(int row, const Session &session);
     static const char *lastApiRouteValue();
+
+    /// Submit the same complete subtree used by the online hierarchy worker.
+    /// This narrow seam keeps the worker-to-CatalogDb boundary regression-testable.
+    std::future<CatalogDbHierarchyWriteResult> submitCatalogHierarchyForTest(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, bool complete);
 
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
@@ -132,6 +144,8 @@ private:
     // Session info for API calls
     Session m_session;
     std::shared_ptr<DownloadManager> m_downloads;
+    std::shared_ptr<CatalogDb> m_catalogDb;
+    CatalogDbJobMetadata m_catalogMetadata;
     std::string m_userName;
 
     // Logout (two-step confirm on Y)
@@ -186,6 +200,7 @@ private:
     std::condition_variable m_hierarchyWake;
     std::vector<MediaItem> m_pendingHierarchyShows;
     std::uint64_t m_pendingHierarchyGeneration = 0;
+    std::shared_ptr<std::atomic_bool> m_catalogGenerationCancellation;
     std::atomic<std::uint64_t> m_hierarchyGeneration{0};
     std::atomic<size_t> m_hierarchyCompleted{0}, m_hierarchyTotal{0};
     std::atomic<bool> m_hierarchyActive{false};
@@ -217,6 +232,11 @@ private:
     void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
                              const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
+    std::future<CatalogDbHierarchyWriteResult> submitCatalogHierarchy(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, bool complete,
+        const std::shared_ptr<std::atomic_bool> &cancellation);
     std::vector<MediaItem> cachedSeasonsForSeries(const std::string &seriesId) const;
     std::string syncStatusText() const;
     void decodeWorker();

@@ -58,7 +58,8 @@ private:
 
     ScreenStack     m_stack;
     InputManager    m_input;
-    std::unique_ptr<CatalogDb> m_catalogDb;
+    std::shared_ptr<CatalogDb> m_catalogDb;
+    std::uint64_t m_catalogScopeEpoch = 0;
 
     bool            m_running;
     Uint32          m_lastTick;

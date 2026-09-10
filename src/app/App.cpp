@@ -124,7 +124,7 @@ App::App()
     , m_renderer(nullptr)
     , m_fb(nullptr)
     , m_fbTex(nullptr)
-    , m_catalogDb(std::make_unique<CatalogDb>())
+    , m_catalogDb(std::make_shared<CatalogDb>())
     , m_running(false)
     , m_lastTick(0)
     , m_playbackStarting(false)
@@ -317,10 +317,11 @@ void App::configureCatalogScopeForSession()
 {
     if (m_catalogDb && m_session.valid()) {
         uiDiagnostics().log("[App] catalog scope request identity=valid");
-        m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
+        m_catalogScopeEpoch =
+            m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
-        m_catalogDb->deconfigureScope();
+        m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
     }
 }
 
@@ -408,7 +409,8 @@ void App::goToHome()
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
-    m_stack.push(std::make_unique<HomeScreen>(m_session, m_downloadManager));
+    m_stack.push(std::make_unique<HomeScreen>(
+        m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch));
 }
 
 void App::goToLogin(const std::string &initialMessage)
@@ -421,7 +423,7 @@ void App::goToLogin(const std::string &initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
-    if (m_catalogDb) m_catalogDb->deconfigureScope();
+    if (m_catalogDb) m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
     if (m_downloadManager) m_downloadManager->configure(Session{});
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_session.clear(); }
     Session::remove();

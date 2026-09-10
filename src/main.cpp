@@ -1,4 +1,5 @@
 #include "app/App.hpp"
+#include "app/RemoteExitSignal.hpp"
 #include "diagnostics/PerformanceTelemetry.hpp"
 #include "diagnostics/TelemetryConfig.hpp"
 #include <SDL2/SDL.h>
@@ -13,6 +14,7 @@ int main(int argc, char *argv[])
     // Unbuffered I/O for debugging
     setbuf(stdout, nullptr);
     setbuf(stderr, nullptr);
+    miyoofin::installRemoteExitSignalHandler();
 
     // --- Temporary: video-driver diagnostics ---
     const char *sdl_video = getenv("SDL_VIDEODRIVER");

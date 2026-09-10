@@ -63,3 +63,14 @@ grep -q 'APP_DIR=/mnt/SDCARD/App/MiyooFin' "$telemetry" || fail 'telemetry mode 
 grep -q "exec '\$APP_DIR/launch.sh'" "$telemetry" || fail 'telemetry mode does not use packaged launcher'
 
 echo '[test] Onion-native remote launcher static contract OK'
+
+EXIT_HELPER="$ROOT/tools/miyoo/onion-remote-exit.sh"
+[ -f "$EXIT_HELPER" ] || fail 'graceful exit helper is missing'
+sh -n "$EXIT_HELPER" || fail 'graceful exit helper has invalid shell syntax'
+grep -q 'kill -USR1' "$EXIT_HELPER" || fail 'exit helper does not use SIGUSR1'
+! grep -Eq 'kill -9|kill -15|SIGKILL|/dev/input/event' "$EXIT_HELPER" || \
+    fail 'exit helper contains an unsafe shutdown mechanism'
+grep -q '/proc/' "$EXIT_HELPER" || fail 'exit helper does not inspect process identity'
+grep -q 'comm' "$EXIT_HELPER" || fail 'exit helper does not verify process name'
+grep -q 'MainUI' "$EXIT_HELPER" || fail 'exit helper does not verify MainUI restoration'
+echo '[test] Onion graceful remote exit static contract OK'

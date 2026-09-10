@@ -35,6 +35,7 @@ endif
 SRCS := \
     src/main.cpp \
     src/app/App.cpp \
+    src/app/RemoteExitSignal.cpp \
     src/catalog/CatalogDb.cpp \
     src/catalog/MediaItemSql.cpp \
     src/app/UiDiagnostics.cpp \

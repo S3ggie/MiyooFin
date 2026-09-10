@@ -160,3 +160,84 @@ the source for CatalogDb counters and zero-drop/error confirmation. Because A
 was both the baseline and the evidence-backed retained candidate, no separate
 finalist production profile was deployed or selected for an app-level A/B run.
 No WAL or reduced-synchronous setting was enabled in the application.
+
+## Task 27 — controlled hierarchy A/B evidence (CP-F)
+
+Task 27 was rerun as a controlled persistence benchmark on the same physical
+Miyoo Mini Plus and Jellyfin server. The invalid earlier SQLite run with zero
+ChangedHierarchy items is excluded. The control was
+`b9efee216ad40e17b0c787c959a3a91fd8748d5a` plus the benchmark-only graceful
+exit hook; it is not a byte-identical historical binary. The SQLite build was
+`e9a6611b3ae981be738a8846896a43493bfff6b5` plus the already-validated remote
+exit tooling at the benchmark HEAD. The A′ hook patch SHA-256 was
+`67e64bde2c04473599c52b0ceaf89780c6e876d0158946aa405263aa48168a27`.
+
+Before each run, the complete scoped state was restored from the same tar
+backup (SHA-256
+`24e295a9dccad4467e517695bc17f470f9a05dac4c5aaf342c67711fc9c37239`). The
+legacy and SQLite checkpoints were set to the same timestamp approximately 23
+hours old, with a fresh reconcile timestamp, keeping the run inside the
+incremental-sync window. Downloads and authentication state were not touched.
+Each run used the Onion-native telemetry launcher, waited for ChangedHierarchy
+and HomeHierarchy completion, then used only the graceful SIGUSR1 exit helper.
+
+All four measured runs were workload-equivalent: 228 ChangedHierarchy items,
+7 ChangedHierarchy requests, 1,407 media items, 21 HomeHierarchy completions,
+zero HomeHierarchy failures/cancellations, and queue high-water 21. The
+objective completion condition was reached before exit; no unrelated manual
+navigation was used.
+
+| metric | A′ rep 1 | A′ rep 2 | B rep 1 | B rep 2 |
+|---|---:|---:|---:|---:|
+| LibrarySync | 37.485 s | 37.785 s | 33.836 s | 35.000 s |
+| all network requests / payload | 204 / 8,405,608 B | same | same | same |
+| ChangedHierarchy latency | 3.766 s | 3.881 s | 3.975 s | 3.688 s |
+| HomeHierarchy completed/failed/cancelled | 21/0/0 | 21/0/0 | 21/0/0 | 21/0/0 |
+| queue HWM | 21 | 21 | 21 | 21 |
+| CPU average / p95 / max (2-core device %) | 45.7/60.8/75.0 | 30.5/50.9/75.4 | 45.2/64.2/78.3 | 48.9/64.8/79.4 |
+| RSS average / sampled max / process peak (KiB) | 47,821/75,076/81,248 | 50,764/79,468/80,620 | 27,055/29,260/29,260 | 25,665/28,000/28,000 |
+| telemetry drops / writer errors | 0/0 | 0/0 | 0/0 | 0/0 |
+
+Paired means, with SQLite relative to A′: LibrarySync was 34.418 s versus
+37.635 s (**−8.5%**); ChangedHierarchy request latency was 3.831 s versus
+3.823 s (**+0.2%**); CPU average was 47.1% versus 38.1% (**+23.6%**, with
+wide run-to-run variation); sampled RSS was 26,360 KiB versus 49,292 KiB
+(**−46.5%**), and process peak RSS was 28,630 KiB versus 80,934 KiB
+(**−64.6%**). Payload and request counts were identical, so network volume is
+not an explanation for the LibrarySync difference.
+
+SQLite recorded 23 transactions, 22 commits, 2,346 inserted rows, 253 updated
+rows, and 119 deleted rows in each B run. Commit maximums were 6.660 s and
+6.943 s (mean 6.801 s); the current summary telemetry does not expose a
+per-commit sample series, so a distinct commit p95 cannot be calculated from
+these traces. Transaction maximums were 10.314 s and 10.468 s (mean 10.391 s).
+No SQLite busy, I/O, corruption, or foreign-key errors occurred; post-run
+`quick_check` was `ok` and foreign-key checks were empty. The A′ architecture
+has no CatalogDb transaction series because it persists hierarchy through
+OfflineCatalog.
+
+Frame pacing was interpreted using the target paced frame interval rather than
+the `>50 ms` bucket, which is near the expected framebuffer-upload boundary on
+this hardware. FullFrame `>100 ms` counts were A′ 27 and 19, versus B 28 and
+35. The complete FullFrame histograms (buckets in the telemetry schema) were
+A′ `[15965,12,3,0,1780,4592,23,2,2]` and
+`[130654,17,0,1,7822,44439,11,2,6]`; B
+`[12688,9,1,0,577,4474,28,0,0]` and
+`[10061,13,0,0,484,3512,35,0,0]`. Input, Update, ScreenRender, and
+FramebufferUpload timings were separately retained in the decoded traces;
+the dominant long-duration phase was framebuffer upload, while Update and
+Input had only isolated >100 ms samples. UiStall records and phase summaries
+were present, with no telemetry loss. These measurements do not establish a
+frame-timing regression from the `>50 ms` count.
+
+The remaining `OfflineCatalog` references previously classified in
+`HomeScreenSync` and `EpisodeBrowserArtwork` were not active catalog
+load/save paths: the former is a compatibility/offline projection object and
+the latter is an unused include. No runtime legacy load/save access was
+observed or introduced by this benchmark.
+
+Both architectures exited cleanly twice through the remote SIGUSR1 path;
+MainUI returned after every run, no queue residue remained, telemetry traces
+decoded successfully, and the SQLite catalog remained valid. The temporary
+control worktree was removed after evidence collection. No production code or
+benchmark workload was changed for the comparison.

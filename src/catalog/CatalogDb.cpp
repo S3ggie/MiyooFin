@@ -672,6 +672,10 @@ struct CatalogDb::LibrarySeedCommand {
     int failAfterWrites = -1;
     std::promise<CatalogDbLibrarySeedResult> result;
 };
+struct CatalogDb::LibraryReadCommand {
+    CatalogDbJobMetadata metadata;
+    std::promise<CatalogDbLibraryReadResult> result;
+};
 
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
@@ -695,6 +699,7 @@ CatalogDb::~CatalogDb()
         m_offlineCommands.clear();
         m_syncStateCommands.clear();
         m_librarySeedCommands.clear();
+        m_libraryReadCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
@@ -1332,6 +1337,22 @@ std::future<CatalogDbLibrarySeedResult> CatalogDb::seedLibrarySnapshotForTest(
     return enqueueLibrarySeed(snapshot, metadata, failAfterWrites);
 }
 
+std::future<CatalogDbLibraryReadResult> CatalogDb::readLibrarySnapshot(
+    const CatalogDbJobMetadata &metadata)
+{ return enqueueLibraryRead(metadata); }
+
+std::future<CatalogDbLibraryReadResult> CatalogDb::enqueueLibraryRead(
+    const CatalogDbJobMetadata &metadata)
+{
+    auto command=std::make_shared<LibraryReadCommand>(); command->metadata=metadata;
+    auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_stopping){CatalogDbLibraryReadResult r;r.error=CatalogDbErrorCategory::ScopeNotReady;r.message="CatalogDb is stopping";command->result.set_value(std::move(r));return future;}
+    if(m_pendingJobs>=kMaxPendingJobs){CatalogDbLibraryReadResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb library read queue is full";command->result.set_value(std::move(r));return future;}
+    command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
+    command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
+    m_libraryReadCommands.push_back(command);++m_pendingJobs; m_wake.notify_one(); return future;
+}
+
 std::future<CatalogDbLibrarySeedResult> CatalogDb::enqueueLibrarySeed(
     const LibrarySnapshot &snapshot, const CatalogDbJobMetadata &metadata,
     int failAfterWrites)
@@ -1430,6 +1451,7 @@ void CatalogDb::workerLoop()
                     || !m_offlineCommands.empty()
                     || !m_syncStateCommands.empty()
                     || !m_librarySeedCommands.empty()
+                    || !m_libraryReadCommands.empty()
                     || hasPendingJobsLocked()));
         });
 
@@ -1564,6 +1586,11 @@ void CatalogDb::workerLoop()
             processLibrarySeed(command);
             lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob = false; m_idle.notify_all();
             continue;
+        }
+        if (!m_libraryReadCommands.empty()) {
+            auto command=std::move(m_libraryReadCommands.front()); m_libraryReadCommands.pop_front(); --m_pendingJobs;
+            m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processLibraryRead(command);
+            lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
         }
 
         Job job = takeNextJobLocked();
@@ -2898,6 +2925,19 @@ void CatalogDb::processOfflineRebuild(
     finish();
 }
 
+void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command)
+{
+    CatalogDbLibraryReadResult result; result.workerOwned=true;
+    { std::lock_guard<std::mutex> lock(m_mutex); if(command->metadata.generation!=m_generation || (command->metadata.scopeEpoch && (command->metadata.scopeEpoch!=m_requestedEpoch||!m_scopeConfigured||!m_scopeReady))){result.superseded=true;result.error=CatalogDbErrorCategory::Superseded;command->result.set_value(std::move(result));return;} }
+    sqlite3_stmt *views=nullptr,*items=nullptr,*home=nullptr,*sg=nullptr,*st=nullptr;
+    const char *cols="id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b";
+    if(sqlite3_prepare_v2(m_db,"SELECT id,name,collection_type FROM library_views ORDER BY ordinal,id",-1,&views,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+" FROM media_items JOIN library_membership ON media_items.id=library_membership.item_id WHERE view_id=? ORDER BY library_membership.ordinal,library_membership.item_id").c_str(),-1,&items,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+",row_kind FROM media_items JOIN home_items ON media_items.id=home_items.item_id ORDER BY row_kind,ordinal,item_id").c_str(),-1,&home,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT ordinal,genre FROM item_genres WHERE item_id=? ORDER BY ordinal",-1,&sg,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT image_type,tag FROM item_image_tags WHERE item_id=? ORDER BY image_type",-1,&st,nullptr)!=SQLITE_OK){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}
+    const MediaItemCollectionStatements collections{nullptr,nullptr,nullptr,nullptr,sg,st};
+    while(sqlite3_step(views)==SQLITE_ROW){CachedLibraryView view;view.id=(const char*)sqlite3_column_text(views,0);view.name=(const char*)sqlite3_column_text(views,1);view.collectionType=(const char*)sqlite3_column_text(views,2);sqlite3_reset(items);sqlite3_clear_bindings(items);sqlite3_bind_text(items,1,view.id.c_str(),-1,SQLITE_TRANSIENT);while(sqlite3_step(items)==SQLITE_ROW){MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(items,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}view.items.push_back(std::move(item));}if(view.collectionType=="tvshows")result.snapshot.shows.push_back(std::move(view));else result.snapshot.movies.push_back(std::move(view));}
+    while(sqlite3_step(home)==SQLITE_ROW){const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));else if(kind&&std::string(kind)=="recently_added")result.snapshot.recentlyAdded.push_back(std::move(item));}
+    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);result.success=true;command->result.set_value(std::move(result));
+}
+
 void CatalogDb::processLibrarySeed(
     const std::shared_ptr<LibrarySeedCommand> &command)
 {
@@ -2918,6 +2958,8 @@ void CatalogDb::processLibrarySeed(
         } return true;
     };
     if (!collect(command->snapshot.movies) || !collect(command->snapshot.shows)) { result.error=CatalogDbErrorCategory::CorruptOrIo; result.message="invalid library snapshot"; command->result.set_value(std::move(result)); return; }
+    auto collectHome = [&](const std::vector<MediaItem> &row) { for (const auto &item : row) { if(item.id.empty() || (item.type!="movie"&&item.type!="show"&&item.type!="episode")) return false; auto found=canonical.find(item.id); if(found!=canonical.end()){if(!mediaItemsEquivalentForCatalog(found->second,item))return false;} else {canonical.emplace(item.id,item);items.push_back(item);} } return true; };
+    if(!collectHome(command->snapshot.continueWatching)||!collectHome(command->snapshot.recentlyAdded)){result.error=CatalogDbErrorCategory::CorruptOrIo;result.message="invalid Home snapshot";command->result.set_value(std::move(result));return;}
     auto execSeed = [&](const std::string &sql) { char *err=nullptr; int rc=sqlite3_exec(m_db,sql.c_str(),nullptr,nullptr,&err); if(rc!=SQLITE_OK){result.message=err?err:sqlite3_errmsg(m_db); sqlite3_free(err); return false;} return true; };
     if (!execSeed("BEGIN IMMEDIATE;")) { result.error=CatalogDbErrorCategory::SqliteError; command->result.set_value(std::move(result)); return; }
     auto rollback = [&] { char *e=nullptr; sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,&e); sqlite3_free(e); };

@@ -225,8 +225,9 @@ static void testCatalogDbFreshBootstrapPathError()
     removeCatalogMigrationTestPaths(paths);
 }
 
-static bool readHierarchyCheckpoint(const std::string &path, bool &complete,
-                                    std::int64_t &generation)
+static bool readHierarchyCheckpoint(const std::string &path,
+                                    const std::string &seriesId,
+                                    bool &complete, std::int64_t &generation)
 {
     sqlite3 *db = nullptr;
     if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr)
@@ -241,9 +242,13 @@ static bool readHierarchyCheckpoint(const std::string &path, bool &complete,
     const bool prepared = sqlite3_prepare_v2(
         db,
         "SELECT complete, last_generation FROM hierarchy_state "
-        "WHERE series_id='__task15_series__'",
+        "WHERE series_id=?1",
         -1, &statement, nullptr) == SQLITE_OK;
-    const int rc = prepared ? sqlite3_step(statement) : SQLITE_ERROR;
+    const int bindRc = prepared
+        ? sqlite3_bind_text(statement, 1, seriesId.c_str(), -1,
+                            SQLITE_TRANSIENT)
+        : SQLITE_ERROR;
+    const int rc = bindRc == SQLITE_OK ? sqlite3_step(statement) : bindRc;
     if (prepared && rc == SQLITE_ROW) {
         complete = sqlite3_column_int(statement, 0) != 0;
         generation = sqlite3_column_int64(statement, 1);
@@ -291,8 +296,8 @@ static void testCatalogDbJellyfinHierarchyStaging()
         CHECK(complete.success && complete.workerOwned);
         bool checkpointComplete = false;
         std::int64_t generation = 0;
-        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
-                                      generation));
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      checkpointComplete, generation));
         CHECK(checkpointComplete && generation == 41);
 
         auto partial = db.stageSeriesHierarchy(
@@ -301,16 +306,144 @@ static void testCatalogDbJellyfinHierarchyStaging()
         auto retained = db.getEpisodes(season.id).get();
         CHECK(retained.success && retained.items.size() == 1
               && retained.items[0].id == episode.id);
-        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
-                                      generation));
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      checkpointComplete, generation));
         CHECK(!checkpointComplete && generation == 42);
 
         auto repeated = db.stageSeriesHierarchy(
             series, {season}, completeEpisodes, 43, 1200, true).get();
         CHECK(repeated.success && repeated.workerOwned);
-        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
-                                      generation));
+        CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                      checkpointComplete, generation));
         CHECK(checkpointComplete && generation == 43);
     }
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static bool readOfflineMovie(const std::string &path, const std::string &id,
+                             std::string &title, std::int64_t &position)
+{
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr)
+            != SQLITE_OK
+        || !db) {
+        if (db) sqlite3_close(db);
+        return false;
+    }
+    sqlite3_stmt *statement = nullptr;
+    const bool prepared = sqlite3_prepare_v2(
+        db, "SELECT title, playback_position_ticks FROM media_items "
+            "WHERE id=?1 AND kind=1", -1, &statement, nullptr) == SQLITE_OK;
+    const int bindRc = prepared
+        ? sqlite3_bind_text(statement, 1, id.c_str(), -1, SQLITE_TRANSIENT)
+        : SQLITE_ERROR;
+    const int rc = bindRc == SQLITE_OK ? sqlite3_step(statement) : bindRc;
+    if (rc == SQLITE_ROW) {
+        const unsigned char *value = sqlite3_column_text(statement, 0);
+        title = value ? reinterpret_cast<const char *>(value) : "";
+        position = sqlite3_column_int64(statement, 1);
+    }
+    if (statement) sqlite3_finalize(statement);
+    sqlite3_close(db);
+    return prepared && rc == SQLITE_ROW;
+}
+
+static void testCatalogDbOfflineDownloadReconstruction()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-offline-downloads-" + suffix + ".example";
+    const std::string user = "offline-downloads-user";
+    const std::string root = "downloads/task16-" + suffix;
+    DownloadStore store(root);
+    const std::string scope = store.scopeKey(url, user);
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    DownloadItem episode;
+    episode.itemId = "__task16_downloaded_episode__";
+    episode.itemType = "episode";
+    episode.title = "Downloaded Episode";
+    episode.seriesId = "__task16_downloaded_series__";
+    episode.seriesName = "Downloaded Series";
+    episode.seasonId = "__task16_downloaded_season__";
+    episode.seasonName = "Downloaded Season";
+    episode.seasonNumber = 3;
+    episode.episodeNumber = 7;
+    episode.runtimeTicks = 1000;
+    episode.playbackPositionTicks = 250;
+    episode.expectedSize = 1;
+    episode.state = DownloadState::Complete;
+    DownloadItem movie = episode;
+    movie.itemId = "__task16_downloaded_movie__";
+    movie.itemType = "movie";
+    movie.title = "Downloaded Movie";
+    movie.seriesId.clear();
+    movie.seriesName.clear();
+    movie.seasonId.clear();
+    movie.seasonName.clear();
+    movie.seasonNumber = 0;
+    movie.episodeNumber = 0;
+    movie.playbackPositionTicks = 400;
+    DownloadItem missing = episode;
+    missing.itemId = "__task16_missing_parent_episode__";
+    missing.title = "Unparented Download";
+    missing.seriesId.clear();
+    missing.seriesName.clear();
+    missing.seasonId.clear();
+    missing.seasonName.clear();
+    const std::vector<DownloadItem> fixtures = {episode, movie, missing};
+    for (const auto &item : fixtures) {
+        CHECK(store.saveManifest(scope, item));
+    }
+    CHECK(store.saveIndex(scope, fixtures));
+    const std::string episodeBefore =
+        readTestBytes(store.manifestPath(scope, episode.itemId));
+    const std::string movieBefore =
+        readTestBytes(store.manifestPath(scope, movie.itemId));
+
+    {
+        CatalogDb db;
+        CHECK(db.configureScope(url, user) != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        auto rebuilt = db.reconstructOfflineDownloads(root).get();
+        CHECK(rebuilt.success && rebuilt.workerOwned && !rebuilt.skipped);
+        CHECK(rebuilt.itemsUpserted == 4 && rebuilt.containersSynthesized == 2);
+        const auto seasons = db.getSeasons(episode.seriesId).get();
+        const auto episodes = db.getEpisodes(episode.seasonId).get();
+        CHECK(seasons.success && seasons.items.size() == 1
+              && seasons.items[0].id == episode.seasonId);
+        CHECK(episodes.success && episodes.items.size() == 1
+              && episodes.items[0].id == episode.itemId
+              && episodes.items[0].seriesName == episode.seriesName
+              && episodes.items[0].playbackPositionTicks == 250
+              && episodes.items[0].indexNumber == 7);
+        bool checkpointComplete = true;
+        std::int64_t generation = -1;
+        CHECK(readHierarchyCheckpoint(paths.finalPath, episode.seriesId,
+                                      checkpointComplete, generation));
+        CHECK(!checkpointComplete);
+        auto repeated = db.reconstructOfflineDownloads(root).get();
+        CHECK(repeated.success && repeated.itemsUpserted == 4);
+        std::string movieTitle;
+        std::int64_t moviePosition = -1;
+        CHECK(readOfflineMovie(paths.finalPath, movie.itemId, movieTitle,
+                               moviePosition));
+        CHECK(movieTitle == movie.title && moviePosition == 400);
+        CHECK(db.getEpisodes(missing.seasonId).get().items.empty());
+    }
+    std::vector<DownloadItem> loaded;
+    CHECK(store.loadCompleteMetadata(scope, loaded) && loaded.size() == 3);
+    CHECK(readTestBytes(store.manifestPath(scope, episode.itemId))
+          == episodeBefore);
+    CHECK(readTestBytes(store.manifestPath(scope, movie.itemId)) == movieBefore);
+    for (const auto &item : fixtures) {
+        store.removeItem(scope, item.itemId);
+    }
+    std::remove((store.scopePath(scope) + "/index.v1").c_str());
+    ::rmdir((store.scopePath(scope) + "/items").c_str());
+    ::rmdir(store.scopePath(scope).c_str());
+    ::rmdir(root.c_str());
     removeCatalogMigrationTestPaths(paths);
 }

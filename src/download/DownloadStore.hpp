@@ -23,6 +23,11 @@ public:
     bool loadManifest(const std::string &scope, const std::string &itemId, DownloadItem &item, std::string *error=nullptr) const;
     bool saveIndex(const std::string &scope, const std::vector<DownloadItem> &items, std::string *error=nullptr) const;
     bool loadIndex(const std::string &scope, std::vector<DownloadItem> &items, std::string *error=nullptr) const;
+    /// Read the durable metadata entries that represent locally available
+    /// downloads. This never scans or modifies media bytes.
+    bool loadCompleteMetadata(const std::string &scope,
+                              std::vector<DownloadItem> &items,
+                              std::string *error=nullptr) const;
     bool rebuildIndex(const std::string &scope, std::vector<DownloadItem> &items, std::string *error=nullptr) const;
     bool reconcile(const std::string &scope, DownloadItem &item, std::string *error=nullptr) const;
     bool validateCompletedDownload(const std::string &scope, const DownloadItem &item, std::string *error=nullptr) const;

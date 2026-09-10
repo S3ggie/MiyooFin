@@ -273,7 +273,7 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,cachedSeasonsForSeries(i->id),presentationOffline()));return true;}return true;}
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,cachedSeasonsForSeries(i->id),presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));return true;}return true;}
         if (activeTabNamed("Movies") && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             refreshMovieFilter();
@@ -284,7 +284,7 @@ bool HomeScreen::handleAction(Action action)
         if (item) {
             printf("[HomeScreen] Select: %s (%s)\n", item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
-                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,cachedSeasonsForSeries(item->id),presentationOffline()));
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,cachedSeasonsForSeries(item->id),presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));
                 return true;
             }
             if (item->type == "movie") {

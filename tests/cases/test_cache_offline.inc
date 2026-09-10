@@ -139,6 +139,22 @@ static void testSeriesCachedSeasonHandoff(){
     // Offline callers hand over the existing downloaded-only projection, never
     // its raw catalog seasons.
     MediaItem remote=cacheItem("remote"); remote.type="season"; OfflineCatalogSnapshot catalog; catalog.seasonsBySeries[show.id]={cached,remote}; MediaItem episode=cacheItem("episode"); episode.type="episode"; episode.seriesId=show.id; episode.seasonId=cached.id; catalog.episodesBySeason[cached.id]={episode}; DownloadItem download; download.itemId=episode.id; download.state=DownloadState::Complete; DownloadSnapshot downloads; downloads.items={download}; LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads); SeriesScreen offline(session,show,{},true,projection.seasons(show.id)); CHECK(offline.diagnosticSeasonsReady()&&offline.diagnosticSeasons().size()==(size_t)1&&offline.diagnosticSeasons()[0].id==cached.id);
+    // An injected app-scoped CatalogDb supplies cached seasons asynchronously
+    // when Home has no in-memory handoff; the screen never reads SQLite in
+    // enter() or update().
+    std::printf("[test] SeriesScreen CatalogDb cached seasons\n");
+    const std::string suffix=std::to_string((long long)getpid());
+    Session catalogSession; catalogSession.serverUrl="https://series-catalog-"+suffix+".example"; catalogSession.userId="series-user-"+suffix;
+    auto catalogDb=std::make_shared<CatalogDb>();
+    const std::uint64_t epoch=catalogDb->configureScope(catalogSession.serverUrl,catalogSession.userId);
+    CHECK(catalogDb->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto seeded=catalogDb->seedHierarchyQueryFixturesForTest();
+    CHECK(seeded.success&&seeded.hierarchyFixture);
+    MediaItem catalogSeries; catalogSeries.id="__task10_series__"; catalogSeries.type="show";
+    SeriesScreen catalogScreen(catalogSession,catalogSeries,{},true,{},false,catalogDb,epoch);
+    catalogScreen.enter();
+    for(int i=0;i<100&&!catalogScreen.diagnosticSeasonsReady();++i){catalogScreen.update(16);usleep(1000);}
+    CHECK(catalogScreen.diagnosticSeasonsReady()&&catalogScreen.diagnosticSeasons().size()==(size_t)3);
 }
 static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);
     // A successful sync is fresh for fifteen minutes, and tab requests while

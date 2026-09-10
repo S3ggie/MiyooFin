@@ -116,6 +116,17 @@ all: $(TARGET)
 	@file $(TARGET)
 	@$(CROSS_PREFIX)readelf -h $(TARGET) | grep -E 'Class|Machine|Flags'
 
+BENCHMARK_SRC := tools/catalog_journal_benchmark.cpp
+BENCHMARK_MAIN := tools/catalog_journal_benchmark_main.cpp
+BENCHMARK_ARM := output/build-arm/catalog-journal-benchmark
+
+.PHONY: benchmark
+benchmark: $(BENCHMARK_ARM)
+
+$(BENCHMARK_ARM): $(BENCHMARK_MAIN) $(BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_ARM_OBJ) | output/build-arm
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^ -lstdc++fs -lpthread
+	@echo "  [LINK] $@"
+
 $(TARGET): $(OBJS) | output/build-arm
 	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2 -lcurl -lpthread
 	@echo "  [LINK] $@"

@@ -47,6 +47,7 @@
 #include "../src/ui/screens/SeriesScreen.hpp"
 #include "../src/ui/screens/MovieDetailsScreen.hpp"
 #include "../src/app/ScreenStack.hpp"
+#include "../src/app/RemoteExitSignal.hpp"
 #include "../src/app/DisplaySizing.hpp"
 #include "../src/catalog/CatalogDb.hpp"
 #include "../src/app/UiDiagnostics.hpp"
@@ -59,6 +60,7 @@
 #include "../src/download/DownloadUi.hpp"
 #include "../src/input/InputManager.hpp"
 #include <unistd.h>
+#include <csignal>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -101,6 +103,18 @@ static void testCatalogDbLifecycle()
         CatalogDb db;
         db.enqueueNoopForTest(CatalogDbPriority::BackgroundSync);
     }
+}
+
+static void testRemoteExitSignal()
+{
+    std::printf("[test] remote exit signal\n");
+    installRemoteExitSignalHandler();
+    CHECK(!consumeRemoteExitRequest());
+    CHECK(std::raise(SIGUSR1) == 0);
+    CHECK(std::raise(SIGUSR1) == 0);
+    CHECK(consumeRemoteExitRequest());
+    CHECK(!consumeRemoteExitRequest());
+    std::printf("[test] remote exit signal OK\n");
 }
 
 static void testDisplaySizingFallback()
@@ -771,6 +785,7 @@ static void testCatalogDbAuthoritativeReconcile()
 #include "cases/test_playback_ui.inc"
 int main()
 {
+    testRemoteExitSignal();
     testDisplaySizingFallback();
     testCatalogDbLifecycle();
     testCatalogDbQueue();

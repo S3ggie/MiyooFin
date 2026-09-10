@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "RemoteExitSignal.hpp"
 #include "DisplaySizing.hpp"
 #include "../net/RouteRequest.hpp"
 #include "UiDiagnostics.hpp"
@@ -685,6 +686,8 @@ int App::run()
             FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Input);
 #endif
             std::vector<Action> actions = m_input.poll();
+            if (!m_playbackStarting && consumeRemoteExitRequest())
+                actions.push_back(Action::Exit);
             if (!m_playbackStarting) {
                 for (Action a : actions) {
                     uiDiagnostics().setLastAction(actionName(a));

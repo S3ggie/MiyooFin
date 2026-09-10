@@ -52,6 +52,7 @@ endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
+    $(SRC_DIR)/app/RemoteExitSignal.cpp \
     $(SRC_DIR)/catalog/CatalogDb.cpp \
     $(SRC_DIR)/catalog/MediaItemSql.cpp \
     $(SRC_DIR)/app/UiDiagnostics.cpp \
@@ -205,6 +206,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/HomeTabs.cpp \
                src/ui/HomeArtworkPlan.cpp \
                src/app/ScreenStack.cpp \
+               src/app/RemoteExitSignal.cpp \
                src/app/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
                src/ui/screens/HomeScreenNavigation.cpp \

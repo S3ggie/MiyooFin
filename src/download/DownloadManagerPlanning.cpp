@@ -1,11 +1,10 @@
 #include "DownloadManager.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
-#include "../cache/OfflineCatalog.hpp"
-#include "../cache/LibraryCache.hpp"
 #include "DownloadSupport.hpp"
 #include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
+#include <ctime>
 
 namespace miyoofin {
 namespace {
@@ -39,15 +38,287 @@ std::uint64_t DownloadManager::requestPlan(const std::vector<MediaItem>&items){
         UiDiagnostics::Scope scope("DownloadManager::requestPlan mutex wait",false);
         l.lock();
     }
-    std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=items.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;
+    std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=items.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}, {}, {}});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;
 }
 std::uint64_t DownloadManager::requestSeriesPlan(const std::string&seriesId){MediaItem series;series.id=seriesId;return requestSeriesPlan(series);}
 std::uint64_t DownloadManager::requestSeasonPlan(const std::string&seriesId,const std::string&seasonId){MediaItem series,season;series.id=seriesId;season.id=seasonId;season.seriesId=seriesId;return requestSeasonPlan(series,season);}
-std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem&series){OfflineCatalogSnapshot cache;std::vector<MediaItem> cached;if(OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),cache)){auto it=cache.seasonsBySeries.find(series.id);if(it!=cache.seasonsBySeries.end())for(const auto&season:it->second){auto eps=cache.episodesBySeason.find(season.id);if(eps==cache.episodesBySeason.end()){cached.clear();break;}cached.insert(cached.end(),eps->second.begin(),eps->second.end());}}std::vector<DownloadItem> provisional;for(const auto&m:cached){DownloadItem i;i.itemId=m.id;i.runtimeTicks=m.runTimeTicks;i.hlsStorage=true;provisional.push_back(i);}DownloadPlan estimate=cached.empty()?DownloadPlan{}:makePlan(provisional);std::lock_guard<std::mutex>l(m_mutex);std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=cached.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,{},series.id,"",series,{}});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;}
-std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem&series,const MediaItem&season){OfflineCatalogSnapshot cache;std::vector<MediaItem> cached;auto path=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));if(OfflineCatalog::load(path,cache)){auto it=cache.episodesBySeason.find(season.id);if(it!=cache.episodesBySeason.end())cached=it->second;}std::vector<DownloadItem> provisional;for(const auto&m:cached){DownloadItem i;i.itemId=m.id;i.runtimeTicks=m.runTimeTicks;i.hlsStorage=true;provisional.push_back(i);}DownloadPlan estimate=cached.empty()?DownloadPlan{}:makePlan(provisional);std::lock_guard<std::mutex>l(m_mutex);std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=cached.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,{},series.id,season.id,series,season});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;}
+std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
+{
+    std::shared_ptr<CatalogDb> catalogDb;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        catalogDb = m_catalogDb;
+    }
+    CatalogDbJobMetadata metadata;
+    if (catalogDb)
+        metadata.scopeEpoch = catalogDb->scopeState().requestedEpoch;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const std::uint64_t id=m_nextPlanId++;
+    DownloadPlanSnapshot snapshot;
+    snapshot.id=id;
+    snapshot.state=DownloadPlanState::Planning;
+    m_plans[id]=snapshot;
+    m_planJobs.push_back({id,m_generation,m_session,{},series.id,"",series,{},catalogDb,metadata});
+    performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
+        static_cast<std::uint32_t>(m_planJobs.size()));
+    publishDownloadGauges(m_items,m_planJobs.size());
+    m_planWake.notify_one();
+    return id;
+}
+std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
+                                                 const MediaItem &season)
+{
+    std::shared_ptr<CatalogDb> catalogDb;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        catalogDb = m_catalogDb;
+    }
+    CatalogDbJobMetadata metadata;
+    if (catalogDb)
+        metadata.scopeEpoch = catalogDb->scopeState().requestedEpoch;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const std::uint64_t id=m_nextPlanId++;
+    DownloadPlanSnapshot snapshot;
+    snapshot.id=id;
+    snapshot.state=DownloadPlanState::Planning;
+    m_plans[id]=snapshot;
+    m_planJobs.push_back({id,m_generation,m_session,{},series.id,season.id,
+                          series,season,catalogDb,metadata});
+    performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
+        static_cast<std::uint32_t>(m_planJobs.size()));
+    publishDownloadGauges(m_items,m_planJobs.size());
+    m_planWake.notify_one();
+    return id;
+}
 DownloadPlanSnapshot DownloadManager::planSnapshot(std::uint64_t id)const{UiDiagnostics::Scope scope("DownloadManager::planSnapshot mutex wait");std::lock_guard<std::mutex>l(m_mutex);auto it=m_plans.find(id);return it==m_plans.end()?DownloadPlanSnapshot{}:it->second;}
 bool DownloadManager::tryPlanSnapshot(std::uint64_t id,DownloadPlanSnapshot&snapshot)const{std::unique_lock<std::mutex>l(m_mutex,std::try_to_lock);if(!l.owns_lock())return false;auto it=m_plans.find(id);snapshot=it==m_plans.end()?DownloadPlanSnapshot{}:it->second;return true;}
 
-void DownloadManager::planner(){for(;;){PlanJob job;{std::unique_lock<std::mutex>l(m_mutex);m_planWake.wait(l,[&]{return m_stop||!m_planJobs.empty();});if(m_stop)return;job=std::move(m_planJobs.front());m_planJobs.pop_front();performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,true);}std::vector<MediaItem> media=job.items,seasons;std::map<std::string,std::vector<MediaItem> > hierarchy;std::string error;if(!job.seasonId.empty()){if(RouteRequest(job.session).run([&](const std::string&base){return JellyfinApi::getEpisodes(base,job.session.accessToken,job.session.userId,job.session.deviceId,job.seriesId,job.seasonId,media,error);},error)){MediaItem season=job.season;season.id=job.seasonId;season.seriesId=job.seriesId;seasons.push_back(season);hierarchy[job.seasonId]=media;}}else if(!job.seriesId.empty()){if(RouteRequest(job.session).run([&](const std::string&base){return JellyfinApi::getSeasons(base,job.session.accessToken,job.session.userId,job.session.deviceId,job.seriesId,seasons,error);},error))for(const auto&season:seasons){std::vector<MediaItem> episodes;if(!RouteRequest(job.session).run([&](const std::string&base){return JellyfinApi::getEpisodes(base,job.session.accessToken,job.session.userId,job.session.deviceId,job.seriesId,season.id,episodes,error);},error))break;hierarchy[season.id]=episodes;media.insert(media.end(),episodes.begin(),episodes.end());}}if(error.empty()&&!job.seriesId.empty()){MediaItem series=job.series;series.id=job.seriesId;if(series.title.empty())for(const auto&a:hierarchy)if(!a.second.empty()){series.title=a.second.front().seriesName;break;}OfflineCatalog::storeDiscoveredHierarchy(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(job.session.serverUrl,job.session.userId)),series,seasons,hierarchy,true,nullptr);}std::vector<DownloadItem> out;std::set<std::string> seen;for(const auto&m:media){if(!seen.insert(m.id).second)continue;std::vector<DownloadMediaSource> sources;if(!RouteRequest(job.session).run([&](const std::string&base){return JellyfinApi::getDownloadMediaSources(base,job.session.accessToken,job.session.userId,job.session.deviceId,m.id,sources,error);},error)||sources.empty()){if(error.empty())error="No downloadable media source";break;}out.push_back(makeDownloadItem(m,sources.front()));}DownloadPlan calculated; if(error.empty()) calculated=makePlan(out);std::lock_guard<std::mutex>l(m_mutex);auto it=m_plans.find(job.id);if(it==m_plans.end()||job.generation!=m_generation){performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,false);continue;}it->second.itemCount=out.size();if(!error.empty()){it->second.state=DownloadPlanState::Error;it->second.plan.error=error;}else{it->second.plan=calculated;it->second.state=calculated.error.empty()?DownloadPlanState::Ready:DownloadPlanState::Error;}performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,false);}}
+void DownloadManager::planner()
+{
+    for (;;) {
+        PlanJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_planWake.wait(lock, [&] {
+                return m_stop || !m_planJobs.empty();
+            });
+            if (m_stop)
+                return;
+            job = std::move(m_planJobs.front());
+            m_planJobs.pop_front();
+            performanceTelemetry().setWorkerQueueDepth(
+                WorkerId::DownloadPlanner,
+                static_cast<std::uint32_t>(m_planJobs.size()));
+            publishDownloadGauges(m_items, m_planJobs.size());
+            performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,
+                                                   true);
+        }
+
+        std::vector<MediaItem> media = job.items;
+        std::vector<MediaItem> seasons;
+        std::map<std::string, std::vector<MediaItem>> hierarchy;
+        std::string error;
+        bool hierarchyReady = false;
+        bool hierarchyFromCatalog = false;
+        bool catalogSuperseded = false;
+
+        auto publishEstimate = [&](const std::vector<MediaItem> &items) {
+            if (items.empty())
+                return;
+            std::vector<DownloadItem> provisional;
+            provisional.reserve(items.size());
+            for (const auto &item : items) {
+                DownloadItem download;
+                download.itemId = item.id;
+                download.itemType = item.type;
+                download.runtimeTicks = item.runTimeTicks;
+                download.hlsStorage = true;
+                provisional.push_back(std::move(download));
+            }
+            const DownloadPlan estimate = makePlan(provisional);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const auto plan = m_plans.find(job.id);
+            if (plan != m_plans.end() && job.generation == m_generation) {
+                plan->second.itemCount = items.size();
+                plan->second.plan = estimate;
+            }
+        };
+
+        auto queryEpisodes = [&](const std::string &seasonId,
+                                 std::vector<MediaItem> &episodes) {
+            if (!job.catalogDb)
+                return false;
+            const CatalogDbHierarchyResult result =
+                job.catalogDb->getEpisodes(seasonId, job.catalogMetadata).get();
+            if (result.superseded || result.cancelled) {
+                catalogSuperseded = true;
+                return false;
+            }
+            if (!result.success)
+                return false;
+            episodes = result.items;
+            return !episodes.empty();
+        };
+
+        if (!job.seriesId.empty() && !job.seasonId.empty()) {
+            std::vector<MediaItem> cached;
+            hierarchyReady = queryEpisodes(job.seasonId, cached);
+            if (hierarchyReady) {
+                media = cached;
+                hierarchyFromCatalog = true;
+                MediaItem season = job.season;
+                season.id = job.seasonId;
+                season.seriesId = job.seriesId;
+                seasons.push_back(std::move(season));
+                hierarchy[job.seasonId] = media;
+            }
+            if (!hierarchyReady && !catalogSuperseded) {
+                media.clear();
+                hierarchyReady = RouteRequest(job.session).run(
+                    [&](const std::string &base) {
+                        return JellyfinApi::getEpisodes(
+                            base, job.session.accessToken, job.session.userId,
+                            job.session.deviceId, job.seriesId, job.seasonId,
+                            media, error);
+                    }, error);
+                if (hierarchyReady) {
+                    MediaItem season = job.season;
+                    season.id = job.seasonId;
+                    season.seriesId = job.seriesId;
+                    seasons.push_back(std::move(season));
+                    hierarchy[job.seasonId] = media;
+                }
+            }
+        } else if (!job.seriesId.empty()) {
+            if (job.catalogDb) {
+                const CatalogDbHierarchyResult cachedSeasons =
+                    job.catalogDb->getSeasons(job.seriesId,
+                                              job.catalogMetadata).get();
+                if (cachedSeasons.superseded || cachedSeasons.cancelled) {
+                    catalogSuperseded = true;
+                } else if (cachedSeasons.success
+                           && !cachedSeasons.items.empty()) {
+                    bool allCached = true;
+                    seasons = cachedSeasons.items;
+                    for (const auto &season : seasons) {
+                        std::vector<MediaItem> episodes;
+                        if (!queryEpisodes(season.id, episodes)) {
+                            allCached = false;
+                            break;
+                        }
+                        hierarchy[season.id] = episodes;
+                        media.insert(media.end(), episodes.begin(),
+                                     episodes.end());
+                    }
+                    hierarchyReady = allCached;
+                    hierarchyFromCatalog = allCached;
+                    if (!allCached)
+                        media.clear();
+                }
+            }
+            if (!hierarchyReady && !catalogSuperseded) {
+                seasons.clear();
+                media.clear();
+                hierarchy.clear();
+                hierarchyReady = RouteRequest(job.session).run(
+                    [&](const std::string &base) {
+                        return JellyfinApi::getSeasons(
+                            base, job.session.accessToken, job.session.userId,
+                            job.session.deviceId, job.seriesId, seasons, error);
+                    }, error);
+                if (hierarchyReady) {
+                    for (const auto &season : seasons) {
+                        std::vector<MediaItem> episodes;
+                        if (!RouteRequest(job.session).run(
+                                [&](const std::string &base) {
+                                    return JellyfinApi::getEpisodes(
+                                        base, job.session.accessToken,
+                                        job.session.userId, job.session.deviceId,
+                                        job.seriesId, season.id, episodes,
+                                        error);
+                                }, error)) {
+                            hierarchyReady = false;
+                            break;
+                        }
+                        hierarchy[season.id] = episodes;
+                        media.insert(media.end(), episodes.begin(),
+                                     episodes.end());
+                    }
+                }
+            }
+        }
+
+        if (hierarchyReady)
+            publishEstimate(media);
+
+        if (hierarchyReady && !hierarchyFromCatalog && job.catalogDb) {
+            MediaItem series = job.series;
+            series.id = job.seriesId;
+            CatalogDbHierarchyWriteResult stored;
+            if (!job.seasonId.empty()) {
+                stored = job.catalogDb->reconcileSeasonHierarchy(
+                    series, seasons.front(), hierarchy[job.seasonId],
+                    job.generation,
+                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                    job.catalogMetadata).get();
+            } else {
+                stored = job.catalogDb->upsertSeriesHierarchy(
+                    series, seasons, hierarchy, job.generation,
+                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                    job.catalogMetadata).get();
+            }
+            if (!stored.success) {
+                error = stored.message.empty()
+                    ? "CatalogDb hierarchy write failed" : stored.message;
+            }
+        }
+        if (catalogSuperseded && error.empty())
+            error = "CatalogDb hierarchy plan superseded";
+
+        std::vector<DownloadItem> out;
+        std::set<std::string> seen;
+        for (const auto &item : media) {
+            if (!seen.insert(item.id).second)
+                continue;
+            std::vector<DownloadMediaSource> sources;
+            if (!error.empty()
+                || !RouteRequest(job.session).run(
+                       [&](const std::string &base) {
+                           return JellyfinApi::getDownloadMediaSources(
+                               base, job.session.accessToken, job.session.userId,
+                               job.session.deviceId, item.id, sources, error);
+                       }, error)
+                || sources.empty()) {
+                if (error.empty())
+                    error = "No downloadable media source";
+                break;
+            }
+            out.push_back(makeDownloadItem(item, sources.front()));
+        }
+
+        DownloadPlan calculated;
+        if (error.empty())
+            calculated = makePlan(out);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto plan = m_plans.find(job.id);
+        if (plan == m_plans.end() || job.generation != m_generation) {
+            performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,
+                                                   false);
+            continue;
+        }
+        plan->second.itemCount = out.empty() && hierarchyReady
+            ? media.size() : out.size();
+        if (!error.empty()) {
+            plan->second.state = DownloadPlanState::Error;
+            plan->second.plan.error = error;
+        } else {
+            plan->second.plan = calculated;
+            plan->second.state = calculated.error.empty()
+                ? DownloadPlanState::Ready : DownloadPlanState::Error;
+        }
+        performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,
+                                               false);
+    }
+}
 
 } // namespace miyoofin

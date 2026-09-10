@@ -25,17 +25,34 @@ Make CatalogDb schema v2 authoritative for cached Home/library metadata while pr
 
 ## Allowed Files
 
+- `src/catalog/CatalogDb.hpp` — the smallest public asynchronous library
+  projection/read result and request API, including scope-epoch metadata,
+  cancellation, and bounded result ownership.
+- `src/catalog/CatalogDb.cpp` — the matching worker-owned command, queue
+  dispatch, and SQLite projection implementation using the existing single
+  CatalogDb worker/connection.
+- `src/ui/screens/HomeScreen.hpp` — only the Home state/callback plumbing
+  required to request and safely publish an asynchronous CatalogDb projection.
 - `src/ui/screens/HomeScreen.cpp`
-- `HomeScreenSync.cpp`
+- `src/ui/screens/HomeScreenSync.cpp`
 - Home pure projection helpers
-- CatalogDb library DAL
-- App wiring
-- Focused tests
+- `tests/test_main.cpp`
+- focused catalog/Home test case include(s), limited to the Task 31 coverage
+  below.
+
+The CatalogDb additions are limited to the asynchronous library
+projection/read path required by this task. Home may remove only the
+Task-31-authorized `LibraryCache::load()` startup read and
+`LibraryCache::save()` refresh writes that the new SQLite path replaces;
+legacy LibraryCache files and any compatibility handling not explicitly
+retired here remain untouched.
 
 ## Forbidden Scope
 
 - Do not implement final lazy paging yet.
 - Do not remove LibraryCache files yet.
+- Do not remove LibraryCache compatibility parsing or unrelated cache users;
+  only the explicitly retired Home load/save calls are in scope.
 - No UI-thread SQLite.
 - No artwork/download ownership changes.
 
@@ -70,6 +87,14 @@ git status --short
 
 ## Focused tests
 
+- successful asynchronous CatalogDb library projection;
+- canonical ordering and collection/media metadata parity;
+- empty/new database behavior;
+- stale scope/epoch suppression and cancellation;
+- repeated reads;
+- Home does not synchronously query SQLite;
+- retired Home LibraryCache load/save paths are no longer used where this
+  task requires their removal.
 - Cached startup.
 - No cache.
 - Network failure with cache.

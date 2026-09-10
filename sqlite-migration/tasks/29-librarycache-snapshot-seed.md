@@ -27,9 +27,24 @@ while keeping that snapshot untouched. This is independent of the retired
 
 ## Allowed Files
 
-- New/updated catalog schema/seed files
-- Existing LibraryCache read API as source
-- Focused tests
+- `src/catalog/CatalogDb.hpp` — the smallest public asynchronous snapshot-seed
+  request/result API, including scope-epoch metadata and bounded result
+  reporting.
+- `src/catalog/CatalogDb.cpp` — the matching worker-owned job dispatch and one
+  bounded transactional seed implementation, using the existing CatalogDb
+  worker and connection.
+- `src/cache/LibraryCache.hpp` and `src/cache/LibraryCache.cpp` — only the
+  read-only snapshot parsing/adapter surface needed to pass validated
+  `LibrarySnapshot` contents to the seed job; snapshot writes remain forbidden.
+- `tests/test_main.cpp` and the focused catalog/cache test case include(s) —
+  successful seed, idempotency, rollback, representative parity, empty
+  snapshot, and stale-scope rejection tests.
+- `sqlite-migration/tasks/29-librarycache-snapshot-seed.md` — this task
+  specification only, if implementation details need clarification.
+
+No other production or consumer files are in scope. In particular, the
+existing schema-v2 files may be read but must not be expanded for unrelated
+tables or consumers.
 
 ## Forbidden Scope
 
@@ -58,6 +73,17 @@ git status --short
 6. Seed stale-generation snapshot only as local data while retaining/setting refresh-needed state outside destructive schema semantics.
 7. Do not delete hierarchy rows not present in LibrarySnapshot.
 8. Validate semantic counts and canonical item parity.
+9. Expose this only as one asynchronous CatalogDb seed job. It must use the
+   existing single worker/connection, carry the requested scope epoch, reject
+   stale jobs before publication, and never execute SQLite on the SDL/UI
+   thread.
+10. Make the seed idempotent: repeated seeds replace the scoped view,
+    membership, and Home-row projections without duplicate rows while leaving
+    hierarchy-only rows intact.
+11. Commit the bounded seed transaction only after all snapshot validation and
+    writes succeed; a failure must roll back the complete seed.
+12. Do not add permanent dual-write behavior, switch Home reads, alter
+    DownloadStore, alter hierarchy persistence, or modify unrelated consumers.
 
 ## Invariants
 
@@ -74,6 +100,8 @@ git status --short
 - Items shared with hierarchy/Home rows.
 - Empty rows/views.
 - Failure rollback.
+- Repeated seed produces identical row counts, order, and canonical metadata.
+- A stale scope epoch is rejected without SQLite writes or publication.
 
 ## Complete validation commands
 

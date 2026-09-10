@@ -161,11 +161,13 @@ bool App::init()
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     uiDiagnostics().start();
+    uiDiagnostics().log("[App] startup stage=diagnostics_started");
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+    uiDiagnostics().log("[App] startup stage=sdl_initialized");
 
     SDL_DisplayMode dm;
     const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
@@ -223,6 +225,7 @@ bool App::init()
 
     loadSavedUrl();
     loadSavedSession();
+    uiDiagnostics().log("[App] startup stage=session_loaded");
     recoverPlaybackResult();
     m_downloadManager = std::make_shared<DownloadManager>(m_session);
     m_deviceId = DeviceIdentity::loadOrCreate();
@@ -233,13 +236,16 @@ bool App::init()
         // background and only an explicit authorization rejection logs out.
         m_savedFastPath = true;
         configureCatalogScopeForSession();
+        uiDiagnostics().log("[App] startup stage=valid_saved_session_scope_requested");
         goToHome();
         startSavedSessionValidation();
         scheduleJournalSync();
     } else if (!m_serverUrl.empty()) {
+        uiDiagnostics().log("[App] startup stage=no_valid_saved_session");
         printf("[App] Saved server URL: %s\n", m_serverUrl.c_str());
         m_stack.push(std::make_unique<ConnectScreen>(m_serverUrl));
     } else {
+        uiDiagnostics().log("[App] startup stage=no_saved_server_url");
         printf("[App] No saved server URL\n");
         m_stack.push(std::make_unique<ServerEntryScreen>());
     }
@@ -247,6 +253,7 @@ bool App::init()
     m_running = true;
     m_lastTick = SDL_GetTicks();
     printf("[App] Initialisation complete\n");
+    uiDiagnostics().log("[App] startup stage=initialisation_complete");
     return true;
 }
 
@@ -309,8 +316,10 @@ void App::loadSavedUrl()
 void App::configureCatalogScopeForSession()
 {
     if (m_catalogDb && m_session.valid()) {
+        uiDiagnostics().log("[App] catalog scope request identity=valid");
         m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
     } else if (m_catalogDb) {
+        uiDiagnostics().log("[App] catalog scope request identity=invalid");
         m_catalogDb->deconfigureScope();
     }
 }
@@ -319,6 +328,7 @@ void App::loadSavedSession()
 {
     m_session = Session::load();
     if (m_session.valid()) {
+        uiDiagnostics().log("[App] saved session valid=1");
         printf("[App] Loaded saved session for user '%s'\n",
                m_session.userName.c_str());
         // Prefer the session's server URL if a server URL is not yet known
@@ -326,6 +336,7 @@ void App::loadSavedSession()
             m_serverUrl = m_session.serverUrl;
         }
     } else {
+        uiDiagnostics().log("[App] saved session valid=0");
         printf("[App] No valid saved session\n");
     }
 }

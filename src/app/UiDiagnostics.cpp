@@ -175,9 +175,10 @@ UiScopeId UiDiagnostics::scopeIdFromDiagnosticName(const char *scope) noexcept
     return UiScopeId::Unknown;
 }
 void UiDiagnostics::event(const char *message){std::lock_guard<std::mutex>l(m_eventsMutex); if(m_events.size()==EVENT_CAPACITY)m_events.erase(m_events.begin()); m_events.emplace_back(message);}
+void UiDiagnostics::log(const std::string &line){if(line.empty())return;std::lock_guard<std::mutex>l(m_pendingMutex);if(m_pendingLogs.size()>=128)m_pendingLogs.erase(m_pendingLogs.begin());m_pendingLogs.emplace_back(line);}
 void UiDiagnostics::setWorker(const char *worker,const char *state){std::atomic<const char*> *target=nullptr;uint16_t mask=0;if(!strcmp(worker,"library")){target=&m_library;mask=kWorkerMaskHomeLibraryFetch;}else if(!strcmp(worker,"hierarchy")){target=&m_hierarchy;mask=kWorkerMaskHomeHierarchy;}else if(!strcmp(worker,"artwork")){target=&m_artwork;mask=kWorkerMaskHomePoster;}else if(!strcmp(worker,"download")){target=&m_download;mask=kWorkerMaskDownloadTransfer;}if(target){target->store(state,std::memory_order_relaxed);const uint16_t active=state!=nullptr&&strcmp(state,"idle")!=0?mask:0;uint16_t observed=m_activeWorkerMask.load(std::memory_order_relaxed);for(;;){const uint16_t desired=(observed&~mask)|active;if(m_activeWorkerMask.compare_exchange_weak(observed,desired,std::memory_order_relaxed,std::memory_order_relaxed))break;}}}
 std::vector<std::string> UiDiagnostics::recentEvents()const{std::lock_guard<std::mutex>l(m_eventsMutex);return m_events;}
-void UiDiagnostics::writeLine(const std::string &line){ struct stat st{}; if(stat(m_path.c_str(),&st)==0 && st.st_size>65536){ FILE*f=fopen(m_path.c_str(),"w");if(f)fclose(f); } FILE*f=fopen(m_path.c_str(),"a"); if(!f && m_path!="ui-stall.log") { m_path="ui-stall.log"; f=fopen(m_path.c_str(),"a"); } if(f){fprintf(f,"%s\n",line.c_str());fclose(f);} }
+void UiDiagnostics::writeLine(const std::string &line){ struct stat st{}; if(stat(m_path.c_str(),&st)==0 && st.st_size>65536){ FILE*f=fopen(m_path.c_str(),"w");if(f)fclose(f); } FILE*f=fopen(m_path.c_str(),"a"); if(!f && m_path!="ui-stall.log") { m_path="ui-stall.log"; f=fopen(m_path.c_str(),"a"); } if(f){fprintf(f,"[t=%llums] %s\n",(unsigned long long)monotonicMs(),line.c_str());fclose(f);} }
 void UiDiagnostics::slow(const char *name,uint64_t elapsed)
 {
     if(elapsed<SLOW_MS)return;

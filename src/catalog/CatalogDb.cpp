@@ -5,6 +5,7 @@
 #include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "MediaItemSql.hpp"
+#include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
 #include "../../vendor/sqlite/sqlite3.h"
@@ -25,6 +26,123 @@
 namespace miyoofin {
 
 namespace {
+
+const char *migrationDecisionName(CatalogDbMigrationDecision value)
+{
+    switch (value) {
+    case CatalogDbMigrationDecision::CreateEmptyFinal: return "create_empty_final";
+    case CatalogDbMigrationDecision::StageLegacyImport: return "stage_legacy_import";
+    case CatalogDbMigrationDecision::RebuildMigratingAtMigrationStart: return "rebuild_migrating";
+    case CatalogDbMigrationDecision::FinalDatabaseWins: return "final_database_wins";
+    case CatalogDbMigrationDecision::FinalDatabaseWinsCleanupCandidate: return "final_wins_cleanup";
+    case CatalogDbMigrationDecision::PathError: return "path_error";
+    }
+    return "unknown";
+}
+
+const char *scopeStatusName(CatalogDbScopeStatus value)
+{
+    switch (value) {
+    case CatalogDbScopeStatus::Unconfigured: return "unconfigured";
+    case CatalogDbScopeStatus::Pending: return "pending";
+    case CatalogDbScopeStatus::Ready: return "ready";
+    case CatalogDbScopeStatus::InvalidIdentity: return "invalid_identity";
+    case CatalogDbScopeStatus::OpenFailed: return "open_failed";
+    }
+    return "unknown";
+}
+
+const char *errorCategoryName(CatalogDbErrorCategory value)
+{
+    switch (value) {
+    case CatalogDbErrorCategory::None: return "none";
+    case CatalogDbErrorCategory::InvalidIdentity: return "invalid_identity";
+    case CatalogDbErrorCategory::ScopeNotReady: return "scope_not_ready";
+    case CatalogDbErrorCategory::OpenFailed: return "open_failed";
+    case CatalogDbErrorCategory::WrongApplicationId: return "wrong_application_id";
+    case CatalogDbErrorCategory::UnsupportedVersion: return "unsupported_version";
+    case CatalogDbErrorCategory::CorruptOrIo: return "corrupt_or_io";
+    case CatalogDbErrorCategory::ConfigurationFailed: return "configuration_failed";
+    case CatalogDbErrorCategory::SqliteError: return "sqlite_error";
+    case CatalogDbErrorCategory::Superseded: return "superseded";
+    }
+    return "unknown";
+}
+
+const char *openStateName(CatalogDbOpenState value)
+{
+    switch (value) {
+    case CatalogDbOpenState::NotAttempted: return "not_attempted";
+    case CatalogDbOpenState::CreatedV1: return "created_v1";
+    case CatalogDbOpenState::SupportedV1: return "supported_v1";
+    case CatalogDbOpenState::WrongApplicationId: return "wrong_application_id";
+    case CatalogDbOpenState::UnsupportedVersion: return "unsupported_version";
+    case CatalogDbOpenState::CorruptOrIo: return "corrupt_or_io";
+    }
+    return "unknown";
+}
+
+std::string scopeDirectory(const std::string &scopeKey)
+{
+    return std::string("cache/library/") + scopeKey;
+}
+
+void catalogDiagnostic(const std::string &line)
+{
+    uiDiagnostics().log(std::string("[CatalogDb] ") + line);
+}
+
+void catalogFinalDiagnostic(bool ready, CatalogDbScopeStatus status,
+                            CatalogDbErrorCategory error,
+                            CatalogDbOpenState openState)
+{
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "final_state ready=%d scope_status=%s(%u) error_category=%s(%u) open_state=%s(%u)",
+                  ready ? 1 : 0, scopeStatusName(status),
+                  static_cast<unsigned>(status), errorCategoryName(error),
+                  static_cast<unsigned>(error), openStateName(openState),
+                  static_cast<unsigned>(openState));
+    catalogDiagnostic(line);
+}
+
+const char *migrationFailureCode(const std::string &message)
+{
+    if (message.find("invalid episode hierarchy relationship") != std::string::npos)
+        return "invalid_episode_hierarchy";
+    if (message.find("conflicting hierarchy parents") != std::string::npos)
+        return "duplicate_conflicting_parent";
+    if (message.find("conflicting payload") != std::string::npos)
+        return "duplicate_conflicting_payload";
+    if (message.find("duplicate media IDs") != std::string::npos)
+        return "duplicate_media_id";
+    if (message.find("orphan season") != std::string::npos)
+        return "orphan_season_list";
+    if (message.find("orphan episodes") != std::string::npos)
+        return "orphan_episode_list";
+    if (message.find("could not read") != std::string::npos
+        || message.find("not available") != std::string::npos)
+        return "legacy_source_unavailable";
+    if (message.find("legacy catalog") != std::string::npos)
+        return "legacy_source_invalid";
+    if (message.find("quick_check") != std::string::npos)
+        return "quick_check";
+    if (message.find("foreign_key_check") != std::string::npos)
+        return "foreign_key_check";
+    if (message.find("parity") != std::string::npos)
+        return "media_item_parity";
+    if (message.find("row counts") != std::string::npos)
+        return "row_count_parity";
+    if (message.find("promotion") != std::string::npos)
+        return "promotion";
+    if (message.find("temporary") != std::string::npos)
+        return "temporary_database";
+    if (message.find("superseded") != std::string::npos)
+        return "superseded_scope";
+    if (message.find("injected") != std::string::npos)
+        return "injected_test_failure";
+    return "other";
+}
 
 constexpr unsigned char kDiagnosticsOperation = 1;
 constexpr unsigned char kStatementReuseOperation = 2;
@@ -626,6 +744,7 @@ struct CatalogDb::ReconcileCommand {
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
 {
+    catalogDiagnostic("service_started");
 }
 
 CatalogDb::~CatalogDb()
@@ -703,6 +822,13 @@ std::uint64_t CatalogDb::configureScope(const std::string &serverUrl,
                           : ScopeCommandKind::InvalidIdentity,
             epoch, scopeKey});
     }
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "configure_scope_requested epoch=%llu scope_hash=%s identity=%s",
+                  static_cast<unsigned long long>(epoch),
+                  scopeKey.empty() ? "none" : scopeKey.c_str(),
+                  validIdentity ? "valid" : "invalid");
+    catalogDiagnostic(line);
     m_wake.notify_one();
     return epoch;
 }
@@ -1328,8 +1454,18 @@ std::size_t CatalogDb::priorityIndex(CatalogDbPriority priority)
 void CatalogDb::processScopeCommand(ScopeCommand command)
 {
     {
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "scope_command_started epoch=%llu scope_hash=%s kind=%u",
+                      static_cast<unsigned long long>(command.epoch),
+                      command.scopeKey.empty() ? "none" : command.scopeKey.c_str(),
+                      static_cast<unsigned>(command.kind));
+        catalogDiagnostic(line);
+    }
+    {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch != m_requestedEpoch) {
+            catalogDiagnostic("scope_command_skipped reason=stale_epoch");
             m_idle.notify_all();
             return;
         }
@@ -1362,12 +1498,23 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
                 ? CatalogDbErrorCategory::InvalidIdentity
                 : CatalogDbErrorCategory::None;
         }
+        catalogFinalDiagnostic(
+            false,
+            command.kind == ScopeCommandKind::InvalidIdentity
+                ? CatalogDbScopeStatus::InvalidIdentity
+                : CatalogDbScopeStatus::Unconfigured,
+            command.kind == ScopeCommandKind::InvalidIdentity
+                ? CatalogDbErrorCategory::InvalidIdentity
+                : CatalogDbErrorCategory::None,
+            CatalogDbOpenState::NotAttempted);
         m_idle.notify_all();
         return;
     }
 
     CatalogDbMigrationState migrationState =
         inspectMigrationState(command.scopeKey);
+    const bool migrationNeeded = !migrationState.finalPresent
+        && (migrationState.legacyPresent || migrationState.migratingPresent);
     bool autoMigration = false;
     int failAfterRows = -1;
     bool failValidation = false;
@@ -1386,8 +1533,32 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
             }
         }
     }
+    {
+        char line[512];
+        std::snprintf(line, sizeof(line),
+                      "state epoch=%llu scope_hash=%s db_dir=%s legacy_present=%d final_present=%d migrating_present=%d migration_needed=%d decision=%s(%u) path_error=%d auto_activation=%d",
+                      static_cast<unsigned long long>(command.epoch),
+                      command.scopeKey.c_str(), scopeDirectory(command.scopeKey).c_str(),
+                      migrationState.legacyPresent ? 1 : 0,
+                      migrationState.finalPresent ? 1 : 0,
+                      migrationState.migratingPresent ? 1 : 0,
+                      migrationNeeded ? 1 : 0,
+                      migrationDecisionName(migrationState.decision),
+                      static_cast<unsigned>(migrationState.decision),
+                      migrationState.pathError ? 1 : 0,
+                      autoMigration ? 1 : 0);
+        catalogDiagnostic(line);
+    }
+    if (migrationNeeded && !autoMigration) {
+        catalogDiagnostic("migration_job_skipped reason=auto_activation_disabled");
+    } else if (!migrationNeeded && migrationState.finalPresent) {
+        catalogDiagnostic("migration_job_skipped reason=final_database_present");
+    } else if (!migrationNeeded) {
+        catalogDiagnostic("migration_job_skipped reason=no_legacy_or_migrating_source");
+    }
     if (autoMigration && !migrationState.finalPresent
         && migrationState.legacyPresent) {
+        catalogDiagnostic("migration_job_started");
         const CatalogDbTestResult migration = migrateLegacyCatalogForWorker(
             command.scopeKey, command.epoch, failAfterRows, failValidation);
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -1406,12 +1577,24 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
                     ? CatalogDbErrorCategory::CorruptOrIo : migration.error;
                 m_openState = CatalogDbOpenState::CorruptOrIo;
             }
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "migration_job_completed success=%d error_category=%s(%u) failure_code=%s",
+                          migration.success ? 1 : 0,
+                          errorCategoryName(migration.error),
+                          static_cast<unsigned>(migration.error),
+                          migrationFailureCode(migration.message));
+            catalogDiagnostic(line);
+            catalogFinalDiagnostic(
+                migration.success && m_scopeReady,
+                m_scopeStatus, m_lastError, m_openState);
         }
         m_idle.notify_all();
         return;
     }
     if (autoMigration && !migrationState.finalPresent
         && !migrationState.legacyPresent && migrationState.migratingPresent) {
+        catalogDiagnostic("migration_job_started mode=recovery");
         const std::string migratingPath = catalogPath(command.scopeKey)
             + ".migrating";
         const std::string sidecars[] = {
@@ -1433,9 +1616,14 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
                 m_lastError = CatalogDbErrorCategory::CorruptOrIo;
                 m_openState = CatalogDbOpenState::CorruptOrIo;
             }
+            catalogDiagnostic("migration_job_completed success=0 error_category=corrupt_or_io(6)");
+            catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                                   CatalogDbErrorCategory::CorruptOrIo,
+                                   CatalogDbOpenState::CorruptOrIo);
             m_idle.notify_all();
             return;
         }
+        catalogDiagnostic("migration_job_completed success=1 mode=recovery");
     }
 
     openConnection(command);
@@ -2321,6 +2509,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_lastError = CatalogDbErrorCategory::CorruptOrIo;
             m_openState = CatalogDbOpenState::CorruptOrIo;
         }
+        catalogDiagnostic("sqlite_open_skipped reason=path_error");
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               CatalogDbErrorCategory::CorruptOrIo,
+                               CatalogDbOpenState::CorruptOrIo);
         return false;
     }
     if (!migrationState.finalPresent
@@ -2331,6 +2523,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_lastError = CatalogDbErrorCategory::None;
             m_openState = CatalogDbOpenState::NotAttempted;
         }
+        catalogDiagnostic("sqlite_open_skipped reason=migration_pending");
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::Pending,
+                               CatalogDbErrorCategory::None,
+                               CatalogDbOpenState::NotAttempted);
         return false;
     }
     const std::size_t slash = path.find_last_of('/');
@@ -2342,12 +2538,25 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_lastError = CatalogDbErrorCategory::CorruptOrIo;
             m_openState = CatalogDbOpenState::CorruptOrIo;
         }
+        catalogDiagnostic("sqlite_open_skipped reason=directory_create_failed");
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               CatalogDbErrorCategory::CorruptOrIo,
+                               CatalogDbOpenState::CorruptOrIo);
         return false;
     }
 
+    catalogDiagnostic(std::string("sqlite_open_attempt db_dir=")
+                      + scopeDirectory(command.scopeKey));
     sqlite3 *db = nullptr;
     const int openRc = sqlite3_open_v2(
         path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
+    {
+        char line[128];
+        std::snprintf(line, sizeof(line),
+                      "sqlite_open_returned rc=%d handle=%d", openRc,
+                      db != nullptr ? 1 : 0);
+        catalogDiagnostic(line);
+    }
     if (openRc != SQLITE_OK || !db) {
         if (db) {
             sqlite3_close(db);
@@ -2358,6 +2567,9 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_lastError = CatalogDbErrorCategory::CorruptOrIo;
             m_openState = CatalogDbOpenState::CorruptOrIo;
         }
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               CatalogDbErrorCategory::CorruptOrIo,
+                               CatalogDbOpenState::CorruptOrIo);
         return false;
     }
 
@@ -2374,6 +2586,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_lastError = CatalogDbErrorCategory::CorruptOrIo;
             m_openState = CatalogDbOpenState::CorruptOrIo;
         }
+        catalogDiagnostic("sqlite_open_failed stage=configuration");
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               CatalogDbErrorCategory::CorruptOrIo,
+                               CatalogDbOpenState::CorruptOrIo);
         return false;
     }
 
@@ -2396,6 +2612,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
             m_lastError = CatalogDbErrorCategory::ConfigurationFailed;
         }
+        catalogDiagnostic("sqlite_open_failed stage=configuration_validation");
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               CatalogDbErrorCategory::ConfigurationFailed,
+                               CatalogDbOpenState::NotAttempted);
         return false;
     }
 
@@ -2412,6 +2632,21 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                     ? CatalogDbErrorCategory::UnsupportedVersion
                     : CatalogDbErrorCategory::CorruptOrIo;
         }
+        const CatalogDbErrorCategory errorCategory =
+            openState == CatalogDbOpenState::WrongApplicationId
+                ? CatalogDbErrorCategory::WrongApplicationId
+                : openState == CatalogDbOpenState::UnsupportedVersion
+                    ? CatalogDbErrorCategory::UnsupportedVersion
+                    : CatalogDbErrorCategory::CorruptOrIo;
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "sqlite_open_failed stage=schema error_category=%s(%u) open_state=%s(%u)",
+                      errorCategoryName(errorCategory),
+                      static_cast<unsigned>(errorCategory),
+                      openStateName(openState), static_cast<unsigned>(openState));
+        catalogDiagnostic(line);
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
+                               errorCategory, openState);
         return false;
     }
 
@@ -2431,6 +2666,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         m_lastError = CatalogDbErrorCategory::None;
         m_openState = openState;
     }
+    catalogFinalDiagnostic(true, CatalogDbScopeStatus::Ready,
+                           CatalogDbErrorCategory::None, openState);
     return true;
 }
 

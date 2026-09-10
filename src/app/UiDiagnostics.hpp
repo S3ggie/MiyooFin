@@ -59,6 +59,10 @@ public:
     uint16_t activeWorkerMask() const noexcept
     { return m_activeWorkerMask.load(std::memory_order_relaxed); }
     void event(const char *message);
+    // Queue a caller-supplied, already-redacted diagnostic line for the
+    // persistent watchdog log without performing filesystem I/O on the UI
+    // thread. Call sites must never include private metadata.
+    void log(const std::string &line);
     std::vector<std::string> recentEvents() const;
     static uint64_t monotonicMs();
 private:

@@ -368,7 +368,17 @@ static void testUiDiagnostics()
     const auto events=d.recentEvents();
     CHECK(events.size()==UiDiagnostics::EVENT_CAPACITY && events.front()=="event2");
     { UiDiagnostics::Scope scope("test-fast-scope"); }
+
+    const std::string path = "/tmp/miyoofin-ui-diagnostics-"
+        + std::to_string(static_cast<long long>(getpid())) + ".log";
+    std::remove(path.c_str());
+    d.start(path);
+    d.log("[CatalogDb] diagnostic test line");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    d.stop();
+    const std::string persisted = readTestBytes(path);
+    CHECK(persisted.find("[CatalogDb] diagnostic test line") != std::string::npos);
+    std::remove(path.c_str());
     std::printf("[test] UI diagnostics watchdog/ring OK\n");
 }
-
 

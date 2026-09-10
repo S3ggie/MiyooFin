@@ -82,47 +82,50 @@ void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const Libr
     std::vector<MediaItem> all, shows; std::set<std::string> seen;
     for (const auto &view : snapshot.shows) for (const auto &show : view.items)
         if (!show.id.empty() && seen.insert(show.id).second) all.push_back(show);
-    OfflineCatalogSnapshot catalogSnapshot;
-    const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
-    const bool catalogValid=OfflineCatalog::load(catalog,catalogSnapshot);
     std::map<std::string,MediaItem> old;
     for(const auto&v:previous.shows)for(const auto&i:v.items)old[i.id]=i;
-    for(const auto&s:all){auto it=old.find(s.id);if(!catalogValid||m_forceHierarchyReconcile||changedSeries.count(s.id)||it==old.end()||!LibraryCache::itemEquivalent(it->second,s))shows.push_back(s);}
-    // An authoritative top-level list also provides deletion reconciliation;
-    // this remains background work and never affects download files.
-    OfflineCatalog::reconcileSeries(catalog,all,nullptr);
-    // This function runs from the library fetch worker.  Refresh the reusable
-    // RAM catalog after reconciliation, never from Home's SDL-thread push.
-    if (OfflineCatalog::load(catalog,catalogSnapshot,nullptr)) {
-        std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
-        m_catalogSnapshot=std::move(catalogSnapshot);
-        m_catalogSnapshotReady=true;
+    for(const auto&s:all){auto it=old.find(s.id);if(m_forceHierarchyReconcile||changedSeries.count(s.id)||it==old.end()||!LibraryCache::itemEquivalent(it->second,s))shows.push_back(s);}
+
+    std::uint64_t generation=0;
+    std::shared_ptr<std::atomic_bool> cancellation;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        generation=m_hierarchyGeneration.fetch_add(1)+1;
+        const std::size_t superseded=m_pendingHierarchyShows.size();
+        if (m_catalogGenerationCancellation)
+            m_catalogGenerationCancellation->store(true);
+        cancellation=std::make_shared<std::atomic_bool>(false);
+        m_catalogGenerationCancellation=cancellation;
+        m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
+        m_pendingHierarchyGeneration=generation;
+        m_hierarchyCompleted.store(0);
+        m_hierarchyTotal.store(m_pendingHierarchyShows.size());
+        m_hierarchyActive.store(!m_pendingHierarchyShows.empty());
+        PerformanceTelemetry &telemetry=performanceTelemetry();
+        telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy,
+                                      static_cast<uint32_t>(m_pendingHierarchyShows.size()));
+        telemetry.setWorkerActive(WorkerId::HomeHierarchy, !m_pendingHierarchyShows.empty());
+        if (superseded != 0)
+            telemetry.addWorkerCancelled(WorkerId::HomeHierarchy,
+                                         static_cast<uint32_t>(superseded));
     }
+
+    bool catalogReady=false;
+    if (m_catalogDb) {
+        CatalogDbJobMetadata metadata=m_catalogMetadata;
+        metadata.generation=0;
+        metadata.cancellation=cancellation;
+        const auto result=m_catalogDb->reconcileSeries(all,true,metadata).get();
+        catalogReady=result.success;
+    }
+    m_hierarchyOffline.store(!catalogReady);
+
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-    const std::uint64_t generation=m_hierarchyGeneration.fetch_add(1)+1;
-    const std::size_t superseded=m_pendingHierarchyShows.size();
-    if (m_catalogGenerationCancellation)
-        m_catalogGenerationCancellation->store(true);
-    m_catalogGenerationCancellation =
-        std::make_shared<std::atomic_bool>(false);
-    m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
-    m_pendingHierarchyGeneration=generation;
-    m_hierarchyCompleted.store(0);
-    m_hierarchyTotal.store(m_pendingHierarchyShows.size());
-    m_hierarchyActive.store(!m_pendingHierarchyShows.empty());
-    PerformanceTelemetry &telemetry=performanceTelemetry();
-    telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy,
-                                  static_cast<uint32_t>(m_pendingHierarchyShows.size()));
-    telemetry.setWorkerActive(WorkerId::HomeHierarchy, !m_pendingHierarchyShows.empty());
-    if (superseded != 0)
-        telemetry.addWorkerCancelled(WorkerId::HomeHierarchy,
-                                     static_cast<uint32_t>(superseded));
-    if(m_pendingHierarchyShows.empty()) {
+    if(m_pendingHierarchyShows.empty() && catalogReady) {
         m_syncState.lastSuccessfulMs=wallClockMs();
         if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
         SyncStateStore::save(SyncStateStore::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_syncState);
     }
-    m_hierarchyOffline.store(false);
     m_hierarchyWake.notify_one();
 }
 
@@ -133,7 +136,6 @@ void HomeScreen::hierarchyWorker()
         std::uint64_t generation=0;
         std::shared_ptr<std::atomic_bool> catalogCancellation;
         { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; catalogCancellation=m_catalogGenerationCancellation; performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
-        const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
         for (std::size_t showIndex=0; showIndex<shows.size(); ++showIndex) {
             const auto &series=shows[showIndex];
             { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
@@ -150,8 +152,8 @@ void HomeScreen::hierarchyWorker()
                 episodesBySeason[season.id]=std::move(episodes);
             }
             // A show is only complete after every discovered level has been
-            // fetched and atomically merged into the offline catalog.
-            if (complete && OfflineCatalog::storeDiscoveredHierarchy(catalog,series,seasons,episodesBySeason,true,nullptr)) {
+            // fetched and atomically merged into CatalogDb.
+            if (complete) {
                 // The same complete subtree is submitted to CatalogDb on this
                 // worker. The CatalogDb worker owns validation and the single
                 // series transaction; the UI thread never waits for it.
@@ -172,14 +174,6 @@ void HomeScreen::hierarchyWorker()
                             WorkerId::HomeHierarchy);
                     }
                     continue;
-                }
-                // Reload on this background worker so the RAM snapshot exactly
-                // follows catalog merge semantics and is ready for handoff.
-                OfflineCatalogSnapshot snapshot;
-                if (OfflineCatalog::load(catalog,snapshot,nullptr)) {
-                    std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);
-                    m_catalogSnapshot=std::move(snapshot);
-                    m_catalogSnapshotReady=true;
                 }
                 if (generation==m_hierarchyGeneration.load()) {
                     m_hierarchyCompleted.fetch_add(1);

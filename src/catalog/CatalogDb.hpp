@@ -197,8 +197,9 @@ struct CatalogDbReconcileResult {
     std::size_t seriesDeleted = 0;
 };
 
-/// App-scoped owner for CatalogDb work. Database behavior is added by later
-/// migration tasks; this shell only proves the worker lifecycle.
+/// App-scoped owner for worker-side scoped catalog bootstrap, population, and
+/// reconciliation. Callers provide already-fetched metadata; the worker owns
+/// all SQLite operations and scope publication.
 class CatalogDb {
 public:
     static constexpr std::size_t kMaxPendingJobs = 32;
@@ -254,6 +255,13 @@ public:
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         const CatalogDbJobMetadata &metadata = {});
+    /// Stage a Jellyfin subtree without claiming that it is complete. Partial
+    /// responses never trigger authoritative child deletion or completion.
+    std::future<CatalogDbHierarchyWriteResult> stageSeriesHierarchy(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, std::int64_t refreshMs,
+        bool complete, const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbHierarchyWriteResult>
     upsertSeriesHierarchyForTest(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
@@ -316,7 +324,7 @@ private:
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
-        const CatalogDbJobMetadata &metadata, int failAfterRows,
+        bool complete, const CatalogDbJobMetadata &metadata, int failAfterRows,
         int cancelAfterRows);
     std::future<CatalogDbReconcileResult> enqueueReconcile(
         const std::vector<MediaItem> &series, bool authoritative,

@@ -26,8 +26,19 @@ Replace EpisodeBrowser's whole-catalog episode load/store with async indexed sea
 ## Allowed Files
 
 - `src/ui/screens/EpisodeBrowserScreen.*` and narrow related EpisodeBrowser units
+- `src/ui/screens/SeriesScreen.cpp` — only the existing
+  `EpisodeBrowserScreen` construction callsite needed to propagate the
+  app-scoped `CatalogDb`.
+- `src/ui/screens/HomeScreenNavigation.cpp` — only the existing direct
+  `EpisodeBrowserScreen` construction callsite, which must receive the same
+  service and scope metadata.
 - CatalogDb public API
-- Focused tests
+- `tests/cases/test_cache_offline.inc` — focused EpisodeBrowser/Series wiring
+  coverage.
+
+The wiring additions must not create another `CatalogDb` instance or move
+ownership. They are limited to constructor propagation and must not perform
+SQLite work on the SDL/UI thread.
 
 ## Forbidden Scope
 

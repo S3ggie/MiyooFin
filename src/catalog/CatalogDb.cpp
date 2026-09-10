@@ -1547,6 +1547,21 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
         catalogDiagnostic(std::string("bootstrap_job_completed success=")
                           + (opened ? "1" : "0"));
     }
+    if (opened) {
+        CatalogDbJobMetadata metadata;
+        metadata.scopeEpoch = command.epoch;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            metadata.generation = m_generation;
+        }
+        // Queue this after the connection is ready so a valid app scope can
+        // reconstruct complete-download hierarchy without blocking startup.
+        // The future is intentionally unobserved: the worker owns the result
+        // and scope/epoch validation still suppresses stale work.
+        auto offlineRebuild = enqueueOfflineRebuild("downloads", metadata);
+        (void)offlineRebuild;
+        catalogDiagnostic("offline_rebuild_scheduled source=download_metadata");
+    }
     m_idle.notify_all();
 }
 

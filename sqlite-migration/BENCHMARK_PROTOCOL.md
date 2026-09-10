@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Choose SQLite durability/performance settings and prove the migration improves real hardware behavior.
+Choose SQLite durability/performance settings and prove fresh SQLite bootstrap, reconciliation, and hierarchy operation are practical on real hardware.
 
 Hardware evidence is mandatory for Tasks 18, 20, 27, and 33.
 
@@ -19,7 +19,7 @@ firmware version if available
 SD-card make/model/capacity if known
 free storage before run
 database size
-legacy catalog size
+legacy `catalog.v1` artifact size if present (record-only; never imported)
 library counts: series/seasons/episodes/movies as applicable
 network route/server condition
 telemetry enabled/disabled state
@@ -131,9 +131,13 @@ Repeated async:
 
 Measure DB queue latency and UI stalls.
 
-### W7 — migration
+### W7 — fresh bootstrap and initial population
 
-Import a copy of the real legacy catalog into a fresh temporary DB.
+- Start with no final SQLite DB in an isolated scope.
+- Create/promote a fresh empty DB through the normal worker path.
+- With network available, reconcile a controlled current Jellyfin hierarchy.
+- With network unavailable, reconstruct the minimum hierarchy needed for complete DownloadStore items.
+- Confirm `catalog.v1`, if present, is not read or modified by the bootstrap path.
 
 ### W8 — restart/recovery
 
@@ -156,7 +160,7 @@ Two levels:
 
 ### Level 1 — mandatory process interruption
 
-Use process termination during controlled writes/imports. Confirm restart/recovery and checkpoint behavior.
+Use process termination during controlled bootstrap/reconciliation writes. Confirm restart/recovery and checkpoint behavior.
 
 ### Level 2 — controlled power interruption
 
@@ -168,7 +172,7 @@ For finalist profiles, interrupt at randomized points during:
 
 - active series transaction;
 - generation finalization;
-- migration;
+- fresh DB bootstrap/rebuild and initial reconciliation;
 - WAL checkpoint if applicable.
 
 After reboot:
@@ -217,7 +221,7 @@ Required metrics:
 - download planning;
 - offline browsing and local playback functional checks.
 
-The migration is not considered successful merely because SQL transactions are individually faster.
+The hierarchy change is not considered successful merely because SQL transactions are individually faster.
 
 ## Home/library A/B at CP-G
 
@@ -242,7 +246,7 @@ catalog.sqlite3
 catalog.sqlite3-journal
 catalog.sqlite3-wal
 catalog.sqlite3-shm
-legacy catalog/snapshot
+legacy `catalog.v1` / LibraryCache snapshot artifacts
 ```
 
 only in benchmark tooling/logs. Do not emit private paths or media IDs into MFT telemetry.

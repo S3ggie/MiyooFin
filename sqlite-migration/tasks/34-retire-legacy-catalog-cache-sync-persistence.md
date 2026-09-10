@@ -17,7 +17,7 @@ For this numbered SQLite roadmap task, the user's roadmap instruction overrides 
 
 ## Goal
 
-Only after every parity and hardware gate, remove obsolete OfflineCatalog, LibraryCache persistence, SyncStateStore persistence, and legacy runtime file writes while retaining deliberate upgrade compatibility policy.
+Only after every reconciliation/offline parity and hardware gate, remove obsolete OfflineCatalog, LibraryCache persistence, SyncStateStore persistence, and legacy runtime file writes while retaining deliberate rollback/compatibility policy.
 
 ## Depends On
 
@@ -50,13 +50,13 @@ git status --short
 ```
 
 - Code-search every legacy API call.
-- Verify fresh-install, migrated-install, offline, and corruption-recovery tests exist.
-- Confirm human-approved compatibility window: reader/importer may need to remain even if writers/classes are retired.
+- Verify fresh-install, fresh-bootstrap, offline-with-downloads, and corruption-recovery tests exist.
+- Confirm the human-approved rollback/compatibility window before removing retained legacy artifacts.
 
 ## Exact implementation requirements
 
 1. Remove legacy production writers and obsolete whole-file serializers only after no runtime dependency remains.
-2. Keep the minimum legacy read/import compatibility necessary for supported upgrade path; if retirement means keeping a small dedicated importer, do so rather than deleting upgrade support prematurely.
+2. Keep only the minimum explicitly approved rollback/compatibility handling; no `catalog.v1` importer is required by the SQLite bootstrap path.
 3. Remove obsolete build entries/tests only when replaced.
 4. Ensure startup no longer creates snapshot.v1/catalog.v1/sync-state.v1.
 5. Do not automatically delete existing user legacy files unless a separately approved cleanup policy says when it is safe.
@@ -73,7 +73,7 @@ git status --short
 ## Focused tests
 
 - Fresh install.
-- Legacy upgrade.
+- Fresh bootstrap after upgrade.
 - Already-SQLite install.
 - Unsupported future schema.
 - Corrupt DB rebuild.

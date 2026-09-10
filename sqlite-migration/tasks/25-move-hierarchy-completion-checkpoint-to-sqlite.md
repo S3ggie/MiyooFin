@@ -73,7 +73,7 @@ git status --short
 - Generation superseded no advance.
 - Checkpoint SQL failure leaves old value.
 - Crash after data commit before checkpoint -> old checkpoint.
-- Legacy sync import one-time semantics.
+- Existing sync-state compatibility seed one-time semantics.
 
 ## Complete validation commands
 

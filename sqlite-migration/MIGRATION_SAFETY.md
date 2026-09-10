@@ -1,28 +1,51 @@
-# Migration Safety and Recovery
+# Fresh SQLite Bootstrap and Recovery Safety
 
-## Scope rule
+## Ownership and scope
 
-Every migration operation belongs to one CatalogDb scope epoch.
+Every bootstrap, rebuild, reconciliation, and recovery operation belongs to one
+CatalogDb scope epoch.
 
-Before promotion/readiness, the worker re-checks that the job epoch is still the latest requested epoch. A superseded scope may finish rollback/cleanup, but it may not publish Ready or data to the new account/server.
+Authoritative sources are deliberately separate:
+
+- Jellyfin is authoritative for server metadata and hierarchy when network data
+  is available.
+- DownloadStore/DownloadManager are authoritative for downloaded media, durable
+  download metadata, and local playability.
+- Playback/download state remains separately authoritative.
+- ImageCache remains separate from CatalogDb.
+- `cache/offline/<scope>/catalog.v1` is reconstructible metadata cache state. It
+  is not a SQLite bootstrap input or production authority.
+
+Before promotion/readiness, the worker re-checks that the job epoch is still the
+latest requested epoch. A superseded scope may finish rollback/cleanup, but it
+may not publish Ready or data to the new account/server.
 
 ## Activation rule
 
-After Task 17, migration is invoked automatically by the normal worker-side `configureScope(serverUrl,userId)` path for a valid saved/login session.
+After Task 17, fresh database activation is invoked automatically by the normal
+worker-side `configureScope(serverUrl,userId)` path for a valid saved/login
+session. It is never invoked on the SDL/UI thread and does not require a hidden
+diagnostic command.
 
-It is never invoked on the SDL/UI thread and does not require a hidden diagnostic command.
+For a valid current scope:
 
-Before later consumer cutovers, the migrated SQLite DB is validated/shadow storage; legacy production reads remain unchanged.
+1. If a supported final `catalog.sqlite3` exists, open it and allow SQLite's
+   normal journal/WAL recovery.
+2. If no final DB exists, create a fresh empty schema database using the
+   disposable `.migrating` file, validate it, and promote it atomically.
+3. If network metadata is available, reconcile current Jellyfin hierarchy in
+   bounded complete-subtree transactions.
+4. If the first launch is offline, seed only the minimum hierarchy needed to
+   browse complete DownloadStore items from authoritative durable download
+   metadata.
+5. Keep `hierarchy_state.complete=0` until a successful Jellyfin reconciliation
+   completes the relevant hierarchy generation.
 
-## Core rule
+The bootstrap path must never parse, import, rewrite, or delete `catalog.v1`.
 
-The legacy OfflineCatalog is an immutable migration source.
-
-Migration never edits:
-
-```text
-cache/offline/<scope>/catalog.v1
-```
+Before hierarchy consumer cutover, existing legacy readers may continue serving
+the UI as a compatibility path. After the hierarchy cutover, `catalog.v1` may
+remain untouched only as a rollback artifact until final retirement.
 
 ## File states
 
@@ -32,105 +55,89 @@ Authoritative new DB:
 cache/library/<scope>/catalog.sqlite3
 ```
 
-Temporary import:
+Temporary fresh bootstrap/rebuild:
 
 ```text
 cache/library/<scope>/catalog.sqlite3.migrating
 ```
 
-A `.migrating` file is never opened as the production database.
+A `.migrating` file is never opened as the production database and never
+contains an import from `catalog.v1`.
 
-## Migration state machine
+## Fresh bootstrap state machine
 
 ```text
-No final DB
-  │
-  ├─ no legacy catalog -> create empty SQLite DB
-  │
-  └─ legacy catalog exists
-         ↓
-     remove stale .migrating only after recognizing it as non-authoritative
-         ↓
-     create fresh .migrating
-         ↓
-     create schema
-         ↓
-     import
-         ↓
-     semantic validation
-         ↓
-     PRAGMA quick_check / integrity policy
-         ↓
-     PRAGMA foreign_key_check
-         ↓
-     close DB cleanly
-         ↓
-     ensure no live journal/WAL family remains
-         ↓
-     fsync completed file
-         ↓
-     rename .migrating -> catalog.sqlite3
-         ↓
-     reopen final DB and verify metadata/version
+Scope configured
+      │
+      ├─ supported final DB exists
+      │       ↓
+      │   open/recover final DB
+      │
+      └─ final DB absent
+              ↓
+          inspect disposable temp DB family
+              ↓
+          discard incomplete temp state
+              ↓
+          create fresh .migrating schema DB
+              ↓
+          structural/schema validation
+              ↓
+          close, fsync, rename to catalog.sqlite3
+              ↓
+          reopen final DB and verify metadata/version
+              ↓
+          Jellyfin reconciliation when online
+          or DownloadStore offline reconstruction
 ```
 
-The legacy catalog remains untouched throughout.
+If both final and `.migrating` exist, final wins. The temp file is a cleanup
+candidate only after the final DB has been opened and validated. Never replace a
+valid final DB with a temp file.
+
+## Interrupted fresh bootstrap/rebuild
+
+If `.migrating` exists but the final DB does not, treat the temp database as
+disposable incomplete state. Close any recoverable connection, remove only that
+temporary DB family, and rebuild a fresh empty database. No legacy source is
+needed for recovery.
+
+If a process is killed during Jellyfin reconciliation, SQLite recovery must leave
+the last committed subtree authoritative. Retry the incomplete generation from
+Jellyfin; do not advance the hierarchy checkpoint until the complete generation
+has succeeded.
+
+Controlled real power interruption requires explicit human approval and
+protected/disposable media.
 
 ## Existing final DB
 
 If `catalog.sqlite3` exists:
 
-- validate application ID;
-- inspect user_version;
+- validate application ID and supported `user_version`;
 - let SQLite perform normal journal/WAL recovery;
-- do not re-import over it automatically;
-- do not remove sidecar journal/WAL files before opening.
+- do not pre-delete journal, WAL, or SHM sidecars before opening;
+- if valid and supported, use it without consulting `catalog.v1`;
+- do not replace it with a fresh DB merely because `catalog.v1` exists.
 
-If final DB is valid and supported, it is authoritative.
+If the final DB is corrupt or unsupported, follow the corruption policy below.
 
-If it is corrupt, follow corruption policy below.
+## Semantic validation
 
-## Interrupted migration
+Bootstrap validation covers:
 
-At next startup, if:
-
-```text
-catalog.sqlite3.migrating
-```
-
-exists but final DB does not, treat `.migrating` as disposable incomplete state and rebuild it from the untouched legacy source.
-
-If both exist, final DB wins; do not replace it with `.migrating`.
-
-## Atomicity limits
-
-`rename()` is necessary but do not assume desktop-ext4 semantics on the FAT32 SD card.
-
-Migration hardware validation must include:
-
-- interruption before import commit;
-- interruption after import commit but before rename;
-- restart after final rename;
-- process kill during migration;
-- controlled real power interruption only with explicit human approval and protected/backup media.
-
-## Semantic validation before switch
-
-Minimum checks:
-
-- row counts by kind;
-- every legacy series ID present;
-- season membership/order;
-- episode membership/order;
-- scalar `MediaItem` equality;
-- ordered genres;
-- image tags;
-- no FK violations;
 - schema/application ID/version;
-- hierarchy completeness;
-- DB reopen succeeds.
+- required pragmas and foreign keys;
+- `PRAGMA quick_check` and `PRAGMA foreign_key_check`;
+- final DB reopen;
+- current Jellyfin counts/order/fields for the response being reconciled;
+- DownloadStore-backed offline hierarchy visibility and complete-download
+  playability;
+- `hierarchy_state.complete=0` before successful full Jellyfin reconciliation;
+- checkpoint advancement only after a complete committed generation.
 
-`quick_check` alone is insufficient for semantic parity.
+There is no required full-catalog comparison against `catalog.v1`, and no
+duplicate-ID canonicalization rule for legacy cache rows.
 
 ## Corruption handling
 
@@ -144,15 +151,16 @@ catalog.sqlite3-wal
 catalog.sqlite3-shm
 ```
 
-If open/query reports corruption/not-a-database or validation fails:
+If open/query reports corruption, not-a-database, or validation failure:
 
-1. close DB;
+1. close the DB;
 2. record safe error category/result codes;
 3. quarantine the DB family under a non-authoritative name if possible;
-4. do not touch downloaded media;
-5. create fresh catalog DB;
+4. do not touch downloaded media, manifests, playback state, or `catalog.v1`;
+5. create a fresh empty catalog DB;
 6. rebuild from Jellyfin when online;
-7. keep download metadata as offline fallback.
+7. reconstruct the minimum downloaded hierarchy from DownloadStore metadata when
+   offline.
 
 Do not implement on-device B-tree salvage.
 
@@ -175,14 +183,16 @@ If `user_version` is newer than the application supports:
 
 - do not modify it;
 - fail catalog open safely;
-- preserve downloads/session files;
+- preserve downloads/session/files/rollback artifacts;
 - report incompatibility.
 
-## LibraryCache migration later
+## LibraryCache/Home migration later
 
-The LibraryCache/Home migration repeats the same principles:
+The LibraryCache/Home phase remains separate from the hierarchy bootstrap:
 
-- import old snapshot read-only;
-- compare old/new projections;
+- Tasks 28–30 handle schema-v2 LibraryCache snapshot seeding and projection
+  parity; this is not `catalog.v1` import;
 - do not retire `snapshot.v1` until CP-G;
-- no permanent dual-write.
+- no permanent dual-write;
+- do not delete `catalog.v1` or other rollback artifacts until the final approved
+  retirement task.

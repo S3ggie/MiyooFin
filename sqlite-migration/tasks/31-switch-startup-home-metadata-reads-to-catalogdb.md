@@ -55,9 +55,9 @@ git status --short
 1. CatalogDb worker provides async cached library snapshot/projection for intermediate parity.
 2. Home loading screen/presentation must not block waiting for DB.
 3. Network library refresh persists authoritative view/Home metadata in one bounded catalog job/transaction before publishing success state.
-4. Stop writing LibraryCache snapshot after successful cutover; retain it read-only as migration source until Task 34.
+4. Stop writing the LibraryCache snapshot after successful cutover; retain it read-only only for supported rollback/compatibility handling until Task 34.
 5. Network failure preserves last valid SQL cached presentation.
-6. Stale-generation migration semantics still force refresh as current behavior requires.
+6. Stale-generation snapshot semantics still force refresh as current behavior requires.
 7. Checkpoint/hierarchy behavior remains unchanged.
 
 ## Invariants
@@ -75,7 +75,8 @@ git status --short
 - Network failure with cache.
 - Fresh remote refresh.
 - Offline/manual-offline mode.
-- Old legacy snapshot migration path.
+- Fresh DB with no snapshot.
+- Network failure with DownloadStore-backed offline fallback.
 
 ## Complete validation commands
 

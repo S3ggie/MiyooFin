@@ -1,4 +1,4 @@
-# Execution Rules — v2
+# Execution Rules — v3
 
 These rules apply to every numbered file under `sqlite-migration/tasks/`.
 
@@ -101,13 +101,15 @@ Initial architecture:
 
 Do not add reader connections without a separately approved evidence-driven architecture change.
 
-## 8. Migration safety
+## 8. Fresh-database migration safety
 
-Legacy `catalog.v1` is immutable migration input.
+`catalog.v1` is reconstructible metadata cache state, not migration input or authoritative user data. The CatalogDb bootstrap path must not parse, import, rewrite, or delete it. During rollout it may remain untouched as a rollback artifact.
 
-Normal migration activation, once Task 17 lands, is the worker-side `configureScope` path. It is not a hidden diagnostic.
+Normal fresh-database activation, once Task 17 lands, is the worker-side `configureScope` path. It is not a hidden diagnostic.
 
-Before consumer cutover, successful SQLite import/open does not by itself make SQLite the production read authority.
+If no valid final DB exists, create a fresh empty DB through the disposable temporary-file/rebuild path. Populate it from current Jellyfin metadata when network is available, or from the minimum authoritative DownloadStore metadata needed to browse complete downloads when offline. Do not require old-vs-new legacy parity.
+
+Before consumer cutover, successful SQLite bootstrap/open does not by itself make SQLite the production read authority.
 
 No production dual-write.
 

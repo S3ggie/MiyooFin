@@ -1,4 +1,4 @@
-# SQLite Migration Status — v2
+# SQLite Migration Status — v3
 
 Initial state: **ROADMAP APPROVED; IMPLEMENTATION NOT STARTED**
 
@@ -26,13 +26,13 @@ States:
 - [ ] 11 Atomic series-subtree UPSERT
 - [ ] 12 Authoritative hierarchy reconciliation
 - [ ] 13 CatalogDb telemetry via explicit MFT v2
-- [ ] 14 Scoped legacy migration discovery/staging
-- [ ] 15 Scoped legacy import validation/atomic promotion
-- [ ] 16 Legacy-vs-SQLite parity harness
-- [H] **CP-B — Migration/parity**
-- [ ] 17 Automatic migration activation on normal valid scope configuration
-- [ ] 18 Real Miyoo normal-path migration validation
-- [H] **CP-C — Real-device migration**
+- [ ] 14 Fresh scoped SQLite bootstrap/rebuild staging
+- [ ] 15 Jellyfin-driven initial population/reconciliation
+- [ ] 16 DownloadStore-driven offline hierarchy reconstruction
+- [H] **CP-B — Fresh bootstrap/reconciliation/offline-download behavior**
+- [ ] 17 Automatic fresh-database activation on normal valid scope configuration
+- [ ] 18 Real Miyoo fresh-bootstrap validation
+- [H] **CP-C — Real-device fresh bootstrap**
 - [ ] 19 Journal benchmark harness
 - [ ] 20 Real Miyoo journal/synchronous benchmark + decision
 - [H] **CP-D — Journal benchmark**
@@ -46,7 +46,7 @@ States:
 - [ ] 27 Hierarchy-only SQLite hardware benchmark
 - [H] **CP-F — Hierarchy-only hardware benchmark**
 - [ ] 28 Schema v2 LibraryCache/Home metadata
-- [ ] 29 LibraryCache legacy importer
+- [ ] 29 LibraryCache snapshot seed
 - [ ] 30 LibraryCache/Home parity harness
 - [ ] 31 Switch startup/Home metadata reads to CatalogDb
 - [ ] 32 Lazy indexed Home reads/paging

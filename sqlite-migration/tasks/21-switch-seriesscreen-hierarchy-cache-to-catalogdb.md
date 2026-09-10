@@ -27,8 +27,16 @@ Replace SeriesScreen's whole OfflineCatalog load/store with asynchronous Catalog
 ## Allowed Files
 
 - `src/ui/screens/SeriesScreen.*`
+- `src/ui/screens/HomeScreenNavigation.cpp` — only the existing
+  `SeriesScreen` construction callsites needed to pass the app-scoped
+  `CatalogDb` service already owned by `HomeScreen`.
 - CatalogDb public job API
-- Focused Series tests
+- `tests/cases/test_cache_offline.inc` — focused SeriesScreen/navigation
+  coverage for the propagated service and asynchronous behavior.
+
+The wiring change must not create another `CatalogDb` instance or move service
+ownership. `HomeScreenNavigation.cpp` may only propagate the existing service;
+it must not perform SQLite work or broaden the consumer cutover.
 
 ## Forbidden Scope
 

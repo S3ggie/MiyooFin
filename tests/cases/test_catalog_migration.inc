@@ -447,3 +447,53 @@ static void testCatalogDbOfflineDownloadReconstruction()
     ::rmdir(root.c_str());
     removeCatalogMigrationTestPaths(paths);
 }
+
+static void testCatalogDbScopeActivationSchedulesOfflineRebuild()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-scope-activation-" + suffix + ".example";
+    const std::string user = "scope-activation-user";
+    const std::string root = "downloads";
+    DownloadStore store(root);
+    const std::string scope = store.scopeKey(url, user);
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    DownloadItem episode;
+    episode.itemId = "__task17_activation_episode__";
+    episode.itemType = "episode";
+    episode.title = "Activation Episode";
+    episode.seriesId = "__task17_activation_series__";
+    episode.seriesName = "Activation Series";
+    episode.seasonId = "__task17_activation_season__";
+    episode.seasonName = "Activation Season";
+    episode.seasonNumber = 1;
+    episode.episodeNumber = 2;
+    episode.runtimeTicks = 1000;
+    episode.expectedSize = 1;
+    episode.state = DownloadState::Complete;
+    CHECK(store.saveManifest(scope, episode));
+    CHECK(store.saveIndex(scope, {episode}));
+
+    {
+        CatalogDb db;
+        CHECK(db.configureScope(url, user) != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db.scopeState();
+        CHECK(state.ready);
+        const auto seasons = db.getSeasons(episode.seriesId).get();
+        const auto episodes = db.getEpisodes(episode.seasonId).get();
+        CHECK(seasons.success && seasons.items.size() == 1
+              && seasons.items[0].id == episode.seasonId);
+        CHECK(episodes.success && episodes.items.size() == 1
+              && episodes.items[0].id == episode.itemId);
+    }
+
+    store.removeItem(scope, episode.itemId);
+    std::remove((store.scopePath(scope) + "/index.v1").c_str());
+    ::rmdir((store.scopePath(scope) + "/items").c_str());
+    ::rmdir(store.scopePath(scope).c_str());
+    removeCatalogMigrationTestPaths(paths);
+}

@@ -23,7 +23,11 @@ playability of complete downloads through DownloadStore metadata.
 ## Allowed Files
 
 - `docs/sqlite-migration-benchmark.md` — factual evidence for the exact tested commit
-- No application/source changes in this hardware-validation task
+- `src/catalog/CatalogDb.cpp` — only minimal, non-sensitive fresh-bootstrap
+  lifecycle diagnostics; no behavior, schema, or authority changes
+- `tests/cases/test_catalog_migration.inc` — focused coverage for the lifecycle
+  diagnostics
+- No other application/source changes in this hardware-validation task
 - If a code fix is needed, stop and create a separate reviewed patch before retrying
 
 ## Forbidden Scope
@@ -43,7 +47,12 @@ playability of complete downloads through DownloadStore metadata.
    normal menu launches unchanged:
    `MIYOOFIN_TELEMETRY=1 ./launch.sh`
 3. Verify fresh `.migrating` creation/lifecycle, final DB promotion, schema,
-   `quick_check`, `foreign_key_check`, and clean reopen.
+   `quick_check`, `foreign_key_check`, and clean reopen. The lifecycle proof
+   must use the persistent redacted CatalogDb diagnostics: temporary bootstrap
+   creation begins, temporary finalization succeeds (or emits a finalization
+   failure), and the final database is ready with no stale `.migrating` family.
+   Filesystem polling alone is not acceptance evidence for this transient
+   lifecycle.
 4. With network available, verify current Jellyfin hierarchy population and that
    completion remains false until the authoritative generation commits.
 5. With network unavailable, verify complete DownloadStore items remain browsable
@@ -61,6 +70,9 @@ playability of complete downloads through DownloadStore metadata.
 - DownloadStore remains local media/download authority.
 - `catalog.v1` remains untouched and unused by bootstrap.
 - No partial DB becomes authoritative.
+- Bootstrap acceptance proves the ordered state transition:
+  `fresh bootstrap -> temporary DB path used -> validation/finalization succeeds
+  -> final catalog.sqlite3 exists -> no stale .migrating remains`.
 
 ## Focused tests
 

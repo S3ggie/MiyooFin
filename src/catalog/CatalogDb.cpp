@@ -3010,6 +3010,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         error = "could not create catalog database directory";
         return false;
     }
+    catalogDiagnostic("bootstrap_temp_open_started");
     sqlite3 *temporary = nullptr;
     const int openRc = sqlite3_open_v2(
         temporaryPath.c_str(), &temporary,
@@ -3018,9 +3019,14 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         if (temporary) {
             sqlite3_close(temporary);
         }
+        char line[96];
+        std::snprintf(line, sizeof(line),
+                      "bootstrap_temp_create_failed rc=%d", openRc);
+        catalogDiagnostic(line);
         error = "could not open temporary catalog database";
         return false;
     }
+    catalogDiagnostic("bootstrap_temp_created");
     sqlite3_extended_result_codes(temporary, 1);
     const auto closeTemporary = [&] {
         if (temporary) {
@@ -3125,6 +3131,11 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         return removeTemporaryFamily();
     }
     if (::rename(temporaryPath.c_str(), finalPath.c_str()) != 0) {
+        const int renameError = errno;
+        char line[128];
+        std::snprintf(line, sizeof(line),
+                      "bootstrap_temp_finalize_failed errno=%d", renameError);
+        catalogDiagnostic(line);
         error = "fresh catalog promotion failed";
         removeTemporaryFamily();
         return false;
@@ -3135,6 +3146,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         ::fsync(directoryFd);
         ::close(directoryFd);
     }
+    catalogDiagnostic("bootstrap_temp_finalized final_present=1");
     return true;
 }
 

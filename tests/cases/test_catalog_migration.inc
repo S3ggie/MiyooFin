@@ -79,6 +79,10 @@ static void testCatalogDbFreshBootstrapPathStates()
     const std::string freshUser = "fresh-bootstrap-user";
     const auto fresh = catalogMigrationTestPaths(freshUrl, freshUser);
     removeCatalogMigrationTestPaths(fresh);
+    const std::string diagnosticPath = "/tmp/miyoofin-catalog-bootstrap-"
+        + suffix + ".log";
+    std::remove(diagnosticPath.c_str());
+    uiDiagnostics().start(diagnosticPath);
     {
         CatalogDb db;
         const auto epoch = db.configureScope(freshUrl, freshUser);
@@ -94,6 +98,20 @@ static void testCatalogDbFreshBootstrapPathStates()
               && schema.applicationId == 0x4D59464E
               && schema.userVersion == 1);
     }
+    uiDiagnostics().stop();
+    const std::string diagnostics = readTestBytes(diagnosticPath);
+    const auto temporaryOpenStarted = diagnostics.find(
+        "[CatalogDb] bootstrap_temp_open_started");
+    const auto temporaryCreated = diagnostics.find(
+        "[CatalogDb] bootstrap_temp_created");
+    const auto temporaryFinalized = diagnostics.find(
+        "[CatalogDb] bootstrap_temp_finalized final_present=1");
+    CHECK(temporaryOpenStarted != std::string::npos);
+    CHECK(temporaryCreated != std::string::npos);
+    CHECK(temporaryFinalized != std::string::npos);
+    CHECK(temporaryOpenStarted < temporaryCreated);
+    CHECK(temporaryCreated < temporaryFinalized);
+    std::remove(diagnosticPath.c_str());
     removeCatalogMigrationTestPaths(fresh);
 
     const std::string legacyUrl =

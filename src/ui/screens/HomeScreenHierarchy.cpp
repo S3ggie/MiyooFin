@@ -12,6 +12,30 @@ namespace miyoofin {
 
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
+bool HomeScreen::publishHierarchyCheckpoint(std::uint64_t generation)
+{
+    if (!m_catalogDb || generation != m_hierarchyGeneration.load())
+        return false;
+    SyncState next=m_syncState;
+    next.lastSuccessfulMs=wallClockMs();
+    if (m_forceHierarchyReconcile)
+        next.lastReconcileMs=next.lastSuccessfulMs;
+    CatalogDbJobMetadata metadata=m_catalogMetadata;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        if (generation != m_hierarchyGeneration.load())
+            return false;
+        metadata.cancellation=m_catalogGenerationCancellation;
+    }
+    const auto result=m_catalogDb->writeSyncState(
+        next.lastSuccessfulMs,next.lastReconcileMs,generation,metadata).get();
+    if (!result.success || generation != m_hierarchyGeneration.load())
+        return false;
+    m_syncState=next;
+    m_forceHierarchyReconcile=false;
+    return true;
+}
+
 std::vector<MediaItem> HomeScreen::cachedSeasonsForSeries(const std::string &seriesId) const
 {
     std::vector<MediaItem> seasons;
@@ -120,12 +144,13 @@ void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const Libr
     }
     m_hierarchyOffline.store(!catalogReady);
 
-    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-    if(m_pendingHierarchyShows.empty() && catalogReady) {
-        m_syncState.lastSuccessfulMs=wallClockMs();
-        if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
-        SyncStateStore::save(SyncStateStore::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_syncState);
+    bool noPending=false;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        noPending=m_pendingHierarchyShows.empty();
     }
+    if(noPending && catalogReady && !publishHierarchyCheckpoint(generation))
+        m_hierarchyOffline.store(true);
     m_hierarchyWake.notify_one();
 }
 
@@ -196,10 +221,8 @@ void HomeScreen::hierarchyWorker()
             // never merely that the metadata request happened.  Failures keep
             // the old checkpoint so the next online attempt is conservative.
             if (!m_hierarchyOffline.load() && m_hierarchyCompleted.load()==m_hierarchyTotal.load()) {
-                m_syncState.lastSuccessfulMs=wallClockMs();
-                if(m_forceHierarchyReconcile)m_syncState.lastReconcileMs=m_syncState.lastSuccessfulMs;
-                SyncStateStore::save(SyncStateStore::path("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),m_syncState);
-                m_forceHierarchyReconcile=false;
+                if (!publishHierarchyCheckpoint(generation))
+                    m_hierarchyOffline.store(true);
             }
         }
     }

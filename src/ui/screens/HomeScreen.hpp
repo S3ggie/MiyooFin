@@ -232,6 +232,7 @@ private:
     void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
                              const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
+    bool publishHierarchyCheckpoint(std::uint64_t generation);
     std::future<CatalogDbHierarchyWriteResult> submitCatalogHierarchy(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,

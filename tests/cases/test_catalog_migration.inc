@@ -371,6 +371,20 @@ static void testHomeCatalogHierarchyIntegration()
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
     CHECK(db->scopeState().ready);
 
+    auto initialSync=db->readSyncState(false,0,0).get();
+    CHECK(initialSync.success && !initialSync.migrated
+          && initialSync.lastSuccessfulMs==0
+          && initialSync.lastReconcileMs==0
+          && initialSync.committedGeneration==0);
+    auto seededSync=db->readSyncState(true,1111,777).get();
+    CHECK(seededSync.success && seededSync.migrated
+          && seededSync.lastSuccessfulMs==1111
+          && seededSync.lastReconcileMs==777);
+    auto repeatedSeed=db->readSyncState(true,2222,888).get();
+    CHECK(repeatedSeed.success && !repeatedSeed.migrated
+          && repeatedSeed.lastSuccessfulMs==1111
+          && repeatedSeed.lastReconcileMs==777);
+
     Session session;
     session.serverUrl = url;
     session.accessToken = "synthetic-token";
@@ -381,6 +395,10 @@ static void testHomeCatalogHierarchyIntegration()
         auto online = home.submitCatalogHierarchyForTest(
             series, {season}, episodes, 1, true).get();
         CHECK(online.success && online.workerOwned);
+        auto afterSeries=db->readSyncState(false,0,0).get();
+        CHECK(afterSeries.success && afterSeries.lastSuccessfulMs==1111
+              && afterSeries.lastReconcileMs==777
+              && afterSeries.committedGeneration==0);
         bool complete = false;
         std::int64_t generation = 0;
         CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
@@ -422,12 +440,24 @@ static void testHomeCatalogHierarchyIntegration()
                                       complete, generation));
         CHECK(complete && generation == 4);
 
+        auto checkpoint=db->writeSyncState(4000,3500,4).get();
+        CHECK(checkpoint.success && checkpoint.workerOwned
+              && checkpoint.committedGeneration==4);
+        auto checkpointRead=db->readSyncState(false,0,0).get();
+        CHECK(checkpointRead.success && checkpointRead.lastSuccessfulMs==4000
+              && checkpointRead.lastReconcileMs==3500
+              && checkpointRead.committedGeneration==4);
+
         const std::string otherUrl =
             "https://sqlite-home-catalog-other-" + suffix + ".example";
         const std::string otherUser = "home-catalog-other-user";
         const auto otherEpoch = db->configureScope(otherUrl, otherUser);
         CHECK(otherEpoch != epoch);
         CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        CatalogDbJobMetadata staleMetadata;
+        staleMetadata.scopeEpoch=epoch;
+        auto staleCheckpoint=db->writeSyncState(5000,4500,6,staleMetadata).get();
+        CHECK(!staleCheckpoint.success && staleCheckpoint.superseded);
         auto stale = home.submitCatalogHierarchyForTest(
             series, {season}, episodes, 6, true).get();
         CHECK(!stale.success && stale.superseded);

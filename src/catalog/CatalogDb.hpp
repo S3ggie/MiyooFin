@@ -209,6 +209,19 @@ struct CatalogDbOfflineRebuildResult {
     std::size_t containersSynthesized = 0;
 };
 
+struct CatalogDbSyncState {
+    bool success = false;
+    bool workerOwned = false;
+    bool migrated = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::int64_t lastSuccessfulMs = 0;
+    std::int64_t lastReconcileMs = 0;
+    std::uint64_t committedGeneration = 0;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -299,6 +312,18 @@ public:
     reconstructOfflineDownloads(
         const std::string &downloadRoot = "downloads",
         const CatalogDbJobMetadata &metadata = {});
+    /// Read the SQLite hierarchy checkpoint on the CatalogDb worker.  A
+    /// non-empty legacy seed is imported only while the SQLite row is still
+    /// at its initial zero value; the legacy file is never written.
+    std::future<CatalogDbSyncState> readSyncState(
+        bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
+        std::int64_t legacyLastReconcileMs,
+        const CatalogDbJobMetadata &metadata = {});
+    /// Publish one complete-generation hierarchy checkpoint on the worker.
+    std::future<CatalogDbSyncState> writeSyncState(
+        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+        std::uint64_t committedGeneration,
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -334,6 +359,7 @@ private:
     struct HierarchyWriteCommand;
     struct ReconcileCommand;
     struct OfflineRebuildCommand;
+    struct SyncStateCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -348,6 +374,8 @@ private:
         const std::shared_ptr<ReconcileCommand> &command);
     void processOfflineRebuild(
         const std::shared_ptr<OfflineRebuildCommand> &command);
+    void processSyncState(
+        const std::shared_ptr<SyncStateCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -359,6 +387,14 @@ private:
         const CatalogDbJobMetadata &metadata, int failAfterRows);
     std::future<CatalogDbOfflineRebuildResult> enqueueOfflineRebuild(
         const std::string &downloadRoot,
+        const CatalogDbJobMetadata &metadata);
+    std::future<CatalogDbSyncState> enqueueSyncStateRead(
+        bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
+        std::int64_t legacyLastReconcileMs,
+        const CatalogDbJobMetadata &metadata);
+    std::future<CatalogDbSyncState> enqueueSyncStateWrite(
+        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+        std::uint64_t committedGeneration,
         const CatalogDbJobMetadata &metadata);
     void finalizeStatements();
     void closeConnection();
@@ -378,6 +414,7 @@ private:
     std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
     std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
     std::deque<std::shared_ptr<OfflineRebuildCommand>> m_offlineCommands;
+    std::deque<std::shared_ptr<SyncStateCommand>> m_syncStateCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

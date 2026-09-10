@@ -6,8 +6,6 @@
 
 namespace miyoofin {
 
-static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
-static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
 static std::future<CatalogDbHierarchyWriteResult> rejectedCatalogHierarchy(
@@ -128,16 +126,12 @@ void HomeScreen::enter()
             m_loadState = LoadState::Ready; clampNavigation();
             printf("[HomeScreen] Loaded local library cache%s\n", cacheNeedsRefresh ? " (stale generation)" : "");
         }
-        const std::string scope=LibraryCache::scopeKey(m_session.serverUrl,m_session.userId);
-        const bool haveState=SyncStateStore::load(SyncStateStore::path("cache",scope),m_syncState);
-        m_forceHierarchyReconcile=!haveState || !syncStateFresh(m_syncState,wallClockMs(),HIERARCHY_RECONCILE_MS);
-        // Skip fetch ONLY when a valid current-generation snapshot exists and
-        // SyncState confirms a recent successful sync.  An old-generation
-        // snapshot (needsRefresh) or missing snapshot must always trigger a
-        // fresh fetch, and a stale SyncState forces one regardless.
-        if (m_haveCachedSnapshot && !cacheNeedsRefresh && haveState && syncStateFresh(m_syncState,wallClockMs(),SYNC_FRESH_WALL_MS)) {
-            m_syncSchedule.hasSucceeded=true; m_syncSchedule.lastSuccess=SDL_GetTicks();
-        } else requestFetch(SDL_GetTicks());
+        // The SQLite checkpoint is read by startFetch's worker before any
+        // ChangedHierarchy request.  Until that result arrives, remain
+        // conservative and perform the normal online fetch.
+        m_forceHierarchyReconcile=true;
+        (void)cacheNeedsRefresh;
+        requestFetch(SDL_GetTicks());
     }
     else if (m_loadState == LoadState::Ready) {
         if (m_resumeRefreshInFlight)

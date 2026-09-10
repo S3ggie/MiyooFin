@@ -13,6 +13,8 @@
 
 namespace miyoofin {
 
+static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
+static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
 void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; const bool catalogLoaded=OfflineCatalog::load(OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId)),catalog,nullptr); if(catalogLoaded){std::lock_guard<std::mutex> lock(m_catalogSnapshotMutex);m_catalogSnapshot=catalog;m_catalogSnapshotReady=true;} OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
 void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
@@ -53,6 +55,28 @@ void HomeScreen::startFetch()
         PerformanceTelemetry &telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
+        const std::string scope=LibraryCache::scopeKey(url,uid);
+        SyncState legacyState;
+        const bool legacyAvailable=SyncStateStore::load(
+            SyncStateStore::path("cache",scope),legacyState,nullptr);
+        CatalogDbSyncState catalogState;
+        if (m_catalogDb) {
+            CatalogDbJobMetadata metadata=m_catalogMetadata;
+            catalogState=m_catalogDb->readSyncState(
+                legacyAvailable,legacyState.lastSuccessfulMs,
+                legacyState.lastReconcileMs,metadata).get();
+            if (catalogState.success) {
+                m_syncState.lastSuccessfulMs=catalogState.lastSuccessfulMs;
+                m_syncState.lastReconcileMs=catalogState.lastReconcileMs;
+            }
+        } else if (legacyAvailable) {
+            m_syncState=legacyState;
+            catalogState.success=true;
+            catalogState.lastSuccessfulMs=legacyState.lastSuccessfulMs;
+            catalogState.lastReconcileMs=legacyState.lastReconcileMs;
+        }
+        m_forceHierarchyReconcile=!catalogState.success
+            || !syncStateFresh(m_syncState,wallClockMs(),HIERARCHY_RECONCILE_MS);
         TelemetryTimer syncTimer;
         uint32_t requestCount = 0;
         uint32_t changedHierarchyCount = 0;
@@ -96,7 +120,7 @@ void HomeScreen::startFetch()
         }
         m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,moviesByView,showsByView); m_remoteSnapshot=std::move(snapshot); std::set<std::string> changedSeries;
         if(m_syncState.lastSuccessfulMs>0&&!m_forceHierarchyReconcile){std::vector<MediaItem> changed;std::string changedError;++requestCount;if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)){fail(changedError);return;}changedHierarchyCount = static_cast<uint32_t>(changed.size());for(const auto&i:changed){if(i.type=="show")changedSeries.insert(i.id);else if(!i.seriesId.empty())changedSeries.insert(i.seriesId);}}
-        std::vector<StalePoster> stale; m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale); const std::string scope=LibraryCache::scopeKey(url,uid);
+        std::vector<StalePoster> stale; m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale);
         if(LibraryCache::save(LibraryCache::cachePath("cache",scope),m_remoteSnapshot)){m_fetchCacheSaved=true;cacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
         completeTelemetry(Outcome::Success);
         m_fetchDone=true;

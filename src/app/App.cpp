@@ -228,6 +228,7 @@ bool App::init()
     uiDiagnostics().log("[App] startup stage=session_loaded");
     recoverPlaybackResult();
     m_downloadManager = std::make_shared<DownloadManager>(m_session);
+    m_downloadManager->setCatalogDb(m_catalogDb);
     m_deviceId = DeviceIdentity::loadOrCreate();
     printf("[App] Device ID: %s\n", m_deviceId.c_str());
 

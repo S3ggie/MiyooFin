@@ -942,7 +942,7 @@ int main()
     testDownloadRestartPersistence();
     testDownloadInterruptStates();
     testDownloadPlanBatchAccounting();
-    testHlsSizeEstimates(); testHlsFailureClassification();
+    testHlsSizeEstimates(); testHlsFailureClassification(); testCatalogDbHierarchyPlanning();
     testDownloadsUiHelpers();
     testDownloadHierarchy();
     testDownloadSourceReconciliation();

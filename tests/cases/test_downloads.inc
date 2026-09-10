@@ -322,3 +322,31 @@ static void testHlsFailureClassification()
     CHECK(DownloadManager::hlsSegmentFailureState(500, CURLE_OK) == DownloadState::Failed);
     CHECK(DownloadManager::hlsSegmentFailureState(404, CURLE_OK) == DownloadState::Failed);
 }
+
+static void testCatalogDbHierarchyPlanning()
+{
+    std::printf("[test] DownloadManager CatalogDb hierarchy estimate\n");
+    const std::string suffix=std::to_string((long long)getpid());
+    Session session; session.serverUrl="https://download-catalog-"+suffix+".example"; session.userId="download-user-"+suffix;
+    auto catalog=std::make_shared<CatalogDb>();
+    const std::uint64_t epoch=catalog->configureScope(session.serverUrl,session.userId);
+    CHECK(catalog->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto seeded=catalog->seedHierarchyQueryFixturesForTest();
+    CHECK(seeded.success&&seeded.hierarchyFixture);
+    DownloadManager manager(session,"output/test/catalog-plan-downloads-"+suffix);
+    manager.setCatalogDb(catalog);
+    MediaItem series; series.id="__task10_series__"; series.type="show";
+    MediaItem season; season.id="__task10_season_a__"; season.type="season"; season.seriesId=series.id;
+    const std::uint64_t planId=manager.requestSeasonPlan(series,season);
+    DownloadPlanSnapshot snapshot;
+    bool hierarchyEstimate=false;
+    for(int i=0;i<500&&!hierarchyEstimate;++i){
+        snapshot=manager.planSnapshot(planId);
+        hierarchyEstimate=snapshot.itemCount==3&&snapshot.plan.items.size()==3;
+        if(!hierarchyEstimate)usleep(10000);
+    }
+    CHECK(hierarchyEstimate);
+    CHECK(epoch==catalog->scopeState().requestedEpoch);
+    CHECK(catalog->getEpisodes(season.id).get().items.size()==(size_t)3);
+    std::printf("[test] DownloadManager CatalogDb hierarchy estimate OK\n");
+}

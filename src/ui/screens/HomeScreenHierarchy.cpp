@@ -101,6 +101,10 @@ void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const Libr
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     const std::uint64_t generation=m_hierarchyGeneration.fetch_add(1)+1;
     const std::size_t superseded=m_pendingHierarchyShows.size();
+    if (m_catalogGenerationCancellation)
+        m_catalogGenerationCancellation->store(true);
+    m_catalogGenerationCancellation =
+        std::make_shared<std::atomic_bool>(false);
     m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
     m_pendingHierarchyGeneration=generation;
     m_hierarchyCompleted.store(0);
@@ -127,7 +131,8 @@ void HomeScreen::hierarchyWorker()
     for (;;) {
         std::vector<MediaItem> shows;
         std::uint64_t generation=0;
-        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
+        std::shared_ptr<std::atomic_bool> catalogCancellation;
+        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; catalogCancellation=m_catalogGenerationCancellation; performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
         const std::string catalog=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
         for (std::size_t showIndex=0; showIndex<shows.size(); ++showIndex) {
             const auto &series=shows[showIndex];
@@ -147,6 +152,27 @@ void HomeScreen::hierarchyWorker()
             // A show is only complete after every discovered level has been
             // fetched and atomically merged into the offline catalog.
             if (complete && OfflineCatalog::storeDiscoveredHierarchy(catalog,series,seasons,episodesBySeason,true,nullptr)) {
+                // The same complete subtree is submitted to CatalogDb on this
+                // worker. The CatalogDb worker owns validation and the single
+                // series transaction; the UI thread never waits for it.
+                auto catalogWrite = submitCatalogHierarchy(
+                    series, seasons, episodesBySeason, generation, true,
+                    catalogCancellation);
+                const auto catalogResult = catalogWrite.get();
+                if (!catalogResult.success) {
+                    if (generation == m_hierarchyGeneration.load()) {
+                        if (catalogResult.cancelled || catalogResult.superseded)
+                            performanceTelemetry().addWorkerCancelled(
+                                WorkerId::HomeHierarchy);
+                        else
+                            performanceTelemetry().addWorkerFailed(
+                                WorkerId::HomeHierarchy);
+                    } else {
+                        performanceTelemetry().addWorkerCancelled(
+                            WorkerId::HomeHierarchy);
+                    }
+                    continue;
+                }
                 // Reload on this background worker so the RAM snapshot exactly
                 // follows catalog merge semantics and is ready for handoff.
                 OfflineCatalogSnapshot snapshot;

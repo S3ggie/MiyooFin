@@ -10,13 +10,30 @@ static constexpr std::int64_t SYNC_FRESH_WALL_MS=15LL*60*1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
-HomeScreen::HomeScreen(const Session &session, std::shared_ptr<DownloadManager> downloads)
+static std::future<CatalogDbHierarchyWriteResult> rejectedCatalogHierarchy(
+    const char *message)
+{
+    std::promise<CatalogDbHierarchyWriteResult> promise;
+    CatalogDbHierarchyWriteResult result;
+    result.error = CatalogDbErrorCategory::ConfigurationFailed;
+    result.message = message;
+    promise.set_value(std::move(result));
+    return promise.get_future();
+}
+
+HomeScreen::HomeScreen(const Session &session,
+                       std::shared_ptr<DownloadManager> downloads,
+                       std::shared_ptr<CatalogDb> catalogDb,
+                       std::uint64_t catalogScopeEpoch)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_session(session)
     , m_downloads(std::move(downloads))
+    , m_catalogDb(std::move(catalogDb))
+    , m_catalogMetadata()
     , m_userName(session.userName)
 {
+    m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
@@ -36,7 +53,11 @@ HomeScreen::~HomeScreen()
         m_resumeRefreshThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
-    { std::lock_guard<std::mutex> lock(m_hierarchyMutex); m_stopHierarchyWorker = true; }
+    { std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+      m_stopHierarchyWorker = true;
+      if (m_catalogGenerationCancellation)
+          m_catalogGenerationCancellation->store(true);
+    }
     m_hierarchyWake.notify_one();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
@@ -56,6 +77,34 @@ int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selecte
 const char *HomeScreen::lastApiRouteValue()
 {
     return RouteStatus::label(RouteStatus::latest());
+}
+
+std::future<CatalogDbHierarchyWriteResult>
+HomeScreen::submitCatalogHierarchyForTest(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, bool complete)
+{
+    return submitCatalogHierarchy(series, seasons, episodesBySeason,
+                                  generation, complete, {});
+}
+
+std::future<CatalogDbHierarchyWriteResult> HomeScreen::submitCatalogHierarchy(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, bool complete,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    if (!complete)
+        return rejectedCatalogHierarchy(
+            "incomplete hierarchy is not eligible for CatalogDb commit");
+    if (!m_catalogDb)
+        return rejectedCatalogHierarchy("CatalogDb service is unavailable");
+    CatalogDbJobMetadata metadata = m_catalogMetadata;
+    metadata.cancellation = cancellation;
+    return m_catalogDb->stageSeriesHierarchy(
+        series, seasons, episodesBySeason, generation, wallClockMs(), true,
+        metadata);
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)

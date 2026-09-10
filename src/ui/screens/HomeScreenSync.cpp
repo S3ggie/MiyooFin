@@ -59,6 +59,11 @@ void HomeScreen::startFetch()
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
         const std::string scope=LibraryCache::scopeKey(url,uid);
+        if (m_catalogDb) {
+            CatalogDbJobMetadata metadata=m_catalogMetadata;
+            auto cached=m_catalogDb->readLibrarySnapshot(metadata).get();
+            if (cached.success) { m_cachedSnapshot=std::move(cached.snapshot); m_haveCachedSnapshot=true; }
+        }
         SyncState legacyState;
         const bool legacyAvailable=SyncStateStore::load(
             SyncStateStore::path("cache",scope),legacyState,nullptr);
@@ -124,7 +129,7 @@ void HomeScreen::startFetch()
         m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,moviesByView,showsByView); m_remoteSnapshot=std::move(snapshot); std::set<std::string> changedSeries;
         if(m_syncState.lastSuccessfulMs>0&&!m_forceHierarchyReconcile){std::vector<MediaItem> changed;std::string changedError;++requestCount;if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)){fail(changedError);return;}changedHierarchyCount = static_cast<uint32_t>(changed.size());for(const auto&i:changed){if(i.type=="show")changedSeries.insert(i.id);else if(!i.seriesId.empty())changedSeries.insert(i.seriesId);}}
         std::vector<StalePoster> stale; m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale);
-        if(LibraryCache::save(LibraryCache::cachePath("cache",scope),m_remoteSnapshot)){m_fetchCacheSaved=true;cacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
+        if(m_catalogDb && m_catalogDb->seedLibrarySnapshot(m_remoteSnapshot,m_catalogMetadata).get().success){m_fetchCacheSaved=true;cacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
         completeTelemetry(Outcome::Success);
         m_fetchDone=true;
     });

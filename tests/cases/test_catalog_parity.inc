@@ -365,6 +365,11 @@ void testCatalogDbLibrarySnapshotSeed()
     auto first = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
     CHECK(first.success && first.workerOwned && first.itemsUpserted == 2
           && first.viewsWritten == 1 && first.homeItemsWritten == 1);
+    auto read = db.readLibrarySnapshot({0, epoch, {}}).get();
+    CHECK(read.success && read.snapshot.movies.size() == 1
+          && read.snapshot.movies[0].collectionType == "movies"
+          && read.snapshot.continueWatching.size() == 1
+          && read.snapshot.continueWatching[0].id == movie.id);
     auto second = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
     CHECK(second.success && second.itemsUpserted == 2 && second.viewsWritten == 1);
     auto failed = db.seedLibrarySnapshotForTest(snapshot, 1, {0, epoch, {}}).get();

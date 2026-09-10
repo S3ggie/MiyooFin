@@ -236,6 +236,15 @@ struct CatalogDbLibrarySeedResult {
     std::size_t viewsWritten = 0;
     std::size_t homeItemsWritten = 0;
 };
+struct CatalogDbLibraryReadResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    LibrarySnapshot snapshot;
+};
 
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
@@ -345,6 +354,8 @@ public:
     std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshotForTest(
         const LibrarySnapshot &snapshot, int failAfterWrites,
         const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -382,6 +393,7 @@ private:
     struct OfflineRebuildCommand;
     struct SyncStateCommand;
     struct LibrarySeedCommand;
+    struct LibraryReadCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -400,6 +412,7 @@ private:
         const std::shared_ptr<SyncStateCommand> &command);
     void processLibrarySeed(
         const std::shared_ptr<LibrarySeedCommand> &command);
+    void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -423,6 +436,8 @@ private:
     std::future<CatalogDbLibrarySeedResult> enqueueLibrarySeed(
         const LibrarySnapshot &snapshot, const CatalogDbJobMetadata &metadata,
         int failAfterWrites = -1);
+    std::future<CatalogDbLibraryReadResult> enqueueLibraryRead(
+        const CatalogDbJobMetadata &metadata);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -443,6 +458,7 @@ private:
     std::deque<std::shared_ptr<OfflineRebuildCommand>> m_offlineCommands;
     std::deque<std::shared_ptr<SyncStateCommand>> m_syncStateCommands;
     std::deque<std::shared_ptr<LibrarySeedCommand>> m_librarySeedCommands;
+    std::deque<std::shared_ptr<LibraryReadCommand>> m_libraryReadCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

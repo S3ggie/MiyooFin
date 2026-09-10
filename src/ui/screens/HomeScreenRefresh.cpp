@@ -80,8 +80,7 @@ void HomeScreen::startResumeRefresh()
     std::string devId = m_session.deviceId;
 
     LibrarySnapshot snapshot=m_cachedSnapshot;
-    const std::string cachePath=LibraryCache::cachePath("cache",LibraryCache::scopeKey(m_session.serverUrl,m_session.userId));
-    m_resumeRefreshThread = std::thread([this, session, url, token, uid, devId, snapshot, cachePath]() mutable {
+    m_resumeRefreshThread = std::thread([this, session, url, token, uid, devId, snapshot]() mutable {
         PerformanceTelemetry &telemetry=performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeResumeRefresh, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeResumeRefresh, 1);
@@ -92,7 +91,7 @@ void HomeScreen::startResumeRefresh()
             m_resumeRefreshResult = std::move(items);
             m_resumeRefreshSucceeded = true;
             snapshot.continueWatching=m_resumeRefreshResult;
-            m_resumeRefreshCacheSaved=LibraryCache::save(cachePath,snapshot);
+            m_resumeRefreshCacheSaved=m_catalogDb && m_catalogDb->seedLibrarySnapshot(snapshot,m_catalogMetadata).get().success;
             startPosterSync(snapshot);
         } else {
             m_resumeRefreshError = error;

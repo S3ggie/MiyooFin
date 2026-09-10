@@ -115,22 +115,10 @@ void HomeScreen::enter()
     printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab,
            m_userName.c_str());
     if (m_loadState == LoadState::Loading && !m_fetchDone) {
-        std::string path = LibraryCache::cachePath("cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-        bool cacheNeedsRefresh=false;
-        if (LibraryCache::load(path, m_cachedSnapshot, nullptr, &cacheNeedsRefresh)) {
-            m_tabs = miyoofin::tabsFromSnapshot(m_cachedSnapshot); m_haveCachedSnapshot = true;
-            m_movieMaster = combineMovieViews(m_cachedSnapshot.movies);
-            refreshMovieFilter();
-            rebuildShowsPresentation();
-            if (m_session.manualOfflineMode) applyPresentationProjection();
-            m_loadState = LoadState::Ready; clampNavigation();
-            printf("[HomeScreen] Loaded local library cache%s\n", cacheNeedsRefresh ? " (stale generation)" : "");
-        }
         // The SQLite checkpoint is read by startFetch's worker before any
         // ChangedHierarchy request.  Until that result arrives, remain
         // conservative and perform the normal online fetch.
         m_forceHierarchyReconcile=true;
-        (void)cacheNeedsRefresh;
         requestFetch(SDL_GetTicks());
     }
     else if (m_loadState == LoadState::Ready) {

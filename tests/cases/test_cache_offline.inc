@@ -1,3 +1,5 @@
+#include "../../vendor/sqlite/sqlite3.h"
+
 static MediaItem cacheItem(const std::string &id) { MediaItem i; i.id=id;i.title="\xCE\xA9 \"title\"";i.overview="line one\nline two";i.year=2024;i.rating=8.5f;i.genre="Drama";i.type="movie";i.etag="etag-"+id;i.genres={"Drama","Sci-Fi"};i.played=true;i.progress=.5f;i.playbackPositionTicks=987654;i.imageTags["Primary"]="tag-"+id;i.indexNumber=2;i.parentIndexNumber=3;i.runTimeTicks=10000000;i.seriesName="series";i.seriesId="sid";i.seasonId="seid";i.artR=1;i.artG=2;i.artB=3;return i; }
 static bool sameItem(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.etag==b.etag&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId&&a.artR==b.artR&&a.artG==b.artG&&a.artB==b.artB;}
 static void testLibraryCacheNew(){std::string d="/tmp/miyoofin-cache-test";mkdir(d.c_str(),0755);std::string p=d+"/x.bin";LibrarySnapshot s;CachedLibraryView v;v.id="v";v.name="Movies";v.collectionType="movies";for(int i=0;i<500;i++)v.items.push_back(cacheItem(std::to_string(i)));s.movies.push_back(v);s.shows.push_back({"s","Shows","tvshows",{cacheItem("show")}});CHECK(LibraryCache::save(p,s));LibrarySnapshot got;CHECK(LibraryCache::load(p,got));CHECK(got.movies.size()==1&&got.movies[0].items.size()==500&&sameItem(got.movies[0].items[0],s.movies[0].items[0]));FILE*f=fopen(p.c_str(),"r+b");fputc('X',f);fclose(f);LibrarySnapshot keep=s;CHECK(!LibraryCache::load(p,keep));CHECK(keep.movies[0].items.size()==500);}
@@ -155,6 +157,58 @@ static void testSeriesCachedSeasonHandoff(){
     catalogScreen.enter();
     for(int i=0;i<100&&!catalogScreen.diagnosticSeasonsReady();++i){catalogScreen.update(16);usleep(1000);}
     CHECK(catalogScreen.diagnosticSeasonsReady()&&catalogScreen.diagnosticSeasons().size()==(size_t)3);
+
+    // EpisodeBrowser must use the same app-scoped CatalogDb for an indexed
+    // season read; the read is issued by its existing fetch worker.
+    std::printf("[test] EpisodeBrowser CatalogDb cached episodes\n");
+    MediaItem catalogSeason; catalogSeason.id="__task10_season_a__"; catalogSeason.type="season";
+    EpisodeBrowserScreen episodeScreen(catalogSession, catalogSeries,
+                                       catalogSeason, "", {}, true, false,
+                                       catalogDb, epoch);
+    episodeScreen.enter();
+    for(int i=0;i<100&&!episodeScreen.diagnosticEpisodesReady();++i){episodeScreen.update(16);usleep(1000);}
+    CHECK(episodeScreen.diagnosticEpisodesReady()
+          && episodeScreen.diagnosticEpisodes().size()==(size_t)3);
+
+    // A network season refresh is authoritative only for that season.  It
+    // removes stale siblings in the refreshed season, preserves another
+    // season, and keeps the series checkpoint conservative in one transaction.
+    MediaItem updateSeries=cacheItem("__task22_series__"); updateSeries.type="show"; updateSeries.seriesId.clear(); updateSeries.seasonId.clear();
+    MediaItem updateA=cacheItem("__task22_season_a__"); updateA.type="season"; updateA.seriesId=updateSeries.id; updateA.seasonId.clear();
+    MediaItem updateB=cacheItem("__task22_season_b__"); updateB.type="season"; updateB.seriesId=updateSeries.id; updateB.seasonId.clear();
+    MediaItem keepA=cacheItem("__task22_episode_keep__"); keepA.type="episode"; keepA.seriesId=updateSeries.id; keepA.seasonId=updateA.id;
+    MediaItem staleA=cacheItem("__task22_episode_stale__"); staleA.type="episode"; staleA.seriesId=updateSeries.id; staleA.seasonId=updateA.id;
+    MediaItem keepB=cacheItem("__task22_episode_sibling__"); keepB.type="episode"; keepB.seriesId=updateSeries.id; keepB.seasonId=updateB.id;
+    auto initialHierarchy=catalogDb->upsertSeriesHierarchyForTest(
+        updateSeries, {updateA,updateB},
+        {{updateA.id,{keepA,staleA}},{updateB.id,{keepB}}}, 0, 42, -1, -1).get();
+    CHECK(initialHierarchy.success);
+    keepA.playbackPositionTicks=1234;
+    auto seasonRefresh=catalogDb->reconcileSeasonHierarchy(
+        updateSeries, updateA, {keepA}, 0, 42).get();
+    CHECK(seasonRefresh.success);
+    auto refreshedA=catalogDb->getEpisodes(updateA.id).get();
+    auto untouchedB=catalogDb->getEpisodes(updateB.id).get();
+    CHECK(refreshedA.success&&refreshedA.items.size()==(size_t)1
+          &&refreshedA.items[0].id==keepA.id
+          &&refreshedA.items[0].playbackPositionTicks==1234);
+    CHECK(untouchedB.success&&untouchedB.items.size()==(size_t)1
+          &&untouchedB.items[0].id==keepB.id);
+    const std::string dbPath="cache/library/"+
+        LibraryCache::scopeKey(catalogSession.serverUrl,catalogSession.userId)+
+        "/catalog.sqlite3";
+    sqlite3 *rawDb=nullptr;
+    CHECK(sqlite3_open_v2(dbPath.c_str(),&rawDb,SQLITE_OPEN_READONLY,nullptr)==SQLITE_OK);
+    sqlite3_stmt *checkpoint=nullptr;
+    CHECK(rawDb!=nullptr&&sqlite3_prepare_v2(rawDb,
+        "SELECT complete FROM hierarchy_state WHERE series_id=?1",-1,
+        &checkpoint,nullptr)==SQLITE_OK);
+    if(checkpoint){
+        CHECK(sqlite3_bind_text(checkpoint,1,updateSeries.id.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK);
+        CHECK(sqlite3_step(checkpoint)==SQLITE_ROW&&sqlite3_column_int(checkpoint,0)==0);
+        sqlite3_finalize(checkpoint);
+    }
+    if(rawDb)sqlite3_close(rawDb);
 }
 static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(moveMovieGrid(9,10,0,-1)==9);CHECK(moveMovieGrid(8,10,1,0)==9);CHECK(clampMovieGridScroll(36,100,0)==1);MovieArtworkRange a=movieVisibleArtworkRange(0,36);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(0,37);CHECK(a.first==0&&a.lastExclusive==36);a=movieVisibleArtworkRange(1,37);CHECK(a.first==9&&a.lastExclusive==37);a=movieVisibleArtworkRange(4,100);CHECK(a.first==36&&a.lastExclusive==72);a=movieVisibleArtworkRange(9,100);CHECK(a.first==81&&a.lastExclusive==100);
     // A successful sync is fresh for fifteen minutes, and tab requests while

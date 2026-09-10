@@ -321,7 +321,10 @@ bool HomeScreen::handleAction(Action action)
                         season.title = "Season";
                     }
 
-                    m_stack->push(std::make_unique<EpisodeBrowserScreen>(m_session, series, season, item->id,m_downloads,m_libraryOffline,presentationOffline()));
+                    m_stack->push(std::make_unique<EpisodeBrowserScreen>(
+                        m_session, series, season, item->id, m_downloads,
+                        m_libraryOffline, presentationOffline(), m_catalogDb,
+                        m_catalogMetadata.scopeEpoch));
                     return true;
                 }
                 printf("[HomeScreen] Cannot open episode browser: missing series/season context\n");

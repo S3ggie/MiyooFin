@@ -6,6 +6,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
+#include "../../catalog/CatalogDb.hpp"
 #include <memory>
 #include <condition_variable>
 #include <cstdint>
@@ -27,7 +28,8 @@ public:
                          const MediaItem &series,
                          const MediaItem &season,
                          const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
-                         bool downloadedOnly=false);
+                         bool downloadedOnly=false, std::shared_ptr<CatalogDb> catalogDb={},
+                         std::uint64_t catalogScopeEpoch=0);
     ~EpisodeBrowserScreen() override;
 
     void enter() override;
@@ -61,6 +63,8 @@ public:
     /// Returns true exactly when the caller should resume prefetching.
     static bool advancePrefetchResume(bool &pending, int &delayUpdates);
     static constexpr bool hasSeparateDownloadActions() { return true; }
+    bool diagnosticEpisodesReady() const { return !m_episodes.empty(); }
+    const std::vector<MediaItem> &diagnosticEpisodes() const { return m_episodes; }
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -131,7 +135,10 @@ private:
     MediaItem     m_season;
     std::string   m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
-    std::shared_ptr<DownloadManager> m_downloads; bool m_networkOffline=false, m_downloadedOnly=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
+    std::shared_ptr<DownloadManager> m_downloads;
+    std::shared_ptr<CatalogDb> m_catalogDb;
+    CatalogDbJobMetadata m_catalogMetadata;
+    bool m_networkOffline=false, m_downloadedOnly=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
     std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedEpisodesDone=false; std::vector<MediaItem> m_fetchEpisodes, m_cachedEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};

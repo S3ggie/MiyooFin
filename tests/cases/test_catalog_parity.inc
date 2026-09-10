@@ -347,4 +347,37 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
     removeCatalogMigrationTestPaths(paths);
 }
 
+void testCatalogDbLibrarySnapshotSeed()
+{
+    const std::string url = "https://sqlite-library-seed.example";
+    const std::string user = "library-seed-user";
+    auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    CatalogDb db;
+    const auto epoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    LibrarySnapshot snapshot;
+    MediaItem movie = catalogParityItem("__task29_movie__", "movie", "Seed Movie");
+    MediaItem secondMovie = catalogParityItem("__task29_movie_2__", "movie", "Seed Movie 2");
+    snapshot.movies.push_back({"movies", "Movies", "movies", {movie}});
+    snapshot.movies[0].items.push_back(secondMovie);
+    snapshot.continueWatching.push_back(movie);
+    auto first = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    CHECK(first.success && first.workerOwned && first.itemsUpserted == 2
+          && first.viewsWritten == 1 && first.homeItemsWritten == 1);
+    auto second = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    CHECK(second.success && second.itemsUpserted == 2 && second.viewsWritten == 1);
+    auto failed = db.seedLibrarySnapshotForTest(snapshot, 1, {0, epoch, {}}).get();
+    CHECK(!failed.success && failed.error == CatalogDbErrorCategory::SqliteError);
+    auto recovered = db.seedLibrarySnapshot(LibrarySnapshot{}, {0, epoch, {}}).get();
+    CHECK(recovered.success && recovered.itemsUpserted == 0);
+    auto nextEpoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    auto stale = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    CHECK(!stale.success && stale.superseded);
+    auto empty = db.seedLibrarySnapshot(LibrarySnapshot{}, {0, nextEpoch, {}}).get();
+    CHECK(empty.success && empty.itemsUpserted == 0 && empty.viewsWritten == 0);
+    removeCatalogMigrationTestPaths(paths);
+}
+
 } // namespace

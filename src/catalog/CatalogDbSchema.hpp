@@ -10,7 +10,7 @@ namespace miyoofin {
 // cannot silently drift from the production database contract.
 inline constexpr std::int64_t kCatalogApplicationId = 0x4D59464E;
 
-inline constexpr std::array<const char *, 8> kCatalogSchemaStatements = {{
+inline constexpr std::array<const char *, 15> kCatalogSchemaStatements = {{
     "CREATE TABLE media_items ("
     "id TEXT PRIMARY KEY NOT NULL,"
     "kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 4),"
@@ -66,6 +66,33 @@ inline constexpr std::array<const char *, 8> kCatalogSchemaStatements = {{
     "CREATE INDEX idx_media_season_order "
     "ON media_items(season_id, index_number, id);",
     "INSERT INTO sync_state(singleton_id) VALUES(1);",
+    "CREATE TABLE library_views ("
+    "id TEXT PRIMARY KEY NOT NULL,"
+    "name TEXT NOT NULL DEFAULT '',"
+    "collection_type TEXT NOT NULL DEFAULT '',"
+    "ordinal INTEGER NOT NULL CHECK(ordinal >= 0)"
+    ");",
+    "CREATE TABLE library_membership ("
+    "view_id TEXT NOT NULL,"
+    "item_id TEXT NOT NULL,"
+    "ordinal INTEGER NOT NULL CHECK(ordinal >= 0),"
+    "PRIMARY KEY(view_id, item_id),"
+    "FOREIGN KEY(view_id) REFERENCES library_views(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(item_id) REFERENCES media_items(id) ON DELETE CASCADE"
+    ");",
+    "CREATE TABLE home_items ("
+    "row_kind TEXT NOT NULL,"
+    "item_id TEXT NOT NULL,"
+    "ordinal INTEGER NOT NULL CHECK(ordinal >= 0),"
+    "PRIMARY KEY(row_kind, item_id),"
+    "FOREIGN KEY(item_id) REFERENCES media_items(id) ON DELETE CASCADE"
+    ");",
+    "CREATE INDEX idx_library_views_ordinal ON library_views(ordinal, id);",
+    "CREATE INDEX idx_library_membership_view_order "
+    "ON library_membership(view_id, ordinal, item_id);",
+    "CREATE INDEX idx_library_membership_item "
+    "ON library_membership(item_id, view_id);",
+    "CREATE INDEX idx_home_items_row_order ON home_items(row_kind, ordinal, item_id);",
 }};
 
 } // namespace miyoofin

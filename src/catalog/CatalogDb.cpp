@@ -75,6 +75,8 @@ const char *openStateName(CatalogDbOpenState value)
     case CatalogDbOpenState::NotAttempted: return "not_attempted";
     case CatalogDbOpenState::CreatedV1: return "created_v1";
     case CatalogDbOpenState::SupportedV1: return "supported_v1";
+    case CatalogDbOpenState::CreatedV2: return "created_v2";
+    case CatalogDbOpenState::SupportedV2: return "supported_v2";
     case CatalogDbOpenState::WrongApplicationId: return "wrong_application_id";
     case CatalogDbOpenState::UnsupportedVersion: return "unsupported_version";
     case CatalogDbOpenState::CorruptOrIo: return "corrupt_or_io";
@@ -354,8 +356,52 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
         openState = CatalogDbOpenState::CorruptOrIo;
         return false;
     }
+    if (applicationId == kCatalogApplicationId && userVersion == 2) {
+        openState = CatalogDbOpenState::SupportedV2;
+        return true;
+    }
     if (applicationId == kCatalogApplicationId && userVersion == 1) {
-        openState = CatalogDbOpenState::SupportedV1;
+        if (!exec(db, "BEGIN IMMEDIATE;", error))
+            return false;
+        const char *const migration[] = {
+            "CREATE TABLE library_views ("
+            "id TEXT PRIMARY KEY NOT NULL,"
+            "name TEXT NOT NULL DEFAULT '',"
+            "collection_type TEXT NOT NULL DEFAULT '',"
+            "ordinal INTEGER NOT NULL CHECK(ordinal >= 0)"
+            ");",
+            "CREATE TABLE library_membership ("
+            "view_id TEXT NOT NULL, item_id TEXT NOT NULL,"
+            "ordinal INTEGER NOT NULL CHECK(ordinal >= 0),"
+            "PRIMARY KEY(view_id, item_id),"
+            "FOREIGN KEY(view_id) REFERENCES library_views(id) ON DELETE CASCADE,"
+            "FOREIGN KEY(item_id) REFERENCES media_items(id) ON DELETE CASCADE"
+            ");",
+            "CREATE TABLE home_items ("
+            "row_kind TEXT NOT NULL, item_id TEXT NOT NULL,"
+            "ordinal INTEGER NOT NULL CHECK(ordinal >= 0),"
+            "PRIMARY KEY(row_kind, item_id),"
+            "FOREIGN KEY(item_id) REFERENCES media_items(id) ON DELETE CASCADE"
+            ");",
+            "CREATE INDEX idx_library_views_ordinal ON library_views(ordinal, id);",
+            "CREATE INDEX idx_library_membership_view_order ON library_membership(view_id, ordinal, item_id);",
+            "CREATE INDEX idx_library_membership_item ON library_membership(item_id, view_id);",
+            "CREATE INDEX idx_home_items_row_order ON home_items(row_kind, ordinal, item_id);",
+        };
+        for (const char *statement : migration) {
+            if (!exec(db, statement, error)) {
+                std::string ignored;
+                exec(db, "ROLLBACK;", ignored);
+                return false;
+            }
+        }
+        if (!exec(db, "PRAGMA user_version = 2;", error)
+            || !exec(db, "COMMIT;", error)) {
+            std::string ignored;
+            exec(db, "ROLLBACK;", ignored);
+            return false;
+        }
+        openState = CatalogDbOpenState::SupportedV2;
         return true;
     }
     if (applicationId != 0 && applicationId != kCatalogApplicationId) {
@@ -382,13 +428,13 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
     const std::string applicationIdPragma =
         "PRAGMA application_id = " + std::to_string(kCatalogApplicationId) + ";";
     if (!exec(db, applicationIdPragma.c_str(), error)
-        || !exec(db, "PRAGMA user_version = 1;", error)
+        || !exec(db, "PRAGMA user_version = 2;", error)
         || !exec(db, "COMMIT;", error)) {
         std::string ignored;
         exec(db, "ROLLBACK;", ignored);
         return false;
     }
-    openState = CatalogDbOpenState::CreatedV1;
+    openState = CatalogDbOpenState::CreatedV2;
     return true;
 }
 
@@ -3201,7 +3247,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         return false;
     }
     if (bootstrapped) {
-        openState = CatalogDbOpenState::CreatedV1;
+        openState = CatalogDbOpenState::CreatedV2;
     }
 
     if (migrationState.migratingPresent) {
@@ -3330,7 +3376,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     }
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
     if (!ensureSchema(temporary, openState, error)
-        || openState != CatalogDbOpenState::CreatedV1) {
+        || openState != CatalogDbOpenState::CreatedV2) {
         if (error.empty()) {
             error = "fresh catalog schema creation failed";
         }
@@ -3523,6 +3569,13 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             "table:item_image_tags",
             "table:media_items",
             "table:sync_state",
+            "index:idx_home_items_row_order",
+            "index:idx_library_membership_item",
+            "index:idx_library_membership_view_order",
+            "index:idx_library_views_ordinal",
+            "table:home_items",
+            "table:library_membership",
+            "table:library_views",
         };
         result.exactSchema = objects == expectedObjects;
         result.singletonSeeded = result.sentinel == "1";
@@ -3530,10 +3583,10 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             && result.foreignKeyCascade && result.checkConstraints
             && result.singletonSeeded
             && result.applicationId == kCatalogApplicationId
-            && result.userVersion == 1;
+            && result.userVersion == 2;
         if (!result.success) {
             result.error = CatalogDbErrorCategory::ConfigurationFailed;
-            result.message = "schema v1 diagnostics did not match the contract";
+            result.message = "schema v2 diagnostics did not match the contract";
         }
         break;
     }

@@ -69,6 +69,8 @@ enum class CatalogDbOpenState : unsigned char {
     NotAttempted,
     CreatedV1,
     SupportedV1,
+    CreatedV2,
+    SupportedV2,
     WrongApplicationId,
     UnsupportedVersion,
     CorruptOrIo,

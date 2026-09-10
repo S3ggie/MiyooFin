@@ -1,4 +1,4 @@
-# MiyooFin SQLite Migration Execution Roadmap — v2
+# MiyooFin SQLite Migration Execution Roadmap — v3
 
 Target repository: `S3ggie/MiyooFin`  
 Approved optimization base when the roadmap was designed: `main` after `b9efee216ad40e17b0c787c959a3a91fd8748d5a`  
@@ -10,12 +10,14 @@ This ZIP is an execution roadmap only. It contains no application implementation
 
 **34 numbered tasks.**
 
-Two first-class tasks were added after the second audit:
+The v3 redesign preserves the 34-task execution shape while replacing the
+discarded legacy-catalog import stage with fresh-bootstrap and authoritative
+source reconciliation tasks. The previously added scope/lifecycle tasks remain:
 
 - Task 04 — CatalogDb scope/session lifecycle.
-- Task 17 — normal application migration activation on valid scope configuration.
+- Task 17 — normal application fresh-database activation on valid scope configuration.
 
-All later task numbers/dependencies were shifted and re-audited.
+All task numbers and dependencies are retained and re-audited in this redesign.
 
 ## Direct autonomous execution rule
 
@@ -44,15 +46,15 @@ All non-delegation safety/validation rules in the repository's current `AGENTS.m
 - no SQLite calls on SDL/UI thread;
 - bounded priority job queue;
 - prepared statement reuse;
-- OfflineCatalog migration first;
+- fresh SQLite bootstrap first, followed by Jellyfin reconciliation and DownloadStore offline reconstruction;
 - Home/LibraryCache migration only after hierarchy-only real-device approval;
 - ImageCache, DownloadStore/DownloadManager, playback/session files, and telemetry files remain separate;
-- legacy catalog untouched during migration;
+- `catalog.v1` retained only as an untouched rollback artifact during rollout;
 - hierarchy checkpoint advances only after a complete successful generation;
 - no production dual-write;
 - journal/synchronous profile decided by real Miyoo Mini Plus hardware evidence.
 
-## Scope lifecycle added by v2
+## Scope lifecycle retained in v3
 
 CatalogDb exists for the app lifetime but starts unconfigured.
 
@@ -68,7 +70,7 @@ CatalogDb worker scope-control job
 cancel/reject stale queued epoch work
 finalize old statements
 close old scoped DB
-open/migrate latest scoped DB
+open/rebuild latest scoped DB
         ↓
 Ready(epoch)
 ```
@@ -77,9 +79,9 @@ Logout uses `deconfigureScope()` and immediately invalidates the previous epoch.
 
 Changing server/account can never expose rows/results from the prior scope.
 
-## Migration activation made explicit
+## Fresh-database activation made explicit
 
-After migration/parity code is proven, Task 17 wires normal App lifecycle to CatalogDb:
+After bootstrap, reconciliation, and offline-download coverage are proven, Task 17 wires normal App lifecycle to CatalogDb:
 
 - valid saved session -> nonblocking `configureScope`;
 - successful login -> nonblocking `configureScope`;
@@ -88,12 +90,13 @@ After migration/parity code is proven, Task 17 wires normal App lifecycle to Cat
 On the worker, a valid latest scope:
 
 1. opens a supported existing SQLite DB; or
-2. if final DB is absent and legacy `catalog.v1` exists, runs the validated `.migrating` import/promotion; or
-3. creates a fresh DB.
+2. if final DB is absent, creates and promotes a fresh empty DB through the disposable `.migrating` path.
 
-Before consumer cutover, this SQLite DB is validated/shadow storage only. Existing legacy reads stay authoritative until their numbered switch tasks.
+After the DB is ready, normal network work reconciles metadata from Jellyfin. When the first launch is offline, DownloadStore/DownloadManager metadata can seed the minimum hierarchy needed to browse complete downloads; that state remains incomplete until Jellyfin reconciliation succeeds.
 
-Thus Task 18 can trigger real migration through a **normal Onion launch/login**, not a hidden diagnostic path.
+Before hierarchy consumer cutover, SQLite is validated/shadow storage and existing legacy readers may continue serving the UI. The CatalogDb bootstrap path never parses `cache/offline/<scope>/catalog.v1`, and that file is never a competing authority after SQLite cutover.
+
+Thus Task 18 can trigger fresh bootstrap and reconciliation through a **normal Onion launch/login**, not a hidden diagnostic path.
 
 ## MFT v1 frozen
 
@@ -114,8 +117,8 @@ See `TELEMETRY_V2_PLAN.md`.
 ## Mandatory checkpoints
 
 1. **CP-A** after Task 07 — SQLite build/core/scope/schema.
-2. **CP-B** after Task 16 — migration/parity.
-3. **CP-C** after Task 18 — real-device migration.
+2. **CP-B** after Task 16 — fresh bootstrap/reconciliation/offline-download behavior.
+3. **CP-C** after Task 18 — real-device fresh bootstrap.
 4. **CP-D** after Task 20 — journal/synchronous benchmark and profile choice.
 5. **CP-E** after Task 26 — hierarchy consumer cutover.
 6. **CP-F** after Task 27 — hierarchy-only hardware benchmark.
@@ -124,7 +127,7 @@ See `TELEMETRY_V2_PLAN.md`.
 
 ## Task map
 
-| Approved stage | v2 tasks |
+| Approved stage | v3 tasks |
 |---|---|
 | Vendor/build SQLite | 01 |
 | CatalogDb core/queue/scope/connection | 02–05 |
@@ -132,10 +135,11 @@ See `TELEMETRY_V2_PLAN.md`.
 | MediaItem codec/parity | 08–09 |
 | Hierarchy DAL | 10–12 |
 | SQLite telemetry / MFT v2 | 13 |
-| Legacy migration machinery | 14–15 |
-| Parity harness | 16 |
-| Normal migration activation | 17 |
-| Real Miyoo migration validation | 18 |
+| Fresh DB bootstrap/rebuild | 14 |
+| Jellyfin initial population/reconciliation | 15 |
+| DownloadStore offline hierarchy reconstruction | 16 |
+| Normal fresh-database activation | 17 |
+| Real Miyoo fresh-bootstrap validation | 18 |
 | Journal/synchronous benchmark | 19–20 |
 | SeriesScreen | 21 |
 | EpisodeBrowser | 22 |
@@ -144,7 +148,7 @@ See `TELEMETRY_V2_PLAN.md`.
 | Hierarchy checkpoint | 25 |
 | Remove whole-catalog RAM snapshot | 26 |
 | Hierarchy-only hardware benchmark | 27 |
-| LibraryCache/Home schema+import+parity | 28–30 |
+| LibraryCache/Home schema+snapshot seed+parity | 28–30 |
 | Startup/Home authoritative DB switch | 31 |
 | Lazy indexed Home reads | 32 |
 | Home/library hardware benchmark | 33 |
@@ -155,9 +159,9 @@ See `TELEMETRY_V2_PLAN.md`.
 The second audit intentionally keeps integration late:
 
 - Tasks 02–16 do not wire CatalogDb into normal App session lifecycle except App ownership shell where explicitly allowed.
-- Scope semantics are unit-proven at Tasks 04–05 before schema/DAL/migration code depends on them.
-- Only Task 17 edits App session/login/logout integration to activate scoped migration.
-- Consumer screen/DownloadManager Allowed Files begin only after real migration + journal gates.
+- Scope semantics are unit-proven at Tasks 04–05 before schema/DAL/bootstrap code depends on them.
+- Only Task 17 edits App session/login/logout integration to activate scoped fresh bootstrap/reconciliation.
+- Consumer screen/DownloadManager Allowed Files begin only after fresh-bootstrap/offline-download and journal gates.
 - LibraryCache/Home edit scope remains after CP-F.
 - Hardware-only tasks write factual `docs/sqlite-migration-benchmark.md`; they do not silently patch application code.
 - Any hardware failure requiring code changes is a STOP and roadmap amendment/focused task, not opportunistic scope expansion.

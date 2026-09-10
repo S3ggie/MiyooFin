@@ -100,9 +100,9 @@ A superseded `A -> B -> C` configure sequence may skip opening A/B when their co
 
 There is never more than one open scoped connection, and changing server/account can never expose rows from a previous scope.
 
-## Migration activation before read cutover
+## Fresh-database activation before read cutover
 
-After host migration/parity validation, normal App session lifecycle becomes the activation path:
+After fresh-bootstrap, Jellyfin-reconciliation, and offline-download validation, normal App session lifecycle becomes the activation path:
 
 ```text
 valid saved session / successful login
@@ -111,11 +111,14 @@ nonblocking configureScope
     ↓
 CatalogDb worker
     ├─ open supported final DB
-    ├─ OR import untouched legacy catalog into .migrating, validate, promote
-    └─ OR create fresh DB
+    └─ OR create/promote a fresh empty DB through .migrating
+         ↓
+    Jellyfin reconciliation when network is available
+         or
+    DownloadStore minimum offline hierarchy reconstruction
 ```
 
-This occurs before SQLite becomes a production read authority. Until the later consumer tasks, existing legacy readers remain authoritative; SQLite is only prepared/validated.
+The bootstrap path never parses or imports `cache/offline/<scope>/catalog.v1`. Before hierarchy consumer cutover, SQLite is prepared/validated while existing legacy readers may continue to serve the UI. Once the hierarchy consumers cut over, `catalog.v1` is only a preserved rollback artifact until final retirement.
 
 Logout/account/server change deconfigures the old scope immediately.
 
@@ -224,7 +227,7 @@ Database corruption must not erase or invalidate downloaded bytes.
 
 ### Phase A — hierarchy-only SQLite
 
-Replaces `OfflineCatalog` behavior first.
+Replaces `OfflineCatalog` hierarchy authority first. A fresh database is populated from current Jellyfin metadata, with DownloadStore metadata supplying the minimum offline hierarchy for complete downloads when network data is unavailable.
 
 `LibraryCache` remains unchanged during this phase.
 
@@ -242,10 +245,10 @@ There is no state in which production permanently writes both legacy whole-file 
 
 Permitted:
 
-- legacy read-only import;
-- host/debug parity comparison;
-- shadow reads for validation;
-- one-time conversion into a temporary SQLite database.
+- retaining `catalog.v1` untouched as a rollback artifact during rollout;
+- host/debug comparison against synthetic or current Jellyfin/DownloadStore projections;
+- shadow reads for validation before consumer cutover;
+- one-time fresh database bootstrap through a temporary SQLite database.
 
 Not permitted:
 
@@ -260,12 +263,12 @@ Final scoped database:
 cache/library/<scope>/catalog.sqlite3
 ```
 
-Legacy hierarchy source remains:
+The old hierarchy cache may remain only as a rollback artifact:
 
 ```text
 cache/offline/<scope>/catalog.v1
 ```
 
-during migration.
+during rollout; it is never read by the SQLite bootstrap path.
 
 The database runs from MiyooFin's SD-card app storage on OnionOS. Treat the storage as removable flash with FAT32 behavior and non-desktop durability characteristics.

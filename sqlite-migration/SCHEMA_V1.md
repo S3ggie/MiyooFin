@@ -1,6 +1,6 @@
 # Catalog Schema V1 — Hierarchy-First
 
-Schema v1 intentionally covers the **OfflineCatalog replacement** only. LibraryCache/Home tables are introduced later as schema v2 after the hierarchy-only hardware gate. This is sequencing, not a change to the approved final architecture.
+Schema v1 intentionally covers the phase-A **hierarchy catalog** only. It is bootstrapped empty and populated from current Jellyfin metadata or the minimum DownloadStore offline projection; it does not import `catalog.v1`. LibraryCache/Home tables are introduced later as schema v2 after the hierarchy-only hardware gate. This is sequencing, not a change to the approved final architecture.
 
 ## Design rules
 
@@ -62,7 +62,7 @@ Insertion order for complete hierarchy writes is:
 series -> seasons -> episodes
 ```
 
-If real legacy data reveals a valid relationship shape incompatible with these FKs, STOP at Task 08/15 and review the schema. Do not disable FKs to force migration through.
+If current Jellyfin or authoritative DownloadStore metadata reveals a valid relationship shape incompatible with these FKs, stop and review the schema. Do not disable FKs to force bootstrap or reconciliation through.
 
 ```sql
 CREATE TABLE item_genres (

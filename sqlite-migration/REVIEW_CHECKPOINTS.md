@@ -1,4 +1,4 @@
-# Mandatory Human Review Checkpoints — v2
+# Mandatory Human Review Checkpoints — v3
 
 ## CP-A — SQLite build/core/scope/schema
 
@@ -20,7 +20,7 @@ Verify:
 - one SQLite connection only;
 - no SQLite calls on SDL/UI;
 - schema v1/version policy correct;
-- runtime behavior still unchanged (normal App migration activation is intentionally later Task 17).
+- runtime behavior still unchanged (normal App fresh-database activation is intentionally later Task 17).
 
 ### Mandatory footprint review
 
@@ -33,36 +33,40 @@ Also review idle RSS before vs after CatalogDb service initialization **if pract
 
 Approval required before Task 08.
 
-## CP-B — Migration/parity
+## CP-B — Fresh bootstrap/reconciliation/offline downloads
 
 After Task 16. STOP.
 
 Verify:
 
-- scope-aware migration cannot cross server/user epochs;
-- legacy `catalog.v1` untouched;
-- `.migrating` never authoritative;
-- importer validates canonical MediaItem fields, genres, image tags, hierarchy/order;
+- scope-aware bootstrap/reconciliation cannot cross server/user epochs;
+- no CatalogDb path parses or imports `catalog.v1`;
+- `.migrating` is only a disposable fresh-DB rebuild file and never authoritative;
+- fresh schema bootstrap and supported final-DB open are safe;
+- Jellyfin subtree reconciliation validates current authoritative metadata, genres, image tags, hierarchy/order;
+- DownloadStore offline reconstruction preserves complete downloaded-media visibility/playability and marks hierarchy incomplete;
 - quick/integrity policy + FK check;
-- interrupted host migration safely retryable;
+- interrupted fresh-DB rebuild is safely retryable;
 - no production dual-write;
 - no normal App activation yet (Task 17 is the reviewed activation step).
 
-## CP-C — Real-device migration
+## CP-C — Real-device fresh bootstrap
 
 After Task 18. STOP.
 
 Requires actual Miyoo Mini Plus evidence.
 
-Verify migration was triggered by **normal valid saved-session launch or normal login through Task-17 configureScope**, not a hidden diagnostic path.
+Verify fresh bootstrap was triggered by **normal valid saved-session launch or normal login through Task-17 configureScope**, not a hidden diagnostic path.
 
 Verify:
 
 - tested commit/build/environment recorded;
-- real legacy catalog on `/mnt/SDCARD` imported;
+- no legacy catalog import occurred;
+- fresh final DB was created and populated from current Jellyfin metadata when online;
+- offline first launch retained browsable/playable complete downloads through DownloadStore reconstruction;
 - duration/CPU/RSS/process I/O/final DB size recorded;
-- process-interrupted migration recovery;
-- legacy remains intact;
+- process-interrupted fresh-DB rebuild/recovery;
+- `catalog.v1`, if present, remains untouched as a rollback artifact;
 - clean restart/reopen;
 - scope/logout stale-result behavior exercised;
 - evidence committed to `docs/sqlite-migration-benchmark.md`.
@@ -85,7 +89,7 @@ After Task 26. STOP.
 
 Verify SeriesScreen, EpisodeBrowser, DownloadManager planning, Home hierarchy, and checkpoint use CatalogDb and enforce current scope epoch.
 
-Verify whole-catalog runtime RAM snapshot is gone and legacy reader remains only migration/parity compatibility.
+Verify whole-catalog runtime RAM snapshot is gone and `catalog.v1` is not a SQLite bootstrap authority; any remaining pre-cutover legacy reader is limited to compatibility/rollback behavior.
 
 ## CP-F — Hierarchy-only hardware benchmark
 
@@ -107,6 +111,6 @@ Verify bounded/lazy Home reads, exact organizational ordering, no stale-scope pu
 
 After Task 34. STOP.
 
-Verify no production legacy writer/runtime reader remains except the minimum dedicated upgrade importer required by supported compatibility policy.
+Verify no production legacy writer/runtime reader remains except explicitly approved rollback/compatibility handling. No `catalog.v1` importer is required.
 
 Verify fresh install, old upgrade, SQLite install, corrupt DB recovery, logout/scope switching, offline/download/local/network playback, and final Miyoo smoke test.

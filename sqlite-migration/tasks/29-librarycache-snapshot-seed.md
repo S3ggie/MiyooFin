@@ -1,4 +1,4 @@
-# Task 29 — LibraryCache legacy importer
+# Task 29 — LibraryCache snapshot seed
 
 
 
@@ -17,7 +17,9 @@ For this numbered SQLite roadmap task, the user's roadmap instruction overrides 
 
 ## Goal
 
-Import `snapshot.v1` LibrarySnapshot data into schema v2 while keeping the legacy snapshot untouched.
+Seed schema v2 from the separate `LibraryCache` `snapshot.v1` metadata snapshot
+while keeping that snapshot untouched. This is independent of the retired
+`catalog.v1` hierarchy-import strategy.
 
 ## Depends On
 
@@ -25,7 +27,7 @@ Import `snapshot.v1` LibrarySnapshot data into schema v2 while keeping the legac
 
 ## Allowed Files
 
-- New/updated catalog migration files
+- New/updated catalog schema/seed files
 - Existing LibraryCache read API as source
 - Focused tests
 
@@ -53,13 +55,13 @@ git status --short
 3. Replace library_views/membership/home_items atomically from the authoritative snapshot.
 4. Preserve view order and item order.
 5. Preserve Continue Watching and Recently Added order.
-6. Import stale-generation snapshot only as local data while retaining/setting refresh-needed state outside destructive schema semantics.
+6. Seed stale-generation snapshot only as local data while retaining/setting refresh-needed state outside destructive schema semantics.
 7. Do not delete hierarchy rows not present in LibrarySnapshot.
 8. Validate semantic counts and canonical item parity.
 
 ## Invariants
 
-- Legacy snapshot immutable.
+- LibraryCache snapshot immutable.
 - Hierarchy survives.
 - No duplicate item authority.
 - No co-write.
@@ -86,7 +88,7 @@ Do not report a command as passed unless it actually ran successfully. Hardware 
 ## Commit message
 
 ```text
-feat(catalog): import legacy library snapshot into SQLite
+feat(catalog): seed library snapshot into SQLite
 ```
 
 This task file is explicit user authorization to create exactly one commit for this task after all required validation succeeds. Commit no unrelated changes.

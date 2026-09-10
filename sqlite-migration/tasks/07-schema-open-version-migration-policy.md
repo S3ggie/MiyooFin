@@ -13,7 +13,7 @@ For this numbered SQLite roadmap task, the user's roadmap instruction overrides 
 - One numbered task equals **one narrow commit**. Do not combine adjacent tasks into one commit.
 - The `Commit message` section in this task is explicit user authorization to commit **this task only** after every required validation succeeds.
 - Preserve all other current repository `AGENTS.md` safety, dirty-work, threading, hardware-evidence, and validation rules.
-- After the successful task commit, **STOP for mandatory human review: CP-A — SQLite build/core/schema**. Do not begin the next numbered task until that checkpoint is explicitly approved.
+- After the successful task commit, **STOP for mandatory human review: CP-A — SQLite build/core/scope/schema**. Do not begin the next numbered task until that checkpoint is explicitly approved.
 
 ## Goal
 

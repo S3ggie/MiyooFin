@@ -54,7 +54,7 @@ git status --short
 2. `cachedSeasonsForSeries` becomes an already-published scoped result path or asynchronous screen query; it must not read DB on SDL thread.
 3. Offline projection must operate from only needed hierarchy plus complete download metadata, or query scoped branches asynchronously.
 4. No runtime path loads all hierarchy merely to filter one show/season.
-5. Keep legacy OfflineCatalog reader only for migration/parity until Task 34.
+5. Any remaining OfflineCatalog reader is limited to pre-cutover compatibility/rollback behavior until Task 34; CatalogDb bootstrap never reads `catalog.v1`.
 
 ## Invariants
 
@@ -69,7 +69,7 @@ git status --short
 - Open show online/offline.
 - Downloaded-only show list/season behavior.
 - No stale snapshot race.
-- Static/code-search test for forbidden runtime OfflineCatalog load call sites where appropriate.
+- Static/code-search test proving the CatalogDb bootstrap path has no runtime `catalog.v1` import/read call.
 
 ## Complete validation commands
 

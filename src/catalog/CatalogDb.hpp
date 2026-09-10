@@ -76,19 +76,14 @@ enum class CatalogDbOpenState : unsigned char {
 
 enum class CatalogDbMigrationFileState : unsigned char {
     NoFiles,
-    LegacyOnly,
     FinalOnly,
     MigratingOnly,
-    LegacyAndFinal,
-    LegacyAndMigrating,
     FinalAndMigrating,
-    LegacyFinalAndMigrating,
     PathError,
 };
 
 enum class CatalogDbMigrationDecision : unsigned char {
     CreateEmptyFinal,
-    StageLegacyImport,
     RebuildMigratingAtMigrationStart,
     FinalDatabaseWins,
     FinalDatabaseWinsCleanupCandidate,
@@ -100,7 +95,6 @@ struct CatalogDbMigrationState {
     CatalogDbMigrationDecision decision =
         CatalogDbMigrationDecision::CreateEmptyFinal;
     bool finalPresent = false;
-    bool legacyPresent = false;
     bool migratingPresent = false;
     bool finalWins = false;
     bool migratingCleanupCandidate = false;
@@ -242,12 +236,6 @@ public:
     CatalogDbTestResult setSchemaMetadataForTest(std::int64_t applicationId,
                                                  std::int64_t userVersion);
     CatalogDbTestResult runMigrationRollbackForTest();
-    CatalogDbTestResult runLegacyMigrationForTest(int failAfterRows = -1,
-                                                  bool failValidation = false);
-    void setLegacyMigrationFailureForTest(int failAfterRows,
-                                          bool failValidation = false);
-    void setLegacyMigrationAutoActivationForTest(bool enabled);
-    void setLegacyMigrationPauseForTest(bool paused);
     CatalogDbTestResult runMediaItemCodecForTest();
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
@@ -336,9 +324,8 @@ private:
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
-    CatalogDbTestResult migrateLegacyCatalogForWorker(
-        const std::string &scopeKey, std::uint64_t scopeEpoch,
-        int failAfterRows, bool failValidation);
+    bool bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
+                                         std::string &error);
     CatalogDbTestResult runTestCommand(unsigned char operation,
                                        const std::string &value = {});
 
@@ -365,10 +352,6 @@ private:
     CatalogDbErrorCategory m_lastError = CatalogDbErrorCategory::None;
     CatalogDbOpenState m_openState = CatalogDbOpenState::NotAttempted;
     CatalogDbMigrationState m_migrationState;
-    int m_testLegacyMigrationFailAfterRows = -1;
-    bool m_testLegacyMigrationFailValidation = false;
-    bool m_testLegacyMigrationAutoActivation = true;
-    bool m_testLegacyMigrationPause = false;
     bool m_stopping = false;
     std::thread m_worker;
     sqlite3 *m_db = nullptr;

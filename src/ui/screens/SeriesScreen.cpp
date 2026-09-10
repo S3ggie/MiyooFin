@@ -9,9 +9,8 @@
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
-#include "../../cache/OfflineCatalog.hpp"
-#include "../../cache/LibraryCache.hpp"
-#include "../../cache/OfflineLibraryProjection.hpp"
+#include <algorithm>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 
@@ -99,14 +98,19 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem &season)
 }
 
 SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool networkOffline,
-                           std::vector<MediaItem> cachedSeasons, bool downloadedOnly)
+                           std::vector<MediaItem> cachedSeasons, bool downloadedOnly,
+                           std::shared_ptr<CatalogDb> catalogDb,
+                           std::uint64_t catalogScopeEpoch)
     : m_session(session)
     , m_series(series)
     , m_downloads(std::move(downloads))
+    , m_catalogDb(std::move(catalogDb))
+    , m_catalogMetadata()
     , m_networkOffline(networkOffline)
     , m_downloadedOnly(downloadedOnly)
     , m_seasons(std::move(cachedSeasons))
 {
+    m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
     if (!m_seasons.empty()) m_loadState=LoadState::Ready;
 }
 
@@ -167,32 +171,96 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
     {std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchDone=false;m_cachedSeasonsDone=false;}
     m_fetchCancelled.store(false, std::memory_order_release); Session s=m_session; std::string id=m_series.id;
     const bool networkOffline=m_networkOffline, downloadedOnly=m_downloadedOnly, loadCached=loadCachedSeasons;
-    const std::string catalogPath=OfflineCatalog::cachePath("cache",LibraryCache::scopeKey(s.serverUrl,s.userId));
     std::shared_ptr<DownloadManager> downloads=m_downloads;
+    std::shared_ptr<CatalogDb> catalogDb=m_catalogDb;
+    const CatalogDbJobMetadata catalogMetadata=m_catalogMetadata;
     const MediaItem series=m_series;
-    m_fetchThread=std::thread([this,s,id,networkOffline,downloadedOnly,loadCached,catalogPath,downloads,series](){
+    m_fetchThread=std::thread([this,s,id,networkOffline,downloadedOnly,loadCached,downloads,catalogDb,catalogMetadata,series](){
         if(loadCached) {
-            OfflineCatalogSnapshot catalog;
-            OfflineCatalog::load(catalogPath,catalog,nullptr);
             if(m_fetchCancelled.load(std::memory_order_acquire)) return;
             std::vector<MediaItem> cached;
-            if(downloadedOnly) {
-                LibrarySnapshot library;
-                OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{});
-                cached=projection.seasons(id);
-            } else {
-                auto it=catalog.seasonsBySeries.find(id);
-                if(it!=catalog.seasonsBySeries.end()) cached=it->second;
+            if (catalogDb) {
+                const CatalogDbHierarchyResult result =
+                    catalogDb->getSeasons(id, catalogMetadata).get();
+                if (result.success) cached = result.items;
+                if (result.cancelled || result.superseded) {
+                    if (networkOffline) return;
+                    cached.clear();
+                }
+            }
+            if (downloadedOnly) {
+                const DownloadSnapshot snapshot =
+                    downloads ? downloads->snapshot() : DownloadSnapshot{};
+                std::vector<MediaItem> filtered;
+                for (const auto &season : cached) {
+                    for (const auto &download : snapshot.items) {
+                        const bool complete =
+                            download.state == DownloadState::Complete
+                            || download.state == DownloadState::LocalOnly
+                            || download.state == DownloadState::UpdateAvailable;
+                        if (complete && download.itemType == "episode"
+                            && download.seriesId == id
+                            && download.seasonId == season.id) {
+                            filtered.push_back(season);
+                            break;
+                        }
+                    }
+                }
+                if (filtered.empty()) {
+                    for (const auto &download : snapshot.items) {
+                        const bool complete =
+                            download.state == DownloadState::Complete
+                            || download.state == DownloadState::LocalOnly
+                            || download.state == DownloadState::UpdateAvailable;
+                        if (!complete || download.itemType != "episode"
+                            || download.seriesId != id
+                            || download.seasonId.empty()) continue;
+                        MediaItem season;
+                        season.id = download.seasonId;
+                        season.type = "season";
+                        season.seriesId = id;
+                        season.title = download.seasonName.empty()
+                            ? "Season " + std::to_string(download.seasonNumber)
+                            : download.seasonName;
+                        season.indexNumber = download.seasonNumber;
+                        bool duplicate = false;
+                        for (const auto &existing : filtered)
+                            duplicate = duplicate || existing.id == season.id;
+                        if (!duplicate) filtered.push_back(std::move(season));
+                    }
+                }
+                cached = std::move(filtered);
             }
             {std::lock_guard<std::mutex>g(m_fetchMutex);m_cachedSeasons=std::move(cached);m_cachedSeasonsDone=true;}
             if(networkOffline) { std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=true;m_fetchDone=true;return; }
         }
         if(m_fetchCancelled.load(std::memory_order_acquire)) return;
         std::vector<MediaItem> v;std::string e;bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getSeasons(base,s.accessToken,s.userId,s.deviceId,id,v,e,&m_fetchCancelled);},e);
-        // Persist network results on the worker too: save() fsyncs the catalog.
+        // Persist the season-scoped network result on CatalogDb's worker.  A
+        // season list is intentionally staged as incomplete because episodes
+        // have not been fetched by this screen.
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
-            OfflineCatalog::storeSeasons(catalogPath,series,v,nullptr);
-            if (downloadedOnly) { OfflineCatalogSnapshot catalog; OfflineCatalog::load(catalogPath,catalog,nullptr); LibrarySnapshot library; OfflineLibraryProjection projection(library,catalog,downloads?downloads->snapshot():DownloadSnapshot{}); v=projection.seasons(id); }
+            if (catalogDb) {
+                catalogDb->stageSeriesHierarchy(
+                    series, v, {}, 0, static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                    false, catalogMetadata).get();
+            }
+            if (downloadedOnly) {
+                const DownloadSnapshot snapshot =
+                    downloads ? downloads->snapshot() : DownloadSnapshot{};
+                v.erase(std::remove_if(v.begin(), v.end(), [&](const MediaItem &season) {
+                    for (const auto &download : snapshot.items) {
+                        const bool complete =
+                            download.state == DownloadState::Complete
+                            || download.state == DownloadState::LocalOnly
+                            || download.state == DownloadState::UpdateAvailable;
+                        if (complete && download.itemType == "episode"
+                            && download.seriesId == id
+                            && download.seasonId == season.id) return false;
+                    }
+                    return true;
+                }), v.end());
+            }
         }
         std::lock_guard<std::mutex>g(m_fetchMutex);m_fetchOk=ok;m_fetchSeasons=std::move(v);m_fetchError=e;m_fetchDone=true;
     });

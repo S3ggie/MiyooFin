@@ -790,6 +790,7 @@ int main()
     testCatalogDbFreshBootstrapPathStates();
     testCatalogDbFreshBootstrapUnsupportedFinalPreserved();
     testCatalogDbFreshBootstrapPathError();
+    testCatalogDbJellyfinHierarchyStaging();
     testCatalogDbProjectionParity();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();

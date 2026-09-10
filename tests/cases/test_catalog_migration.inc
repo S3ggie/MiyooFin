@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../../vendor/sqlite/sqlite3.h"
+
 namespace {
 
 struct CatalogMigrationTestPaths {
@@ -220,5 +222,95 @@ static void testCatalogDbFreshBootstrapPathError()
     CHECK(state.openState == CatalogDbOpenState::CorruptOrIo);
     CHECK(state.migration.files == CatalogDbMigrationFileState::PathError);
     CHECK(state.migration.decision == CatalogDbMigrationDecision::PathError);
+    removeCatalogMigrationTestPaths(paths);
+}
+
+static bool readHierarchyCheckpoint(const std::string &path, bool &complete,
+                                    std::int64_t &generation)
+{
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr)
+            != SQLITE_OK
+        || !db) {
+        if (db) {
+            sqlite3_close(db);
+        }
+        return false;
+    }
+    sqlite3_stmt *statement = nullptr;
+    const bool prepared = sqlite3_prepare_v2(
+        db,
+        "SELECT complete, last_generation FROM hierarchy_state "
+        "WHERE series_id='__task15_series__'",
+        -1, &statement, nullptr) == SQLITE_OK;
+    const int rc = prepared ? sqlite3_step(statement) : SQLITE_ERROR;
+    if (prepared && rc == SQLITE_ROW) {
+        complete = sqlite3_column_int(statement, 0) != 0;
+        generation = sqlite3_column_int64(statement, 1);
+    }
+    if (statement) {
+        sqlite3_finalize(statement);
+    }
+    sqlite3_close(db);
+    return prepared && rc == SQLITE_ROW;
+}
+
+static void testCatalogDbJellyfinHierarchyStaging()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-jellyfin-staging-" + suffix + ".example";
+    const std::string user = "jellyfin-staging-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    MediaItem series;
+    series.id = "__task15_series__";
+    series.type = "show";
+    series.title = "Synthetic Series";
+    MediaItem season;
+    season.id = "__task15_season__";
+    season.type = "season";
+    season.seriesId = series.id;
+    season.title = "Synthetic Season";
+    MediaItem episode;
+    episode.id = "__task15_episode__";
+    episode.type = "episode";
+    episode.seriesId = series.id;
+    episode.seasonId = season.id;
+    episode.title = "Synthetic Episode";
+    const std::map<std::string, std::vector<MediaItem>> completeEpisodes = {
+        {season.id, {episode}}};
+    {
+        CatalogDb db;
+        CHECK(db.configureScope(url, user) != 0);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        auto complete = db.stageSeriesHierarchy(
+            series, {season}, completeEpisodes, 41, 1000, true).get();
+        CHECK(complete.success && complete.workerOwned);
+        bool checkpointComplete = false;
+        std::int64_t generation = 0;
+        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
+                                      generation));
+        CHECK(checkpointComplete && generation == 41);
+
+        auto partial = db.stageSeriesHierarchy(
+            series, {season}, {{season.id, {}}}, 42, 1100, false).get();
+        CHECK(partial.success && partial.workerOwned);
+        auto retained = db.getEpisodes(season.id).get();
+        CHECK(retained.success && retained.items.size() == 1
+              && retained.items[0].id == episode.id);
+        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
+                                      generation));
+        CHECK(!checkpointComplete && generation == 42);
+
+        auto repeated = db.stageSeriesHierarchy(
+            series, {season}, completeEpisodes, 43, 1200, true).get();
+        CHECK(repeated.success && repeated.workerOwned);
+        CHECK(readHierarchyCheckpoint(paths.finalPath, checkpointComplete,
+                                      generation));
+        CHECK(checkpointComplete && generation == 43);
+    }
     removeCatalogMigrationTestPaths(paths);
 }

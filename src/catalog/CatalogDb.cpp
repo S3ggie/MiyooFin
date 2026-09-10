@@ -640,6 +640,7 @@ struct CatalogDb::HierarchyWriteCommand {
     std::map<std::string, std::vector<MediaItem>> episodesBySeason;
     std::uint64_t generation = 0;
     std::int64_t refreshMs = 0;
+    bool complete = true;
     CatalogDbJobMetadata metadata;
     std::uint64_t enqueuedMonotonicUs = 0;
     int failAfterRows = -1;
@@ -965,7 +966,17 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::upsertSeriesHierarchy(
     const CatalogDbJobMetadata &metadata)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, metadata, -1, -1);
+                                 refreshMs, true, metadata, -1, -1);
+}
+
+std::future<CatalogDbHierarchyWriteResult> CatalogDb::stageSeriesHierarchy(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, std::int64_t refreshMs, bool complete,
+    const CatalogDbJobMetadata &metadata)
+{
+    return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
+                                 refreshMs, complete, metadata, -1, -1);
 }
 
 std::future<CatalogDbHierarchyWriteResult>
@@ -976,7 +987,7 @@ CatalogDb::upsertSeriesHierarchyForTest(
     int cancelAfterRows)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, {}, failAfterRows,
+                                 refreshMs, true, {}, failAfterRows,
                                  cancelAfterRows);
 }
 
@@ -984,7 +995,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
     const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
     std::uint64_t generation, std::int64_t refreshMs,
-    const CatalogDbJobMetadata &metadata, int failAfterRows,
+    bool complete, const CatalogDbJobMetadata &metadata, int failAfterRows,
     int cancelAfterRows)
 {
     auto command = std::make_shared<HierarchyWriteCommand>();
@@ -993,6 +1004,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     command->episodesBySeason = episodesBySeason;
     command->generation = generation;
     command->refreshMs = refreshMs;
+    command->complete = complete;
     command->metadata = metadata;
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     command->failAfterRows = failAfterRows;
@@ -1808,8 +1820,8 @@ void CatalogDb::processHierarchyWrite(
         || !prepareCached(
                "hierarchy_mark_complete",
                "INSERT INTO hierarchy_state(series_id, complete, "
-               "last_refresh_ms, last_generation) VALUES(?1, 1, ?2, ?3) "
-               "ON CONFLICT(series_id) DO UPDATE SET complete=1, "
+               "last_refresh_ms, last_generation) VALUES(?1, ?2, ?3, ?4) "
+               "ON CONFLICT(series_id) DO UPDATE SET complete=excluded.complete, "
                "last_refresh_ms=excluded.last_refresh_ms, "
                "last_generation=excluded.last_generation",
                markComplete)
@@ -1920,15 +1932,15 @@ void CatalogDb::processHierarchyWrite(
         transactionStartUs = beginUs;
         transactionActive = true;
     }
-    if (!began
-        || !writeItem(command->series)
-        || !deleteById(deleteSeasons, command->series.id)) {
+    if (!began || !writeItem(command->series)
+        || (command->complete
+            && !deleteById(deleteSeasons, command->series.id))) {
         rollback();
         finish();
         return;
     }
     for (const auto &season : command->seasons) {
-        if (!deleteById(deleteEpisodes, season.id)
+        if ((command->complete && !deleteById(deleteEpisodes, season.id))
             || !writeItem(season)) {
             rollback();
             finish();
@@ -1950,8 +1962,10 @@ void CatalogDb::processHierarchyWrite(
     reset(markComplete);
     if (sqlite3_bind_text(markComplete, 1, command->series.id.c_str(), -1,
                           SQLITE_TRANSIENT) != SQLITE_OK
-        || sqlite3_bind_int64(markComplete, 2, command->refreshMs) != SQLITE_OK
-        || sqlite3_bind_int64(markComplete, 3,
+        || sqlite3_bind_int(markComplete, 2, command->complete ? 1 : 0)
+               != SQLITE_OK
+        || sqlite3_bind_int64(markComplete, 3, command->refreshMs) != SQLITE_OK
+        || sqlite3_bind_int64(markComplete, 4,
                               static_cast<sqlite3_int64>(command->generation))
                != SQLITE_OK
         || sqlite3_step(markComplete) != SQLITE_DONE) {

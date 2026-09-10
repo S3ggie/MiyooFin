@@ -392,7 +392,7 @@ static void testCatalogDbSchemaV1()
     auto schema = db.runSchemaDiagnosticsForTest();
     CHECK(schema.success && schema.workerOwned && schema.exactSchema);
     CHECK(schema.applicationId == 0x4D59464E);
-    CHECK(schema.userVersion == 1);
+    CHECK(schema.userVersion == 2);
     CHECK(schema.singletonSeeded && schema.foreignKeyCascade);
     CHECK(schema.checkConstraints);
 
@@ -418,20 +418,20 @@ static void testCatalogDbSchemaOpenPolicy()
     CHECK(created.waitForIdleForTest(std::chrono::seconds(2)));
     auto state = created.scopeState();
     CHECK(state.requestedEpoch == createdEpoch && state.ready);
-    CHECK(state.openState == CatalogDbOpenState::CreatedV1);
+    CHECK(state.openState == CatalogDbOpenState::CreatedV2);
 
     const auto supportedEpoch = created.configureScope(createdUrl, createdUser);
     CHECK(supportedEpoch > createdEpoch);
     CHECK(created.waitForIdleForTest(std::chrono::seconds(2)));
     state = created.scopeState();
-    CHECK(state.ready && state.openState == CatalogDbOpenState::SupportedV1);
+    CHECK(state.ready && state.openState == CatalogDbOpenState::SupportedV2);
 
     const std::string wrongUrl = "https://sqlite-policy-wrong-" + suffix
         + ".example";
     CatalogDb wrong;
     const auto wrongEpoch = wrong.configureScope(wrongUrl, "policy-wrong");
     CHECK(wrong.waitForIdleForTest(std::chrono::seconds(2)));
-    CHECK(wrong.scopeState().openState == CatalogDbOpenState::CreatedV1);
+    CHECK(wrong.scopeState().openState == CatalogDbOpenState::CreatedV2);
     CHECK(wrong.setSchemaMetadataForTest(0x4D59464F, 1).success);
     const std::string wrongPath = "cache/library/"
         + LibraryCache::scopeKey(wrongUrl, "policy-wrong") + "/catalog.sqlite3";

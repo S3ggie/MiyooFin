@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../data/MediaItem.hpp"
+#include "../cache/LibraryCache.hpp"
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -224,6 +225,18 @@ struct CatalogDbSyncState {
     std::uint64_t committedGeneration = 0;
 };
 
+struct CatalogDbLibrarySeedResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t itemsUpserted = 0;
+    std::size_t viewsWritten = 0;
+    std::size_t homeItemsWritten = 0;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -326,6 +339,12 @@ public:
         std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
         std::uint64_t committedGeneration,
         const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshot(
+        const LibrarySnapshot &snapshot,
+        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshotForTest(
+        const LibrarySnapshot &snapshot, int failAfterWrites,
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -362,6 +381,7 @@ private:
     struct ReconcileCommand;
     struct OfflineRebuildCommand;
     struct SyncStateCommand;
+    struct LibrarySeedCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -378,6 +398,8 @@ private:
         const std::shared_ptr<OfflineRebuildCommand> &command);
     void processSyncState(
         const std::shared_ptr<SyncStateCommand> &command);
+    void processLibrarySeed(
+        const std::shared_ptr<LibrarySeedCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -398,6 +420,9 @@ private:
         std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
         std::uint64_t committedGeneration,
         const CatalogDbJobMetadata &metadata);
+    std::future<CatalogDbLibrarySeedResult> enqueueLibrarySeed(
+        const LibrarySnapshot &snapshot, const CatalogDbJobMetadata &metadata,
+        int failAfterWrites = -1);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -417,6 +442,7 @@ private:
     std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
     std::deque<std::shared_ptr<OfflineRebuildCommand>> m_offlineCommands;
     std::deque<std::shared_ptr<SyncStateCommand>> m_syncStateCommands;
+    std::deque<std::shared_ptr<LibrarySeedCommand>> m_librarySeedCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

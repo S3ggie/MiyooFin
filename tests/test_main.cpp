@@ -810,6 +810,7 @@ int main()
     testCatalogDbOfflineDownloadReconstruction();
     testCatalogDbScopeActivationSchedulesOfflineRebuild();
     testCatalogDbProjectionParity();
+    testCatalogDbLibrarySnapshotSeed();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
     testRouteRequest();

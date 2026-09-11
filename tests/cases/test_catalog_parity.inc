@@ -653,6 +653,36 @@ static void testCatalogDbMediaPageUpsertAndPopulation()
     std::printf("[test] CatalogDb page upsert atomicity and population states OK\n");
 }
 
+static void testCatalogDbMediaPageTopLevelStaging()
+{
+    std::printf("[test] CatalogDb staged media page writes\n");
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://page-stage.example", "user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    const CatalogDbJobMetadata metadata{0, epoch, {}};
+    CatalogDbMediaPageWrite live;
+    live.items = {catalogParityItem("live-stage", "movie", "Live Stage")};
+    live.viewId = "movies"; live.viewName = "Movies"; live.collectionType = "movies";
+    CHECK(db.upsertMediaPage(live, metadata).get().success);
+    CHECK(db.beginTopLevelSync(77, metadata).get().success);
+    CatalogDbMediaPageWrite staged = live;
+    staged.items = {catalogParityItem("staged-a", "movie", "A"),
+                    catalogParityItem("staged-b", "movie", "B")};
+    staged.syncGeneration = 77; staged.ordinalStart = 4;
+    CHECK(db.upsertMediaPage(staged, metadata).get().success);
+    auto before = db.readLibrarySnapshot(metadata).get();
+    CHECK(before.success && before.snapshot.movies.size() == 1
+          && before.snapshot.movies[0].items[0].id == "live-stage");
+    auto stale = staged; stale.syncGeneration = 76;
+    CHECK(db.upsertMediaPage(stale, metadata).get().superseded);
+    auto failed = staged; failed.items = {catalogParityItem("rollback-stage", "movie", "R")};
+    CHECK(!db.upsertMediaPageForTest(failed, 0, metadata).get().success);
+    CHECK(db.abortTopLevelSync(77, metadata).get().success);
+    auto after = db.readLibrarySnapshot(metadata).get();
+    CHECK(after.success && after.snapshot.movies[0].items[0].id == "live-stage");
+    std::printf("[test] CatalogDb staged media page writes OK\n");
+}
+
 static void testHomeSkipsUnsupportedLibraryViews()
 {
     std::printf("[test] Home skips unsupported library views before persistence\n");

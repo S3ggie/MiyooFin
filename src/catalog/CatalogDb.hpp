@@ -300,6 +300,7 @@ struct CatalogDbMediaPageWrite {
     std::string collectionType;
     std::size_t ordinalStart = 0;
     int viewOrdinal = 0;
+    std::uint64_t syncGeneration = 0;
     bool finalPage = false;
 };
 

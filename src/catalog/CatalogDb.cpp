@@ -6,6 +6,7 @@
 #include "../download/DownloadStore.hpp"
 #include "MediaItemSql.hpp"
 #include "CatalogDbSchema.hpp"
+#include "../ui/TitleOrganization.hpp"
 #include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
@@ -77,6 +78,8 @@ const char *openStateName(CatalogDbOpenState value)
     case CatalogDbOpenState::SupportedV1: return "supported_v1";
     case CatalogDbOpenState::CreatedV2: return "created_v2";
     case CatalogDbOpenState::SupportedV2: return "supported_v2";
+    case CatalogDbOpenState::CreatedV3: return "created_v3";
+    case CatalogDbOpenState::SupportedV3: return "supported_v3";
     case CatalogDbOpenState::WrongApplicationId: return "wrong_application_id";
     case CatalogDbOpenState::UnsupportedVersion: return "unsupported_version";
     case CatalogDbOpenState::CorruptOrIo: return "corrupt_or_io";
@@ -122,6 +125,7 @@ constexpr unsigned char kMediaItemCodecOperation = 11;
 constexpr unsigned char kMediaItemCollectionsOperation = 12;
 constexpr unsigned char kSeedHierarchyQueryOperation = 13;
 constexpr unsigned char kClearHierarchyQueryOperation = 14;
+constexpr unsigned char kMediaPageQueryPlanOperation = 15;
 constexpr std::size_t kMaxHierarchyQueryRows = 128;
 constexpr std::size_t kMaxReconcileSeries = 4096;
 
@@ -356,8 +360,22 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
         openState = CatalogDbOpenState::CorruptOrIo;
         return false;
     }
+    if (applicationId == kCatalogApplicationId && userVersion == 3) {
+        openState = CatalogDbOpenState::SupportedV3;
+        return true;
+    }
     if (applicationId == kCatalogApplicationId && userVersion == 2) {
-        openState = CatalogDbOpenState::SupportedV2;
+        if (!exec(db, "BEGIN IMMEDIATE;", error)) return false;
+        const char *const migration[] = {
+            "ALTER TABLE media_items ADD COLUMN organizational_sort_key TEXT NOT NULL DEFAULT '';",
+            "CREATE INDEX idx_media_movie_sort ON media_items(kind, organizational_sort_key, title, id);",
+            "CREATE INDEX idx_media_show_sort ON media_items(kind, organizational_sort_key, title, id);",
+        };
+        for (const char *statement : migration) {
+            if (!exec(db, statement, error)) { std::string ignored; exec(db, "ROLLBACK;", ignored); return false; }
+        }
+        if (!exec(db, "PRAGMA user_version = 3;", error) || !exec(db, "COMMIT;", error)) { std::string ignored; exec(db, "ROLLBACK;", ignored); return false; }
+        openState = CatalogDbOpenState::SupportedV3;
         return true;
     }
     if (applicationId == kCatalogApplicationId && userVersion == 1) {
@@ -387,6 +405,9 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
             "CREATE INDEX idx_library_membership_view_order ON library_membership(view_id, ordinal, item_id);",
             "CREATE INDEX idx_library_membership_item ON library_membership(item_id, view_id);",
             "CREATE INDEX idx_home_items_row_order ON home_items(row_kind, ordinal, item_id);",
+            "ALTER TABLE media_items ADD COLUMN organizational_sort_key TEXT NOT NULL DEFAULT '';",
+            "CREATE INDEX idx_media_movie_sort ON media_items(kind, organizational_sort_key, title, id);",
+            "CREATE INDEX idx_media_show_sort ON media_items(kind, organizational_sort_key, title, id);",
         };
         for (const char *statement : migration) {
             if (!exec(db, statement, error)) {
@@ -395,7 +416,7 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
                 return false;
             }
         }
-        if (!exec(db, "PRAGMA user_version = 2;", error)
+        if (!exec(db, "PRAGMA user_version = 3;", error)
             || !exec(db, "COMMIT;", error)) {
             std::string ignored;
             exec(db, "ROLLBACK;", ignored);
@@ -428,14 +449,47 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
     const std::string applicationIdPragma =
         "PRAGMA application_id = " + std::to_string(kCatalogApplicationId) + ";";
     if (!exec(db, applicationIdPragma.c_str(), error)
-        || !exec(db, "PRAGMA user_version = 2;", error)
+        || !exec(db, "PRAGMA user_version = 3;", error)
         || !exec(db, "COMMIT;", error)) {
         std::string ignored;
         exec(db, "ROLLBACK;", ignored);
         return false;
     }
-    openState = CatalogDbOpenState::CreatedV2;
+    openState = CatalogDbOpenState::CreatedV3;
     return true;
+}
+
+bool backfillOrganizationalSortKeys(sqlite3 *db, std::string &error)
+{
+    sqlite3_stmt *read = nullptr;
+    sqlite3_stmt *write = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT id, title FROM media_items", -1, &read, nullptr) != SQLITE_OK
+        || sqlite3_prepare_v2(db, "UPDATE media_items SET organizational_sort_key=?1 WHERE id=?2", -1, &write, nullptr) != SQLITE_OK) {
+        error = sqlite3_errmsg(db); sqlite3_finalize(read); sqlite3_finalize(write); return false;
+    }
+    while (sqlite3_step(read) == SQLITE_ROW) {
+        const char *id = reinterpret_cast<const char *>(sqlite3_column_text(read, 0));
+        const char *title = reinterpret_cast<const char *>(sqlite3_column_text(read, 1));
+        sqlite3_reset(write); sqlite3_clear_bindings(write);
+        if (!id || sqlite3_bind_text(write, 1, organizationalSortKey(title ? title : "").c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+            || sqlite3_bind_text(write, 2, id, -1, SQLITE_TRANSIENT) != SQLITE_OK
+            || sqlite3_step(write) != SQLITE_DONE) { error = sqlite3_errmsg(db); sqlite3_finalize(read); sqlite3_finalize(write); return false; }
+    }
+    sqlite3_finalize(read); sqlite3_finalize(write); return true;
+}
+
+bool maintainOrganizationalSortKey(sqlite3 *db, const MediaItem &item,
+                                   std::string &error)
+{
+    sqlite3_stmt *statement = nullptr;
+    if (sqlite3_prepare_v2(db, "UPDATE media_items SET organizational_sort_key=?1 WHERE id=?2", -1, &statement, nullptr) != SQLITE_OK) { error = sqlite3_errmsg(db); return false; }
+    const std::string key = organizationalSortKey(item.title);
+    const bool ok = sqlite3_bind_text(statement, 1, key.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK
+        && sqlite3_bind_text(statement, 2, item.id.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK
+        && sqlite3_step(statement) == SQLITE_DONE;
+    if (!ok) error = sqlite3_errmsg(db);
+    sqlite3_finalize(statement);
+    return ok;
 }
 
 bool schemaConstraints(sqlite3 *db, bool &foreignKeyCascade,
@@ -676,6 +730,11 @@ struct CatalogDb::LibraryReadCommand {
     CatalogDbJobMetadata metadata;
     std::promise<CatalogDbLibraryReadResult> result;
 };
+struct CatalogDb::MediaPageCommand {
+    std::string type; int letter = -1; std::size_t limit = 0;
+    CatalogDbPageCursor after; CatalogDbJobMetadata metadata;
+    std::promise<CatalogDbMediaPageResult> result;
+};
 
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
@@ -700,6 +759,7 @@ CatalogDb::~CatalogDb()
         m_syncStateCommands.clear();
         m_librarySeedCommands.clear();
         m_libraryReadCommands.clear();
+        m_mediaPageCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
@@ -869,6 +929,19 @@ CatalogDbTestResult CatalogDb::seedHierarchyQueryFixturesForTest()
 CatalogDbTestResult CatalogDb::clearHierarchyQueryFixturesForTest()
 {
     return runTestCommand(kClearHierarchyQueryOperation);
+}
+
+CatalogDbTestResult CatalogDb::runMediaPageQueryPlanForTest(
+    const std::string &type, int alphabetLetter)
+{
+    if (type != "movie" && type != "show") {
+        CatalogDbTestResult result;
+        result.error = CatalogDbErrorCategory::SqliteError;
+        result.message = "invalid media page query-plan type";
+        return result;
+    }
+    return runTestCommand(kMediaPageQueryPlanOperation,
+                          type + ":" + std::to_string(alphabetLetter));
 }
 
 CatalogDbTestResult CatalogDb::writeSentinelForTest(const std::string &value)
@@ -1341,6 +1414,24 @@ std::future<CatalogDbLibraryReadResult> CatalogDb::readLibrarySnapshot(
     const CatalogDbJobMetadata &metadata)
 { return enqueueLibraryRead(metadata); }
 
+std::future<CatalogDbMediaPageResult> CatalogDb::readMediaPage(
+    const std::string &type, int alphabetLetter, std::size_t limit,
+    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
+{ return enqueueMediaPage(type, alphabetLetter, limit, after, metadata); }
+
+std::future<CatalogDbMediaPageResult> CatalogDb::enqueueMediaPage(
+    const std::string &type, int alphabetLetter, std::size_t limit,
+    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
+{
+    auto command=std::make_shared<MediaPageCommand>(); command->type=type; command->letter=alphabetLetter; command->limit=std::min<std::size_t>(limit, 64); command->after=after; command->metadata=metadata;
+    auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
+    if(m_stopping){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::ScopeNotReady;r.message="CatalogDb is stopping";command->result.set_value(std::move(r));return future;}
+    if(command->limit==0 || (type!="movie" && type!="show")){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::SqliteError;r.message="invalid media page request";command->result.set_value(std::move(r));return future;}
+    if(m_pendingJobs>=kMaxPendingJobs){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb page queue is full";command->result.set_value(std::move(r));return future;}
+    command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation; command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
+    m_mediaPageCommands.push_back(command); ++m_pendingJobs; m_wake.notify_one(); return future;
+}
+
 std::future<CatalogDbLibraryReadResult> CatalogDb::enqueueLibraryRead(
     const CatalogDbJobMetadata &metadata)
 {
@@ -1451,7 +1542,8 @@ void CatalogDb::workerLoop()
                     || !m_offlineCommands.empty()
                     || !m_syncStateCommands.empty()
                     || !m_librarySeedCommands.empty()
-                    || !m_libraryReadCommands.empty()
+                || !m_libraryReadCommands.empty()
+                    || !m_mediaPageCommands.empty()
                     || hasPendingJobsLocked()));
         });
 
@@ -1590,6 +1682,11 @@ void CatalogDb::workerLoop()
         if (!m_libraryReadCommands.empty()) {
             auto command=std::move(m_libraryReadCommands.front()); m_libraryReadCommands.pop_front(); --m_pendingJobs;
             m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processLibraryRead(command);
+            lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
+        }
+        if (!m_mediaPageCommands.empty()) {
+            auto command=std::move(m_mediaPageCommands.front()); m_mediaPageCommands.pop_front(); --m_pendingJobs;
+            m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processMediaPage(command);
             lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
         }
 
@@ -2228,7 +2325,8 @@ void CatalogDb::processHierarchyWrite(
         }
         reset(upsert);
         const bool bound = bindMediaItemScalars(upsert, item, error);
-        const bool stepped = bound && sqlite3_step(upsert) == SQLITE_DONE;
+        const bool stepped = bound && sqlite3_step(upsert) == SQLITE_DONE
+            && maintainOrganizationalSortKey(m_db, item, result.message);
         if (!stepped) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
@@ -2521,7 +2619,8 @@ void CatalogDb::processReconcile(
         }
         reset(upsert);
         const bool ok = bindMediaItemScalars(upsert, item, error)
-            && sqlite3_step(upsert) == SQLITE_DONE;
+            && sqlite3_step(upsert) == SQLITE_DONE
+            && maintainOrganizationalSortKey(m_db, item, result.message);
         if (!ok) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
@@ -2826,7 +2925,8 @@ void CatalogDb::processOfflineRebuild(
         MediaItemSqlError bindError = MediaItemSqlError::None;
         reset(upsert);
         if (!bindMediaItemScalars(upsert, item, bindError)
-            || sqlite3_step(upsert) != SQLITE_DONE) {
+            || sqlite3_step(upsert) != SQLITE_DONE
+            || !maintainOrganizationalSortKey(m_db, item, result.message)) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = sqlite3_errmsg(m_db);
             reset(upsert);
@@ -2925,6 +3025,95 @@ void CatalogDb::processOfflineRebuild(
     finish();
 }
 
+void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &command)
+{
+    CatalogDbMediaPageResult result; result.workerOwned=true;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command->metadata.generation != m_generation
+            || command->metadata.scopeEpoch != m_requestedEpoch
+            || !m_scopeReady) {
+            result.superseded=true;
+            result.error=CatalogDbErrorCategory::Superseded;
+            command->result.set_value(std::move(result));
+            return;
+        }
+    }
+    sqlite3_stmt *statement=nullptr, *genres=nullptr, *tags=nullptr;
+    const std::string indexName = "idx_media_" + command->type + "_sort";
+    const std::string sql =
+        "SELECT id,kind,title,overview,production_year,community_rating,"
+        "etag,played,progress,playback_position_ticks,index_number,"
+        "parent_index_number,runtime_ticks,series_name,series_id,season_id,"
+        "art_r,art_g,art_b FROM media_items INDEXED BY " + indexName
+        + " WHERE kind=?1 AND "
+        "(?2 < 0 OR (organizational_sort_key>=?3 AND "
+        "organizational_sort_key<?4)) AND (?5=0 OR "
+        "(organizational_sort_key,title,id)>(?6,?7,?8)) "
+        "ORDER BY organizational_sort_key,title,id LIMIT ?9";
+    if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &statement, nullptr) != SQLITE_OK
+        || sqlite3_prepare_v2(
+               m_db,
+               "SELECT ordinal,genre FROM item_genres WHERE item_id=?1 "
+               "ORDER BY ordinal", -1, &genres, nullptr) != SQLITE_OK
+        || sqlite3_prepare_v2(
+               m_db,
+               "SELECT image_type,tag FROM item_image_tags WHERE item_id=?1 "
+               "ORDER BY image_type", -1, &tags, nullptr) != SQLITE_OK) {
+        result.error=CatalogDbErrorCategory::SqliteError;
+        result.message=sqlite3_errmsg(m_db);
+        sqlite3_finalize(statement); sqlite3_finalize(genres);
+        sqlite3_finalize(tags);
+        command->result.set_value(std::move(result));
+        return;
+    }
+    const std::string lower = command->letter >= 0
+        ? std::string(1, static_cast<char>('a' + command->letter)) : "";
+    const std::string upper = command->letter >= 0
+        ? std::string(1, static_cast<char>('a' + command->letter + 1)) : "";
+    sqlite3_bind_int(statement,1,command->type=="movie"?1:2);
+    sqlite3_bind_int(statement,2,command->letter);
+    sqlite3_bind_text(statement,3,lower.c_str(),-1,SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement,4,upper.c_str(),-1,SQLITE_TRANSIENT);
+    sqlite3_bind_int(statement,5,command->after.valid?1:0);
+    sqlite3_bind_text(statement,6,command->after.sortKey.c_str(),-1,SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement,7,command->after.title.c_str(),-1,SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement,8,command->after.id.c_str(),-1,SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement,9,static_cast<sqlite3_int64>(command->limit+1));
+    const MediaItemCollectionStatements collections{
+        nullptr, nullptr, nullptr, nullptr, genres, tags};
+    while (sqlite3_step(statement)==SQLITE_ROW) {
+        if (command->metadata.cancellation
+            && command->metadata.cancellation->load()) {
+            result.cancelled=true;
+            break;
+        }
+        MediaItem item;
+        MediaItemSqlError e=MediaItemSqlError::None;
+        if (!readMediaItemScalars(statement,item,e)
+            || !readMediaItemCollections(collections,item,e)) {
+            result.error=CatalogDbErrorCategory::SqliteError;
+            result.message=sqlite3_errmsg(m_db);
+            break;
+        }
+        if (result.items.size()<command->limit)
+            result.items.push_back(std::move(item));
+        else
+            result.hasMore=true;
+    }
+    if (!result.items.empty()) {
+        const auto &item=result.items.back();
+        result.next.sortKey=organizationalSortKey(item.title);
+        result.next.title=item.title;
+        result.next.id=item.id;
+        result.next.valid=true;
+    }
+    sqlite3_finalize(statement); sqlite3_finalize(genres); sqlite3_finalize(tags);
+    if (!result.cancelled&&result.error==CatalogDbErrorCategory::None)
+        result.success=true;
+    command->result.set_value(std::move(result));
+}
+
 void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command)
 {
     CatalogDbLibraryReadResult result; result.workerOwned=true;
@@ -2973,7 +3162,7 @@ void CatalogDb::processLibrarySeed(
         || sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&insertTag,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); rollback(); command->result.set_value(std::move(result)); return; }
     const MediaItemCollectionStatements collections{deleteGenres,insertGenre,deleteTags,insertTag};
     int writes=0;
-    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failAfterWrites>=0&&++writes>=command->failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
+    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failAfterWrites>=0&&++writes>=command->failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
     sqlite3_finalize(upsert); sqlite3_finalize(deleteGenres); sqlite3_finalize(insertGenre); sqlite3_finalize(deleteTags); sqlite3_finalize(insertTag);
     if (!execSeed("DELETE FROM library_membership; DELETE FROM library_views; DELETE FROM home_items;")) { result.error=CatalogDbErrorCategory::SqliteError; rollback(); command->result.set_value(std::move(result)); return; }
     auto addView = [&](const CachedLibraryView &v, int ordinal) { sqlite3_stmt *s=nullptr; if(sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?)",-1,&s,nullptr)!=SQLITE_OK)return false; sqlite3_bind_text(s,1,v.id.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,2,v.name.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,3,v.collectionType.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_int(s,4,ordinal);bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);if(!ok)return false; for(size_t i=0;i<v.items.size();++i){if(!execSeed("INSERT INTO library_membership(view_id,item_id,ordinal) VALUES('"+v.id+"','"+v.items[i].id+"',"+std::to_string(i)+")"))return false;} ++result.viewsWritten;return true; };
@@ -3386,9 +3575,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                                errorCategory, openState);
         return false;
     }
-    if (bootstrapped) {
-        openState = CatalogDbOpenState::CreatedV2;
-    }
+    if (!backfillOrganizationalSortKeys(db, error)) { sqlite3_close(db); return false; }
+    if (bootstrapped) openState = CatalogDbOpenState::CreatedV3;
 
     if (migrationState.migratingPresent) {
         const std::string temporaryPath = migratingPath(command.scopeKey);
@@ -3516,7 +3704,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     }
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
     if (!ensureSchema(temporary, openState, error)
-        || openState != CatalogDbOpenState::CreatedV2) {
+        || openState != CatalogDbOpenState::CreatedV3) {
         if (error.empty()) {
             error = "fresh catalog schema creation failed";
         }
@@ -3702,6 +3890,8 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             break;
         }
         const std::set<std::string> expectedObjects = {
+            "index:idx_media_movie_sort",
+            "index:idx_media_show_sort",
             "index:idx_media_season_order",
             "index:idx_media_series_kind_order",
             "table:hierarchy_state",
@@ -3723,10 +3913,10 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             && result.foreignKeyCascade && result.checkConstraints
             && result.singletonSeeded
             && result.applicationId == kCatalogApplicationId
-            && result.userVersion == 2;
+            && result.userVersion == 3;
         if (!result.success) {
             result.error = CatalogDbErrorCategory::ConfigurationFailed;
-            result.message = "schema v2 diagnostics did not match the contract";
+            result.message = "schema v3 diagnostics did not match the contract";
         }
         break;
     }
@@ -4253,6 +4443,68 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
             m_db, "DELETE FROM media_items WHERE id LIKE '__task10_%';",
             result.message);
         break;
+
+    case kMediaPageQueryPlanOperation: {
+        const std::size_t separator = command->value.find(':');
+        if (separator == std::string::npos) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "invalid media page query-plan arguments";
+            break;
+        }
+        const std::string type = command->value.substr(0, separator);
+        int letter = -1;
+        try {
+            letter = std::stoi(command->value.substr(separator + 1));
+        } catch (...) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "invalid media page query-plan alphabet";
+            break;
+        }
+        if ((type != "movie" && type != "show") || letter < -1 || letter > 25) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "invalid media page query-plan arguments";
+            break;
+        }
+        const int kind = type == "movie" ? 1 : 2;
+        std::string sql =
+            "EXPLAIN QUERY PLAN SELECT id FROM media_items INDEXED BY "
+            + ("idx_media_" + type + "_sort")
+            + " WHERE kind=" + std::to_string(kind);
+        if (letter >= 0) {
+            sql += " AND organizational_sort_key >= '";
+            sql += static_cast<char>('a' + letter);
+            sql += "' AND organizational_sort_key < '";
+            sql += static_cast<char>('a' + letter + 1);
+            sql += "'";
+        }
+        sql += " ORDER BY organizational_sort_key, title, id LIMIT 25;";
+        sqlite3_stmt *plan = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &plan, nullptr)
+            != SQLITE_OK) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            break;
+        }
+        bool sawTempSort = false;
+        while (sqlite3_step(plan) == SQLITE_ROW) {
+            const unsigned char *detail = sqlite3_column_text(plan, 3);
+            if (!detail) continue;
+            const std::string text(reinterpret_cast<const char *>(detail));
+            if (text.find("idx_media_" + type + "_sort") != std::string::npos)
+                result.mediaPageUsesSortIndex = true;
+            if (text.find("USE TEMP B-TREE") != std::string::npos)
+                sawTempSort = true;
+        }
+        sqlite3_finalize(plan);
+        result.mediaPageAvoidsTempSort = !sawTempSort;
+        result.success = result.mediaPageUsesSortIndex
+            && result.mediaPageAvoidsTempSort;
+        if (!result.success) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            result.message = "bounded media page query plan is not indexed";
+        }
+        break;
+    }
 
     case kWriteSentinelOperation: {
         if (!exec(m_db,

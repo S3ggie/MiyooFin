@@ -72,6 +72,8 @@ enum class CatalogDbOpenState : unsigned char {
     SupportedV1,
     CreatedV2,
     SupportedV2,
+    CreatedV3,
+    SupportedV3,
     WrongApplicationId,
     UnsupportedVersion,
     CorruptOrIo,
@@ -155,6 +157,8 @@ struct CatalogDbTestResult {
     bool collectionsParity = false;
     bool hierarchyFixture = false;
     bool hierarchyIndexes = false;
+    bool mediaPageUsesSortIndex = false;
+    bool mediaPageAvoidsTempSort = false;
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::string foreignKeys;
@@ -246,6 +250,25 @@ struct CatalogDbLibraryReadResult {
     LibrarySnapshot snapshot;
 };
 
+struct CatalogDbPageCursor {
+    std::string sortKey;
+    std::string title;
+    std::string id;
+    bool valid = false;
+};
+
+struct CatalogDbMediaPageResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    bool hasMore = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::vector<MediaItem> items;
+    CatalogDbPageCursor next;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -290,6 +313,8 @@ public:
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
     CatalogDbTestResult clearHierarchyQueryFixturesForTest();
+    CatalogDbTestResult runMediaPageQueryPlanForTest(
+        const std::string &type, int alphabetLetter = -1);
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
 
@@ -356,6 +381,13 @@ public:
         const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
         const CatalogDbJobMetadata &metadata = {});
+    /// Read one bounded, deterministically ordered movie/show page. All SQL
+    /// work is performed by the CatalogDb worker; cursor fields are the full
+    /// organizational ordering tuple.
+    std::future<CatalogDbMediaPageResult> readMediaPage(
+        const std::string &type, int alphabetLetter, std::size_t limit,
+        const CatalogDbPageCursor &after = {},
+        const CatalogDbJobMetadata &metadata = {});
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -394,6 +426,7 @@ private:
     struct SyncStateCommand;
     struct LibrarySeedCommand;
     struct LibraryReadCommand;
+    struct MediaPageCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -413,6 +446,7 @@ private:
     void processLibrarySeed(
         const std::shared_ptr<LibrarySeedCommand> &command);
     void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
+    void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -438,6 +472,9 @@ private:
         int failAfterWrites = -1);
     std::future<CatalogDbLibraryReadResult> enqueueLibraryRead(
         const CatalogDbJobMetadata &metadata);
+    std::future<CatalogDbMediaPageResult> enqueueMediaPage(
+        const std::string &type, int alphabetLetter, std::size_t limit,
+        const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -459,6 +496,7 @@ private:
     std::deque<std::shared_ptr<SyncStateCommand>> m_syncStateCommands;
     std::deque<std::shared_ptr<LibrarySeedCommand>> m_librarySeedCommands;
     std::deque<std::shared_ptr<LibraryReadCommand>> m_libraryReadCommands;
+    std::deque<std::shared_ptr<MediaPageCommand>> m_mediaPageCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;

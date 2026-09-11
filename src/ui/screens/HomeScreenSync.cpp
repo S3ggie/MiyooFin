@@ -9,6 +9,7 @@
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../HomeSyncState.hpp"
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 
@@ -17,8 +18,8 @@ namespace miyoofin {
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
-void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies=p.movies();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
-void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_movieMaster=std::move(m_fetchOfflineMovies);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;refreshMovieFilter();rebuildShowsPresentation();clampNavigation(); }
+void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies.clear();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &tab:m_fetchOfflineTabs){if(tab.name=="Movies")tab.rows={{"Movies",{}}};if(tab.name=="Shows")tab.rows={{"Shows",{}}};}for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
+void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;resetMediaPaging();clampNavigation(); }
 void HomeScreen::applyPresentationProjection() {
     if (!m_haveCachedSnapshot) return;
     // Offline hierarchy comes from durable DownloadStore metadata.  The
@@ -27,7 +28,7 @@ void HomeScreen::applyPresentationProjection() {
     OfflineCatalogSnapshot catalog;
     OfflineLibraryProjection projection(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
     m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);
-    m_fetchOfflineMovies=projection.movies();
+    m_fetchOfflineMovies.clear();
     m_fetchOfflineSnapshot=m_cachedSnapshot;
     for (auto &view : m_fetchOfflineSnapshot.shows) {
         std::vector<MediaItem> filtered;
@@ -37,6 +38,10 @@ void HomeScreen::applyPresentationProjection() {
         }
         view.items=std::move(filtered);
     }
+    for (auto &tab : m_fetchOfflineTabs) {
+        if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
+    }
     m_fetchOfflinePrepared=true;
     applyOfflineProjection();
 }
@@ -45,8 +50,111 @@ void HomeScreen::restoreOnlinePresentation() {
     const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab;
     m_tabs=tabsFromSnapshot(m_cachedSnapshot);
     m_activeTab=transitionTabIndex(previous,selected,m_tabs);
-    m_movieMaster=combineMovieViews(m_cachedSnapshot.movies);
-    refreshMovieFilter(); rebuildShowsPresentation(); clampNavigation();
+    resetMediaPaging();
+    clampNavigation();
+}
+
+void HomeScreen::resetMediaPaging()
+{
+    auto reset = [](MediaPageState &state, const std::string &type, int letter) {
+        if (state.cancellation)
+            state.cancellation->store(true);
+        state = MediaPageState{};
+        state.type = type;
+        state.letter = letter;
+    };
+    reset(m_moviePage, "movie", m_movieActiveLetter);
+    reset(m_showPage, "show", m_showsActiveLetter);
+    m_movieWindow.clear();
+    m_showWindow.clear();
+    m_animeWindow.clear();
+    m_filteredShows.clear();
+    m_filteredAnime.clear();
+    if (const int movies = tabIndex("Movies"); movies >= 0)
+        m_tabs[movies].rows = {{"Movies", {}}};
+    if (const int shows = tabIndex("Shows"); shows >= 0)
+        m_tabs[shows].rows = {{"Shows", {}}};
+    requestMediaPage(m_moviePage);
+    requestMediaPage(m_showPage);
+}
+
+void HomeScreen::requestMediaPage(MediaPageState &state)
+{
+    if (!m_catalogDb || state.inFlight || !state.hasMore)
+        return;
+    state.cancellation = std::make_shared<std::atomic_bool>(false);
+    CatalogDbJobMetadata metadata = m_catalogMetadata;
+    metadata.cancellation = state.cancellation;
+    state.future = m_catalogDb->readMediaPage(
+        state.type, state.letter, 24, state.next, metadata);
+    state.inFlight = true;
+}
+
+void HomeScreen::finishMediaPage(MediaPageState &state)
+{
+    if (!state.inFlight || !state.future.valid()
+        || state.future.wait_for(std::chrono::milliseconds(0))
+               != std::future_status::ready)
+        return;
+    const CatalogDbMediaPageResult result = state.future.get();
+    state.inFlight = false;
+    if (!result.success || result.cancelled || result.superseded)
+        return;
+    auto &window = state.type == "movie" ? m_moviePage.items : m_showPage.items;
+    std::set<std::string> known;
+    for (const auto &item : window)
+        known.insert(item.id);
+    for (const auto &item : result.items)
+        if (known.insert(item.id).second)
+            window.push_back(item);
+    static constexpr std::size_t kWindowLimit = 96;
+    if (window.size() > kWindowLimit) {
+        const std::size_t remove = window.size() - kWindowLimit;
+        window.erase(window.begin(),
+                     window.begin() + static_cast<std::ptrdiff_t>(remove));
+        if (state.type == "movie")
+            m_activeCard = std::max(0, m_activeCard - static_cast<int>(remove));
+        else {
+            m_showSelected = std::max(0, m_showSelected - static_cast<int>(remove));
+            m_animeSelected = std::max(0, m_animeSelected - static_cast<int>(remove));
+        }
+    }
+    state.next = result.next;
+    state.hasMore = result.hasMore;
+    if (state.type == "movie") {
+        m_movieWindow = window;
+        refreshMovieFilter();
+    } else {
+        rebuildShowsPresentation();
+    }
+}
+
+void HomeScreen::updateMediaPaging()
+{
+    finishMediaPage(m_moviePage);
+    finishMediaPage(m_showPage);
+    if (activeTabNamed("Movies")) {
+        const auto &rows = m_tabs[tabIndex("Movies")].rows;
+        const auto &items = rows.empty() ? m_movieWindow : rows[0].items;
+        if (items.empty() || m_activeCard + 8 >= static_cast<int>(items.size()))
+            requestMediaPage(m_moviePage);
+    } else if (activeTabNamed("Shows")) {
+        const int showCount = static_cast<int>(m_filteredShows.size());
+        const int animeCount = static_cast<int>(m_filteredAnime.size());
+        if ((m_showsFocus == ShowsFocus::AnimeGrid
+             && (animeCount == 0 || m_animeSelected + 4 >= animeCount))
+            || (m_showsFocus != ShowsFocus::AnimeGrid
+                && (showCount == 0 || m_showSelected + 4 >= showCount)))
+            requestMediaPage(m_showPage);
+    }
+}
+
+static void makeMediaTabsBounded(std::vector<TabData> &tabs)
+{
+    for (auto &tab : tabs) {
+        if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
+    }
 }
 
 void HomeScreen::startFetch()
@@ -137,9 +245,10 @@ void HomeScreen::startFetch()
 void HomeScreen::requestFetch(Uint32 now){if(m_syncSchedule.request(now))startFetch();}
 void HomeScreen::finishFetch()
 {
-    if(m_fetchThread.joinable())m_fetchThread.join(); m_fetchDone=false;
+    if(m_fetchThread.joinable())m_fetchThread.join();
+    m_fetchDone=false;
     if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_syncSchedule.complete(SDL_GetTicks(),false);return;}
     if(!m_fetchCacheSaved)printf("[HomeScreen] Library cache save failed; retaining old cache\n");else{m_cachedSnapshot=m_remoteSnapshot;m_haveCachedSnapshot=true;}
-    const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(m_fetchResult);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;m_movieMaster=combineMovieViews(m_cachedSnapshot.movies);refreshMovieFilter();rebuildShowsPresentation();if(m_session.manualOfflineMode)applyPresentationProjection();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);
+    const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(m_fetchResult);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);
 }
 }

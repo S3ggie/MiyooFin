@@ -46,15 +46,6 @@ void checkCatalogParityItems(const std::vector<MediaItem> &legacy,
     }
 }
 
-std::vector<std::string> catalogParityIds(const std::vector<MediaItem> &items)
-{
-    std::vector<std::string> ids;
-    for (const auto &item : items) {
-        ids.push_back(item.id);
-    }
-    return ids;
-}
-
 MediaItem catalogParityItem(const std::string &id, const std::string &type,
                             const std::string &title)
 {
@@ -383,6 +374,140 @@ void testCatalogDbLibrarySnapshotSeed()
     auto empty = db.seedLibrarySnapshot(LibrarySnapshot{}, {0, nextEpoch, {}}).get();
     CHECK(empty.success && empty.itemsUpserted == 0 && empty.viewsWritten == 0);
     removeCatalogMigrationTestPaths(paths);
+}
+
+static std::vector<std::string> collectCatalogPageIds(
+    CatalogDb &db, const std::string &type, int letter, std::size_t pageSize,
+    std::uint64_t epoch)
+{
+    std::vector<std::string> ids;
+    CatalogDbPageCursor cursor;
+    for (std::size_t page = 0; page < 4096; ++page) {
+        const auto result = db.readMediaPage(
+            type, letter, pageSize, cursor, {0, epoch, {}}).get();
+        CHECK(result.success && result.workerOwned && !result.cancelled
+              && !result.superseded);
+        std::set<std::string> pageIds;
+        for (const auto &item : result.items) {
+            CHECK(pageIds.insert(item.id).second);
+            CHECK(std::find(ids.begin(), ids.end(), item.id) == ids.end());
+            ids.push_back(item.id);
+        }
+        if (!result.hasMore) {
+            CHECK(!result.items.empty() || ids.empty());
+            break;
+        }
+        CHECK(result.next.valid);
+        cursor = result.next;
+    }
+    return ids;
+}
+
+static void testCatalogDbBoundedMediaPaging()
+{
+    std::printf("[test] CatalogDb bounded media paging\n");
+    const std::string url = "https://sqlite-media-pages.example";
+    const std::string user = "media-pages-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    std::vector<MediaItem> movies;
+    const std::vector<std::string> titles = {
+        "The apple", "APPLE", "Apple", "The APPLE", "apple",
+        "The apple pie", "apple pie", "A", "a", "A!", "A-",
+        "The", "", "Same", "Same", "Same", "Zed", "zebra",
+        "Ärger", "世界", "éclair", "The 2", "2 Fast", "_hidden",
+    };
+    for (std::size_t i = 0; i < titles.size(); ++i) {
+        movies.push_back(catalogParityItem(
+            "__task32_movie_" + std::to_string(i) + "__", "movie",
+            titles[i]));
+    }
+    LibrarySnapshot snapshot;
+    snapshot.movies.push_back({"movies", "Movies", "movies", movies});
+    MediaItem show = catalogParityItem("__task32_show__", "show", "The Show");
+    snapshot.shows.push_back({"shows", "Shows", "tvshows", {show}});
+
+    CatalogDb db;
+    const auto epoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+
+    auto expected = movies;
+    std::sort(expected.begin(), expected.end(), organizationalLess);
+    std::vector<std::string> expectedIds;
+    for (const auto &item : expected) expectedIds.push_back(item.id);
+    for (const std::size_t pageSize : {std::size_t(1), std::size_t(2),
+                                       std::size_t(3), std::size_t(7),
+                                       std::size_t(24)}) {
+        CHECK(collectCatalogPageIds(db, "movie", -1, pageSize, epoch)
+              == expectedIds);
+    }
+    const auto repeated = collectCatalogPageIds(db, "movie", -1, 3, epoch);
+    CHECK(repeated == collectCatalogPageIds(db, "movie", -1, 3, epoch));
+
+    for (int letter = 0; letter < 26; ++letter) {
+        std::vector<std::string> expectedLetter;
+        for (const auto &item : expected)
+            if (matchesAlphabetFilter(item.title, letter))
+                expectedLetter.push_back(item.id);
+        CHECK(collectCatalogPageIds(db, "movie", letter, 1, epoch)
+              == expectedLetter);
+    }
+
+    snapshot.movies[0].items[0].title = "Aardvark";
+    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+    expected = snapshot.movies[0].items;
+    std::sort(expected.begin(), expected.end(), organizationalLess);
+    expectedIds.clear();
+    for (const auto &item : expected) expectedIds.push_back(item.id);
+    CHECK(collectCatalogPageIds(db, "movie", -1, 2, epoch) == expectedIds);
+
+    const auto plan = db.runMediaPageQueryPlanForTest("movie", -1);
+    CHECK(plan.success && plan.workerOwned && plan.mediaPageUsesSortIndex
+          && plan.mediaPageAvoidsTempSort);
+
+    CatalogDb empty;
+    const auto emptyEpoch = empty.configureScope(
+        "https://sqlite-media-pages-empty.example", "empty-user");
+    CHECK(empty.waitForIdleForTest(std::chrono::seconds(2)));
+    const auto emptyPage = empty.readMediaPage(
+        "movie", -1, 1, {}, {0, emptyEpoch, {}}).get();
+    CHECK(emptyPage.success && emptyPage.items.empty() && !emptyPage.hasMore);
+
+    CatalogDb staleGeneration;
+    const auto staleEpoch = staleGeneration.configureScope(
+        "https://sqlite-media-pages-stale-generation.example", "stale-user");
+    CHECK(staleGeneration.waitForIdleForTest(std::chrono::seconds(2)));
+    staleGeneration.setGenerationForTest(1);
+    staleGeneration.setWorkerPausedForTest(true);
+    auto staleFuture = staleGeneration.readMediaPage(
+        "movie", -1, 1, {}, {1, staleEpoch, {}});
+    staleGeneration.setGenerationForTest(2);
+    staleGeneration.setWorkerPausedForTest(false);
+    CHECK(staleGeneration.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(staleFuture.get().superseded);
+
+    CatalogDb staleScope;
+    const auto firstEpoch = staleScope.configureScope(
+        "https://sqlite-media-pages-stale-scope-a.example", "scope-user");
+    CHECK(staleScope.waitForIdleForTest(std::chrono::seconds(2)));
+    staleScope.setWorkerPausedForTest(true);
+    auto staleScopeFuture = staleScope.readMediaPage(
+        "movie", -1, 1, {}, {0, firstEpoch, {}});
+    const auto secondEpoch = staleScope.configureScope(
+        "https://sqlite-media-pages-stale-scope-b.example", "scope-user");
+    staleScope.setWorkerPausedForTest(false);
+    CHECK(staleScope.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(staleScope.scopeState().requestedEpoch == secondEpoch);
+    CHECK(staleScopeFuture.get().superseded);
+
+    const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(homeSource.find("readMediaPage") != std::string::npos);
+    CHECK(homeSource.find("m_movieMaster=combineMovieViews") == std::string::npos);
+    CHECK(homeSource.find("rebuildShowsPresentation();if(m_session.manualOfflineMode)") == std::string::npos);
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] CatalogDb bounded media paging OK\n");
 }
 
 void testLibraryCacheHomeParityHarness()

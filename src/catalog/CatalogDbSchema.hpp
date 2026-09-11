@@ -10,11 +10,12 @@ namespace miyoofin {
 // cannot silently drift from the production database contract.
 inline constexpr std::int64_t kCatalogApplicationId = 0x4D59464E;
 
-inline constexpr std::array<const char *, 15> kCatalogSchemaStatements = {{
+inline constexpr std::array<const char *, 18> kCatalogSchemaStatements = {{
     "CREATE TABLE media_items ("
     "id TEXT PRIMARY KEY NOT NULL,"
     "kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 4),"
     "title TEXT NOT NULL DEFAULT '',"
+    "organizational_sort_key TEXT NOT NULL DEFAULT '',"
     "overview TEXT NOT NULL DEFAULT '',"
     "production_year INTEGER NOT NULL DEFAULT 0,"
     "community_rating REAL NOT NULL DEFAULT 0.0,"
@@ -65,6 +66,8 @@ inline constexpr std::array<const char *, 15> kCatalogSchemaStatements = {{
     "ON media_items(series_id, kind, index_number, id);",
     "CREATE INDEX idx_media_season_order "
     "ON media_items(season_id, index_number, id);",
+    "CREATE INDEX idx_media_movie_sort ON media_items(kind, organizational_sort_key, title, id);",
+    "CREATE INDEX idx_media_show_sort ON media_items(kind, organizational_sort_key, title, id);",
     "INSERT INTO sync_state(singleton_id) VALUES(1);",
     "CREATE TABLE library_views ("
     "id TEXT PRIMARY KEY NOT NULL,"

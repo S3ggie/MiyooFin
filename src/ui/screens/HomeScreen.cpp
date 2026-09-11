@@ -45,6 +45,8 @@ HomeScreen::HomeScreen(const Session &session,
 
 HomeScreen::~HomeScreen()
 {
+    if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
+    if (m_showPage.cancellation) m_showPage.cancellation->store(true);
     if (m_fetchThread.joinable())
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
@@ -108,7 +110,38 @@ std::future<CatalogDbHierarchyWriteResult> HomeScreen::submitCatalogHierarchy(
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
 { return miyoofin::combineMovieViews(views); }
 
-void HomeScreen::rebuildShowsPresentation() { ShowsPresentation p=makeShowsPresentation((presentationOffline()?m_offlineSnapshot:m_cachedSnapshot).shows); m_showMaster=std::move(p.shows); m_animeMaster=std::move(p.anime); refreshShowsFilter(); }
+void HomeScreen::rebuildShowsPresentation()
+{
+    const std::vector<MediaItem> rawWindow = m_showPage.items;
+    m_showWindow.clear();
+    m_animeWindow.clear();
+    const auto &views = (presentationOffline() ? m_offlineSnapshot
+                                                : m_cachedSnapshot).shows;
+    std::set<std::string> seenShows;
+    std::set<std::string> seenAnime;
+    for (const auto &item : rawWindow) {
+        bool anime = false;
+        for (const auto &view : views) {
+            auto found = std::find_if(view.items.begin(), view.items.end(),
+                                      [&](const MediaItem &candidate) {
+                                          return candidate.id == item.id;
+                                      });
+            if (found != view.items.end() && isAnimeSeries(view, *found)) {
+                anime = true;
+                break;
+            }
+        }
+        if (anime) {
+            if (seenAnime.insert(item.id).second)
+                m_animeWindow.push_back(item);
+        } else if (seenShows.insert(item.id).second) {
+            m_showWindow.push_back(item);
+        }
+    }
+    std::sort(m_showWindow.begin(), m_showWindow.end(), organizationalLess);
+    std::sort(m_animeWindow.begin(), m_animeWindow.end(), organizationalLess);
+    refreshShowsFilter();
+}
 
 void HomeScreen::enter()
 {
@@ -148,6 +181,8 @@ void HomeScreen::update(Uint32 dt)
         UiDiagnostics::Scope scope("HomeScreen::publishResumeResult");
         finishResumeRefresh();
     }
+    if (m_loadState == LoadState::Ready)
+        updateMediaPaging();
     if (m_downloadRefreshTimer > dt) m_downloadRefreshTimer-=dt; else m_downloadRefreshTimer=0;
     if (m_loadState == LoadState::Ready && (activeTabNamed("Downloads") || activeTabNamed("Settings"))) refreshDownloads();
     // Reconcile before draining: an in-flight decode can complete between a

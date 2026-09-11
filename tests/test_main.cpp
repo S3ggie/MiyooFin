@@ -35,6 +35,7 @@
 #include "../src/cache/SyncState.hpp"
 #include "../src/cache/OfflineCatalog.hpp"
 #include "../src/cache/OfflineLibraryProjection.hpp"
+#include "../src/library/OfflineLibraryQuery.hpp"
 #include "../src/net/HttpClient.hpp"
 #include "../src/net/RouteRequest.hpp"
 #include "../src/net/RouteStatus.hpp"
@@ -846,7 +847,7 @@ int main()
     testShowsPresentation();
 
     std::printf("\n--- local-first cache/grid tests ---\n");
-    testLibraryCacheNew(); testLibraryCacheV3SaveLoad(); testLibraryCacheV2BackCompat(); testLibraryCacheV1BackCompat(); testLibraryCacheUnknownVersion(); testLibraryCacheFetchDecision(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testSettingsRowActions(); testLanServerAddressClassificationAndSettingsLayout(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
+    testLibraryCacheNew(); testLibraryCacheV3SaveLoad(); testLibraryCacheV2BackCompat(); testLibraryCacheV1BackCompat(); testLibraryCacheUnknownVersion(); testLibraryCacheFetchDecision(); testSyncState(); testOfflineCatalog(); testOfflineLibraryProjection(); testOfflineLibraryQuery(); testSettingsRowActions(); testLanServerAddressClassificationAndSettingsLayout(); testSeriesCachedSeasonHandoff(); testSeasonPosterScheduling(); testNewGridAndSchedule(); testCacheRemoveNew();
     std::printf("MiyooFin Checkpoint B3+B4+B5a+B5b+B5c1+B5d1+B5d2a+B5e1a+B5e2a+B5e3b+B5f2+B5f3a tests\n");
     std::printf("==============================================================================\n\n");
 

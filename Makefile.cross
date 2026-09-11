@@ -60,6 +60,7 @@ SRCS := \
     src/cache/SyncState.cpp \
     src/cache/OfflineCatalog.cpp \
     src/cache/OfflineLibraryProjection.cpp \
+    src/library/OfflineLibraryQuery.cpp \
     src/download/DownloadStore.cpp \
     src/download/DownloadManager.cpp \
     src/download/DownloadManagerPlanning.cpp \
@@ -108,6 +109,7 @@ TARGET    := output/build-arm/miyoofin
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
              output/build-arm/download output/build-arm/catalog \
+             output/build-arm/library \
              output/build-arm/diagnostics output/build-arm/sqlite \
              output/build-arm/ui/screens output/build-arm/playback
 

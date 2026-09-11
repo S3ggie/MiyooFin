@@ -811,6 +811,7 @@ int main()
     testCatalogDbOfflineRebuildAfterScopeActivation();
     testCatalogDbProjectionParity();
     testCatalogDbLibrarySnapshotSeed();
+    testCatalogDbTopLevelSyncStagingLifecycle();
     testCatalogDbBoundedMediaPaging();
     testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();

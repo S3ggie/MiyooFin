@@ -303,6 +303,15 @@ struct CatalogDbMediaPageWrite {
     bool finalPage = false;
 };
 
+struct CatalogDbTopLevelSyncResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::uint64_t generation = 0;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -419,6 +428,10 @@ public:
     std::future<CatalogDbMediaPageUpsertResult> upsertMediaPageForTest(
         const CatalogDbMediaPageWrite &page, int failAfterRows,
         const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbTopLevelSyncResult> beginTopLevelSync(
+        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbTopLevelSyncResult> abortTopLevelSync(
+        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
     CatalogDbPopulationStatus populationStatus() const;
     std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
         const CatalogDbJobMetadata &metadata = {});
@@ -469,6 +482,7 @@ private:
     struct LibraryReadCommand;
     struct MediaPageCommand;
     struct MediaPageUpsertCommand;
+    struct TopLevelSyncCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -490,6 +504,7 @@ private:
     void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
     void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
     void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command);
+    void processTopLevelSync(const std::shared_ptr<TopLevelSyncCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -544,8 +559,11 @@ private:
     std::deque<std::shared_ptr<LibraryReadCommand>> m_libraryReadCommands;
     std::deque<std::shared_ptr<MediaPageCommand>> m_mediaPageCommands;
     std::deque<std::shared_ptr<MediaPageUpsertCommand>> m_mediaPageUpsertCommands;
+    std::deque<std::shared_ptr<TopLevelSyncCommand>> m_topLevelSyncCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
+    std::uint64_t m_topLevelSyncGeneration = 0;
+    std::uint64_t m_activeTopLevelSyncGeneration = 0;
     std::uint64_t m_requestedEpoch = 0;
     std::string m_requestedScopeKey;
     std::string m_activeScopeKey;

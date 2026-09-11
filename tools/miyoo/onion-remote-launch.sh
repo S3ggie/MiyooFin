@@ -34,6 +34,8 @@ STAGED_QUEUE=/tmp/cmd_to_run.sh
 LOCK_DIR=/tmp/miyoofin-onion-remote-launch.lock
 QUEUE_TMP=/tmp/.miyoofin-onion-remote-queue.$$
 LEASE=/tmp/.miyoofin-onion-remote-lease.$$
+NULL_SINK=/tmp/.miyoofin-onion-remote-null.$$
+HANDOFF_HELPER=/tmp/miyoofin-mainui-handoff
 LAUNCH_MODE=${1-normal}
 [ "$LAUNCH_MODE" = normal ] || [ "$LAUNCH_MODE" = telemetry ] || {
     printf '%s\n' '[onion-remote] ERROR: invalid launch mode' >&2
@@ -58,20 +60,21 @@ fail() {
 }
 
 cleanup() {
-    rm -f "$QUEUE_TMP" "$LEASE"
+    rm -f "$QUEUE_TMP" "$LEASE" "$NULL_SINK"
     if [ "$STAGED_QUEUE_OWNED" -eq 1 ]; then
         rm -f "$STAGED_QUEUE"
     fi
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    rmdir "$LOCK_DIR" 2>"$NULL_SINK" || true
 }
 trap cleanup EXIT HUP INT TERM
+: > "$NULL_SINK"
 
 count_comm() {
     name=$1
     count=0
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
-        comm=$(cat "$proc/comm" 2>/dev/null || true)
+        comm=$(cat "$proc/comm" 2>"$NULL_SINK" || true)
         if [ "$comm" = "$name" ]; then
             count=$((count + 1))
         fi
@@ -84,7 +87,7 @@ pid_for_comm() {
     found=
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
-        comm=$(cat "$proc/comm" 2>/dev/null || true)
+        comm=$(cat "$proc/comm" 2>"$NULL_SINK" || true)
         if [ "$comm" = "$name" ]; then
             [ -z "$found" ] || fail "multiple $name processes are active"
             found=${proc#/proc/}
@@ -98,9 +101,9 @@ runtime_count() {
     count=0
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
-        comm=$(cat "$proc/comm" 2>/dev/null || true)
+        comm=$(cat "$proc/comm" 2>"$NULL_SINK" || true)
         [ "$comm" = runtime.sh ] || continue
-        cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
+        cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>"$NULL_SINK" || true)
         case "$cmd" in
             *"$RUNTIME_SCRIPT"*) count=$((count + 1)) ;;
         esac
@@ -146,12 +149,12 @@ done
 [ -x "$APP_DIR/launch.sh" ] || fail 'packaged MiyooFin launcher is not executable'
 
 if [ "$LAUNCH_MODE" = telemetry ]; then
-    trace_before=$(stat -c '%Y:%s:%i' "$TRACE_FILE" 2>/dev/null || true)
+    trace_before=$(stat -c '%Y:%s:%i' "$TRACE_FILE" 2>"$NULL_SINK" || true)
 else
     trace_before=
 fi
 
-mkdir "$LOCK_DIR" 2>/dev/null || fail 'another Onion-native launch helper is active'
+mkdir "$LOCK_DIR" 2>"$NULL_SINK" || fail 'another Onion-native launch helper is active'
 trap cleanup EXIT HUP INT TERM
 : > "$LEASE"
 deadline=$(( $(date +%s) + 120 ))
@@ -175,12 +178,11 @@ mv -f "$QUEUE_TMP" "$STAGED_QUEUE" || fail 'could not atomically queue Onion com
 STAGED_QUEUE_OWNED=1
 log "queued Onion-native MiyooFin handoff mode=$LAUNCH_MODE"
 
-# This installed MainUI ignores SIGINT but has a caught SIGTERM disposition.
-# Request the normal MainUI exit path for the exact validated PID.  No
-# process-name killing or escalation is attempted here.
-mainui_pid=$(pid_for_comm MainUI)
-kill -15 "$mainui_pid" || fail 'native MainUI handoff request failed'
-log 'requested MainUI exit through Onion SIGTERM handoff'
+[ -x "$HANDOFF_HELPER" ] || fail 'privileged MainUI handoff helper is unavailable'
+"$HANDOFF_HELPER" || fail 'privileged MainUI handoff helper rejected the launch'
+STAGED_QUEUE_OWNED=0
+
+log 'requested MainUI exit through validated privileged handoff'
 
 wait_for_no_comm MainUI 30 || fail 'MainUI did not exit after the queued handoff'
 log 'MainUI exited; waiting for Onion runtime to launch MiyooFin'
@@ -204,7 +206,7 @@ wait_for_comm MainUI 45 || fail 'MainUI did not return after MiyooFin exit'
 [ ! -e "$RUNTIME_QUEUE" ] || fail 'Onion runtime queue remained stale after app exit'
 
 if [ -n "$TELEMETRY_LINE" ]; then
-    trace_after=$(stat -c '%Y:%s:%i' "$TRACE_FILE" 2>/dev/null || true)
+    trace_after=$(stat -c '%Y:%s:%i' "$TRACE_FILE" 2>"$NULL_SINK" || true)
     [ -n "$trace_after" ] || fail 'telemetry mode produced no telemetry trace'
     [ "$trace_after" != "$trace_before" ] || fail 'telemetry trace was not refreshed'
     log 'telemetry trace refreshed without exposing its contents'

@@ -51,7 +51,8 @@ grep -q 'SYS_DIR=/mnt/SDCARD/.tmp_update' "$normal" || fail 'normal mode does no
 grep -q 'RUNTIME_QUEUE=\$SYS_DIR/cmd_to_run.sh' "$normal" || fail 'normal mode does not verify runtime queue'
 grep -q 'APP_DIR=/mnt/SDCARD/App/MiyooFin' "$normal" || fail 'normal mode does not use the MiyooFin app directory'
 grep -q "exec '\$APP_DIR/launch.sh'" "$normal" || fail 'normal mode does not use packaged launcher'
-grep -q 'kill -15' "$normal" || fail 'normal mode does not use the validated MainUI handoff signal'
+grep -q 'HANDOFF_HELPER=/tmp/miyoofin-mainui-handoff' "$normal" || fail 'normal mode does not use the fixed MainUI handoff helper'
+grep -q '"\$HANDOFF_HELPER"' "$normal" || fail 'normal mode does not invoke the fixed MainUI handoff helper'
 ! grep -Eq '(^|[[:space:]])(pkill|killall)([[:space:]]|$)|SIGKILL|kill -9|exec[[:space:]]+\./miyoofin' "$normal" || \
     fail 'normal mode contains unsafe direct process control'
 
@@ -67,10 +68,12 @@ echo '[test] Onion-native remote launcher static contract OK'
 EXIT_HELPER="$ROOT/tools/miyoo/onion-remote-exit.sh"
 [ -f "$EXIT_HELPER" ] || fail 'graceful exit helper is missing'
 sh -n "$EXIT_HELPER" || fail 'graceful exit helper has invalid shell syntax'
-grep -q 'kill -USR1' "$EXIT_HELPER" || fail 'exit helper does not use SIGUSR1'
+grep -q 'EXIT_HELPER=/tmp/miyoofin-graceful-exit' "$EXIT_HELPER" || fail 'exit helper does not use the fixed graceful-exit helper'
+grep -q '"\$EXIT_HELPER"' "$EXIT_HELPER" || fail 'exit helper does not invoke the fixed graceful-exit helper'
 ! grep -Eq 'kill -9|kill -15|SIGKILL|/dev/input/event' "$EXIT_HELPER" || \
     fail 'exit helper contains an unsafe shutdown mechanism'
-grep -q '/proc/' "$EXIT_HELPER" || fail 'exit helper does not inspect process identity'
-grep -q 'comm' "$EXIT_HELPER" || fail 'exit helper does not verify process name'
+grep -q '/proc/' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not inspect process identity'
+grep -q 'SIGUSR1' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not use SIGUSR1'
+grep -q 'comm' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not verify process name'
 grep -q 'MainUI' "$EXIT_HELPER" || fail 'exit helper does not verify MainUI restoration'
 echo '[test] Onion graceful remote exit static contract OK'

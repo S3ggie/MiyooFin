@@ -3486,6 +3486,9 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
 
 void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command)
 {
+    // This whole-snapshot path is retained for compatibility/tests. The
+    // normal Home flow renders bounded library pages and receives ephemeral
+    // rail responses from Jellyfin; it must not depend on home_items.
     CatalogDbLibraryReadResult result; result.workerOwned=true;
     { std::lock_guard<std::mutex> lock(m_mutex); if(command->metadata.generation!=m_generation || (command->metadata.scopeEpoch && (command->metadata.scopeEpoch!=m_requestedEpoch||!m_scopeConfigured||!m_scopeReady))){result.superseded=true;result.error=CatalogDbErrorCategory::Superseded;command->result.set_value(std::move(result));return;} }
     sqlite3_stmt *views=nullptr,*items=nullptr,*home=nullptr,*sg=nullptr,*st=nullptr;
@@ -3549,6 +3552,8 @@ void CatalogDb::processLibrarySeed(
     int writes=0;
     for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failAfterWrites>=0&&++writes>=command->failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
     sqlite3_finalize(upsert); sqlite3_finalize(deleteGenres); sqlite3_finalize(insertGenre); sqlite3_finalize(deleteTags); sqlite3_finalize(insertTag);
+    // seedLibrarySnapshot is the compatibility-only writer for home_items.
+    // Normal top-level synchronization never enters this path.
     if (!execSeed("DELETE FROM library_membership; DELETE FROM library_views; DELETE FROM home_items;")) { result.error=CatalogDbErrorCategory::SqliteError; rollback(); command->result.set_value(std::move(result)); return; }
     auto addView = [&](const CachedLibraryView &v, int ordinal) { sqlite3_stmt *s=nullptr; if(sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?)",-1,&s,nullptr)!=SQLITE_OK)return false; sqlite3_bind_text(s,1,v.id.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,2,v.name.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,3,v.collectionType.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_int(s,4,ordinal);bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);if(!ok)return false; for(size_t i=0;i<v.items.size();++i){if(!execSeed("INSERT INTO library_membership(view_id,item_id,ordinal) VALUES('"+v.id+"','"+v.items[i].id+"',"+std::to_string(i)+")"))return false;} ++result.viewsWritten;return true; };
     for(size_t i=0;i<command->snapshot.movies.size();++i) if(!addView(command->snapshot.movies[i],i)){result.error=CatalogDbErrorCategory::SqliteError;rollback();command->result.set_value(std::move(result));return;}

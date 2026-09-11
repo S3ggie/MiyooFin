@@ -238,6 +238,9 @@ struct CatalogDbSyncState {
 };
 
 struct CatalogDbLibrarySeedResult {
+    // Compatibility bridge for legacy LibrarySnapshot persistence. Normal
+    // top-level synchronization stages library membership/pages directly and
+    // leaves Home rails ephemeral.
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -249,6 +252,8 @@ struct CatalogDbLibrarySeedResult {
     std::size_t homeItemsWritten = 0;
 };
 struct CatalogDbLibraryReadResult {
+    // Compatibility read bridge; Home runtime does not use home_items as rail
+    // authority.
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;

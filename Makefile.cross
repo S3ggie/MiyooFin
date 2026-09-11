@@ -62,6 +62,7 @@ SRCS := \
     src/cache/OfflineLibraryProjection.cpp \
     src/library/OfflineLibraryQuery.cpp \
     src/library/LibrarySync.cpp \
+    src/library/LibraryQuery.cpp \
     src/download/DownloadStore.cpp \
     src/download/DownloadManager.cpp \
     src/download/DownloadManagerPlanning.cpp \

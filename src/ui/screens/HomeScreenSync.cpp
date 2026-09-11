@@ -293,6 +293,15 @@ void HomeScreen::startFetch()
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
+        const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
+        bool topLevelSyncStarted = false;
+        if (m_catalogDb) {
+            auto begin = m_catalogDb->beginTopLevelSync(syncGeneration, metadata).get();
+            topLevelSyncStarted = begin.success;
+            if (!topLevelSyncStarted) catalogRefreshFailed = true;
+        } else {
+            catalogRefreshFailed = true;
+        }
         if (!RouteRequest(session).run([&](const std::string &base){
                 return JellyfinApi::getViews(base, token, uid, devId, views,
                                              viewsErr, cancellation.get());
@@ -346,6 +355,7 @@ void HomeScreen::startFetch()
                         writePage.collectionType = view.collectionType;
                         writePage.ordinalStart = static_cast<std::size_t>(start);
                         writePage.viewOrdinal = static_cast<int>(&view - views.data());
+                        writePage.syncGeneration = syncGeneration;
                         writePage.finalPage = !page.hasMore;
                         auto write = m_catalogDb->upsertMediaPage(writePage, metadata);
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
@@ -387,6 +397,12 @@ void HomeScreen::startFetch()
                 }
                 if (catalogRefreshFailed) break;
             }
+        }
+        if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
+            auto finalized = m_catalogDb->finalizeTopLevelSync(syncGeneration, metadata).get();
+            if (!finalized.success) catalogRefreshFailed = true;
+        } else if (topLevelSyncStarted) {
+            m_catalogDb->abortTopLevelSync(syncGeneration, metadata).get();
         }
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;

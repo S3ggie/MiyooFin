@@ -747,6 +747,7 @@ struct CatalogDb::MediaPageUpsertCommand {
 };
 struct CatalogDb::TopLevelSyncCommand {
     bool begin = false;
+    bool finalize = false;
     std::uint64_t generation = 0;
     CatalogDbJobMetadata metadata;
     std::promise<CatalogDbTopLevelSyncResult> result;
@@ -816,6 +817,19 @@ std::future<CatalogDbTopLevelSyncResult> CatalogDb::abortTopLevelSync(
 {
     auto command = std::make_shared<TopLevelSyncCommand>();
     command->begin = false; command->generation = generation;
+    command->metadata = metadata;
+    auto future = command->result.get_future();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    command->metadata.scopeEpoch = command->metadata.scopeEpoch ? command->metadata.scopeEpoch : m_requestedEpoch;
+    m_topLevelSyncCommands.push_back(command); ++m_pendingJobs; m_wake.notify_one();
+    return future;
+}
+
+std::future<CatalogDbTopLevelSyncResult> CatalogDb::finalizeTopLevelSync(
+    std::uint64_t generation, const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<TopLevelSyncCommand>();
+    command->finalize = true; command->generation = generation;
     command->metadata = metadata;
     auto future = command->result.get_future();
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -3141,9 +3155,6 @@ void CatalogDb::processTopLevelSync(
         "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_views (generation INTEGER NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, collection_type TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(generation, id))",
         "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_membership (generation INTEGER NOT NULL, view_id TEXT NOT NULL, item_id TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(generation, view_id, item_id))",
         "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_active (generation INTEGER NOT NULL PRIMARY KEY)",
-        "DELETE FROM top_level_sync_views",
-        "DELETE FROM top_level_sync_membership",
-        "DELETE FROM top_level_sync_active",
     };
     for (const char *sql : createSql) {
         if (!exec(m_db, sql, error)) {
@@ -3153,6 +3164,11 @@ void CatalogDb::processTopLevelSync(
         }
     }
     if (command->begin) {
+        if (!exec(m_db, "DELETE FROM top_level_sync_views; DELETE FROM top_level_sync_membership; DELETE FROM top_level_sync_active;", error)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = error;
+            command->result.set_value(std::move(result)); return;
+        }
         sqlite3_stmt *statement = nullptr;
         if (sqlite3_prepare_v2(m_db,
                 "INSERT INTO top_level_sync_active(generation) VALUES(?1)",
@@ -3168,6 +3184,26 @@ void CatalogDb::processTopLevelSync(
         sqlite3_finalize(statement);
         m_topLevelSyncGeneration = command->generation;
         m_activeTopLevelSyncGeneration = command->generation;
+        result.success = true;
+    } else if (command->finalize) {
+        if (m_activeTopLevelSyncGeneration != command->generation) {
+            result.error = CatalogDbErrorCategory::Superseded;
+            result.message = "top-level sync generation is not active";
+            command->result.set_value(std::move(result)); return;
+        }
+        const std::string copyViews = "INSERT INTO library_views(id,name,collection_type,ordinal) SELECT id,name,collection_type,ordinal FROM top_level_sync_views WHERE generation=" + std::to_string(command->generation) + " ORDER BY ordinal,id;";
+        const std::string copyMembership = "INSERT INTO library_membership(view_id,item_id,ordinal) SELECT view_id,item_id,ordinal FROM top_level_sync_membership WHERE generation=" + std::to_string(command->generation) + " ORDER BY view_id,ordinal,item_id;";
+        if (!exec(m_db, "BEGIN IMMEDIATE;", error)
+            || !exec(m_db, "DELETE FROM library_membership; DELETE FROM library_views;", error)
+            || !exec(m_db, copyViews.c_str(), error)
+            || !exec(m_db, copyMembership.c_str(), error)
+            || !exec(m_db, "COMMIT;", error)) {
+            std::string ignored; exec(m_db, "ROLLBACK;", ignored);
+            result.error = CatalogDbErrorCategory::SqliteError; result.message = error;
+            command->result.set_value(std::move(result)); return;
+        }
+        exec(m_db, "DELETE FROM top_level_sync_views; DELETE FROM top_level_sync_membership; DELETE FROM top_level_sync_active;", error);
+        m_activeTopLevelSyncGeneration = 0;
         result.success = true;
     } else if (m_activeTopLevelSyncGeneration == command->generation) {
         m_activeTopLevelSyncGeneration = 0;

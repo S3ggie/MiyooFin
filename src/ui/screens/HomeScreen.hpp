@@ -147,6 +147,7 @@ private:
     std::shared_ptr<DownloadManager> m_downloads;
     std::shared_ptr<CatalogDb> m_catalogDb;
     CatalogDbJobMetadata m_catalogMetadata;
+    std::uint64_t m_topLevelSyncGeneration = 0;
     std::string m_userName;
 
     struct MediaPageState {

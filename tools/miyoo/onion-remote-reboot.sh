@@ -6,6 +6,13 @@ MIYOO_SSH_CONNECT_TIMEOUT=${MIYOO_REBOOT_CONNECT_TIMEOUT:-3}
 . "$SCRIPT_DIR/ssh-common.sh"
 REBOOT_HELPER=/tmp/miyoofin-reboot
 POLL_SECONDS=${MIYOO_REBOOT_POLL_SECONDS:-90}
+MODE=normal
+MIYOO_REBOOT_RECOVERY=--recovery
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != '--recovery' ]; }; then
+    fail() { printf '[onion-remote-reboot] ERROR: %s\n' "$*" >&2; exit 1; }
+    fail 'usage: onion-remote-reboot.sh [--recovery]'
+fi
+[ "$#" -eq 0 ] || MODE=recovery
 fail() { printf '[onion-remote-reboot] ERROR: %s\n' "$*" >&2; exit 1; }
 
 check_state() {
@@ -37,17 +44,22 @@ REMOTE
 
 boot_before=$(miyoo_ssh "$MIYOO_SSH_TARGET" 'cat /proc/sys/kernel/random/boot_id') || fail 'could not read current boot identity'
 
-check_state >/tmp/.miyoofin-reboot-preflight.$$ 2>&1 || {
+if [ "$MODE" = normal ]; then
+    check_state >/tmp/.miyoofin-reboot-preflight.$$ 2>&1 || {
+        rm -f /tmp/.miyoofin-reboot-preflight.$$
+        fail 'preflight failed'
+    }
+    preflight=$(sed -n '$p' /tmp/.miyoofin-reboot-preflight.$$)
     rm -f /tmp/.miyoofin-reboot-preflight.$$
-    fail 'preflight failed'
-}
-preflight=$(sed -n '$p' /tmp/.miyoofin-reboot-preflight.$$)
-rm -f /tmp/.miyoofin-reboot-preflight.$$
-[ "$preflight" = READY ] || fail 'unexpected preflight response'
+    [ "$preflight" = READY ] || fail 'unexpected preflight response'
+fi
 
-printf '%s\n' '[onion-remote-reboot] requesting normal reboot'
-miyoo_ssh "$MIYOO_SSH_TARGET" "$REBOOT_HELPER" >/tmp/.miyoofin-reboot-request.$$ 2>&1 || true
-rm -f /tmp/.miyoofin-reboot-request.$$
+printf '%s\n' "[onion-remote-reboot] requesting $MODE reboot"
+if [ "$MODE" = recovery ]; then
+    miyoo_ssh "$MIYOO_SSH_TARGET" "$REBOOT_HELPER" "$MIYOO_REBOOT_RECOVERY" >/tmp/.miyoofin-reboot-request.$$ 2>&1 || true
+else
+    miyoo_ssh "$MIYOO_SSH_TARGET" "$REBOOT_HELPER" >/tmp/.miyoofin-reboot-request.$$ 2>&1 || true
+fi
 
 down=0
 seconds=$POLL_SECONDS
@@ -98,4 +110,13 @@ printf '%s\n' READY
 REMOTE
 ) || fail 'post-reboot helper validation failed'
 [ "$post_helpers" = READY ] || fail 'reboot helper installation is not ready'
+if [ "$MODE" = recovery ]; then
+    diagnostics=/tmp/miyoofin-recovery-reboot-$(date +%s).log
+    cat /tmp/.miyoofin-reboot-request.$$ >"$diagnostics" 2>/tmp/.miyoofin-reboot-diag-null.$$ || true
+    miyoo_ssh "$MIYOO_SSH_TARGET" 'cat /mnt/SDCARD/App/MiyooFin/telemetry-logs/recovery-reboot.log' >>"$diagnostics" 2>/tmp/.miyoofin-reboot-diag-null.$$ || true
+    rm -f /tmp/.miyoofin-reboot-request.$$ /tmp/.miyoofin-reboot-diag-null.$$
+    printf '%s\n' "[onion-remote-reboot] recovery diagnostics saved to $diagnostics"
+else
+    rm -f /tmp/.miyoofin-reboot-request.$$
+fi
 printf '%s\n' '[onion-remote-reboot] reboot completed and postflight checks passed'

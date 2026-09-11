@@ -23,13 +23,15 @@ HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<DownloadManager> downloads,
                        std::shared_ptr<CatalogDb> catalogDb,
                        std::uint64_t catalogScopeEpoch,
-                       std::shared_ptr<library::LibrarySync> librarySync)
+                       std::shared_ptr<library::LibrarySync> librarySync,
+                       std::shared_ptr<library::LibraryQuery> libraryQuery)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_session(session)
     , m_downloads(std::move(downloads))
     , m_catalogDb(std::move(catalogDb))
     , m_librarySync(std::move(librarySync))
+    , m_libraryQuery(std::move(libraryQuery))
     , m_catalogMetadata()
     , m_userName(session.userName)
 {

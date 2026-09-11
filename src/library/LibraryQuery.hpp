@@ -4,6 +4,7 @@
 #include "../catalog/CatalogDb.hpp"
 #include <future>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@ struct MediaPage {
     std::string message;
     bool hasMore = false;
     std::vector<MediaItem> items;
+    std::map<std::string, std::vector<CatalogDbMediaPageMembership>> membershipsByItem;
     CatalogDbPageCursor next;
 };
 

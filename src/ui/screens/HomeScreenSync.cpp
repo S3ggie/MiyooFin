@@ -81,13 +81,12 @@ void HomeScreen::resetMediaPaging()
 
 void HomeScreen::requestMediaPage(MediaPageState &state)
 {
-    if (!m_catalogDb || state.inFlight || !state.hasMore)
+    if (!m_libraryQuery || state.inFlight || !state.hasMore)
         return;
     state.cancellation = std::make_shared<std::atomic_bool>(false);
-    CatalogDbJobMetadata metadata = m_catalogMetadata;
-    metadata.cancellation = state.cancellation;
-    state.future = m_catalogDb->readMediaPage(
-        state.type, state.letter, 24, state.next, metadata);
+    state.future = state.type == "movie"
+        ? m_libraryQuery->movies(state.letter, 24, state.next)
+        : m_libraryQuery->shows(state.letter, 24, state.next);
     state.inFlight = true;
     if (!m_firstMediaPageReadLogged) {
         m_firstMediaPageReadLogged = true;
@@ -102,7 +101,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         || state.future.wait_for(std::chrono::milliseconds(0))
                != std::future_status::ready)
         return;
-    const CatalogDbMediaPageResult result = state.future.get();
+    const library::MediaPage result = state.future.get();
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;

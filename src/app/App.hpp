@@ -15,6 +15,7 @@
 #include "../net/Session.hpp"
 #include "../download/DownloadManager.hpp"
 #include "../library/LibrarySync.hpp"
+#include "../library/LibraryQuery.hpp"
 
 namespace miyoofin {
 
@@ -61,6 +62,7 @@ private:
     InputManager    m_input;
     std::shared_ptr<CatalogDb> m_catalogDb;
     std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     std::uint64_t m_catalogScopeEpoch = 0;
 
     bool            m_running;

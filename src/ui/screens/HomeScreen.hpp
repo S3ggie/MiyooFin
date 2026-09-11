@@ -13,6 +13,7 @@
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include "../../catalog/CatalogDb.hpp"
 #include "../../library/LibrarySync.hpp"
+#include "../../library/LibraryQuery.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
 #include "../HomeSettingsModel.hpp"
@@ -48,7 +49,8 @@ public:
                         std::shared_ptr<DownloadManager> downloads={},
                         std::shared_ptr<CatalogDb> catalogDb={},
                         std::uint64_t catalogScopeEpoch=0,
-                        std::shared_ptr<library::LibrarySync> librarySync={});
+                        std::shared_ptr<library::LibrarySync> librarySync={},
+                        std::shared_ptr<library::LibraryQuery> libraryQuery={});
     ~HomeScreen() override;
 
     void enter() override;
@@ -149,6 +151,7 @@ private:
     std::shared_ptr<DownloadManager> m_downloads;
     std::shared_ptr<CatalogDb> m_catalogDb;
     std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     CatalogDbJobMetadata m_catalogMetadata;
     std::uint64_t m_topLevelSyncGeneration = 0;
     std::string m_userName;
@@ -161,7 +164,7 @@ private:
         bool hasMore = true;
         bool inFlight = false;
         std::shared_ptr<std::atomic_bool> cancellation;
-        std::future<CatalogDbMediaPageResult> future;
+        std::future<library::MediaPage> future;
     };
     MediaPageState m_moviePage, m_showPage;
 

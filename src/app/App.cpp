@@ -328,11 +328,14 @@ void App::configureCatalogScopeForSession()
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
         m_librarySync = std::make_shared<library::LibrarySync>(
             m_session, m_catalogDb, m_catalogScopeEpoch);
+        m_libraryQuery = std::make_shared<library::LibraryQuery>(
+            m_catalogDb, m_catalogScopeEpoch);
         uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
         m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
         m_librarySync.reset();
+        m_libraryQuery.reset();
     }
 }
 
@@ -422,7 +425,7 @@ void App::goToHome()
     }
     m_stack.push(std::make_unique<HomeScreen>(
         m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch,
-        m_librarySync));
+        m_librarySync, m_libraryQuery));
 }
 
 void App::goToLogin(const std::string &initialMessage)

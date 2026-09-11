@@ -82,10 +82,6 @@ void HomeScreen::requestMediaPage(MediaPageState &state)
 {
     if (!m_catalogDb || state.inFlight || !state.hasMore)
         return;
-    if (m_catalogMetadata.scopeEpoch == 0 && m_session.valid()) {
-        m_catalogMetadata.scopeEpoch = m_catalogDb->configureScope(
-            m_session.serverUrl, m_session.userId);
-    }
     state.cancellation = std::make_shared<std::atomic_bool>(false);
     CatalogDbJobMetadata metadata = m_catalogMetadata;
     metadata.cancellation = state.cancellation;

@@ -2,15 +2,12 @@
 # Development-only graceful MiyooFin exit through the normal Action::Exit path.
 set -eu
 
-TARGET=onion@192.168.1.197
-[ -n "${MIYOO_SSH_TARGET:-}" ] && TARGET=$MIYOO_SSH_TARGET
-[ -n "${MIYOO_HOST:-}" ] && TARGET=$MIYOO_HOST
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Override MIYOO_SSH_PORT=22 only for emergency access to Onion's fallback SSH.
+. "$SCRIPT_DIR/ssh-common.sh"
+TARGET=$MIYOO_SSH_TARGET
 
-run_ssh() {
-    ssh -T -o ConnectTimeout=10 "$@"
-}
-
-run_ssh "$TARGET" sh -s <<'REMOTE_SCRIPT'
+miyoo_ssh "$TARGET" sh -s <<'REMOTE_SCRIPT'
 set -eu
 APP_DIR=/mnt/SDCARD/App/MiyooFin
 fail() { printf '[onion-remote-exit] ERROR: %s\n' "$*" >&2; exit 1; }

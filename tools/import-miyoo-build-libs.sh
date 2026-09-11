@@ -31,6 +31,10 @@
 # -------------------------------------------------------------------
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Override MIYOO_SSH_PORT=22 only for emergency access to Onion's fallback SSH.
+. "$SCRIPT_DIR/miyoo/ssh-common.sh"
+
 VERIFY_ONLY=0
 HOST=""
 
@@ -43,8 +47,8 @@ for arg in "$@"; do
 done
 
 if [ "$VERIFY_ONLY" -eq 0 ] && [ -z "$HOST" ]; then
-    if [ -n "${MIYOO_HOST:-}" ]; then
-        HOST="$MIYOO_HOST"
+    if [ -n "${MIYOO_SSH_TARGET:-}" ] || [ -n "${MIYOO_HOST:-}" ]; then
+        HOST="$MIYOO_SSH_TARGET"
     elif [ -t 0 ]; then
         printf "Miyoo IP address or hostname: "
         IFS= read -r DEVICE_HOST
@@ -136,7 +140,7 @@ trap cleanup EXIT INT TERM
 
 echo "Importing Miyoo build libraries from ${HOST}..."
 echo "Opening one reusable SSH connection..."
-if ! ssh \
+if ! miyoo_ssh \
     -o ControlMaster=yes \
     -o ControlPath="$CONTROL_PATH" \
     -o ControlPersist=60 \
@@ -158,7 +162,7 @@ while IFS= read -r line; do
     expected_hash="$3"
 
     printf "  Fetching %s ... " "$local_name"
-    if ! scp -q \
+    if ! miyoo_scp -q \
         -o ControlMaster=no \
         -o ControlPath="$CONTROL_PATH" \
         "${HOST}:${remote_path}" "${TMP_DIR}/${local_name}"; then

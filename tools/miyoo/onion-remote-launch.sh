@@ -5,7 +5,10 @@
 # The installed Onion runtime consumes it only after MainUI has exited.
 set -eu
 
-TARGET=${MIYOO_SSH_TARGET:-${MIYOO_HOST:-onion@192.168.1.197}}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Override MIYOO_SSH_PORT=22 only for emergency access to Onion's fallback SSH.
+. "$SCRIPT_DIR/ssh-common.sh"
+TARGET=$MIYOO_SSH_TARGET
 MODE=normal
 
 if [ "$#" -gt 1 ]; then
@@ -20,15 +23,7 @@ if [ "$#" -eq 1 ]; then
     MODE=telemetry
 fi
 
-run_ssh() {
-    if [ -n "${MIYOO_SSH_CONTROL_PATH:-}" ]; then
-        ssh -T -o ConnectTimeout=10 -o ControlPath="$MIYOO_SSH_CONTROL_PATH" "$@"
-    else
-        ssh -T -o ConnectTimeout=10 "$@"
-    fi
-}
-
-run_ssh "$TARGET" sh -s -- "$MODE" <<'REMOTE_SCRIPT'
+miyoo_ssh "$TARGET" sh -s -- "$MODE" <<'REMOTE_SCRIPT'
 set -eu
 
 SYS_DIR=/mnt/SDCARD/.tmp_update

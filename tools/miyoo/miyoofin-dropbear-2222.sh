@@ -12,6 +12,7 @@ HOST_KEY=$RUNTIME_KEYS/dropbear_ed25519_host_key
 PID_FILE=$BASE/run/dropbear-2222.pid
 LOG_FILE=$BASE/log/dropbear-2222.log
 DAEMON=$BASE/bin/dropbear
+SFTP_SERVER=$BASE/bin/sftp-server
 PERSIST_HOST_KEY=$BASE/keys/dropbear_ed25519_host_key
 HANDOFF_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-mainui-handoff
 HANDOFF_RUNTIME=/tmp/miyoofin-mainui-handoff
@@ -22,10 +23,17 @@ REBOOT_RUNTIME=/tmp/miyoofin-reboot
 CHARGING_MARKER_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/install-charging-boot-marker.sh
 
 mkdir -p "$RUNTIME_SSH" "$RUNTIME_KEYS" "$BASE/run" "$BASE/log"
+# Onion's boot image may recreate /dev/null as root-only.  The SFTP
+# subsystem runs as onion and requires the standard device-node mode.
+chmod 666 /dev/null
 chown 1000:1000 "$RUNTIME_HOME" "$RUNTIME_SSH"
 chmod 700 "$RUNTIME_HOME" "$RUNTIME_SSH"
 if [ ! -f "$KEYSTORE" ]; then
     echo "miyoofin-dropbear: missing persistent authorized_keys" >>"$LOG_FILE"
+    exit 1
+fi
+if [ ! -x "$SFTP_SERVER" ]; then
+    echo "miyoofin-dropbear: missing SFTP server $SFTP_SERVER" >>"$LOG_FILE"
     exit 1
 fi
 cp "$KEYSTORE" "$RUNTIME_SSH/authorized_keys"
@@ -100,4 +108,4 @@ if [ -f "$PID_FILE" ]; then
     esac
 fi
 
-HOME="$RUNTIME_HOME" "$DAEMON" -s -p 2222 -r "$HOST_KEY" -P "$PID_FILE" -E >>"$LOG_FILE" 2>&1
+HOME="$RUNTIME_HOME" "$DAEMON" -s -p 2222 -r "$HOST_KEY" -P "$PID_FILE" -e >>"$LOG_FILE" 2>&1

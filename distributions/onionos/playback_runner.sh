@@ -227,17 +227,21 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Clear MiyooFin's SDL driver overrides so FFplay uses Onion's native
-# drivers.
+# Select Onion's native SDL drivers explicitly. The parent has synchronously
+# released its SDL/display resources before this child is spawned.
 # -------------------------------------------------------------------
-unset SDL_VIDEODRIVER
-unset SDL_AUDIODRIVER
+export SDL_VIDEODRIVER=mmiyoo
+export SDL_AUDIODRIVER=mmiyoo
+playback_log "player_env SDL_VIDEODRIVER=$SDL_VIDEODRIVER SDL_AUDIODRIVER=$SDL_AUDIODRIVER LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so"
 
 # -------------------------------------------------------------------
 # Run Onion FFplay
 # -------------------------------------------------------------------
 SYS=/mnt/SDCARD/.tmp_update
 playback_log "Starting FFplay with Onion SDL environment"
+# The bridge URL is intentionally redacted: keep argv shape without ever
+# persisting a possibly authenticated input URL.
+playback_log "ffplay_argv=-stats -autoexit -fs -vf=<redacted-filter> -i=<redacted-url>"
 cd "$SYS" || {
     playback_log "ERROR: Cannot cd to $SYS"
     cleanup_playback
@@ -249,10 +253,20 @@ cd "$SYS" || {
 LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so ./bin/ffplay \
     -stats \
     -autoexit \
+    -fs \
     -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
     -i "$PLAY_URL" \
-    >> "$APP_DIR/playback-ffplay.log" 2>&1
+    >> "$APP_DIR/playback-ffplay.log" 2>&1 &
 
+FFPLAY_PID=$!
+playback_log "ffplay_spawned pid=$FFPLAY_PID"
+if [ -r "/proc/$FFPLAY_PID/status" ]; then
+    FFPLAY_STATE=$(awk '/^State:/{print $2; exit}' "/proc/$FFPLAY_PID/status" 2>/dev/null)
+    playback_log "ffplay_process_state=${FFPLAY_STATE:-unavailable}"
+else
+    playback_log "ffplay_process_state=unavailable"
+fi
+wait "$FFPLAY_PID"
 FFPLAY_EXIT=$?
 playback_log "FFplay exited with code $FFPLAY_EXIT"
 

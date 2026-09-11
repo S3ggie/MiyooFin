@@ -265,6 +265,12 @@ struct CatalogDbPageCursor {
     bool valid = false;
 };
 
+struct CatalogDbMediaPageMembership {
+    std::string viewId;
+    std::string viewName;
+    std::string collectionType;
+};
+
 struct CatalogDbMediaPageResult {
     bool success = false;
     bool workerOwned = false;
@@ -274,6 +280,7 @@ struct CatalogDbMediaPageResult {
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::vector<MediaItem> items;
+    std::map<std::string, std::vector<CatalogDbMediaPageMembership>> membershipsByItem;
     CatalogDbPageCursor next;
 };
 

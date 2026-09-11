@@ -315,6 +315,20 @@ static void testPtsEventFirstReturnsStart() {
     CHECK(attempted);
     std::printf("[test] pts_event: first call OK\n");
 }
+
+static void testPlayerVideoOutputDiagnostics()
+{
+    std::printf("[test] player video output diagnostics\n");
+    CHECK(player_video_output_initialized("SDL video driver: mmiyoo"));
+    CHECK(player_video_output_initialized("Using video driver 'mmiyoo'"));
+    CHECK(player_video_output_initialization_failed(
+        "Could not initialize SDL - video output unavailable"));
+    CHECK(player_video_output_initialization_failed(
+        "SDL_CreateWindow failed: display busy"));
+    CHECK(!player_video_output_initialized("showinfo pts_time:1.0"));
+    std::printf("[test] player video output diagnostics OK\n");
+}
+
 static void testPtsEventSecondReturnsProgress() {
     std::printf("[test] pts_event: second call returns true (Progress)\n");
     bool attempted = false;
@@ -552,6 +566,7 @@ int main()
 
     std::printf("\n--- G: pts_event lifecycle (start-once bug fix) ---\n");
     testPtsEventFirstReturnsStart(); testPtsEventSecondReturnsProgress();
+    testPlayerVideoOutputDiagnostics();
     testPtsEventAlwaysStartThenProgress();
 
     std::printf("\n--- H: pos.cfg binary-record parsing ---\n");

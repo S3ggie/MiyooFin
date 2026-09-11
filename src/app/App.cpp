@@ -227,6 +227,9 @@ bool App::init()
     loadSavedUrl();
     loadSavedSession();
     uiDiagnostics().log("[App] startup stage=session_loaded");
+    uiDiagnostics().log(m_session.valid()
+        ? "[App] startup stage=session_ready"
+        : "[App] startup stage=session_not_ready");
     recoverPlaybackResult();
     m_downloadManager = std::make_shared<DownloadManager>(m_session);
     m_downloadManager->setCatalogDb(m_catalogDb);
@@ -318,9 +321,11 @@ void App::loadSavedUrl()
 void App::configureCatalogScopeForSession()
 {
     if (m_catalogDb && m_session.valid()) {
+        uiDiagnostics().log("[App] startup stage=catalog_scope_start");
         uiDiagnostics().log("[App] catalog scope request identity=valid");
         m_catalogScopeEpoch =
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
+        uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
         m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
@@ -447,6 +452,11 @@ bool App::suspendPlatform()
 
     // Shut down SDL subsystems — releases framebuffer/video hardware
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+    // Fully tear down SDL before exec: the Miyoo video backend can retain
+    // framebuffer/display ownership after subsystem-only shutdown. A fresh
+    // SDL process must be able to claim the display for FFplay.
+    SDL_Quit();
+    uiDiagnostics().log("[App] playback stage=display_release_complete");
 
     printf("[App] Platform suspended\n");
     return true;
@@ -457,7 +467,7 @@ bool App::resumePlatform()
     printf("[App] Resuming platform resources\n");
     if (m_downloadManager) m_downloadManager->setPlaybackActive(false);
 
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_InitSubSystem failed: %s\n", SDL_GetError());
         return false;
     }

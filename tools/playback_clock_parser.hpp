@@ -119,6 +119,23 @@ inline bool parse_showinfo_pts(const std::string &record, double &outSeconds)
     return true;
 }
 
+// These predicates only classify explicit FFplay/SDL stderr text. They do
+// not claim that a decoded frame reached the physical display.
+inline bool player_video_output_initialized(const std::string &record)
+{
+    return record.find("SDL video driver") != std::string::npos
+        || record.find("SDL_CreateWindow") != std::string::npos
+        || record.find("Using video driver") != std::string::npos;
+}
+
+inline bool player_video_output_initialization_failed(const std::string &record)
+{
+    return record.find("Could not initialize SDL") != std::string::npos
+        || record.find("Failed to create window") != std::string::npos
+        || (record.find("SDL_CreateWindow") != std::string::npos
+            && record.find("failed") != std::string::npos);
+}
+
 // -------------------------------------------------------------------
 // Decide whether a new sampled PTS should trigger PlaybackStart or
 // PlaybackProgress.  Call once per valid PTS event.

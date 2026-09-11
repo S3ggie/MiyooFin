@@ -133,11 +133,17 @@ void HomeScreen::rebuildShowsPresentation()
     m_animeWindow.clear();
     const auto &views = (presentationOffline() ? m_offlineSnapshot
                                                 : m_cachedSnapshot).shows;
+    std::set<std::string> animeItemIds;
+    {
+        std::lock_guard<std::mutex> lock(m_fetchMutex);
+        animeItemIds = m_animeItemIds;
+    }
     std::set<std::string> seenShows;
     std::set<std::string> seenAnime;
     for (const auto &item : rawWindow) {
-        bool anime = false;
+        bool anime = animeItemIds.count(item.id) != 0;
         for (const auto &view : views) {
+            if (anime) break;
             auto found = std::find_if(view.items.begin(), view.items.end(),
                                       [&](const MediaItem &candidate) {
                                           return candidate.id == item.id;
@@ -163,12 +169,15 @@ void HomeScreen::enter()
 {
     printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab,
            m_userName.c_str());
-    if (m_loadState == LoadState::Loading && !m_fetchDone) {
-        // The SQLite checkpoint is read by startFetch's worker before any
-        // ChangedHierarchy request.  Until that result arrives, remain
-        // conservative and perform the normal online fetch.
-        m_forceHierarchyReconcile=true;
-        requestFetch(SDL_GetTicks());
+    uiDiagnostics().log("[HomeScreen] startup stage=home_entered");
+    if (m_loadState == LoadState::Loading) {
+        if (!m_fetchDone) {
+            // The SQLite checkpoint is read by startFetch's worker before any
+            // ChangedHierarchy request.  The first bounded page publishes the
+            // minimum Home data; remaining population stays in the worker.
+            m_forceHierarchyReconcile=true;
+            requestFetch(SDL_GetTicks());
+        }
     }
     else if (m_loadState == LoadState::Ready) {
         if (m_resumeRefreshInFlight)
@@ -185,11 +194,18 @@ void HomeScreen::leave()
 
 void HomeScreen::update(Uint32 dt)
 {
+    if (!m_catalogScopeReadyLogged && m_catalogDb) {
+        const CatalogDbScopeState state = m_catalogDb->scopeState();
+        if (state.ready) {
+            m_catalogScopeReadyLogged = true;
+            uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready");
+        }
+    }
     if (m_logoutArmed && !m_logoutRequested) {
         if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
         else m_logoutTimer -= dt;
     }
-    if (m_fetchDone) {
+    if (m_fetchReady.load()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();
     }

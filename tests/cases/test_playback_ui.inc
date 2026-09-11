@@ -243,6 +243,29 @@ static void testPlaybackRequestStillWorks()
     std::printf("[test] B5f3a: PlaybackRequest still writes correctly OK\n");
 }
 
+static void testPlaybackRunnerInitializesOnionSdlDrivers()
+{
+    std::printf("[test] playback runner initializes Onion SDL drivers\n");
+    const std::string source = readTestBytes("distributions/onionos/playback_runner.sh");
+    CHECK(source.find("export SDL_VIDEODRIVER=mmiyoo") != std::string::npos);
+    CHECK(source.find("export SDL_AUDIODRIVER=mmiyoo") != std::string::npos);
+    CHECK(source.find("unset SDL_VIDEODRIVER") == std::string::npos);
+    CHECK(source.find("unset SDL_AUDIODRIVER") == std::string::npos);
+    std::printf("[test] playback runner initializes Onion SDL drivers OK\n");
+}
+
+static void testExternalPlaybackFullyReleasesSdlBeforeExec()
+{
+    std::printf("[test] external playback fully releases SDL before exec\n");
+    const std::string source = readTestBytes("src/app/App.cpp");
+    const auto subsystemQuit = source.find("SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);");
+    const auto fullQuit = source.find("SDL_Quit();", subsystemQuit);
+    CHECK(subsystemQuit != std::string::npos && fullQuit != std::string::npos);
+    CHECK(source.find("display_release_complete") != std::string::npos);
+    CHECK(source.find("display_release_complete") < source.find("fork()"));
+    std::printf("[test] external playback fully releases SDL before exec OK\n");
+}
+
 // B5f3a: ScreenStack does not get destroyed during external playback
 // (conceptual test — push screens, set flag, verify stack is intact)
 static void testScreenStackPreservedDuringExternalPlayback()

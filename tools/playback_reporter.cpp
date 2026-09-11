@@ -380,6 +380,20 @@ int main(int argc, char *argv[])
     bool hasPts = false;
     bool ffplayExited = false;
     int exitCode = 0;
+    bool outputInitObserved = false;
+    bool outputInitFailed = false;
+
+    auto inspectPlayerOutput = [&](const std::string &record) {
+        if (!outputInitFailed
+            && player_video_output_initialization_failed(record)) {
+            outputInitFailed = true;
+            reporter_log("player_video_output_initialization_failed evidence=ffplay_stderr");
+        } else if (!outputInitObserved
+                   && player_video_output_initialized(record)) {
+            outputInitObserved = true;
+            reporter_log("player_video_output_initialized evidence=ffplay_stderr");
+        }
+    };
 
     reporter_log("waiting for showinfo pts_time in %s", ffplayLog.c_str());
 
@@ -410,12 +424,14 @@ int main(int argc, char *argv[])
                 size_t parsePos = 0;
                 std::string record;
                 while (extract_record(partialBuf, parsePos, record)) {
+                    inspectPlayerOutput(record);
                     double pts = 0.0;
                     if (parse_showinfo_pts(record, pts)) {
                         lastPts = pts;
                         hasPts = true;
                         if (!pts_event(startAttempted)) {
                             // First valid PTS → send PlaybackStart (once)
+                            reporter_log("first_video_frame_decoded pts=%.4f evidence=showinfo", pts);
                             reporter_log("first pts %.4f sec", pts);
                             report_event("ReportPlaybackStart", "/Sessions/Playing", route, itemId,
                                          absolute_position_ticks(resumeTicks, pts), false, false,
@@ -456,6 +472,7 @@ int main(int argc, char *argv[])
                 size_t parsePos = 0;
                 std::string record;
                 while (extract_record(partialBuf, parsePos, record)) {
+                    inspectPlayerOutput(record);
                     double pts = 0.0;
                     if (parse_showinfo_pts(record, pts)) {
                         lastPts = pts; hasPts = true;
@@ -507,8 +524,15 @@ int main(int argc, char *argv[])
         (void)usedPosCfg;  // suppress unused-variable warning in non-debug builds
     }
 
-    // Send ReportPlaybackStopped
-    bool failed = (exitCode != 0);
+    if (outputInitFailed) {
+        reporter_log("playback_attempt_classification=failed reason=player_video_output_initialization");
+    } else if (!outputInitObserved) {
+        reporter_log("player_video_output_initialization=not_observed");
+    }
+
+    // Send ReportPlaybackStopped. A player output-init error is a failed
+    // attempt even when FFplay itself returned zero; no retry is performed.
+    bool failed = (exitCode != 0) || outputInitFailed;
     if (hasPts) {
         const int64_t finalTicks =
             absolute_position_ticks(resumeTicks, lastPts);

@@ -92,6 +92,11 @@ void HomeScreen::requestMediaPage(MediaPageState &state)
     state.future = m_catalogDb->readMediaPage(
         state.type, state.letter, 24, state.next, metadata);
     state.inFlight = true;
+    if (!m_firstMediaPageReadLogged) {
+        m_firstMediaPageReadLogged = true;
+        uiDiagnostics().log(
+            "[HomeScreen] startup stage=first_read_media_page_requested");
+    }
 }
 
 void HomeScreen::finishMediaPage(MediaPageState &state)
@@ -104,6 +109,16 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;
+    if (!m_firstMediaPageReadCompletedLogged) {
+        m_firstMediaPageReadCompletedLogged = true;
+        uiDiagnostics().log(
+            "[HomeScreen] startup stage=first_read_media_page_ready");
+    }
+    if (!m_firstUsefulHomeLogged) {
+        m_firstUsefulHomeLogged = true;
+        uiDiagnostics().log(
+            "[HomeScreen] startup stage=first_useful_home_ready");
+    }
     auto &window = state.type == "movie" ? m_moviePage.items : m_showPage.items;
     std::set<std::string> known;
     for (const auto &item : window)
@@ -129,6 +144,24 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         m_movieWindow = window;
         refreshMovieFilter();
     } else {
+        {
+            std::lock_guard<std::mutex> lock(m_fetchMutex);
+            for (const auto &item : result.items) {
+                const auto found = result.membershipsByItem.find(item.id);
+                if (found == result.membershipsByItem.end())
+                    continue;
+                for (const auto &membership : found->second) {
+                    CachedLibraryView view;
+                    view.id = membership.viewId;
+                    view.name = membership.viewName;
+                    view.collectionType = membership.collectionType;
+                    if (isAnimeSeries(view, item)) {
+                        m_animeItemIds.insert(item.id);
+                        break;
+                    }
+                }
+            }
+        }
         rebuildShowsPresentation();
     }
 }
@@ -164,7 +197,13 @@ static void makeMediaTabsBounded(std::vector<TabData> &tabs)
 void HomeScreen::startFetch()
 {
     if (m_fetchThread.joinable()) return;
-    m_fetchDone = false; m_fetchError.clear(); m_fetchResult.clear(); m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
+    m_fetchDone = false; m_fetchReady.store(false); m_fetchComplete.store(false);
+    m_fetchPublished = false; m_fetchError.clear(); m_fetchResult.clear();
+    m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
+    {
+        std::lock_guard<std::mutex> lock(m_fetchMutex);
+        m_animeItemIds.clear();
+    }
     m_fetchCancellation = std::make_shared<std::atomic<bool>>(false);
     const std::shared_ptr<std::atomic<bool>> cancellation = m_fetchCancellation;
     Session session=m_session; std::string url=session.serverUrl; std::string token=m_session.accessToken; std::string uid=m_session.userId; std::string devId=m_session.deviceId;
@@ -217,7 +256,7 @@ void HomeScreen::startFetch()
             telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, false);
             telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
         };
-        std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();completeTelemetry(Outcome::Failure);m_fetchDone=true;};
+        std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();completeTelemetry(Outcome::Failure);m_fetchComplete.store(true);m_fetchReady.store(true);m_fetchDone=true;};
         if (session.manualOfflineMode) {
             bool needsRefresh = false;
             if (!LibraryCache::load(LibraryCache::cachePath("cache", scope),
@@ -231,23 +270,35 @@ void HomeScreen::startFetch()
             m_remoteSnapshot = m_cachedSnapshot;
             m_fetchCacheSaved = true;
             completeTelemetry(Outcome::Success);
+            m_fetchComplete.store(true);
+            m_fetchReady.store(true);
             m_fetchDone = true;
             return;
         }
         bool optionalRequestFailed = false;
+        bool initialPagePublished = false;
+        bool firstBoundedRequestLogged = false;
+        bool firstPagePersistedLogged = false;
+        uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
         std::vector<MediaItem> cw; std::string cwErr;
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRequestFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
         std::vector<MediaItem> ra; std::string raErr;
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRequestFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         std::string viewsErr;
+        uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         if (!RouteRequest(session).run([&](const std::string &base){
                 return JellyfinApi::getViews(base, token, uid, devId, views,
                                              viewsErr, cancellation.get());
-            }, viewsErr)) {
+        }, viewsErr)) {
             optionalRequestFailed = true;
         } else {
+            uiDiagnostics().log("[HomeScreen] startup stage=views_finished");
             std::printf("[HomeScreen] population_coordinator views=%zu\n", views.size());
             views.erase(std::remove_if(views.begin(), views.end(), [](const LibraryView &view) {
                 if (supportedLibraryView(view)) return false;
@@ -263,12 +314,27 @@ void HomeScreen::startFetch()
                     LibraryItemsPage page;
                     std::string pageErr;
                     ++requestCount;
+                    if (!firstBoundedRequestLogged) {
+                        firstBoundedRequestLogged = true;
+                        uiDiagnostics().log(
+                            "[HomeScreen] startup stage=first_bounded_request_started");
+                    }
                     if (!RouteRequest(session).run([&](const std::string &base){
                             return JellyfinApi::getLibraryItemsPage(
                                 base, token, uid, devId, view.id, types, start, 48,
                                 page, pageErr, cancellation.get());
                         }, pageErr)) { optionalRequestFailed = true; break; }
                     mediaCount += static_cast<uint32_t>(page.items.size());
+                    if (view.collectionType == "tvshows") {
+                        CachedLibraryView classificationView;
+                        classificationView.id = view.id;
+                        classificationView.name = view.name;
+                        classificationView.collectionType = view.collectionType;
+                        std::lock_guard<std::mutex> lock(m_fetchMutex);
+                        for (const auto &item : page.items)
+                            if (isAnimeSeries(classificationView, item))
+                                m_animeItemIds.insert(item.id);
+                    }
                     std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
                                 page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
                     if (m_catalogDb) {
@@ -282,7 +348,7 @@ void HomeScreen::startFetch()
                         writePage.finalPage = !page.hasMore;
                         auto write = m_catalogDb->upsertMediaPage(writePage, metadata);
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
-                        if (!writeResult.success) {
+                    if (!writeResult.success) {
                             optionalRequestFailed = true;
                             std::printf("[HomeScreen] page_write_failed error=%u cancelled=%d superseded=%d message=%s\n",
                                         static_cast<unsigned>(writeResult.error),
@@ -296,26 +362,60 @@ void HomeScreen::startFetch()
                         std::printf("[HomeScreen] page_write_failed error=db_unavailable\n");
                         break;
                     }
+                    if (!firstPagePersistedLogged) {
+                        firstPagePersistedLogged = true;
+                        uiDiagnostics().log(
+                            "[HomeScreen] startup stage=first_page_persisted");
+                    }
+                    if (!initialPagePublished) {
+                        // Home becomes useful after the first bounded page;
+                        // remaining pages continue in this worker and are
+                        // available to lazy CatalogDb reads as they commit.
+                        {
+                            std::lock_guard<std::mutex> lock(m_fetchMutex);
+                            m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,{},{});
+                        }
+                        std::printf("[HomeScreen] first bounded page ready views=%zu\n",
+                                    views.size());
+                        initialPagePublished = true;
+                        uiDiagnostics().log("[HomeScreen] startup stage=first_bounded_page_ready");
+                        m_fetchReady.store(true);
+                    }
                     if (!page.hasMore || page.items.empty()) break;
                     start = page.startIndex + static_cast<int>(page.items.size());
                 }
                 if (optionalRequestFailed) break;
             }
         }
-        m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,{},{});
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;
         completeTelemetry(optionalRequestFailed ? Outcome::Failure : Outcome::Success);
+        m_fetchComplete.store(true);
+        m_fetchDone.store(true);
+        m_fetchReady.store(true);
         m_fetchDone=true;
     });
 }
 void HomeScreen::requestFetch(Uint32 now){if(m_syncSchedule.request(now))startFetch();}
 void HomeScreen::finishFetch()
 {
-    if(m_fetchThread.joinable())m_fetchThread.join();
-    m_fetchDone=false;
-    if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_syncSchedule.complete(SDL_GetTicks(),false);return;}
-    if(!m_fetchCacheSaved)printf("[HomeScreen] Library cache save failed; retaining old cache\n");else{m_cachedSnapshot=m_remoteSnapshot;m_haveCachedSnapshot=true;}
-    const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(m_fetchResult);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);
+    if (!m_fetchReady.load())
+        return;
+    if (!m_fetchPublished) {
+        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_syncSchedule.complete(SDL_GetTicks(),false);m_fetchPublished=true;}
+        else {
+            std::vector<TabData> publishedTabs;
+            {
+                std::lock_guard<std::mutex> lock(m_fetchMutex);
+                publishedTabs = std::move(m_fetchResult);
+            }
+            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+        }
+    }
+    if (m_fetchComplete.load() && m_fetchThread.joinable()) {
+        m_fetchThread.join();
+        if (m_fetchCacheSaved) { m_cachedSnapshot=m_remoteSnapshot; m_haveCachedSnapshot=true; }
+        m_fetchDone.store(false);
+    }
 }
 }

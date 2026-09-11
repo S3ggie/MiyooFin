@@ -3078,7 +3078,8 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
             return;
         }
     }
-    sqlite3_stmt *statement=nullptr, *genres=nullptr, *tags=nullptr;
+    sqlite3_stmt *statement=nullptr, *genres=nullptr, *tags=nullptr,
+                 *memberships=nullptr;
     const std::string indexName = "idx_media_" + command->type + "_sort";
     const std::string sql =
         "SELECT id,kind,title,overview,production_year,community_rating,"
@@ -3098,11 +3099,19 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
         || sqlite3_prepare_v2(
                m_db,
                "SELECT image_type,tag FROM item_image_tags WHERE item_id=?1 "
-               "ORDER BY image_type", -1, &tags, nullptr) != SQLITE_OK) {
+               "ORDER BY image_type", -1, &tags, nullptr) != SQLITE_OK
+        || sqlite3_prepare_v2(
+               m_db,
+               "SELECT library_views.id,library_views.name,"
+               "library_views.collection_type FROM library_membership "
+               "JOIN library_views ON library_views.id=library_membership.view_id "
+               "WHERE library_membership.item_id=?1 "
+               "ORDER BY library_views.ordinal,library_views.id",
+               -1, &memberships, nullptr) != SQLITE_OK) {
         result.error=CatalogDbErrorCategory::SqliteError;
         result.message=sqlite3_errmsg(m_db);
         sqlite3_finalize(statement); sqlite3_finalize(genres);
-        sqlite3_finalize(tags);
+        sqlite3_finalize(tags); sqlite3_finalize(memberships);
         command->result.set_value(std::move(result));
         return;
     }
@@ -3135,6 +3144,27 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
             result.message=sqlite3_errmsg(m_db);
             break;
         }
+        sqlite3_reset(memberships); sqlite3_clear_bindings(memberships);
+        sqlite3_bind_text(memberships, 1, item.id.c_str(), -1, SQLITE_TRANSIENT);
+        int membershipRc = SQLITE_DONE;
+        while ((membershipRc = sqlite3_step(memberships)) == SQLITE_ROW) {
+            CatalogDbMediaPageMembership membership;
+            const char *viewId = reinterpret_cast<const char *>(
+                sqlite3_column_text(memberships, 0));
+            const char *viewName = reinterpret_cast<const char *>(
+                sqlite3_column_text(memberships, 1));
+            const char *collectionType = reinterpret_cast<const char *>(
+                sqlite3_column_text(memberships, 2));
+            membership.viewId = viewId ? viewId : "";
+            membership.viewName = viewName ? viewName : "";
+            membership.collectionType = collectionType ? collectionType : "";
+            result.membershipsByItem[item.id].push_back(std::move(membership));
+        }
+        if (membershipRc != SQLITE_DONE) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            break;
+        }
         if (result.items.size()<command->limit)
             result.items.push_back(std::move(item));
         else
@@ -3148,6 +3178,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
         result.next.valid=true;
     }
     sqlite3_finalize(statement); sqlite3_finalize(genres); sqlite3_finalize(tags);
+    sqlite3_finalize(memberships);
     if (!result.cancelled&&result.error==CatalogDbErrorCategory::None)
         result.success=true;
     command->result.set_value(std::move(result));

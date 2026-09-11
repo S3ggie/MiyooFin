@@ -3242,6 +3242,10 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
         "parent_index_number,runtime_ticks,series_name,series_id,season_id,"
         "art_r,art_g,art_b FROM media_items INDEXED BY " + indexName
         + " WHERE kind=?1 AND "
+        "EXISTS (SELECT 1 FROM library_membership "
+        "JOIN library_views ON library_views.id=library_membership.view_id "
+        "WHERE library_membership.item_id=media_items.id "
+        "AND library_views.collection_type=?10) AND "
         "(?2 < 0 OR (organizational_sort_key>=?3 AND "
         "organizational_sort_key<?4)) AND (?5=0 OR "
         "(organizational_sort_key,title,id)>(?6,?7,?8)) "
@@ -3283,6 +3287,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     sqlite3_bind_text(statement,7,command->after.title.c_str(),-1,SQLITE_TRANSIENT);
     sqlite3_bind_text(statement,8,command->after.id.c_str(),-1,SQLITE_TRANSIENT);
     sqlite3_bind_int64(statement,9,static_cast<sqlite3_int64>(command->limit+1));
+    sqlite3_bind_text(statement,10,command->type=="movie"?"movies":"tvshows",-1,SQLITE_STATIC);
     const MediaItemCollectionStatements collections{
         nullptr, nullptr, nullptr, nullptr, genres, tags};
     while (sqlite3_step(statement)==SQLITE_ROW) {
@@ -4896,7 +4901,12 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         std::string sql =
             "EXPLAIN QUERY PLAN SELECT id FROM media_items INDEXED BY "
             + ("idx_media_" + type + "_sort")
-            + " WHERE kind=" + std::to_string(kind);
+            + " WHERE kind=" + std::to_string(kind)
+            + " AND EXISTS (SELECT 1 FROM library_membership "
+              "JOIN library_views ON library_views.id=library_membership.view_id "
+              "WHERE library_membership.item_id=media_items.id "
+              "AND library_views.collection_type='"
+            + (type == "movie" ? "movies" : "tvshows") + "')";
         if (letter >= 0) {
             sql += " AND organizational_sort_key >= '";
             sql += static_cast<char>('a' + letter);

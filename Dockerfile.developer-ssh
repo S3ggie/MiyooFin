@@ -1,0 +1,18 @@
+FROM debian:buster
+
+RUN dpkg --add-architecture armhf \
+    && sed -i 's/deb\.debian\.org/archive.debian.org/g' /etc/apt/sources.list \
+    && sed -i 's|security.debian.org|archive.debian.org/debian-security|g' /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates curl make gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+       bzip2 gzip \
+       autoconf automake libtool pkg-config patch \
+       libssl-dev:armhf zlib1g-dev:armhf \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY tools/miyoo/build-developer-ssh.sh /src/build-developer-ssh.sh
+RUN chmod +x /src/build-developer-ssh.sh
+
+ENTRYPOINT ["/src/build-developer-ssh.sh"]

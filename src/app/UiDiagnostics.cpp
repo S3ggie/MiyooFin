@@ -85,7 +85,16 @@ uint64_t UiDiagnostics::monotonicMs() { return (uint64_t)std::chrono::duration_c
 int UiDiagnostics::Watchdog::poll(uint64_t heartbeat, uint64_t now, bool suspended, uint64_t &duration) { duration=0; if(suspended){seen=heartbeat;stalled=false;return 0;} if(heartbeat!=seen){int r=stalled?2:0; if(stalled) duration=now-seen; seen=heartbeat; stalled=false; return r;} if(!stalled && now>=seen+STALL_MS){stalled=true;return 1;} return 0; }
 UiDiagnostics::UiDiagnostics(){} UiDiagnostics::~UiDiagnostics(){stop();}
 void UiDiagnostics::start(const std::string &path){ if(m_thread.joinable())return; m_path=path; m_stop=false; heartbeat(); event("diagnostics started"); m_thread=std::thread(&UiDiagnostics::watchdogLoop,this); }
-void UiDiagnostics::stop(){ m_stop=true; if(m_thread.joinable())m_thread.join(); }
+void UiDiagnostics::stop(){
+    m_stop=true;
+    if(m_thread.joinable())m_thread.join();
+    std::vector<std::string> logs;
+    {
+        std::lock_guard<std::mutex> l(m_pendingMutex);
+        logs.swap(m_pendingLogs);
+    }
+    for(const auto &line:logs)writeLine(line);
+}
 void UiDiagnostics::heartbeat(){m_heartbeat.store(monotonicMs(),std::memory_order_relaxed);}
 UiPhaseId UiDiagnostics::phaseIdFromDiagnosticName(const char *phase) noexcept
 {

@@ -925,11 +925,58 @@ static void testBuildLibraryItemsUrl()
     CHECK(url.find("SortBy=SortName") != std::string::npos);
     CHECK(url.find("SortOrder=Ascending") != std::string::npos);
     CHECK(url.find("Recursive=true") != std::string::npos);
-    CHECK(url.find("Fields=Overview,Genres,CommunityRating,UserData,ImageTags") !=
+    CHECK(url.find("Fields=Overview,Genres,CommunityRating,UserData,ImageTags,RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,IndexNumber,Etag") !=
           std::string::npos);
     CHECK(url.find("StartIndex=50") != std::string::npos);
     CHECK(url.find("Limit=50") != std::string::npos);
     std::printf("[test] buildLibraryItemsUrl OK\n");
+}
+
+static void testLibraryItemsBoundedPageHttp()
+{
+    std::printf("[test] bounded Jellyfin library page HTTP handling\n");
+    struct Case { const char *name; int start; int limit; int bodyStart; int total; int count; bool more; };
+    const Case cases[] = {
+        {"first", 0, 3, 0, 7, 3, true}, {"middle", 3, 3, 3, 7, 3, true},
+        {"final partial", 6, 3, 6, 7, 1, false},
+        {"exact multiple final", 3, 3, 3, 6, 3, false},
+        {"zero", 0, 3, 0, 0, 0, false},
+    };
+    for (const auto &test : cases) {
+        const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        CHECK(listener >= 0); if (listener < 0) continue;
+        int reuse = 1; ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); address.sin_port = htons(0);
+        CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+        socklen_t size = sizeof(address); CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address), &size) == 0); CHECK(::listen(listener, 1) == 0);
+        std::string request;
+        std::thread server([&] {
+            const int client = ::accept(listener, nullptr, nullptr); if (client < 0) return;
+            char buffer[4096];
+            while (request.find("\r\n\r\n") == std::string::npos) { const ssize_t n = ::recv(client, buffer, sizeof(buffer), 0); if (n <= 0) break; request.append(buffer, static_cast<size_t>(n)); }
+            std::string body = "{\"StartIndex\":" + std::to_string(test.bodyStart) + ",\"TotalRecordCount\":" + std::to_string(test.total) + ",\"Items\":[";
+            for (int i = 0; i < test.count; ++i) { if (i) body += ','; body += "{\"Id\":\"page-" + std::to_string(test.bodyStart+i) + "\",\"Type\":\"Movie\",\"Name\":\"Title " + std::to_string(test.bodyStart+i) + "\",\"RunTimeTicks\":20000000,\"Etag\":\"etag\"}"; }
+            body += "]}";
+            const std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0); ::close(client);
+        });
+        LibraryItemsPage page; std::string error;
+        const bool ok = JellyfinApi::getLibraryItemsPage("http://127.0.0.1:" + std::to_string(ntohs(address.sin_port)), "token", "user", "device", "library-id", "Movie", test.start, test.limit, page, error);
+        server.join(); ::close(listener);
+        CHECK(ok && error.empty()); CHECK(static_cast<int>(page.items.size()) == test.count); CHECK(page.totalRecordCount == test.total); CHECK(page.hasMore == test.more);
+        CHECK(request.find("/Users/user/Items?ParentId=library-id&IncludeItemTypes=Movie") != std::string::npos);
+        CHECK(request.find("StartIndex=" + std::to_string(test.start)) != std::string::npos); CHECK(request.find("Limit=" + std::to_string(test.limit)) != std::string::npos);
+        CHECK(request.find("SeriesName") != std::string::npos && request.find("Etag") != std::string::npos);
+    }
+    { // HTTP failure is returned without retry or internal paging.
+        const int listener = ::socket(AF_INET, SOCK_STREAM, 0); CHECK(listener >= 0); if (listener < 0) return;
+        int reuse = 1; ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)); sockaddr_in address{}; address.sin_family=AF_INET; address.sin_addr.s_addr=htonl(INADDR_LOOPBACK); address.sin_port=htons(0); CHECK(::bind(listener,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0); socklen_t size=sizeof(address); ::getsockname(listener,reinterpret_cast<sockaddr*>(&address),&size); ::listen(listener,1);
+        int requests = 0; std::thread server([&]{ int c=::accept(listener,nullptr,nullptr); ++requests; const char *r="HTTP/1.1 500 Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\nno"; (void)::send(c,r,strlen(r),0); ::close(c); });
+        LibraryItemsPage page; std::string error; CHECK(!JellyfinApi::getLibraryItemsPage("http://127.0.0.1:"+std::to_string(ntohs(address.sin_port)),"t","u","d","p","Movie",0,3,page,error)); server.join(); ::close(listener); CHECK(requests==1 && !error.empty());
+    }
+    std::atomic<bool> cancelled{true}; LibraryItemsPage page; std::string error;
+    CHECK(!JellyfinApi::getLibraryItemsPage("http://127.0.0.1:1","t","u","d","p","Movie",0,3,page,error,&cancelled)); CHECK(error == "Callback aborted");
+    std::printf("[test] bounded Jellyfin library page HTTP handling OK\n");
 }
 
 // -------------------------------------------------------------------

@@ -49,6 +49,13 @@ struct LibraryView {
     std::string collectionType; // "movies", "tvshows", "music", etc.
 };
 
+struct LibraryItemsPage {
+    std::vector<MediaItem> items;
+    int startIndex = 0;
+    int totalRecordCount = 0;
+    bool hasMore = false;
+};
+
 /// The subset of Jellyfin PlaybackInfo needed to safely create an original
 /// download.  Size is authoritative: a zero value means it is unavailable.
 struct DownloadMediaSource {
@@ -141,6 +148,17 @@ public:
                                 std::vector<MediaItem> &items,
                                 std::string &error,
                                 const std::atomic<bool> *cancelled = nullptr);
+    /// Fetch exactly one bounded page. This never follows a subsequent page.
+    static bool getLibraryItemsPage(const std::string &baseUrl,
+                                    const std::string &accessToken,
+                                    const std::string &userId,
+                                    const std::string &deviceId,
+                                    const std::string &parentId,
+                                    const std::string &includeItemTypes,
+                                    int startIndex, int limit,
+                                    LibraryItemsPage &page,
+                                    std::string &error,
+                                    const std::atomic<bool> *cancelled = nullptr);
     /// Changed hierarchy relationships since a durable UTC checkpoint.  The
     /// result retains only ID, normalized type, and SeriesId; DateLastSaved
     /// still includes metadata and per-user UserData changes.

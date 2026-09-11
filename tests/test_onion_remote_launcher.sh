@@ -110,6 +110,12 @@ if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeScreenSync.cpp
 grep -q 'getResumeItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Continue Watching request'
 grep -q 'getLatestItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Recently Added request'
 grep -q 'readMediaPage' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
-grep -q 'catalog_scope_deferred_until_media_navigation' "$ROOT/src/app/App.cpp" || fail 'online startup still opens CatalogDb scope eagerly'
-grep -q 'configureScope' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'media navigation does not lazily configure CatalogDb scope'
+grep -q 'configureCatalogScopeForSession();' "$ROOT/src/app/App.cpp" || fail 'online startup does not configure CatalogDb scope for the session'
+if ! awk '
+    /configureCatalogScopeForSession\(\);/ { configured = NR }
+    /goToHome\(\);/ && configured && NR > configured { ordered = 1 }
+    END { exit ordered ? 0 : 1 }
+' "$ROOT/src/app/App.cpp"; then
+    fail 'CatalogDb scope configuration is not ordered before Home'
+fi
 echo '[test] Home fetch cancellation contract OK'

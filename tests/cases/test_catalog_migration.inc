@@ -97,6 +97,11 @@ static void testCatalogDbFreshBootstrapPathStates()
         CHECK(schema.success && schema.exactSchema
               && schema.applicationId == 0x4D59464E
               && schema.userVersion == 3);
+        const auto warmEpoch = db.configureScope(freshUrl, freshUser);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto warmState = db.scopeState();
+        CHECK(warmState.requestedEpoch == warmEpoch && warmState.ready);
+        CHECK(warmState.openState == CatalogDbOpenState::SupportedV3);
     }
     uiDiagnostics().stop();
     const std::string diagnostics = readTestBytes(diagnosticPath);
@@ -111,6 +116,8 @@ static void testCatalogDbFreshBootstrapPathStates()
     CHECK(temporaryFinalized != std::string::npos);
     CHECK(temporaryOpenStarted < temporaryCreated);
     CHECK(temporaryCreated < temporaryFinalized);
+    CHECK(diagnostics.find("sort_key_backfill_skipped reason=schema_has_canonical_keys")
+          != std::string::npos);
     std::remove(diagnosticPath.c_str());
     removeCatalogMigrationTestPaths(fresh);
 

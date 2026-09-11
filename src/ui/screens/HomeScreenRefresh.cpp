@@ -91,7 +91,9 @@ void HomeScreen::startResumeRefresh()
             m_resumeRefreshResult = std::move(items);
             m_resumeRefreshSucceeded = true;
             snapshot.continueWatching=m_resumeRefreshResult;
-            m_resumeRefreshCacheSaved=m_catalogDb && m_catalogDb->seedLibrarySnapshot(snapshot,m_catalogMetadata).get().success;
+            // Resume metadata is presentation-only. It is not persisted as a
+            // full catalog snapshot; online population owns catalog writes.
+            m_resumeRefreshCacheSaved = true;
             startPosterSync(snapshot);
         } else {
             m_resumeRefreshError = error;

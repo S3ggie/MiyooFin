@@ -17,6 +17,8 @@ namespace miyoofin {
 
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
+static bool supportedLibraryView(const LibraryView &view)
+{ return view.collectionType == "movies" || view.collectionType == "tvshows"; }
 
 void HomeScreen::prepareOfflineProjection() { OfflineCatalogSnapshot catalog; OfflineLibraryProjection p(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{}); m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);m_fetchOfflineMovies.clear();m_fetchOfflineSnapshot=m_cachedSnapshot;for(auto &tab:m_fetchOfflineTabs){if(tab.name=="Movies")tab.rows={{"Movies",{}}};if(tab.name=="Shows")tab.rows={{"Shows",{}}};}for(auto &view:m_fetchOfflineSnapshot.shows){std::vector<MediaItem>filtered;for(const auto&i:view.items)if(p.playable(i.id)||!p.seasons(i.id).empty())filtered.push_back(i);view.items=std::move(filtered);}m_fetchOfflinePrepared=true; }
 void HomeScreen::applyOfflineProjection() { const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;if(!m_fetchOfflinePrepared)return;m_tabs=std::move(m_fetchOfflineTabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_offlineSnapshot=std::move(m_fetchOfflineSnapshot);m_fetchOfflinePrepared=false;resetMediaPaging();clampNavigation(); }
@@ -239,6 +241,67 @@ void HomeScreen::startFetch()
         std::vector<MediaItem> ra; std::string raErr;
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRequestFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        std::string viewsErr;
+        if (!RouteRequest(session).run([&](const std::string &base){
+                return JellyfinApi::getViews(base, token, uid, devId, views,
+                                             viewsErr, cancellation.get());
+            }, viewsErr)) {
+            optionalRequestFailed = true;
+        } else {
+            std::printf("[HomeScreen] population_coordinator views=%zu\n", views.size());
+            views.erase(std::remove_if(views.begin(), views.end(), [](const LibraryView &view) {
+                if (supportedLibraryView(view)) return false;
+                std::printf("[HomeScreen] library_view_skipped unsupported_collection=%s\n",
+                            view.collectionType.c_str());
+                return true;
+            }), views.end());
+            for (const auto &view : views) {
+                const std::string types = view.collectionType == "tvshows" ? "Series" : "Movie";
+                int start = 0;
+                for (;;) {
+                    if (cancellation->load()) { optionalRequestFailed = true; break; }
+                    LibraryItemsPage page;
+                    std::string pageErr;
+                    ++requestCount;
+                    if (!RouteRequest(session).run([&](const std::string &base){
+                            return JellyfinApi::getLibraryItemsPage(
+                                base, token, uid, devId, view.id, types, start, 48,
+                                page, pageErr, cancellation.get());
+                        }, pageErr)) { optionalRequestFailed = true; break; }
+                    mediaCount += static_cast<uint32_t>(page.items.size());
+                    std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
+                                page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
+                    if (m_catalogDb) {
+                        CatalogDbMediaPageWrite writePage;
+                        writePage.items = page.items;
+                        writePage.viewId = view.id;
+                        writePage.viewName = view.name;
+                        writePage.collectionType = view.collectionType;
+                        writePage.ordinalStart = static_cast<std::size_t>(start);
+                        writePage.viewOrdinal = static_cast<int>(&view - views.data());
+                        writePage.finalPage = !page.hasMore;
+                        auto write = m_catalogDb->upsertMediaPage(writePage, metadata);
+                        const CatalogDbMediaPageUpsertResult writeResult = write.get();
+                        if (!writeResult.success) {
+                            optionalRequestFailed = true;
+                            std::printf("[HomeScreen] page_write_failed error=%u cancelled=%d superseded=%d message=%s\n",
+                                        static_cast<unsigned>(writeResult.error),
+                                        writeResult.cancelled ? 1 : 0,
+                                        writeResult.superseded ? 1 : 0,
+                                        writeResult.message.c_str());
+                            break;
+                        }
+                    } else {
+                        optionalRequestFailed = true;
+                        std::printf("[HomeScreen] page_write_failed error=db_unavailable\n");
+                        break;
+                    }
+                    if (!page.hasMore || page.items.empty()) break;
+                    start = page.startIndex + static_cast<int>(page.items.size());
+                }
+                if (optionalRequestFailed) break;
+            }
+        }
         m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,{},{});
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;

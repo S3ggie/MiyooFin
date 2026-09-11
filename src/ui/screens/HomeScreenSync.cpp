@@ -275,7 +275,8 @@ void HomeScreen::startFetch()
             m_fetchDone = true;
             return;
         }
-        bool optionalRequestFailed = false;
+        bool optionalRailFailed = false;
+        bool catalogRefreshFailed = false;
         bool initialPagePublished = false;
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
@@ -283,12 +284,12 @@ void HomeScreen::startFetch()
         std::vector<MediaItem> cw; std::string cwErr;
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRequestFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
         std::vector<MediaItem> ra; std::string raErr;
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRequestFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
@@ -296,7 +297,7 @@ void HomeScreen::startFetch()
                 return JellyfinApi::getViews(base, token, uid, devId, views,
                                              viewsErr, cancellation.get());
         }, viewsErr)) {
-            optionalRequestFailed = true;
+            catalogRefreshFailed = true;
         } else {
             uiDiagnostics().log("[HomeScreen] startup stage=views_finished");
             std::printf("[HomeScreen] population_coordinator views=%zu\n", views.size());
@@ -310,7 +311,7 @@ void HomeScreen::startFetch()
                 const std::string types = view.collectionType == "tvshows" ? "Series" : "Movie";
                 int start = 0;
                 for (;;) {
-                    if (cancellation->load()) { optionalRequestFailed = true; break; }
+                    if (cancellation->load()) { catalogRefreshFailed = true; break; }
                     LibraryItemsPage page;
                     std::string pageErr;
                     ++requestCount;
@@ -323,7 +324,7 @@ void HomeScreen::startFetch()
                             return JellyfinApi::getLibraryItemsPage(
                                 base, token, uid, devId, view.id, types, start, 48,
                                 page, pageErr, cancellation.get());
-                        }, pageErr)) { optionalRequestFailed = true; break; }
+                        }, pageErr)) { catalogRefreshFailed = true; break; }
                     mediaCount += static_cast<uint32_t>(page.items.size());
                     if (view.collectionType == "tvshows") {
                         CachedLibraryView classificationView;
@@ -349,7 +350,7 @@ void HomeScreen::startFetch()
                         auto write = m_catalogDb->upsertMediaPage(writePage, metadata);
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
                     if (!writeResult.success) {
-                            optionalRequestFailed = true;
+                            catalogRefreshFailed = true;
                             std::printf("[HomeScreen] page_write_failed error=%u cancelled=%d superseded=%d message=%s\n",
                                         static_cast<unsigned>(writeResult.error),
                                         writeResult.cancelled ? 1 : 0,
@@ -358,7 +359,7 @@ void HomeScreen::startFetch()
                             break;
                         }
                     } else {
-                        optionalRequestFailed = true;
+                        catalogRefreshFailed = true;
                         std::printf("[HomeScreen] page_write_failed error=db_unavailable\n");
                         break;
                     }
@@ -384,12 +385,14 @@ void HomeScreen::startFetch()
                     if (!page.hasMore || page.items.empty()) break;
                     start = page.startIndex + static_cast<int>(page.items.size());
                 }
-                if (optionalRequestFailed) break;
+                if (catalogRefreshFailed) break;
             }
         }
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;
-        completeTelemetry(optionalRequestFailed ? Outcome::Failure : Outcome::Success);
+        if (optionalRailFailed)
+            std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
+        completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
         m_fetchComplete.store(true);
         m_fetchDone.store(true);
         m_fetchReady.store(true);

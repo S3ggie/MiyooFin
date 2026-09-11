@@ -712,7 +712,10 @@ static void testHomeSkipsUnsupportedLibraryViews()
     CHECK(source.find("library_view_skipped unsupported_collection") != std::string::npos);
     CHECK(source.find("views.erase(std::remove_if") != std::string::npos);
     CHECK(source.find("getLibraryItemsPage") != std::string::npos);
-    CHECK(source.find("upsertMediaPage") != std::string::npos);
+    CHECK(source.find("m_librarySync->stage") != std::string::npos);
+    CHECK(source.find("beginTopLevelSync") == std::string::npos);
+    CHECK(source.find("finalizeTopLevelSync") == std::string::npos);
+    CHECK(source.find("abortTopLevelSync") == std::string::npos);
     std::printf("[test] Home skips unsupported library views before persistence OK\n");
 }
 

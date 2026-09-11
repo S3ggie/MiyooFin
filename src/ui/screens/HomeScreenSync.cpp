@@ -321,8 +321,8 @@ void HomeScreen::startFetch()
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
         bool topLevelSyncStarted = false;
-        if (m_catalogDb) {
-            auto begin = m_catalogDb->beginTopLevelSync(syncGeneration, metadata).get();
+        if (m_librarySync) {
+            auto begin = m_librarySync->begin(syncGeneration).get();
             topLevelSyncStarted = begin.success;
             if (!topLevelSyncStarted) catalogRefreshFailed = true;
         } else {
@@ -383,7 +383,7 @@ void HomeScreen::startFetch()
                         writePage.viewOrdinal = static_cast<int>(&view - views.data());
                         writePage.syncGeneration = syncGeneration;
                         writePage.finalPage = !page.hasMore;
-                        auto write = m_catalogDb->upsertMediaPage(writePage, metadata);
+                        auto write = m_librarySync->stage(writePage);
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
                     if (!writeResult.success) {
                             catalogRefreshFailed = true;
@@ -425,10 +425,10 @@ void HomeScreen::startFetch()
             }
         }
         if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
-            auto finalized = m_catalogDb->finalizeTopLevelSync(syncGeneration, metadata).get();
+            auto finalized = m_librarySync->finalize(syncGeneration).get();
             if (!finalized.success) catalogRefreshFailed = true;
         } else if (topLevelSyncStarted) {
-            m_catalogDb->abortTopLevelSync(syncGeneration, metadata).get();
+            m_librarySync->abort(syncGeneration).get();
         }
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;

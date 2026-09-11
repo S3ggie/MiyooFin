@@ -634,6 +634,21 @@ static void testHomeSkipsUnsupportedLibraryViews()
     std::printf("[test] Home skips unsupported library views before persistence OK\n");
 }
 
+static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
+{
+    std::printf("[test] Home optional rail failures are isolated\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("bool optionalRailFailed") != std::string::npos);
+    CHECK(source.find("bool catalogRefreshFailed") != std::string::npos);
+    CHECK(source.find("optionalRailFailed=true") != std::string::npos);
+    CHECK(source.find("catalogRefreshFailed = true") != std::string::npos);
+    CHECK(source.find("if (catalogRefreshFailed) break;") != std::string::npos);
+    CHECK(source.find("completeTelemetry(catalogRefreshFailed ? Outcome::Failure")
+          != std::string::npos);
+    CHECK(source.find("if (optionalRailFailed) break") == std::string::npos);
+    std::printf("[test] Home optional rail failures are isolated OK\n");
+}
+
 static void testCatalogScopeConfiguredBeforeHomePopulation()
 {
     std::printf("[test] Catalog scope precedes Home population\n");

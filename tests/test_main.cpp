@@ -815,6 +815,7 @@ int main()
     testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();
     testHomeSkipsUnsupportedLibraryViews();
+    testHomeOptionalRailFailuresDoNotStopCatalogPopulation();
     testCatalogScopeConfiguredBeforeHomePopulation();
     testHomePublishesAfterFirstBoundedPage();
     testHomePreservesAnimeMembershipDuringBoundedReads();

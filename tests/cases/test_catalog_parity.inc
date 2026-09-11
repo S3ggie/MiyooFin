@@ -376,6 +376,39 @@ void testCatalogDbLibrarySnapshotSeed()
     removeCatalogMigrationTestPaths(paths);
 }
 
+void testCatalogDbTopLevelSyncStagingLifecycle()
+{
+    const std::string url = "https://sqlite-top-level-stage.example";
+    const std::string user = "top-level-stage-user";
+    auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    CatalogDb db;
+    const auto epoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    LibrarySnapshot snapshot;
+    snapshot.movies.push_back({"movies", "Movies", "movies",
+                                {catalogParityItem("__stage_movie__", "movie", "Stage Movie")} });
+    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+    auto before = db.readLibrarySnapshot({0, epoch, {}}).get();
+    auto begin = db.beginTopLevelSync(101, {0, epoch, {}}).get();
+    CHECK(begin.success && begin.workerOwned && begin.generation == 101);
+    auto newer = db.beginTopLevelSync(102, {0, epoch, {}}).get();
+    CHECK(newer.success && newer.generation == 102);
+    auto abort = db.abortTopLevelSync(102, {0, epoch, {}}).get();
+    CHECK(abort.success && abort.workerOwned);
+    auto repeatAbort = db.abortTopLevelSync(102, {0, epoch, {}}).get();
+    CHECK(repeatAbort.success);
+    auto after = db.readLibrarySnapshot({0, epoch, {}}).get();
+    CHECK(before.success && after.success && after.snapshot.movies.size() == 1
+          && after.snapshot.movies[0].items.size() == 1
+          && after.snapshot.movies[0].items[0].id == "__stage_movie__");
+    auto nextEpoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    auto stale = db.beginTopLevelSync(103, {0, epoch, {}}).get();
+    CHECK(!stale.success && stale.error == CatalogDbErrorCategory::ScopeNotReady);
+    removeCatalogMigrationTestPaths(paths);
+}
+
 static std::vector<std::string> collectCatalogPageIds(
     CatalogDb &db, const std::string &type, int letter, std::size_t pageSize,
     std::uint64_t epoch)

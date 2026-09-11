@@ -745,6 +745,12 @@ struct CatalogDb::MediaPageUpsertCommand {
     int failAfterRows = -1;
     std::promise<CatalogDbMediaPageUpsertResult> result;
 };
+struct CatalogDb::TopLevelSyncCommand {
+    bool begin = false;
+    std::uint64_t generation = 0;
+    CatalogDbJobMetadata metadata;
+    std::promise<CatalogDbTopLevelSyncResult> result;
+};
 
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
@@ -777,12 +783,45 @@ CatalogDb::~CatalogDb()
             command->result.set_value(std::move(result));
         }
         m_mediaPageUpsertCommands.clear();
+        for (auto &command : m_topLevelSyncCommands) {
+            CatalogDbTopLevelSyncResult result;
+            result.error = CatalogDbErrorCategory::ScopeNotReady;
+            result.message = "CatalogDb stopped before sync staging";
+            command->result.set_value(std::move(result));
+        }
+        m_topLevelSyncCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
     if (m_worker.joinable()) {
         m_worker.join();
     }
+}
+
+std::future<CatalogDbTopLevelSyncResult> CatalogDb::beginTopLevelSync(
+    std::uint64_t generation, const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<TopLevelSyncCommand>();
+    command->begin = true; command->generation = generation;
+    command->metadata = metadata;
+    auto future = command->result.get_future();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    command->metadata.scopeEpoch = command->metadata.scopeEpoch ? command->metadata.scopeEpoch : m_requestedEpoch;
+    m_topLevelSyncCommands.push_back(command); ++m_pendingJobs; m_wake.notify_one();
+    return future;
+}
+
+std::future<CatalogDbTopLevelSyncResult> CatalogDb::abortTopLevelSync(
+    std::uint64_t generation, const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<TopLevelSyncCommand>();
+    command->begin = false; command->generation = generation;
+    command->metadata = metadata;
+    auto future = command->result.get_future();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    command->metadata.scopeEpoch = command->metadata.scopeEpoch ? command->metadata.scopeEpoch : m_requestedEpoch;
+    m_topLevelSyncCommands.push_back(command); ++m_pendingJobs; m_wake.notify_one();
+    return future;
 }
 
 CatalogDbEnqueueResult CatalogDb::enqueueNoopForTest(
@@ -1588,6 +1627,7 @@ void CatalogDb::workerLoop()
                     || !m_libraryReadCommands.empty()
                     || !m_mediaPageCommands.empty()
                     || !m_mediaPageUpsertCommands.empty()
+                    || !m_topLevelSyncCommands.empty()
                     || hasPendingJobsLocked()));
         });
 
@@ -1738,6 +1778,14 @@ void CatalogDb::workerLoop()
             m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processMediaPageUpsert(command);
             lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
         }
+        if (!m_topLevelSyncCommands.empty()) {
+            auto command = std::move(m_topLevelSyncCommands.front());
+            m_topLevelSyncCommands.pop_front(); --m_pendingJobs;
+            m_runningJob = true; performanceTelemetry().setCatalogDbActive(true);
+            lock.unlock(); processTopLevelSync(command);
+            lock.lock(); performanceTelemetry().setCatalogDbActive(false);
+            m_runningJob = false; m_idle.notify_all(); continue;
+        }
 
         Job job = takeNextJobLocked();
         performanceTelemetry().setCatalogDbQueueDepth(
@@ -1837,6 +1885,11 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
     }
 
     closeConnection();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_topLevelSyncGeneration = 0;
+        m_activeTopLevelSyncGeneration = 0;
+    }
 
     if (command.kind == ScopeCommandKind::Deconfigure
         || command.kind == ScopeCommandKind::InvalidIdentity) {
@@ -3062,6 +3115,72 @@ void CatalogDb::processOfflineRebuild(
         }
     }
     finish();
+}
+
+void CatalogDb::processTopLevelSync(
+    const std::shared_ptr<TopLevelSyncCommand> &command)
+{
+    assert(std::this_thread::get_id() == m_worker.get_id());
+    CatalogDbTopLevelSyncResult result; result.workerOwned = true;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    result.generation = command->generation;
+    if (!m_scopeConfigured || !m_scopeReady || command->metadata.scopeEpoch == 0
+        || command->metadata.scopeEpoch != m_requestedEpoch
+        || command->generation == 0) {
+        result.error = CatalogDbErrorCategory::ScopeNotReady;
+        result.message = "top-level sync scope is not current";
+        command->result.set_value(std::move(result)); return;
+    }
+    if (!m_db) {
+        result.error = CatalogDbErrorCategory::OpenFailed;
+        result.message = "top-level sync database is not open";
+        command->result.set_value(std::move(result)); return;
+    }
+    std::string error;
+    const char *const createSql[] = {
+        "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_views (generation INTEGER NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, collection_type TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(generation, id))",
+        "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_membership (generation INTEGER NOT NULL, view_id TEXT NOT NULL, item_id TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(generation, view_id, item_id))",
+        "CREATE TEMP TABLE IF NOT EXISTS top_level_sync_active (generation INTEGER NOT NULL PRIMARY KEY)",
+        "DELETE FROM top_level_sync_views",
+        "DELETE FROM top_level_sync_membership",
+        "DELETE FROM top_level_sync_active",
+    };
+    for (const char *sql : createSql) {
+        if (!exec(m_db, sql, error)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = error;
+            command->result.set_value(std::move(result)); return;
+        }
+    }
+    if (command->begin) {
+        sqlite3_stmt *statement = nullptr;
+        if (sqlite3_prepare_v2(m_db,
+                "INSERT INTO top_level_sync_active(generation) VALUES(?1)",
+                -1, &statement, nullptr) != SQLITE_OK
+            || sqlite3_bind_int64(statement, 1,
+                static_cast<sqlite3_int64>(command->generation)) != SQLITE_OK
+            || sqlite3_step(statement) != SQLITE_DONE) {
+            if (statement) sqlite3_finalize(statement);
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            command->result.set_value(std::move(result)); return;
+        }
+        sqlite3_finalize(statement);
+        m_topLevelSyncGeneration = command->generation;
+        m_activeTopLevelSyncGeneration = command->generation;
+        result.success = true;
+    } else if (m_activeTopLevelSyncGeneration == command->generation) {
+        m_activeTopLevelSyncGeneration = 0;
+        if (!exec(m_db, "DELETE FROM top_level_sync_active", error)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = error;
+            command->result.set_value(std::move(result)); return;
+        }
+        result.success = true;
+    } else {
+        result.success = true;
+    }
+    command->result.set_value(std::move(result));
 }
 
 void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &command)

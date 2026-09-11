@@ -12,6 +12,7 @@
 #include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include "../../catalog/CatalogDb.hpp"
+#include "../../library/LibrarySync.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
 #include "../HomeSettingsModel.hpp"
@@ -46,7 +47,8 @@ public:
     explicit HomeScreen(const Session &session,
                         std::shared_ptr<DownloadManager> downloads={},
                         std::shared_ptr<CatalogDb> catalogDb={},
-                        std::uint64_t catalogScopeEpoch=0);
+                        std::uint64_t catalogScopeEpoch=0,
+                        std::shared_ptr<library::LibrarySync> librarySync={});
     ~HomeScreen() override;
 
     void enter() override;
@@ -146,6 +148,7 @@ private:
     Session m_session;
     std::shared_ptr<DownloadManager> m_downloads;
     std::shared_ptr<CatalogDb> m_catalogDb;
+    std::shared_ptr<library::LibrarySync> m_librarySync;
     CatalogDbJobMetadata m_catalogMetadata;
     std::uint64_t m_topLevelSyncGeneration = 0;
     std::string m_userName;

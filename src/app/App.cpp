@@ -147,6 +147,7 @@ App::~App()
         printf("[App] Download manager stopped\n");
     }
     m_catalogDb.reset();
+    m_librarySync.reset();
     if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
     if (m_fb)     SDL_FreeSurface(m_fb);
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
@@ -325,10 +326,13 @@ void App::configureCatalogScopeForSession()
         uiDiagnostics().log("[App] catalog scope request identity=valid");
         m_catalogScopeEpoch =
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
+        m_librarySync = std::make_shared<library::LibrarySync>(
+            m_session, m_catalogDb, m_catalogScopeEpoch);
         uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
         m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
+        m_librarySync.reset();
     }
 }
 
@@ -417,7 +421,8 @@ void App::goToHome()
         m_stack.pop();
     }
     m_stack.push(std::make_unique<HomeScreen>(
-        m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch));
+        m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch,
+        m_librarySync));
 }
 
 void App::goToLogin(const std::string &initialMessage)

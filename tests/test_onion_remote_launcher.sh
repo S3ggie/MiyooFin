@@ -75,6 +75,11 @@ grep -q '"\$EXIT_HELPER"' "$EXIT_HELPER" || fail 'exit helper does not invoke th
 grep -q '/proc/' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not inspect process identity'
 grep -q 'SIGUSR1' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not use SIGUSR1'
 grep -q 'comm' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not verify process name'
+grep -q 'EXPECTED_MIYOOFIN_UID' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper does not require root-owned target'
+grep -q 'classification=target_validation_failed' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper lacks target-validation classification'
+grep -q 'validated_target_signal_eperm' tools/miyoo/miyoofin-graceful-exit.c || fail 'exit helper lacks precise EPERM classification'
+grep -q 'unclassified_helper_failure' "$EXIT_HELPER" || fail 'remote exit does not redact/classify helper failures'
+! grep -Eq 'kill -9|kill -15|SIGKILL|system\(|popen\(|sudo|su ' tools/miyoo/miyoofin-graceful-exit.c "$EXIT_HELPER" || fail 'exit tooling exposes unsafe escalation'
 grep -q 'MainUI' "$EXIT_HELPER" || fail 'exit helper does not verify MainUI restoration'
 echo '[test] Onion graceful remote exit static contract OK'
 

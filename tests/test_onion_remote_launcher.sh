@@ -89,7 +89,21 @@ grep -q 'device did not return to the network' "$REBOOT_HELPER" || fail 'reboot 
 grep -q 'boot_id' "$REBOOT_HELPER" || fail 'reboot wrapper does not verify a new boot'
 grep -q 'dropbear -s -p 2222' "$REBOOT_HELPER" || fail 'reboot wrapper does not verify developer Dropbear'
 grep -q 'argc != 1' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper accepts arguments'
+grep -q '"--recovery"' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper has no explicit recovery mode'
+grep -q 'sync_timeout' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'recovery sync is not bounded'
+grep -q 'MIYOO_REBOOT_RECOVERY' "$REBOOT_HELPER" || fail 'reboot wrapper has no explicit recovery mode'
+grep -q 'RB_AUTOBOOT' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper does not request normal reboot'
 grep -q 'RB_AUTOBOOT' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper does not request normal reboot'
 grep -q 'sync()' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper does not sync'
 ! grep -Eq 'RB_POWER_OFF|RB_KEXEC|system\(|execle|popen\(' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper exposes unsafe reboot capability'
 echo '[test] Onion remote reboot static contract OK'
+
+grep -q 'm_fetchCancellation' "$ROOT/src/ui/screens/HomeScreen.hpp" || fail 'Home fetch has no teardown cancellation token'
+grep -q 'm_fetchCancellation.*store' "$ROOT/src/ui/screens/HomeScreen.cpp" || fail 'Home destructor does not cancel the library fetch'
+grep -q 'cancelled' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home library fetch does not propagate cancellation'
+if grep -q 'readLibrarySnapshot' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still uses full CatalogDb snapshot read'; fi
+if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still waits on full CatalogDb seed'; fi
+grep -q 'getResumeItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Continue Watching request'
+grep -q 'getLatestItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Recently Added request'
+grep -q 'readMediaPage' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
+echo '[test] Home fetch cancellation contract OK'

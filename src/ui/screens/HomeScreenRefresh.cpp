@@ -87,7 +87,7 @@ void HomeScreen::startResumeRefresh()
         TelemetryTimer refreshTimer;
         std::vector<MediaItem> items;
         std::string error;
-        if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12,items, error);},error)) {
+        if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12,items, error, nullptr);},error)) {
             m_resumeRefreshResult = std::move(items);
             m_resumeRefreshSucceeded = true;
             snapshot.continueWatching=m_resumeRefreshResult;

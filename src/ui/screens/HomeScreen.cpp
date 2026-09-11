@@ -45,8 +45,12 @@ HomeScreen::HomeScreen(const Session &session,
 
 HomeScreen::~HomeScreen()
 {
+    cancelAsyncWork();
+    if (m_fetchThread.joinable())
+        m_fetchThread.join();
     if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
+    if (m_fetchCancellation) m_fetchCancellation->store(true);
     if (m_fetchThread.joinable())
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
@@ -66,6 +70,18 @@ HomeScreen::~HomeScreen()
     { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
     m_decodeWake.notify_one();
     if (m_decodeThread.joinable()) m_decodeThread.join();
+}
+
+void HomeScreen::cancelAsyncWork() noexcept
+{
+    if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
+    if (m_showPage.cancellation) m_showPage.cancellation->store(true);
+    if (m_fetchCancellation) m_fetchCancellation->store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        if (m_catalogGenerationCancellation)
+            m_catalogGenerationCancellation->store(true);
+    }
 }
 
 void HomeScreen::updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items) { miyoofin::updateContinueWatchingRow(tabs, items); }

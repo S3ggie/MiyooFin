@@ -80,6 +80,7 @@ public:
     bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
     bool takePublicAddressRequest() { const bool requested = m_publicAddressRequested; m_publicAddressRequested = false; return requested; }
     void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
+    void cancelAsyncWork() noexcept;
     void setPublicServerUrl(const std::string &url) { m_session.publicServerUrl = url; }
     bool presentationOffline() const { return m_libraryOffline || m_session.manualOfflineMode; }
 
@@ -182,6 +183,7 @@ private:
 
     // Background fetch
     std::thread m_fetchThread;
+    std::shared_ptr<std::atomic<bool>> m_fetchCancellation;
     std::atomic<bool> m_fetchDone{false};
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;

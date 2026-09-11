@@ -106,4 +106,6 @@ if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeScreenSync.cpp
 grep -q 'getResumeItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Continue Watching request'
 grep -q 'getLatestItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Recently Added request'
 grep -q 'readMediaPage' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
+grep -q 'catalog_scope_deferred_until_media_navigation' "$ROOT/src/app/App.cpp" || fail 'online startup still opens CatalogDb scope eagerly'
+grep -q 'configureScope' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'media navigation does not lazily configure CatalogDb scope'
 echo '[test] Home fetch cancellation contract OK'

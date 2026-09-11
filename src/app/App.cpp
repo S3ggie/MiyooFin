@@ -237,8 +237,7 @@ bool App::init()
         // Cached UI is useful even without Wi-Fi. Validation continues in the
         // background and only an explicit authorization rejection logs out.
         m_savedFastPath = true;
-        configureCatalogScopeForSession();
-        uiDiagnostics().log("[App] startup stage=valid_saved_session_scope_requested");
+        uiDiagnostics().log("[App] startup stage=catalog_scope_deferred_until_media_navigation");
         goToHome();
         startSavedSessionValidation();
         scheduleJournalSync();
@@ -695,6 +694,8 @@ int App::run()
                     telemetry.setAction(PerformanceTelemetry::actionIdFromAction(a));
 #endif
                     if (a == Action::Exit) {
+                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
+                            home->cancelAsyncWork();
                         m_running = false;
                         break;
                     }

@@ -808,7 +808,7 @@ int main()
     testCatalogDbJellyfinHierarchyStaging();
     testHomeCatalogHierarchyIntegration();
     testCatalogDbOfflineDownloadReconstruction();
-    testCatalogDbScopeActivationSchedulesOfflineRebuild();
+    testCatalogDbOfflineRebuildAfterScopeActivation();
     testCatalogDbProjectionParity();
     testCatalogDbLibrarySnapshotSeed();
     testCatalogDbBoundedMediaPaging();

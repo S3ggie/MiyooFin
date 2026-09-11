@@ -597,7 +597,7 @@ static void testCatalogDbOfflineDownloadReconstruction()
     removeCatalogMigrationTestPaths(paths);
 }
 
-static void testCatalogDbScopeActivationSchedulesOfflineRebuild()
+static void testCatalogDbOfflineRebuildAfterScopeActivation()
 {
     const std::string suffix =
         std::to_string(static_cast<long long>(getpid()));
@@ -632,6 +632,7 @@ static void testCatalogDbScopeActivationSchedulesOfflineRebuild()
         CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
         const auto state = db.scopeState();
         CHECK(state.ready);
+        CHECK(db.reconstructOfflineDownloads(root, {}).get().success);
         const auto seasons = db.getSeasons(episode.seriesId).get();
         const auto episodes = db.getEpisodes(episode.seasonId).get();
         CHECK(seasons.success && seasons.items.size() == 1

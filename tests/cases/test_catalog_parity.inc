@@ -414,6 +414,10 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     CHECK(published.success && published.snapshot.movies.size() == 1
           && published.snapshot.movies[0].items.size() == 1
           && published.snapshot.movies[0].items[0].id == "__replacement_movie__");
+    const auto mediaPage = db.readMediaPage(
+        "movie", -1, 8, {}, {0, epoch, {}}).get();
+    CHECK(mediaPage.success && mediaPage.items.size() == 1
+          && mediaPage.items[0].id == "__replacement_movie__");
     db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
     auto stale = db.beginTopLevelSync(103, {0, epoch, {}}).get();

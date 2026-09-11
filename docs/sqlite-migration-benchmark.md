@@ -198,6 +198,42 @@ navigation was used.
 | RSS average / sampled max / process peak (KiB) | 47,821/75,076/81,248 | 50,764/79,468/80,620 | 27,055/29,260/29,260 | 25,665/28,000/28,000 |
 | telemetry drops / writer errors | 0/0 | 0/0 | 0/0 | 0/0 |
 
+## Task 33 — final Home/library validation (CP-G)
+
+The final Task 33 validation used the ARM package produced from commit
+`4737d5832d511e331715dbe3da9ce0706a680273` on the same physical Miyoo Mini
+Plus, through the centralized Onion-native launcher on SSH port 2222. The
+package passed `make onionos verify-arm` before deployment. The existing Task
+32/Task 27 hardware runs already established bounded Home paging, Movies and
+Shows navigation, Series/EpisodeBrowser navigation, media open/back flows,
+offline/download/local playback behavior, stale-work suppression, and the
+required schema-v3 integrity checks. No production code was changed for this
+benchmark task.
+
+The final current-build lifecycle run launched with telemetry enabled, reached
+the Onion-native foreground state, and was terminated with the validated
+graceful SIGUSR1 helper while background activity was active. MiyooFin exited,
+MainUI was restored, and no MiyooFin process remained. The refreshed MFT trace
+was analyzed with `--cpu-count 2`:
+
+| metric | final current-build run |
+|---|---:|
+| telemetry records | 29 health records |
+| telemetry drops / writer errors | 0 / 0 |
+| telemetry queue high-water | 3 |
+| frame samples | 3,189 |
+| frame stalls >50 ms / >100 ms | 726 / 5 |
+| maximum frame duration | 100,601 µs |
+| CatalogDb artifact | schema-v3 `catalog.sqlite3`, 21,028,864 B |
+| MainUI restoration | PASS |
+| graceful exit with active background work | PASS |
+
+The >50 ms and >100 ms frame observations are attributable to the known
+framebuffer-upload boundary on this hardware; they do not show a new SQLite or
+UI-thread regression. The device image does not include a sqlite3 CLI, so the
+final integrity values remain the previously recorded hardware evidence:
+`PRAGMA quick_check = ok`, zero `foreign_key_check` rows, and schema version 3.
+
 Paired means, with SQLite relative to A′: LibrarySync was 34.418 s versus
 37.635 s (**−8.5%**); ChangedHierarchy request latency was 3.831 s versus
 3.823 s (**+0.2%**); CPU average was 47.1% versus 38.1% (**+23.6%**, with

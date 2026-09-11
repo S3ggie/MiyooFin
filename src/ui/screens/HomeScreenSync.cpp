@@ -281,6 +281,39 @@ void HomeScreen::startFetch()
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
+        // Probe the committed catalog before starting any network refresh. These
+        // are bounded reads on the CatalogDb worker; the SDL thread only sees
+        // the publication signal in update(). A genuinely empty catalog must
+        // remain Loading until the authoritative network generation commits.
+        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
+            auto warmMovies = m_catalogDb->readMediaPage(
+                "movie", -1, 24, {}, metadata);
+            auto warmShows = m_catalogDb->readMediaPage(
+                "show", -1, 24, {}, metadata);
+            const auto movies = warmMovies.get();
+            const auto shows = warmShows.get();
+            if (movies.success || shows.success) {
+                std::vector<TabData> warmTabs;
+                warmTabs.push_back({"Home", {{"", {}}}});
+                if (!movies.items.empty())
+                    warmTabs.push_back({"Movies", {{"Movies", movies.items}}});
+                else
+                    warmTabs.push_back({"Movies", {{"Movies", {}}}});
+                if (!shows.items.empty())
+                    warmTabs.push_back({"Shows", {{"Shows", shows.items}}});
+                else
+                    warmTabs.push_back({"Shows", {{"Shows", {}}}});
+                warmTabs.push_back({"Downloads", {{"", {}}}});
+                warmTabs.push_back({"Settings", {{"", {}}}});
+                {
+                    std::lock_guard<std::mutex> lock(m_fetchMutex);
+                    m_fetchResult = std::move(warmTabs);
+                }
+                uiDiagnostics().log(
+                    "[HomeScreen] startup stage=warm_sqlite_catalog_ready");
+                m_fetchReady.store(true);
+            }
+        }
         std::vector<MediaItem> cw; std::string cwErr;
         // Home rails are ephemeral presentation data. They are refreshed from
         // Jellyfin and are deliberately excluded from CatalogDb persistence.

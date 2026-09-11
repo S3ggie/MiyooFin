@@ -64,6 +64,11 @@ static void blitDecoded(SDL_Surface *fb, const DecodedImage &img, int x, int y, 
 
 void HomeScreen::render(SDL_Surface *fb)
 {
+    if (m_loadState == LoadState::Ready && !m_firstInteractiveFrameLogged) {
+        m_firstInteractiveFrameLogged = true;
+        uiDiagnostics().log(
+            "[HomeScreen] startup stage=first_interactive_frame");
+    }
     drawTabBar(fb);
 
     if (m_loadState == LoadState::Loading) {

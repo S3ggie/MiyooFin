@@ -515,6 +515,47 @@ static void testCatalogDbBoundedMediaPaging()
     std::printf("[test] CatalogDb bounded media paging OK\n");
 }
 
+static void testCatalogDbMediaPagePreservesViewMembership()
+{
+    std::printf("[test] CatalogDb media pages preserve TV view membership\n");
+    const std::string url = "https://sqlite-media-membership.example";
+    const std::string user = "media-membership-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    MediaItem anime = catalogParityItem("__task33_anime_series__", "show",
+                                        "Anime Series");
+    anime.genres = {"Animation"};
+    LibrarySnapshot snapshot;
+    snapshot.shows = {
+        {"shows", "Shows", "tvshows", {anime}},
+        {"anime-view", "Anime", "tvshows", {anime}},
+    };
+
+    CatalogDb db;
+    const auto epoch = db.configureScope(url, user);
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+
+    const auto page = db.readMediaPage(
+        "show", -1, 8, {}, {0, epoch, {}}).get();
+    CHECK(page.success && page.items.size() == 1);
+    const auto memberships = page.membershipsByItem.find(anime.id);
+    CHECK(memberships != page.membershipsByItem.end());
+    if (memberships != page.membershipsByItem.end()) {
+        CHECK(memberships->second.size() == 2);
+        const bool hasAnimeView = std::any_of(
+            memberships->second.begin(), memberships->second.end(),
+            [](const CatalogDbMediaPageMembership &membership) {
+                return membership.viewName == "Anime"
+                    && membership.collectionType == "tvshows";
+            });
+        CHECK(hasAnimeView);
+    }
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] CatalogDb media pages preserve TV view membership OK\n");
+}
+
 void testLibraryCacheHomeParityHarness()
 {
     LibrarySnapshot snapshot;
@@ -603,6 +644,46 @@ static void testCatalogScopeConfiguredBeforeHomePopulation()
     CHECK(appSource.find("catalog_scope_deferred_until_media_navigation")
           == std::string::npos);
     std::printf("[test] Catalog scope precedes Home population OK\n");
+}
+
+static void testHomePublishesAfterFirstBoundedPage()
+{
+    std::printf("[test] Home publishes after first bounded page\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string lifecycle = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(source.find("m_fetchReady") != std::string::npos);
+    CHECK(source.find("m_fetchComplete") != std::string::npos);
+    CHECK(source.find("first bounded page") != std::string::npos);
+    CHECK(source.find("m_fetchReady.store(true)") != std::string::npos);
+    CHECK(lifecycle.find("if (m_fetchReady.load())") != std::string::npos);
+    CHECK(source.find("m_fetchDone.store(true);\n                    }")
+          == std::string::npos);
+    std::printf("[test] Home publishes after first bounded page OK\n");
+}
+
+static void testHomePreservesAnimeMembershipDuringBoundedReads()
+{
+    std::printf("[test] Home preserves Anime membership during bounded reads\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("m_animeItemIds") != std::string::npos);
+    CHECK(source.find("isAnimeSeries") != std::string::npos);
+    CHECK(source.find("view.name") != std::string::npos);
+    std::printf("[test] Home preserves Anime membership during bounded reads OK\n");
+}
+
+static void testHomeUsesCatalogBeforeNetworkRefresh()
+{
+    std::printf("[test] Home uses CatalogDb before network refresh\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(source.find("requestFetch(SDL_GetTicks())") != std::string::npos);
+    CHECK(source.find("first_useful_home_ready") == std::string::npos);
+    const auto enter = source.find("void HomeScreen::enter()");
+    const auto leave = source.find("void HomeScreen::leave()", enter);
+    CHECK(enter != std::string::npos && leave != std::string::npos);
+    if (enter != std::string::npos && leave != std::string::npos)
+        CHECK(source.substr(enter, leave - enter).find(
+                  "m_loadState = LoadState::Ready") == std::string::npos);
+    std::printf("[test] Home uses CatalogDb before network refresh OK\n");
 }
 
 } // namespace

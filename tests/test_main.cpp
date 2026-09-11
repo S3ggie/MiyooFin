@@ -812,9 +812,13 @@ int main()
     testCatalogDbProjectionParity();
     testCatalogDbLibrarySnapshotSeed();
     testCatalogDbBoundedMediaPaging();
+    testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();
     testHomeSkipsUnsupportedLibraryViews();
     testCatalogScopeConfiguredBeforeHomePopulation();
+    testHomePublishesAfterFirstBoundedPage();
+    testHomePreservesAnimeMembershipDuringBoundedReads();
+    testHomeUsesCatalogBeforeNetworkRefresh();
     testLibraryCacheHomeParityHarness();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
@@ -976,6 +980,8 @@ int main()
     testExternalPlaybackFlagMultipleSet();
     testExternalPlaybackSourcePropagation();
     testPlaybackRequestStillWorks();
+    testPlaybackRunnerInitializesOnionSdlDrivers();
+    testExternalPlaybackFullyReleasesSdlBeforeExec();
     testScreenStackPreservedDuringExternalPlayback();
     testScreenRetirementDoesNotBlockPop();
     testMovieDetailsOpensBeforeArtworkPreparation();

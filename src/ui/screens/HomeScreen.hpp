@@ -135,6 +135,7 @@ private:
     bool m_movieRailFocused = false;
     enum class ShowsFocus { ShowsGrid, AnimeGrid, AlphabetRail };
     std::vector<MediaItem> m_showWindow, m_animeWindow;
+    std::set<std::string> m_animeItemIds;
     std::vector<MediaItem> m_filteredShows, m_filteredAnime;
     ShowsFocus m_showsFocus = ShowsFocus::AlphabetRail;
     int m_showSelected=0, m_animeSelected=0, m_showScroll=0, m_animeScroll=0;
@@ -185,6 +186,10 @@ private:
     std::thread m_fetchThread;
     std::shared_ptr<std::atomic<bool>> m_fetchCancellation;
     std::atomic<bool> m_fetchDone{false};
+    std::atomic<bool> m_fetchReady{false};
+    std::atomic<bool> m_fetchComplete{false};
+    bool m_fetchPublished = false;
+    std::mutex m_fetchMutex;
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;
     LibrarySnapshot m_cachedSnapshot;
@@ -201,6 +206,11 @@ private:
     bool m_forceHierarchyReconcile = false;
     LibrarySyncSchedule m_syncSchedule;
     bool m_libraryOffline = false;
+    bool m_catalogScopeReadyLogged = false;
+    bool m_firstMediaPageReadLogged = false;
+    bool m_firstMediaPageReadCompletedLogged = false;
+    bool m_firstUsefulHomeLogged = false;
+    bool m_firstInteractiveFrameLogged = false;
     std::thread m_posterThread;
     std::mutex m_posterMutex;
     std::condition_variable m_posterWake;

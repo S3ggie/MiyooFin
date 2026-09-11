@@ -24,6 +24,7 @@
 #define MAINUI_PATH "/mnt/SDCARD/miyoo/app/MainUI"
 #define RECOVERY_LOG "/mnt/SDCARD/App/MiyooFin/telemetry-logs/recovery-reboot.log"
 #define SYNC_TIMEOUT_SECONDS 10
+#define FULL_BOOT_MARKER "/mnt/SDCARD/.tmp_update/config/.miyoofin_force_full_boot_once"
 
 static int require_one_mainui(void);
 static int handoff_in_progress(void);
@@ -61,6 +62,19 @@ static void bounded_sync(void)
     recovery_log("sync_timeout");
     kill(child, SIGTERM);
     waitpid(child, NULL, 0);
+}
+
+static int create_full_boot_marker(void)
+{
+    int fd = open(FULL_BOOT_MARKER, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return 0;
+    close(fd);
+    return 1;
+}
+
+static void remove_full_boot_marker(void)
+{
+    unlink(FULL_BOOT_MARKER);
 }
 
 static int path_exists(const char *path)
@@ -197,8 +211,12 @@ int main(int argc, char **argv)
         recovery_log(require_one_mainui() == 0 ? "mainui_valid" : "mainui_not_valid");
         recovery_log(path_exists(QUEUE_PATH) || path_exists(ONION_QUEUE) ? "launch_queue_present" : "launch_queue_absent");
         recovery_log(handoff_in_progress() ? "handoff_in_progress" : "handoff_idle");
+        if (!create_full_boot_marker()) return fail("could not create full-boot marker");
         bounded_sync();
-        if (reboot(RB_AUTOBOOT) != 0) return fail("normal recovery reboot request failed");
+        if (reboot(RB_AUTOBOOT) != 0) {
+            remove_full_boot_marker();
+            return fail("normal recovery reboot request failed");
+        }
         return 0;
     }
     if (any_comm("miyoofin")) return fail("MiyooFin is still running");
@@ -206,7 +224,11 @@ int main(int argc, char **argv)
     if (path_exists(QUEUE_PATH) || path_exists(ONION_QUEUE))
         return fail("an Onion launch queue is staged");
     if (handoff_in_progress()) return fail("a developer handoff is in progress");
+    if (!create_full_boot_marker()) return fail("could not create full-boot marker");
     sync();
-    if (reboot(RB_AUTOBOOT) != 0) return fail("normal reboot request failed");
+    if (reboot(RB_AUTOBOOT) != 0) {
+        remove_full_boot_marker();
+        return fail("normal reboot request failed");
+    }
     return 0;
 }

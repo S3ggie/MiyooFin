@@ -19,6 +19,7 @@ EXIT_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-graceful-exit
 EXIT_RUNTIME=/tmp/miyoofin-graceful-exit
 REBOOT_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-reboot
 REBOOT_RUNTIME=/tmp/miyoofin-reboot
+CHARGING_MARKER_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/install-charging-boot-marker.sh
 
 mkdir -p "$RUNTIME_SSH" "$RUNTIME_KEYS" "$BASE/run" "$BASE/log"
 chown 1000:1000 "$RUNTIME_HOME" "$RUNTIME_SSH"
@@ -30,6 +31,12 @@ fi
 cp "$KEYSTORE" "$RUNTIME_SSH/authorized_keys"
 chown 1000:1000 "$RUNTIME_SSH/authorized_keys"
 chmod 600 "$RUNTIME_SSH/authorized_keys"
+
+if [ -f "$CHARGING_MARKER_SOURCE" ]; then
+    /bin/sh "$CHARGING_MARKER_SOURCE" || echo "miyoofin-dropbear: charging boot marker hook not installed" >>"$LOG_FILE"
+else
+    echo "miyoofin-dropbear: charging boot marker installer missing" >>"$LOG_FILE"
+fi
 
 if [ ! -f "$PERSIST_HOST_KEY" ]; then
     echo "miyoofin-dropbear: missing persistent host key" >>"$LOG_FILE"

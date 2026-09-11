@@ -79,6 +79,7 @@ SRCS        := \
     $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
     $(SRC_DIR)/library/OfflineLibraryQuery.cpp \
     $(SRC_DIR)/library/LibrarySync.cpp \
+    $(SRC_DIR)/library/LibraryQuery.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
@@ -197,6 +198,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/cache/OfflineLibraryProjection.cpp \
                src/library/OfflineLibraryQuery.cpp \
                src/library/LibrarySync.cpp \
+               src/library/LibraryQuery.cpp \
                src/download/DownloadStore.cpp \
                src/download/DownloadManager.cpp \
                src/download/DownloadManagerPlanning.cpp \

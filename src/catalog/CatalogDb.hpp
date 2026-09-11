@@ -433,6 +433,8 @@ public:
         std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbTopLevelSyncResult> abortTopLevelSync(
         std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbTopLevelSyncResult> finalizeTopLevelSync(
+        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
     CatalogDbPopulationStatus populationStatus() const;
     std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
         const CatalogDbJobMetadata &metadata = {});

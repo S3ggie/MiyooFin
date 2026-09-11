@@ -402,7 +402,19 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     CHECK(before.success && after.success && after.snapshot.movies.size() == 1
           && after.snapshot.movies[0].items.size() == 1
           && after.snapshot.movies[0].items[0].id == "__stage_movie__");
-    auto nextEpoch = db.configureScope(url, user);
+    CHECK(db.beginTopLevelSync(104, {0, epoch, {}}).get().success);
+    CatalogDbMediaPageWrite replacement;
+    replacement.items = {catalogParityItem("__replacement_movie__", "movie", "Replacement Movie")};
+    replacement.viewId = "movies"; replacement.viewName = "Movies";
+    replacement.collectionType = "movies"; replacement.syncGeneration = 104;
+    CHECK(db.upsertMediaPage(replacement, {0, epoch, {}}).get().success);
+    auto finalized = db.finalizeTopLevelSync(104, {0, epoch, {}}).get();
+    CHECK(finalized.success && finalized.workerOwned);
+    auto published = db.readLibrarySnapshot({0, epoch, {}}).get();
+    CHECK(published.success && published.snapshot.movies.size() == 1
+          && published.snapshot.movies[0].items.size() == 1
+          && published.snapshot.movies[0].items[0].id == "__replacement_movie__");
+    db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
     auto stale = db.beginTopLevelSync(103, {0, epoch, {}}).get();
     CHECK(!stale.success && stale.error == CatalogDbErrorCategory::ScopeNotReady);

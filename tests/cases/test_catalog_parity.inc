@@ -557,6 +557,9 @@ static void testCatalogDbBoundedMediaPaging()
     CHECK(homeSource.find("getLibraryItemsPage") != std::string::npos);
     CHECK(homeSource.find("seedLibrarySnapshot") == std::string::npos);
     CHECK(homeSource.find("readLibrarySnapshot") == std::string::npos);
+    CHECK(homeSource.find("home_items") == std::string::npos);
+    const std::string refreshSource = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
+    CHECK(refreshSource.find("home_items") == std::string::npos);
     CHECK(homeSource.find("m_movieMaster=combineMovieViews") == std::string::npos);
     CHECK(homeSource.find("m_showMaster=combineShowViews") == std::string::npos);
     CHECK(homeSource.find("rebuildShowsPresentation();if(m_session.manualOfflineMode)") == std::string::npos);

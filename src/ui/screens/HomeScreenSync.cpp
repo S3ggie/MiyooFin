@@ -282,6 +282,8 @@ void HomeScreen::startFetch()
         bool firstPagePersistedLogged = false;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
         std::vector<MediaItem> cw; std::string cwErr;
+        // Home rails are ephemeral presentation data. They are refreshed from
+        // Jellyfin and are deliberately excluded from CatalogDb persistence.
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }

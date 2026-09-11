@@ -63,6 +63,8 @@ void HomeScreen::finishDownloadRefresh()
 
 void HomeScreen::startResumeRefresh()
 {
+    // Continue Watching is an ephemeral rail; the compatibility home_items
+    // table is not a runtime source or destination for this refresh.
     if (m_resumeRefreshThread.joinable())
         m_resumeRefreshThread.join();
 

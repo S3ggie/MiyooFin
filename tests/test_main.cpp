@@ -815,6 +815,7 @@ int main()
     testCatalogDbBoundedMediaPaging();
     testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();
+    testCatalogDbMediaPageTopLevelStaging();
     testHomeSkipsUnsupportedLibraryViews();
     testHomeOptionalRailFailuresDoNotStopCatalogPopulation();
     testCatalogScopeConfiguredBeforeHomePopulation();

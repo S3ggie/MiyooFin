@@ -3329,6 +3329,17 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
     };
     if (!valid()) { result.error=CatalogDbErrorCategory::Superseded; catalogDiagnostic(result.cancelled ? "page_submit_rejected reason=cancelled" : "page_submit_rejected reason=stale_or_not_ready"); command->result.set_value(std::move(result)); return; }
     catalogDiagnostic("page_submit_dequeued");
+    const bool staged = command->page.syncGeneration != 0;
+    if (staged) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command->page.syncGeneration != m_activeTopLevelSyncGeneration) {
+            result.superseded = true;
+            result.error = CatalogDbErrorCategory::Superseded;
+            result.message = "top-level sync generation is not active";
+            command->result.set_value(std::move(result));
+            return;
+        }
+    }
     { std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Populating; }
     catalogDiagnostic("page_transaction_begin");
     if (sqlite3_exec(m_db,"BEGIN IMMEDIATE;",nullptr,nullptr,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message="CatalogDb transaction begin failed"; catalogDiagnostic("page_transaction_rollback reason=begin_failed"); command->result.set_value(std::move(result)); return; }
@@ -3338,10 +3349,17 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
     if (!prepared) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); command->result.set_value(std::move(result)); return; }
     const MediaItemCollectionStatements c{dg,ig,dt,it};
     sqlite3_stmt *view=nullptr,*membership=nullptr;
+    const char *viewSql = staged ?
+        "INSERT INTO top_level_sync_views(generation,id,name,collection_type,ordinal) VALUES(?,?,?,?,?) ON CONFLICT(generation,id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type,ordinal=excluded.ordinal" :
+        "INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type";
+    const char *membershipSql = staged ?
+        "INSERT INTO top_level_sync_membership(generation,view_id,item_id,ordinal) VALUES(?,?,?,?) ON CONFLICT(generation,view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal" :
+        "INSERT INTO library_membership(view_id,item_id,ordinal) VALUES(?,?,?) ON CONFLICT(view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal";
     bool viewReady = command->page.viewId.empty() ||
-        (sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type",-1,&view,nullptr)==SQLITE_OK &&
-         sqlite3_bind_text(view,1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(view,4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(view)==SQLITE_DONE &&
-         sqlite3_prepare_v2(m_db,"INSERT INTO library_membership(view_id,item_id,ordinal) VALUES(?,?,?) ON CONFLICT(view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal",-1,&membership,nullptr)==SQLITE_OK);
+        (sqlite3_prepare_v2(m_db,viewSql,-1,&view,nullptr)==SQLITE_OK &&
+         (!staged || sqlite3_bind_int64(view,1,static_cast<sqlite3_int64>(command->page.syncGeneration))==SQLITE_OK) &&
+         sqlite3_bind_text(view,staged?2:1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?3:2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?4:3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(view,staged?5:4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(view)==SQLITE_DONE &&
+         sqlite3_prepare_v2(m_db,membershipSql,-1,&membership,nullptr)==SQLITE_OK);
     for (std::size_t n = 0; viewReady && n < command->page.items.size(); ++n) {
         const auto &item = command->page.items[n];
         MediaItemSqlError e = MediaItemSqlError::None;
@@ -3388,9 +3406,11 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
         }
         if (!command->page.viewId.empty()) {
             sqlite3_reset(membership); sqlite3_clear_bindings(membership);
-            sqlite3_bind_text(membership, 1, command->page.viewId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(membership, 2, item.id.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(membership, 3,
+            const int offset = staged ? 1 : 0;
+            if (staged) sqlite3_bind_int64(membership, 1, static_cast<sqlite3_int64>(command->page.syncGeneration));
+            sqlite3_bind_text(membership, 1 + offset, command->page.viewId.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(membership, 2 + offset, item.id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(membership, 3 + offset,
                 static_cast<sqlite3_int64>(command->page.ordinalStart + n));
             const int membershipRc = sqlite3_step(membership);
             if (membershipRc != SQLITE_DONE) {

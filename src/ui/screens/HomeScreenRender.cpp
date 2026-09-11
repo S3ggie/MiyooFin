@@ -83,7 +83,8 @@ void HomeScreen::render(SDL_Surface *fb)
         drawDownloadsTab(fb);
     } else if (activeTabNamed("Settings")) {
         drawSettingsTab(fb);
-    } else if (tab.rows.size() == 1 && tab.rows[0].items.empty()) {
+    } else if (!activeTabNamed("Movies") && !activeTabNamed("Shows")
+               && tab.rows.size() == 1 && tab.rows[0].items.empty()) {
         drawPlaceholderTab(fb, tab.rows[0].label.empty() ? "No content" : tab.rows[0].label.c_str());
     } else {
         bool hasItems = false;

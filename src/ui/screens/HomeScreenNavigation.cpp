@@ -37,7 +37,7 @@ void HomeScreen::refreshMovieFilter()
 {
     const int movies=tabIndex("Movies"); if (movies < 0) return;
     std::vector<MediaItem> displayed;
-    for (const auto &item : m_movieMaster) {
+    for (const auto &item : m_movieWindow) {
         if (movieMatchesAlphabetFilter(item.title, m_movieActiveLetter))
             displayed.push_back(item);
     }
@@ -46,7 +46,35 @@ void HomeScreen::refreshMovieFilter()
     m_selectedArtwork = {}; m_selectedArtworkId.clear(); m_selectedArtworkAttempted = false;
 }
 
-void HomeScreen::refreshShowsFilter() { m_filteredShows.clear();m_filteredAnime.clear();for(const auto&i:m_showMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredShows.push_back(i);for(const auto&i:m_animeMaster)if(matchesAlphabetFilter(i.title,m_showsActiveLetter))m_filteredAnime.push_back(i);m_showSelected=m_animeSelected=m_showScroll=m_animeScroll=0;m_showsFocus=!m_filteredShows.empty()?ShowsFocus::ShowsGrid:!m_filteredAnime.empty()?ShowsFocus::AnimeGrid:ShowsFocus::AlphabetRail;if(const MediaItem*i=showsSelectedItem())m_showsPreviewId=i->id; }
+void HomeScreen::refreshShowsFilter()
+{
+    const std::string selectedId = m_showsPreviewId;
+    m_filteredShows.clear();
+    m_filteredAnime.clear();
+    for (const auto &item : m_showWindow)
+        if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
+            m_filteredShows.push_back(item);
+    for (const auto &item : m_animeWindow)
+        if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
+            m_filteredAnime.push_back(item);
+    m_showSelected = m_animeSelected = m_showScroll = m_animeScroll = 0;
+    m_showsFocus = !m_filteredShows.empty() ? ShowsFocus::ShowsGrid
+        : !m_filteredAnime.empty() ? ShowsFocus::AnimeGrid
+        : ShowsFocus::AlphabetRail;
+    auto restore = [&](const std::vector<MediaItem> &items, int &selected) {
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            if (items[i].id == selectedId) {
+                selected = i;
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!restore(m_filteredShows, m_showSelected))
+        restore(m_filteredAnime, m_animeSelected);
+    if (const MediaItem *item = showsSelectedItem())
+        m_showsPreviewId = item->id;
+}
 const MediaItem *HomeScreen::showsSelectedItem() const { const std::vector<MediaItem>*v=m_showsFocus==ShowsFocus::AnimeGrid?&m_filteredAnime:&m_filteredShows;int n=m_showsFocus==ShowsFocus::AnimeGrid?m_animeSelected:m_showSelected;if(n>=0&&n<(int)v->size())return &(*v)[n];for(const auto&i:m_filteredShows)if(i.id==m_showsPreviewId)return &i;for(const auto&i:m_filteredAnime)if(i.id==m_showsPreviewId)return &i;return nullptr; }
 void HomeScreen::clampShowsNavigation() { if(!m_filteredShows.empty()){m_showSelected=std::max(0,std::min(m_showSelected,(int)m_filteredShows.size()-1));m_showScroll=clampShowsGridScroll(m_showSelected,m_filteredShows.size(),m_showScroll);}else m_showSelected=m_showScroll=0;if(!m_filteredAnime.empty()){m_animeSelected=std::max(0,std::min(m_animeSelected,(int)m_filteredAnime.size()-1));m_animeScroll=clampShowsGridScroll(m_animeSelected,m_filteredAnime.size(),m_animeScroll);}else m_animeSelected=m_animeScroll=0; }
 
@@ -273,10 +301,10 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;refreshShowsFilter();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));return true;}return true;}
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;resetMediaPaging();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));return true;}return true;}
         if (activeTabNamed("Movies") && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
-            refreshMovieFilter();
+            resetMediaPaging();
             return true;
         }
         if(activeTabNamed("Shows")&&m_showsFocus==ShowsFocus::AlphabetRail){m_showsFocus=!m_filteredShows.empty()?ShowsFocus::ShowsGrid:!m_filteredAnime.empty()?ShowsFocus::AnimeGrid:ShowsFocus::AlphabetRail;return true;}

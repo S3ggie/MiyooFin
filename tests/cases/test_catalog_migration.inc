@@ -96,7 +96,7 @@ static void testCatalogDbFreshBootstrapPathStates()
         const auto schema = db.runSchemaDiagnosticsForTest();
         CHECK(schema.success && schema.exactSchema
               && schema.applicationId == 0x4D59464E
-              && schema.userVersion == 2);
+              && schema.userVersion == 3);
     }
     uiDiagnostics().stop();
     const std::string diagnostics = readTestBytes(diagnosticPath);

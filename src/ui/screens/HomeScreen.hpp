@@ -126,14 +126,15 @@ private:
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;
-    // Movies keeps this complete, deduplicated local collection intact.  The
-    // displayed row is always derived from it when an alphabet filter changes.
-    std::vector<MediaItem> m_movieMaster;
+    // These are bounded windows populated by CatalogDb keyset pages.  They
+    // are never the complete movie/show catalog.
+    std::vector<MediaItem> m_movieWindow;
     int m_movieActiveLetter = -1;
     int m_movieAlphabetFocus = 0;
     bool m_movieRailFocused = false;
     enum class ShowsFocus { ShowsGrid, AnimeGrid, AlphabetRail };
-    std::vector<MediaItem> m_showMaster, m_animeMaster, m_filteredShows, m_filteredAnime;
+    std::vector<MediaItem> m_showWindow, m_animeWindow;
+    std::vector<MediaItem> m_filteredShows, m_filteredAnime;
     ShowsFocus m_showsFocus = ShowsFocus::AlphabetRail;
     int m_showSelected=0, m_animeSelected=0, m_showScroll=0, m_animeScroll=0;
     int m_showsAlphabetFocus=0, m_showsActiveLetter=-1;
@@ -145,6 +146,18 @@ private:
     std::shared_ptr<CatalogDb> m_catalogDb;
     CatalogDbJobMetadata m_catalogMetadata;
     std::string m_userName;
+
+    struct MediaPageState {
+        std::string type;
+        int letter = -1;
+        std::vector<MediaItem> items;
+        CatalogDbPageCursor next;
+        bool hasMore = true;
+        bool inFlight = false;
+        std::shared_ptr<std::atomic_bool> cancellation;
+        std::future<CatalogDbMediaPageResult> future;
+    };
+    MediaPageState m_moviePage, m_showPage;
 
     // Logout (two-step confirm on Y)
     bool m_logoutArmed = false;
@@ -309,6 +322,10 @@ private:
     void refreshMovieFilter();
     void rebuildShowsPresentation();
     void refreshShowsFilter();
+    void resetMediaPaging();
+    void requestMediaPage(MediaPageState &state);
+    void finishMediaPage(MediaPageState &state);
+    void updateMediaPaging();
     const MediaItem *showsSelectedItem() const;
     void clampShowsNavigation();
     void drawShowsGrid(SDL_Surface *fb);

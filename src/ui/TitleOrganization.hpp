@@ -4,12 +4,23 @@
 #include "../data/MediaItem.hpp"
 #include <string>
 #include <string_view>
+#include <string>
 
 namespace miyoofin {
 inline std::string_view organizationalTitle(const std::string &title) {
     if (title.size() > 4 && (title[0]=='T'||title[0]=='t') && (title[1]=='H'||title[1]=='h') &&
         (title[2]=='E'||title[2]=='e') && title[3]==' ') return std::string_view(title).substr(4);
     return title;
+}
+inline std::string organizationalSortKey(const std::string &title) {
+    const std::string_view source = organizationalTitle(title);
+    std::string key;
+    key.reserve(source.size());
+    for (unsigned char c : source) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<unsigned char>(c + ('a' - 'A'));
+        key.push_back(static_cast<char>(c));
+    }
+    return key;
 }
 inline int asciiCaseInsensitiveCompare(std::string_view a, std::string_view b) {
     const size_t n=a.size()<b.size()?a.size():b.size();

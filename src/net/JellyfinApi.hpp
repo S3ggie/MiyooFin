@@ -126,7 +126,8 @@ public:
                          const std::string &userId,
                          const std::string &deviceId,
                          std::vector<LibraryView> &views,
-                         std::string &error);
+                         std::string &error,
+                         const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch items from a specific library.
     /// @param includeItemTypes  e.g. "Movie" or "Series"
@@ -138,13 +139,15 @@ public:
                                 const std::string &includeItemTypes,
                                 int limit,
                                 std::vector<MediaItem> &items,
-                                std::string &error);
+                                std::string &error,
+                                const std::atomic<bool> *cancelled = nullptr);
     /// Changed hierarchy relationships since a durable UTC checkpoint.  The
     /// result retains only ID, normalized type, and SeriesId; DateLastSaved
     /// still includes metadata and per-user UserData changes.
     static bool getChangedHierarchyItems(const std::string &baseUrl, const std::string &accessToken,
                                          const std::string &userId, const std::string &deviceId,
-                                         std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error);
+                                         std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error,
+                                         const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch "continue watching" / resume items.
     static bool getResumeItems(const std::string &baseUrl,
@@ -153,7 +156,8 @@ public:
                                const std::string &deviceId,
                                int limit,
                                std::vector<MediaItem> &items,
-                               std::string &error);
+                               std::string &error,
+                               const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch "recently added" items across all libraries.
     static bool getLatestItems(const std::string &baseUrl,
@@ -162,7 +166,8 @@ public:
                                const std::string &deviceId,
                                int limit,
                                std::vector<MediaItem> &items,
-                               std::string &error);
+                               std::string &error,
+                               const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch seasons for a given series.
     static bool getSeasons(const std::string &baseUrl,

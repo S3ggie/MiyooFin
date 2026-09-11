@@ -74,14 +74,16 @@ void HomeScreen::resetMediaPaging()
         m_tabs[movies].rows = {{"Movies", {}}};
     if (const int shows = tabIndex("Shows"); shows >= 0)
         m_tabs[shows].rows = {{"Shows", {}}};
-    requestMediaPage(m_moviePage);
-    requestMediaPage(m_showPage);
 }
 
 void HomeScreen::requestMediaPage(MediaPageState &state)
 {
     if (!m_catalogDb || state.inFlight || !state.hasMore)
         return;
+    if (m_catalogMetadata.scopeEpoch == 0 && m_session.valid()) {
+        m_catalogMetadata.scopeEpoch = m_catalogDb->configureScope(
+            m_session.serverUrl, m_session.userId);
+    }
     state.cancellation = std::make_shared<std::atomic_bool>(false);
     CatalogDbJobMetadata metadata = m_catalogMetadata;
     metadata.cancellation = state.cancellation;
@@ -161,31 +163,25 @@ void HomeScreen::startFetch()
 {
     if (m_fetchThread.joinable()) return;
     m_fetchDone = false; m_fetchError.clear(); m_fetchResult.clear(); m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
+    m_fetchCancellation = std::make_shared<std::atomic<bool>>(false);
+    const std::shared_ptr<std::atomic<bool>> cancellation = m_fetchCancellation;
     Session session=m_session; std::string url=session.serverUrl; std::string token=m_session.accessToken; std::string uid=m_session.userId; std::string devId=m_session.deviceId;
-    m_fetchThread = std::thread([this, session, url, token, uid, devId]() {
+    m_fetchThread = std::thread([this, session, url, token, uid, devId, cancellation]() {
         PerformanceTelemetry &telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
         const std::string scope=LibraryCache::scopeKey(url,uid);
-        if (m_catalogDb) {
-            CatalogDbJobMetadata metadata=m_catalogMetadata;
-            auto cached=m_catalogDb->readLibrarySnapshot(metadata).get();
-            if (cached.success) { m_cachedSnapshot=std::move(cached.snapshot); m_haveCachedSnapshot=true; }
-        }
+        CatalogDbJobMetadata metadata=m_catalogMetadata;
+        metadata.cancellation=cancellation;
         SyncState legacyState;
         const bool legacyAvailable=SyncStateStore::load(
             SyncStateStore::path("cache",scope),legacyState,nullptr);
+        // Online Home readiness must not wait on CatalogDb, even for the
+        // small sync checkpoint.  The checkpoint is advisory here; the
+        // bounded Home reads below are the only startup data dependency.
+        // Background sync/reconcile paths can refresh these fields later.
         CatalogDbSyncState catalogState;
-        if (m_catalogDb) {
-            CatalogDbJobMetadata metadata=m_catalogMetadata;
-            catalogState=m_catalogDb->readSyncState(
-                legacyAvailable,legacyState.lastSuccessfulMs,
-                legacyState.lastReconcileMs,metadata).get();
-            if (catalogState.success) {
-                m_syncState.lastSuccessfulMs=catalogState.lastSuccessfulMs;
-                m_syncState.lastReconcileMs=catalogState.lastReconcileMs;
-            }
-        } else if (legacyAvailable) {
+        if (legacyAvailable) {
             m_syncState=legacyState;
             catalogState.success=true;
             catalogState.lastSuccessfulMs=legacyState.lastSuccessfulMs;
@@ -220,25 +216,33 @@ void HomeScreen::startFetch()
             telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
         };
         std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();completeTelemetry(Outcome::Failure);m_fetchDone=true;};
-        ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getViews(base, token, uid, devId, views, err);},err)){fail(err);return;}
-        printf("[HomeScreen] Got %zu library views\n", views.size());
+        if (session.manualOfflineMode) {
+            bool needsRefresh = false;
+            if (!LibraryCache::load(LibraryCache::cachePath("cache", scope),
+                                    m_cachedSnapshot, nullptr, &needsRefresh)) {
+                fail("offline library cache unavailable");
+                return;
+            }
+            m_haveCachedSnapshot = true;
+            prepareOfflineProjection();
+            m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
+            m_remoteSnapshot = m_cachedSnapshot;
+            m_fetchCacheSaved = true;
+            completeTelemetry(Outcome::Success);
+            m_fetchDone = true;
+            return;
+        }
+        bool optionalRequestFailed = false;
         std::vector<MediaItem> cw; std::string cwErr;
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr);},cwErr)) printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRequestFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         std::vector<MediaItem> ra; std::string raErr;
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr);},raErr)) printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
-        std::vector<std::pair<std::string,std::vector<MediaItem>>> moviesByView, showsByView; LibrarySnapshot snapshot; snapshot.continueWatching=cw; snapshot.recentlyAdded=ra;
-        for (const auto &v:views) {
-            if (v.collectionType=="movies") { std::vector<MediaItem> items; std::string ie; ++requestCount; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Movie",50,items,ie);},ie)){mediaCount += static_cast<uint32_t>(items.size());moviesByView.push_back({v.name,std::move(items)});snapshot.movies.push_back({v.id,v.name,v.collectionType,moviesByView.back().second});} else {fail(ie);return;} }
-            else if (v.collectionType=="tvshows") { std::vector<MediaItem> items; std::string ie; ++requestCount; if(RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLibraryItems(base,token,uid,devId,v.id,"Series",50,items,ie);},ie)){mediaCount += static_cast<uint32_t>(items.size());showsByView.push_back({v.name,std::move(items)});snapshot.shows.push_back({v.id,v.name,v.collectionType,showsByView.back().second});} else {fail(ie);return;} }
-        }
-        m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,moviesByView,showsByView); m_remoteSnapshot=std::move(snapshot); std::set<std::string> changedSeries;
-        if(m_syncState.lastSuccessfulMs>0&&!m_forceHierarchyReconcile){std::vector<MediaItem> changed;std::string changedError;++requestCount;if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getChangedHierarchyItems(base,token,uid,devId,m_syncState.lastSuccessfulMs,changed,changedError);},changedError)){fail(changedError);return;}changedHierarchyCount = static_cast<uint32_t>(changed.size());for(const auto&i:changed){if(i.type=="show")changedSeries.insert(i.id);else if(!i.seriesId.empty())changedSeries.insert(i.seriesId);}}
-        std::vector<StalePoster> stale; m_fetchStats=LibraryCache::reconcile(m_cachedSnapshot,m_remoteSnapshot,&stale);
-        if(m_catalogDb && m_catalogDb->seedLibrarySnapshot(m_remoteSnapshot,m_catalogMetadata).get().success){m_fetchCacheSaved=true;cacheSaved=true;for(const auto&p:stale)ImageCache::removeCached(p.itemId,ImageType::Primary,p.tag,64,96);startPosterSync(m_remoteSnapshot);startHierarchyCache(m_remoteSnapshot,m_cachedSnapshot,changedSeries);}
-        completeTelemetry(Outcome::Success);
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRequestFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,{},{});
+        m_remoteSnapshot.continueWatching=cw;
+        m_remoteSnapshot.recentlyAdded=ra;
+        completeTelemetry(optionalRequestFailed ? Outcome::Failure : Outcome::Success);
         m_fetchDone=true;
     });
 }

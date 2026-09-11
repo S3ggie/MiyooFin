@@ -1461,7 +1461,7 @@ static void testTelemetrySchemaTypes()
     }
     CHECK(librarySyncCount == 1);
     CHECK(librarySyncFailure);
-    CHECK(librarySyncRequests == 1);
+    CHECK(librarySyncRequests == 2);
     CHECK(libraryWorkerSawInactive);
     std::remove(syncPath.c_str());
     ::rmdir(syncRoot.c_str());

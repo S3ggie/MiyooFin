@@ -51,7 +51,8 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
                            const std::string &userId,
                            const std::string &deviceId,
                            std::vector<LibraryView> &views,
-                           std::string &error)
+                           std::string &error,
+                           const std::atomic<bool> *cancelled)
 {
     HttpClient client;
     client.setTimeoutSec(10);
@@ -59,7 +60,7 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
     std::string url = baseUrl + "/Users/" + userId + "/Views";
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::Views);
-    if (!client.perform("GET", url, headers, {}, response, error)) {
+    if (!client.perform("GET", url, headers, {}, response, error, cancelled)) {
         if (error.empty()) error = "Could not reach server";
         return false;
     }
@@ -89,7 +90,8 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
                                   const std::string &includeItemTypes,
                                   int limit,
                                   std::vector<MediaItem> &items,
-                                  std::string &error)
+                                  std::string &error,
+                                  const std::atomic<bool> *cancelled)
 {
     if (limit <= 0) {
         error = "Library item page size must be positive";
@@ -102,11 +104,15 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
     int startIndex = 0;
 
     while (true) {
+        if (cancelled && cancelled->load()) {
+            error = "Callback aborted";
+            return false;
+        }
         std::string url = buildLibraryItemsUrl(baseUrl, userId, parentId,
                                                includeItemTypes, startIndex, limit);
         HttpResponse response;
         TelemetryRequestScope request(RequestKind::LibraryItems);
-        if (!client.perform("GET", url.c_str(), headers, {}, response, error)) {
+        if (!client.perform("GET", url.c_str(), headers, {}, response, error, cancelled)) {
             if (error.empty()) error = "Could not reach server";
             return false;
         }
@@ -155,7 +161,8 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
                                  const std::string &deviceId,
                                  int limit,
                                  std::vector<MediaItem> &items,
-                                 std::string &error)
+                                 std::string &error,
+                                 const std::atomic<bool> *cancelled)
 {
     HttpClient client;
     client.setTimeoutSec(10);
@@ -169,7 +176,7 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
         baseUrl.c_str(), userId.c_str(), limit);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::ResumeItems);
-    if (!client.perform("GET", urlBuf, headers, {}, response, error)) {
+    if (!client.perform("GET", urlBuf, headers, {}, response, error, cancelled)) {
         if (error.empty()) error = "Could not reach server";
         return false;
     }
@@ -203,7 +210,8 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
                                  const std::string &deviceId,
                                  int limit,
                                  std::vector<MediaItem> &items,
-                                 std::string &error)
+                                 std::string &error,
+                                 const std::atomic<bool> *cancelled)
 {
     HttpClient client;
     client.setTimeoutSec(10);
@@ -211,7 +219,7 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     std::string url = buildLatestUrl(baseUrl, userId, limit);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::LatestItems);
-    if (!client.perform("GET", url.c_str(), headers, {}, response, error)) {
+    if (!client.perform("GET", url.c_str(), headers, {}, response, error, cancelled)) {
         if (error.empty()) error = "Could not reach server";
         return false;
     }

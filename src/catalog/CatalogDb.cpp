@@ -1871,21 +1871,11 @@ void CatalogDb::processScopeCommand(ScopeCommand command)
         catalogDiagnostic(std::string("bootstrap_job_completed success=")
                           + (opened ? "1" : "0"));
     }
-    if (opened) {
-        CatalogDbJobMetadata metadata;
-        metadata.scopeEpoch = command.epoch;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            metadata.generation = m_generation;
-        }
-        // Queue this after the connection is ready so a valid app scope can
-        // reconstruct complete-download hierarchy without blocking startup.
-        // The future is intentionally unobserved: the worker owns the result
-        // and scope/epoch validation still suppresses stale work.
-        auto offlineRebuild = enqueueOfflineRebuild("downloads", metadata);
-        (void)offlineRebuild;
-        catalogDiagnostic("offline_rebuild_scheduled source=download_metadata");
-    }
+    // Do not enqueue download-catalog maintenance during scope opening.
+    // It is not needed to publish online Home readiness, and an unobserved
+    // filesystem scan can otherwise keep the CatalogDb worker in disk sleep
+    // until application shutdown.  Offline projection reads DownloadStore
+    // directly and remains available without this startup side job.
     m_idle.notify_all();
 }
 
@@ -3122,9 +3112,24 @@ void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &co
     const char *cols="id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b";
     if(sqlite3_prepare_v2(m_db,"SELECT id,name,collection_type FROM library_views ORDER BY ordinal,id",-1,&views,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+" FROM media_items JOIN library_membership ON media_items.id=library_membership.item_id WHERE view_id=? ORDER BY library_membership.ordinal,library_membership.item_id").c_str(),-1,&items,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+",row_kind FROM media_items JOIN home_items ON media_items.id=home_items.item_id ORDER BY row_kind,ordinal,item_id").c_str(),-1,&home,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT ordinal,genre FROM item_genres WHERE item_id=? ORDER BY ordinal",-1,&sg,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT image_type,tag FROM item_image_tags WHERE item_id=? ORDER BY image_type",-1,&st,nullptr)!=SQLITE_OK){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}
     const MediaItemCollectionStatements collections{nullptr,nullptr,nullptr,nullptr,sg,st};
-    while(sqlite3_step(views)==SQLITE_ROW){CachedLibraryView view;view.id=(const char*)sqlite3_column_text(views,0);view.name=(const char*)sqlite3_column_text(views,1);view.collectionType=(const char*)sqlite3_column_text(views,2);sqlite3_reset(items);sqlite3_clear_bindings(items);sqlite3_bind_text(items,1,view.id.c_str(),-1,SQLITE_TRANSIENT);while(sqlite3_step(items)==SQLITE_ROW){MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(items,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}view.items.push_back(std::move(item));}if(view.collectionType=="tvshows")result.snapshot.shows.push_back(std::move(view));else result.snapshot.movies.push_back(std::move(view));}
-    while(sqlite3_step(home)==SQLITE_ROW){const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));else if(kind&&std::string(kind)=="recently_added")result.snapshot.recentlyAdded.push_back(std::move(item));}
-    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);result.success=true;command->result.set_value(std::move(result));
+    auto cancelled = [&] { return command->metadata.cancellation
+        && command->metadata.cancellation->load(); };
+    while(sqlite3_step(views)==SQLITE_ROW){
+        if (cancelled()) { result.cancelled=true; break; }
+        CachedLibraryView view;view.id=(const char*)sqlite3_column_text(views,0);view.name=(const char*)sqlite3_column_text(views,1);view.collectionType=(const char*)sqlite3_column_text(views,2);sqlite3_reset(items);sqlite3_clear_bindings(items);sqlite3_bind_text(items,1,view.id.c_str(),-1,SQLITE_TRANSIENT);
+        while(sqlite3_step(items)==SQLITE_ROW){
+            if (cancelled()) { result.cancelled=true; break; }
+            MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(items,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}view.items.push_back(std::move(item));
+        }
+        if (result.cancelled) break;
+        if(view.collectionType=="tvshows")result.snapshot.shows.push_back(std::move(view));else result.snapshot.movies.push_back(std::move(view));
+    }
+    if (!result.cancelled) while(sqlite3_step(home)==SQLITE_ROW){
+        if (cancelled()) { result.cancelled=true; break; }
+        const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));else if(kind&&std::string(kind)=="recently_added")result.snapshot.recentlyAdded.push_back(std::move(item));
+    }
+    if (cancelled()) result.cancelled=true;
+    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);if(!result.cancelled)result.success=true;command->result.set_value(std::move(result));
 }
 
 void CatalogDb::processLibrarySeed(

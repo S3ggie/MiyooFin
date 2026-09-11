@@ -234,3 +234,19 @@ static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(mov
     CHECK_EQ(librarySyncStatus(2,true,false,false,true,done,false),"SYNCED");
 }
 static void testCacheRemoveNew(){std::string old=ImageCache::cacheDir();ImageCache::setCacheDir("/tmp/miyoofin-images/");unsigned char b[2]={1,2};CHECK(ImageCache::writeToCache("a",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::writeToCache("b",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::removeCached("a",ImageType::Primary,"x",64,96));CHECK(!ImageCache::isCached("a",ImageType::Primary,"x",64,96));CHECK(ImageCache::isCached("b",ImageType::Primary,"x",64,96));ImageCache::setCacheDir(old);}
+
+static void testOfflineLibraryQuery(){
+    DownloadSnapshot downloads;
+    DownloadItem movie; movie.itemId="m1"; movie.itemType="movie"; movie.title="Fallback movie"; movie.state=DownloadState::Complete;
+    DownloadItem episode; episode.itemId="e1"; episode.itemType="episode"; episode.seriesId="s1"; episode.seriesName="Fallback show"; episode.state=DownloadState::LocalOnly;
+    DownloadItem online; online.itemId="online"; online.itemType="movie"; online.state=DownloadState::Queued;
+    downloads.items={movie,episode,online};
+    auto batches=OfflineLibraryQuery::metadataBatches(downloads);
+    CHECK(batches.size()==1 && batches[0].size()==2);
+    MediaItem canonical=cacheItem("m1"); canonical.type="movie"; canonical.title="Canonical movie";
+    auto root=OfflineLibraryQuery::build(downloads,{canonical});
+    CHECK(root.movies.size()==1 && root.movies[0].items.size()==1);
+    CHECK(root.movies[0].items[0].title=="Canonical movie");
+    CHECK(root.shows.size()==1 && root.shows[0].items.size()==1);
+    CHECK(root.shows[0].items[0].id=="s1");
+}

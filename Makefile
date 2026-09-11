@@ -77,6 +77,7 @@ SRCS        := \
     $(SRC_DIR)/cache/SyncState.cpp \
     $(SRC_DIR)/cache/OfflineCatalog.cpp \
     $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
+    $(SRC_DIR)/library/OfflineLibraryQuery.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
@@ -121,6 +122,7 @@ OBJS        += $(SQLITE_HOST_OBJ)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
                output/build/download output/build/catalog \
+               output/build/library \
                output/build/diagnostics \
                output/build/ui output/build/ui/screens \
                output/build/playback
@@ -192,6 +194,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/cache/SyncState.cpp \
                src/cache/OfflineCatalog.cpp \
                src/cache/OfflineLibraryProjection.cpp \
+               src/library/OfflineLibraryQuery.cpp \
                src/download/DownloadStore.cpp \
                src/download/DownloadManager.cpp \
                src/download/DownloadManagerPlanning.cpp \

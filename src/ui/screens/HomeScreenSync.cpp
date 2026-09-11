@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "../../library/OfflineLibraryQuery.hpp"
 #include "../../cache/OfflineLibraryProjection.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/RouteRequest.hpp"
@@ -252,16 +253,10 @@ void HomeScreen::startFetch()
             telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, false);
             telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
         };
-        std::string err; auto fail=[&](const std::string &error){m_fetchError=error;if(m_haveCachedSnapshot)prepareOfflineProjection();completeTelemetry(Outcome::Failure);m_fetchComplete.store(true);m_fetchReady.store(true);m_fetchDone=true;};
         if (session.manualOfflineMode) {
-            bool needsRefresh = false;
-            if (!LibraryCache::load(LibraryCache::cachePath("cache", scope),
-                                    m_cachedSnapshot, nullptr, &needsRefresh)) {
-                fail("offline library cache unavailable");
-                return;
-            }
+            m_cachedSnapshot = OfflineLibraryQuery::build(
+                m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
             m_haveCachedSnapshot = true;
-            prepareOfflineProjection();
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
             m_fetchCacheSaved = true;

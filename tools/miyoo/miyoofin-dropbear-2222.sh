@@ -17,6 +17,8 @@ HANDOFF_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-mainui-handoff
 HANDOFF_RUNTIME=/tmp/miyoofin-mainui-handoff
 EXIT_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-graceful-exit
 EXIT_RUNTIME=/tmp/miyoofin-graceful-exit
+REBOOT_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-reboot
+REBOOT_RUNTIME=/tmp/miyoofin-reboot
 
 mkdir -p "$RUNTIME_SSH" "$RUNTIME_KEYS" "$BASE/run" "$BASE/log"
 chown 1000:1000 "$RUNTIME_HOME" "$RUNTIME_SSH"
@@ -47,6 +49,20 @@ owner_mode=$(stat -c '%u:%a' "$HANDOFF_RUNTIME" 2>/dev/null || true)
 [ "$owner_mode" = 0:4755 ] || {
     echo "miyoofin-dropbear: unsafe MainUI handoff helper mode=$owner_mode" >>"$LOG_FILE"
     rm -f "$HANDOFF_RUNTIME"
+    exit 1
+}
+
+if [ ! -f "$REBOOT_SOURCE" ]; then
+    echo "miyoofin-dropbear: missing reboot helper" >>"$LOG_FILE"
+    exit 1
+fi
+cp "$REBOOT_SOURCE" "$REBOOT_RUNTIME"
+chown 0:0 "$REBOOT_RUNTIME"
+chmod 4755 "$REBOOT_RUNTIME"
+owner_mode=$(stat -c '%u:%a' "$REBOOT_RUNTIME" 2>/dev/null || true)
+[ "$owner_mode" = 0:4755 ] || {
+    echo "miyoofin-dropbear: unsafe reboot helper mode=$owner_mode" >>"$LOG_FILE"
+    rm -f "$REBOOT_RUNTIME"
     exit 1
 }
 

@@ -26,9 +26,14 @@ count_comm() {
     done
     printf '%s\n' "$count"
 }
-[ -x "$EXIT_HELPER" ] || fail 'privileged graceful-exit helper is unavailable'
+[ -x "$EXIT_HELPER" ] || fail 'classification=helper_unavailable'
 [ "$(count_comm MainUI)" -eq 0 ] || fail 'MainUI is resident while MiyooFin is active'
-"$EXIT_HELPER" || fail 'privileged graceful-exit helper rejected the target'
+if ! helper_output=$("$EXIT_HELPER" 2>&1); then
+    case "$helper_output" in
+        *classification=*) fail "graceful-exit helper rejected target (${helper_output##*classification=})" ;;
+        *) fail 'graceful-exit helper rejected target (classification=unclassified_helper_failure)' ;;
+    esac
+fi
 seconds=45
 while [ "$seconds" -gt 0 ]; do
     [ "$(count_comm miyoofin)" -eq 0 ] && break

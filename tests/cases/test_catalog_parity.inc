@@ -772,6 +772,9 @@ static void testHomeUsesCatalogBeforeNetworkRefresh()
 {
     std::printf("[test] Home uses CatalogDb before network refresh\n");
     const std::string source = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const std::string syncSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(syncSource.find("configureScope") == std::string::npos);
+    CHECK(syncSource.find("scopeEpoch == 0") == std::string::npos);
     CHECK(source.find("requestFetch(SDL_GetTicks())") != std::string::npos);
     CHECK(source.find("first_useful_home_ready") == std::string::npos);
     const auto enter = source.find("void HomeScreen::enter()");

@@ -812,6 +812,9 @@ int main()
     testCatalogDbProjectionParity();
     testCatalogDbLibrarySnapshotSeed();
     testCatalogDbBoundedMediaPaging();
+    testCatalogDbMediaPageUpsertAndPopulation();
+    testHomeSkipsUnsupportedLibraryViews();
+    testCatalogScopeConfiguredBeforeHomePopulation();
     testLibraryCacheHomeParityHarness();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
@@ -864,6 +867,7 @@ int main()
     testLatestItemsDirectArray();
     testBuildLatestUrl();
     testBuildLibraryItemsUrl();
+    testLibraryItemsBoundedPageHttp();
     testChangedHierarchyLightweightProjection();
     testUnicodeEscapeDecoding();
     testBitmapFontMapCodePoint();

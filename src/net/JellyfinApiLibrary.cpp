@@ -139,6 +139,44 @@ bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
     }
 }
 
+bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
+                                      const std::string &accessToken,
+                                      const std::string &userId,
+                                      const std::string &deviceId,
+                                      const std::string &parentId,
+                                      const std::string &includeItemTypes,
+                                      int startIndex, int limit,
+                                      LibraryItemsPage &page,
+                                      std::string &error,
+                                      const std::atomic<bool> *cancelled)
+{
+    if (startIndex < 0 || limit <= 0) { error = "Invalid library page"; return false; }
+    if (cancelled && cancelled->load()) { error = "Callback aborted"; return false; }
+    HttpClient client;
+    client.setTimeoutSec(15);
+    HttpResponse response;
+    TelemetryRequestScope request(RequestKind::LibraryItems);
+    if (!client.perform("GET", buildLibraryItemsUrl(baseUrl, userId, parentId,
+                                                     includeItemTypes, startIndex, limit).c_str(),
+                       buildAuthHeaders(accessToken, deviceId), {}, response,
+                       error, cancelled)) {
+        if (error.empty()) error = "Could not reach server";
+        return false;
+    }
+    if (!response.ok()) { error = "Failed to fetch library page"; return false; }
+    page = {};
+    page.startIndex = jsonIntField(response.body, "StartIndex");
+    if (page.startIndex == 0 && startIndex != 0) page.startIndex = startIndex;
+    page.totalRecordCount = jsonIntField(response.body, "TotalRecordCount");
+    for (const auto &raw : jsonExtractArray(response.body, "Items"))
+        page.items.push_back(jsonToMediaItem(raw));
+    page.hasMore = page.startIndex + static_cast<int>(page.items.size()) < page.totalRecordCount;
+    std::printf("[JellyfinApi] library_page_success start=%d count=%zu total=%d more=%d\n",
+                page.startIndex, page.items.size(), page.totalRecordCount,
+                page.hasMore ? 1 : 0);
+    return true;
+}
+
 
 std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,
                                               const std::string &userId,
@@ -150,7 +188,7 @@ std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,
     return baseUrl + "/Users/" + userId + "/Items?ParentId=" + parentId +
         "&IncludeItemTypes=" + includeItemTypes +
         "&SortBy=SortName&SortOrder=Ascending&Recursive=true"
-        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags"
+        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,IndexNumber,Etag"
         "&StartIndex=" + std::to_string(startIndex) +
         "&Limit=" + std::to_string(limit);
 }

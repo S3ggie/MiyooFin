@@ -52,6 +52,14 @@ enum class CatalogDbScopeStatus : unsigned char {
     InvalidIdentity,
     OpenFailed,
 };
+enum class CatalogDbPopulationState : unsigned char {
+    Opening, Populating, Ready, GenuinelyEmpty, Failed
+};
+struct CatalogDbPopulationStatus {
+    CatalogDbPopulationState state = CatalogDbPopulationState::Opening;
+    std::size_t pages = 0;
+    std::size_t rows = 0;
+};
 
 enum class CatalogDbErrorCategory : unsigned char {
     None,
@@ -269,6 +277,25 @@ struct CatalogDbMediaPageResult {
     CatalogDbPageCursor next;
 };
 
+struct CatalogDbMediaPageUpsertResult {
+    bool success = false;
+    bool workerOwned = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t rowsWritten = 0;
+};
+struct CatalogDbMediaPageWrite {
+    std::vector<MediaItem> items;
+    std::string viewId;
+    std::string viewName;
+    std::string collectionType;
+    std::size_t ordinalStart = 0;
+    int viewOrdinal = 0;
+    bool finalPage = false;
+};
+
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
@@ -379,6 +406,13 @@ public:
     std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshotForTest(
         const LibrarySnapshot &snapshot, int failAfterWrites,
         const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbMediaPageUpsertResult> upsertMediaPage(
+        const CatalogDbMediaPageWrite &page,
+        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbMediaPageUpsertResult> upsertMediaPageForTest(
+        const CatalogDbMediaPageWrite &page, int failAfterRows,
+        const CatalogDbJobMetadata &metadata = {});
+    CatalogDbPopulationStatus populationStatus() const;
     std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
         const CatalogDbJobMetadata &metadata = {});
     /// Read one bounded, deterministically ordered movie/show page. All SQL
@@ -427,6 +461,7 @@ private:
     struct LibrarySeedCommand;
     struct LibraryReadCommand;
     struct MediaPageCommand;
+    struct MediaPageUpsertCommand;
 
     void workerLoop();
     bool hasPendingJobsLocked() const;
@@ -447,6 +482,7 @@ private:
         const std::shared_ptr<LibrarySeedCommand> &command);
     void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
     void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
+    void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -475,6 +511,9 @@ private:
     std::future<CatalogDbMediaPageResult> enqueueMediaPage(
         const std::string &type, int alphabetLetter, std::size_t limit,
         const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata);
+    std::future<CatalogDbMediaPageUpsertResult> enqueueMediaPageUpsert(
+        const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
+        int failAfterRows = -1);
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -497,6 +536,7 @@ private:
     std::deque<std::shared_ptr<LibrarySeedCommand>> m_librarySeedCommands;
     std::deque<std::shared_ptr<LibraryReadCommand>> m_libraryReadCommands;
     std::deque<std::shared_ptr<MediaPageCommand>> m_mediaPageCommands;
+    std::deque<std::shared_ptr<MediaPageUpsertCommand>> m_mediaPageUpsertCommands;
     std::deque<CatalogDbJobReport> m_jobReports;
     std::uint64_t m_generation = 0;
     std::uint64_t m_requestedEpoch = 0;
@@ -518,6 +558,7 @@ private:
     bool m_connectionOpen = false;
     bool m_connectionWorkerOwned = false;
     std::size_t m_preparedStatementCount = 0;
+    CatalogDbPopulationStatus m_populationStatus;
 };
 
 } // namespace miyoofin

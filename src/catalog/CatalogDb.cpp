@@ -351,8 +351,9 @@ bool collectObjects(sqlite3 *db, std::set<std::string> &objects,
 }
 
 bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
-                  std::string &error)
+                  bool &needsBackfill, std::string &error)
 {
+    needsBackfill = false;
     std::int64_t applicationId = 0;
     std::int64_t userVersion = 0;
     if (!scalarInt(db, "PRAGMA application_id;", applicationId, error)
@@ -365,6 +366,7 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
         return true;
     }
     if (applicationId == kCatalogApplicationId && userVersion == 2) {
+        needsBackfill = true;
         if (!exec(db, "BEGIN IMMEDIATE;", error)) return false;
         const char *const migration[] = {
             "ALTER TABLE media_items ADD COLUMN organizational_sort_key TEXT NOT NULL DEFAULT '';",
@@ -379,6 +381,7 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
         return true;
     }
     if (applicationId == kCatalogApplicationId && userVersion == 1) {
+        needsBackfill = true;
         if (!exec(db, "BEGIN IMMEDIATE;", error))
             return false;
         const char *const migration[] = {
@@ -439,6 +442,7 @@ bool ensureSchema(sqlite3 *db, CatalogDbOpenState &openState,
     if (!exec(db, "BEGIN IMMEDIATE;", error)) {
         return false;
     }
+    // A newly-created schema has no pre-existing rows to canonicalize.
     for (const char *statement : kCatalogSchemaStatements) {
         if (!exec(db, statement, error)) {
             std::string ignored;
@@ -735,6 +739,12 @@ struct CatalogDb::MediaPageCommand {
     CatalogDbPageCursor after; CatalogDbJobMetadata metadata;
     std::promise<CatalogDbMediaPageResult> result;
 };
+struct CatalogDb::MediaPageUpsertCommand {
+    CatalogDbMediaPageWrite page;
+    CatalogDbJobMetadata metadata;
+    int failAfterRows = -1;
+    std::promise<CatalogDbMediaPageUpsertResult> result;
+};
 
 CatalogDb::CatalogDb()
     : m_worker(&CatalogDb::workerLoop, this)
@@ -760,6 +770,13 @@ CatalogDb::~CatalogDb()
         m_librarySeedCommands.clear();
         m_libraryReadCommands.clear();
         m_mediaPageCommands.clear();
+        for (auto &command : m_mediaPageUpsertCommands) {
+            CatalogDbMediaPageUpsertResult result;
+            result.error = CatalogDbErrorCategory::ScopeNotReady;
+            result.message = "CatalogDb stopped before page submission";
+            command->result.set_value(std::move(result));
+        }
+        m_mediaPageUpsertCommands.clear();
         m_pendingJobs = 0;
     }
     m_wake.notify_one();
@@ -1419,6 +1436,32 @@ std::future<CatalogDbMediaPageResult> CatalogDb::readMediaPage(
     const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
 { return enqueueMediaPage(type, alphabetLetter, limit, after, metadata); }
 
+CatalogDbPopulationStatus CatalogDb::populationStatus() const
+{ std::lock_guard<std::mutex> lock(m_mutex); return m_populationStatus; }
+
+std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPage(
+    const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata)
+{ return enqueueMediaPageUpsert(page, metadata); }
+
+std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPageForTest(
+    const CatalogDbMediaPageWrite &page, int failAfterRows,
+    const CatalogDbJobMetadata &metadata)
+{ return enqueueMediaPageUpsert(page, metadata, failAfterRows); }
+
+std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
+    const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
+    int failAfterRows)
+{
+    auto command=std::make_shared<MediaPageUpsertCommand>(); command->page=page; command->metadata=metadata; command->failAfterRows=failAfterRows;
+    auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_stopping || m_pendingJobs >= kMaxPendingJobs) { CatalogDbMediaPageUpsertResult r; r.error=CatalogDbErrorCategory::ScopeNotReady; r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full"; command->result.set_value(std::move(r)); return future; }
+    command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
+    command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
+    m_mediaPageUpsertCommands.push_back(command); ++m_pendingJobs;
+    catalogDiagnostic("page_submit_enqueued");
+    m_wake.notify_one(); return future;
+}
+
 std::future<CatalogDbMediaPageResult> CatalogDb::enqueueMediaPage(
     const std::string &type, int alphabetLetter, std::size_t limit,
     const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
@@ -1542,8 +1585,9 @@ void CatalogDb::workerLoop()
                     || !m_offlineCommands.empty()
                     || !m_syncStateCommands.empty()
                     || !m_librarySeedCommands.empty()
-                || !m_libraryReadCommands.empty()
+                    || !m_libraryReadCommands.empty()
                     || !m_mediaPageCommands.empty()
+                    || !m_mediaPageUpsertCommands.empty()
                     || hasPendingJobsLocked()));
         });
 
@@ -1687,6 +1731,11 @@ void CatalogDb::workerLoop()
         if (!m_mediaPageCommands.empty()) {
             auto command=std::move(m_mediaPageCommands.front()); m_mediaPageCommands.pop_front(); --m_pendingJobs;
             m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processMediaPage(command);
+            lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
+        }
+        if (!m_mediaPageUpsertCommands.empty()) {
+            auto command=std::move(m_mediaPageUpsertCommands.front()); m_mediaPageUpsertCommands.pop_front(); --m_pendingJobs;
+            m_runningJob=true; performanceTelemetry().setCatalogDbActive(true); lock.unlock(); processMediaPageUpsert(command);
             lock.lock(); performanceTelemetry().setCatalogDbActive(false); m_runningJob=false; m_idle.notify_all(); continue;
         }
 
@@ -3104,6 +3153,126 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     command->result.set_value(std::move(result));
 }
 
+void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command)
+{
+    CatalogDbMediaPageUpsertResult result; result.workerOwned=true;
+    auto pageRollbackDiagnostic = [&](const char *stage, std::size_t itemOrdinal,
+                                      const MediaItem *item, int rc = SQLITE_OK) {
+        std::string line = "page_transaction_rollback page_start="
+            + std::to_string(command->page.ordinalStart)
+            + " page_count=" + std::to_string(command->page.items.size())
+            + " item_ordinal=" + std::to_string(itemOrdinal)
+            + " media_type=" + (item ? item->type : "unknown")
+            + " stage=" + stage;
+        if (rc != SQLITE_OK) {
+            line += " sqlite_rc=" + std::to_string(rc)
+                + " sqlite_extended_rc="
+                + std::to_string(sqlite3_extended_errcode(m_db));
+        }
+        catalogDiagnostic(line);
+    };
+    auto valid = [&] {
+        if (command->metadata.cancellation && command->metadata.cancellation->load()) { result.cancelled=true; return false; }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (command->metadata.generation != m_generation || command->metadata.scopeEpoch != m_requestedEpoch || !m_scopeReady) { result.superseded=true; return false; }
+        return true;
+    };
+    if (!valid()) { result.error=CatalogDbErrorCategory::Superseded; catalogDiagnostic(result.cancelled ? "page_submit_rejected reason=cancelled" : "page_submit_rejected reason=stale_or_not_ready"); command->result.set_value(std::move(result)); return; }
+    catalogDiagnostic("page_submit_dequeued");
+    { std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Populating; }
+    catalogDiagnostic("page_transaction_begin");
+    if (sqlite3_exec(m_db,"BEGIN IMMEDIATE;",nullptr,nullptr,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message="CatalogDb transaction begin failed"; catalogDiagnostic("page_transaction_rollback reason=begin_failed"); command->result.set_value(std::move(result)); return; }
+    sqlite3_stmt *upsert=nullptr,*dg=nullptr,*ig=nullptr,*dt=nullptr,*it=nullptr;
+    const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id,art_r=excluded.art_r,art_g=excluded.art_g,art_b=excluded.art_b";
+    bool prepared=sqlite3_prepare_v2(m_db,sql,-1,&upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,&dg,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,&ig,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,&dt,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&it,nullptr)==SQLITE_OK;
+    if (!prepared) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); command->result.set_value(std::move(result)); return; }
+    const MediaItemCollectionStatements c{dg,ig,dt,it};
+    sqlite3_stmt *view=nullptr,*membership=nullptr;
+    bool viewReady = command->page.viewId.empty() ||
+        (sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type",-1,&view,nullptr)==SQLITE_OK &&
+         sqlite3_bind_text(view,1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(view,4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(view)==SQLITE_DONE &&
+         sqlite3_prepare_v2(m_db,"INSERT INTO library_membership(view_id,item_id,ordinal) VALUES(?,?,?) ON CONFLICT(view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal",-1,&membership,nullptr)==SQLITE_OK);
+    for (std::size_t n = 0; viewReady && n < command->page.items.size(); ++n) {
+        const auto &item = command->page.items[n];
+        MediaItemSqlError e = MediaItemSqlError::None;
+        if (command->failAfterRows >= 0
+            && static_cast<int>(result.rowsWritten) >= command->failAfterRows) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = "injected page failure";
+            pageRollbackDiagnostic("injected_test_failure", n, &item);
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        sqlite3_reset(upsert); sqlite3_clear_bindings(upsert);
+        if (!bindMediaItemScalars(upsert, item, e)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            pageRollbackDiagnostic(e == MediaItemSqlError::InvalidKind
+                ? "ID/type" : "scalar validation", n, &item);
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        const int mediaRc = sqlite3_step(upsert);
+        if (mediaRc != SQLITE_DONE) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            pageRollbackDiagnostic("media bind/step", n, &item, mediaRc);
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        if (!maintainOrganizationalSortKey(m_db, item, result.message)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            pageRollbackDiagnostic("sort key", n, &item, sqlite3_errcode(m_db));
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        if (!replaceMediaItemCollections(c, item, e)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            pageRollbackDiagnostic("media bind/step", n, &item, sqlite3_errcode(m_db));
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        if (!valid()) {
+            result.error = CatalogDbErrorCategory::Superseded;
+            pageRollbackDiagnostic(result.cancelled ? "stale/cancel" : "stale/cancel", n, &item);
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            break;
+        }
+        if (!command->page.viewId.empty()) {
+            sqlite3_reset(membership); sqlite3_clear_bindings(membership);
+            sqlite3_bind_text(membership, 1, command->page.viewId.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(membership, 2, item.id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(membership, 3,
+                static_cast<sqlite3_int64>(command->page.ordinalStart + n));
+            const int membershipRc = sqlite3_step(membership);
+            if (membershipRc != SQLITE_DONE) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                pageRollbackDiagnostic("membership bind/step", n, &item, membershipRc);
+                sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                break;
+            }
+        }
+        ++result.rowsWritten;
+    }
+    if (!viewReady && result.error==CatalogDbErrorCategory::None) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); }
+    sqlite3_finalize(view); sqlite3_finalize(membership);
+    sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);
+    if (result.error==CatalogDbErrorCategory::None && valid()) {
+        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit"); std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten; m_populationStatus.state=command->page.finalPage ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty) : CatalogDbPopulationState::Populating; }
+        else { result.error=CatalogDbErrorCategory::SqliteError; catalogDiagnostic("page_transaction_rollback reason=commit_failed"); sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Failed; }
+    } else {
+        if (result.error == CatalogDbErrorCategory::None) {
+            pageRollbackDiagnostic("population state", result.rowsWritten, nullptr);
+        } else if (result.message.empty()) {
+            pageRollbackDiagnostic("FK/unique", result.rowsWritten, nullptr,
+                                   sqlite3_errcode(m_db));
+        }
+        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!result.cancelled && !result.superseded)
+            m_populationStatus.state = CatalogDbPopulationState::Failed;
+    }
+    command->result.set_value(std::move(result));
+}
+
 void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command)
 {
     CatalogDbLibraryReadResult result; result.workerOwned=true;
@@ -3392,6 +3561,9 @@ void CatalogDb::finalizeStatements()
 bool CatalogDb::openConnection(const ScopeCommand &command)
 {
     assert(std::this_thread::get_id() == m_worker.get_id());
+    const auto scopeStage = [&](const char *stage) {
+        catalogDiagnostic(std::string("scope_stage=") + stage);
+    };
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch != m_requestedEpoch || m_stopping) {
@@ -3399,9 +3571,11 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         }
     }
 
+    scopeStage("path_state_inspect_started");
     const std::string path = catalogPath(command.scopeKey);
     CatalogDbMigrationState migrationState =
         inspectMigrationState(command.scopeKey);
+    scopeStage("path_state_inspect_completed");
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
@@ -3425,6 +3599,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                                CatalogDbOpenState::CorruptOrIo);
         return false;
     }
+    scopeStage("directory_prepare_started");
     const std::size_t slash = path.find_last_of('/');
     std::string error;
     if (slash == std::string::npos || !makeDirectories(path.substr(0, slash))) {
@@ -3440,6 +3615,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                                CatalogDbOpenState::CorruptOrIo);
         return false;
     }
+    scopeStage("directory_prepare_completed");
 
     bool bootstrapped = false;
     if (!migrationState.finalPresent) {
@@ -3476,6 +3652,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         }
     }
 
+    scopeStage("sqlite_open_started");
     catalogDiagnostic(std::string("sqlite_open_attempt db_dir=")
                       + scopeDirectory(command.scopeKey));
     sqlite3 *db = nullptr;
@@ -3483,9 +3660,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
     {
         char line[128];
+        const char *message = db ? sqlite3_errmsg(db) : "no_handle";
         std::snprintf(line, sizeof(line),
-                      "sqlite_open_returned rc=%d handle=%d", openRc,
-                      db != nullptr ? 1 : 0);
+                      "sqlite_open_returned rc=%d handle=%d errmsg=%s", openRc,
+                      db != nullptr ? 1 : 0, message ? message : "none");
         catalogDiagnostic(line);
     }
     if (openRc != SQLITE_OK || !db) {
@@ -3505,11 +3683,21 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     }
 
     sqlite3_extended_result_codes(db, 1);
-    if (!exec(db, "PRAGMA foreign_keys = ON;", error)
-        || !exec(db, "PRAGMA trusted_schema = OFF;", error)
-        || !exec(db, "PRAGMA journal_mode = DELETE;", error)
-        || !exec(db, "PRAGMA synchronous = FULL;", error)
-        || !exec(db, "PRAGMA locking_mode = NORMAL;", error)) {
+    const int busyRc = sqlite3_busy_timeout(db, 250);
+    catalogDiagnostic("busy_timeout rc=" + std::to_string(busyRc)
+                      + " ms=250");
+    const auto setupPragma = [&](const char *sql, const char *name) {
+        const int rc = execResult(db, sql, error);
+        catalogDiagnostic(std::string("setup_pragma name=") + name
+                          + " rc=" + std::to_string(rc)
+                          + " errmsg=" + (db ? sqlite3_errmsg(db) : "none"));
+        return rc == SQLITE_OK;
+    };
+    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys")
+        || !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema")
+        || !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode")
+        || !setupPragma("PRAGMA synchronous = FULL;", "synchronous")
+        || !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
         sqlite3_close(db);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
@@ -3550,8 +3738,10 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         return false;
     }
 
+    scopeStage("schema_validate_migrate_started");
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
-    if (!ensureSchema(db, openState, error)) {
+    bool needsBackfill = false;
+    if (!ensureSchema(db, openState, needsBackfill, error)) {
         sqlite3_close(db);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
@@ -3580,7 +3770,16 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                                errorCategory, openState);
         return false;
     }
-    if (!backfillOrganizationalSortKeys(db, error)) { sqlite3_close(db); return false; }
+    catalogDiagnostic(std::string("schema_validate_migrate_completed open_state=")
+                      + openStateName(openState));
+    if (needsBackfill) {
+        scopeStage("sort_key_backfill_started");
+        if (!backfillOrganizationalSortKeys(db, error)) { sqlite3_close(db); return false; }
+        scopeStage("sort_key_backfill_completed");
+    } else {
+        catalogDiagnostic("sort_key_backfill_skipped reason=schema_has_canonical_keys");
+    }
+    scopeStage("scope_setup_completed");
     if (bootstrapped) openState = CatalogDbOpenState::CreatedV3;
 
     if (migrationState.migratingPresent) {
@@ -3625,6 +3824,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     }
     catalogFinalDiagnostic(true, CatalogDbScopeStatus::Ready,
                            CatalogDbErrorCategory::None, openState);
+    scopeStage("scope_ready");
     return true;
 }
 
@@ -3632,6 +3832,9 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
                                                 std::string &error)
 {
     assert(std::this_thread::get_id() == m_worker.get_id());
+    const auto bootstrapStage = [&](const char *stage) {
+        catalogDiagnostic(std::string("bootstrap_stage=") + stage);
+    };
     const auto scopeIsCurrent = [&] {
         std::lock_guard<std::mutex> lock(m_mutex);
         return !m_stopping && command.epoch == m_requestedEpoch
@@ -3698,17 +3901,29 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
             temporary = nullptr;
         }
     };
-    if (!exec(temporary, "PRAGMA foreign_keys = ON;", error)
-        || !exec(temporary, "PRAGMA trusted_schema = OFF;", error)
-        || !exec(temporary, "PRAGMA journal_mode = DELETE;", error)
-        || !exec(temporary, "PRAGMA synchronous = FULL;", error)
-        || !exec(temporary, "PRAGMA locking_mode = NORMAL;", error)) {
+    const int busyRc = sqlite3_busy_timeout(temporary, 250);
+    catalogDiagnostic("bootstrap_busy_timeout rc=" + std::to_string(busyRc)
+                      + " ms=250");
+    const auto setupPragma = [&](const char *sql, const char *name) {
+        const int rc = execResult(temporary, sql, error);
+        catalogDiagnostic(std::string("bootstrap_pragma name=") + name
+                          + " rc=" + std::to_string(rc)
+                          + " errmsg=" + sqlite3_errmsg(temporary));
+        return rc == SQLITE_OK;
+    };
+    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys")
+        || !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema")
+        || !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode")
+        || !setupPragma("PRAGMA synchronous = FULL;", "synchronous")
+        || !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
         closeTemporary();
         removeTemporaryFamily();
         return false;
     }
+    bootstrapStage("schema_validate_migrate_started");
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
-    if (!ensureSchema(temporary, openState, error)
+    bool needsBackfill = false;
+    if (!ensureSchema(temporary, openState, needsBackfill, error)
         || openState != CatalogDbOpenState::CreatedV3) {
         if (error.empty()) {
             error = "fresh catalog schema creation failed";
@@ -3717,6 +3932,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         removeTemporaryFamily();
         return false;
     }
+    bootstrapStage("schema_validate_migrate_completed");
     std::string foreignKeys;
     std::string trustedSchema;
     std::string journalMode;

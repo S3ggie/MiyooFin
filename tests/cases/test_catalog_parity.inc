@@ -504,7 +504,12 @@ static void testCatalogDbBoundedMediaPaging()
 
     const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(homeSource.find("readMediaPage") != std::string::npos);
+    CHECK(homeSource.find("std::thread([this") != std::string::npos);
+    CHECK(homeSource.find("getLibraryItemsPage") != std::string::npos);
+    CHECK(homeSource.find("seedLibrarySnapshot") == std::string::npos);
+    CHECK(homeSource.find("readLibrarySnapshot") == std::string::npos);
     CHECK(homeSource.find("m_movieMaster=combineMovieViews") == std::string::npos);
+    CHECK(homeSource.find("m_showMaster=combineShowViews") == std::string::npos);
     CHECK(homeSource.find("rebuildShowsPresentation();if(m_session.manualOfflineMode)") == std::string::npos);
     removeCatalogMigrationTestPaths(paths);
     std::printf("[test] CatalogDb bounded media paging OK\n");
@@ -534,6 +539,70 @@ void testLibraryCacheHomeParityHarness()
     CHECK(tabs[2].rows.size() == 1 && tabs[2].rows[0].label == "Shows"
           && tabs[2].rows[0].items[0].id == a.id);
     CHECK(offlineTabsFromSnapshot(snapshot).size() == 4);
+}
+
+static void testCatalogDbMediaPageUpsertAndPopulation()
+{
+    std::printf("[test] CatalogDb page upsert atomicity and population states\n");
+    CatalogDb db;
+    const auto epoch = db.configureScope("https://page-upsert.example", "user");
+    CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    const CatalogDbJobMetadata metadata{0, epoch, {}};
+    auto item = catalogParityItem("page-item", "movie", "The Page Item");
+    CatalogDbMediaPageWrite first;
+    first.items = {item}; first.viewId = "movies"; first.viewName = "Movies";
+    first.collectionType = "movies"; first.ordinalStart = 4; first.finalPage = false;
+    auto written = db.upsertMediaPage(first, metadata).get();
+    CHECK(written.success && written.workerOwned && written.rowsWritten == 1);
+    CHECK(db.populationStatus().state == CatalogDbPopulationState::Populating);
+    auto again = db.upsertMediaPage(first, metadata).get();
+    CHECK(again.success && again.rowsWritten == 1);
+    item.title = "Updated Page Item";
+    CatalogDbMediaPageWrite final = first; final.items = {item}; final.finalPage = true;
+    CHECK(db.upsertMediaPage(final, metadata).get().success);
+    CHECK(db.populationStatus().state == CatalogDbPopulationState::Ready);
+    auto snapshot = db.readLibrarySnapshot(metadata).get();
+    CHECK(snapshot.success && snapshot.snapshot.movies.size() == 1
+          && snapshot.snapshot.movies[0].items.size() == 1
+          && snapshot.snapshot.movies[0].items[0].title == "Updated Page Item");
+    CatalogDbMediaPageWrite failing = first;
+    failing.items = {catalogParityItem("rollback-a", "movie", "A"),
+                     catalogParityItem("rollback-b", "movie", "B")};
+    auto failed = db.upsertMediaPageForTest(failing, 1, metadata).get();
+    CHECK(!failed.success && failed.error == CatalogDbErrorCategory::SqliteError);
+    auto after = db.readMediaPage("movie", -1, 64, {}, metadata).get();
+    CHECK(after.success && std::none_of(after.items.begin(), after.items.end(),
+        [](const MediaItem &v) { return v.id == "rollback-a" || v.id == "rollback-b"; }));
+    auto cancel = std::make_shared<std::atomic_bool>(true);
+    auto cancelled = db.upsertMediaPage(final, {0, epoch, cancel}).get();
+    CHECK(cancelled.cancelled && !cancelled.success);
+    std::printf("[test] CatalogDb page upsert atomicity and population states OK\n");
+}
+
+static void testHomeSkipsUnsupportedLibraryViews()
+{
+    std::printf("[test] Home skips unsupported library views before persistence\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("supportedLibraryView") != std::string::npos);
+    CHECK(source.find("view.collectionType == \"movies\"") != std::string::npos);
+    CHECK(source.find("view.collectionType == \"tvshows\"") != std::string::npos);
+    CHECK(source.find("library_view_skipped unsupported_collection") != std::string::npos);
+    CHECK(source.find("views.erase(std::remove_if") != std::string::npos);
+    CHECK(source.find("getLibraryItemsPage") != std::string::npos);
+    CHECK(source.find("upsertMediaPage") != std::string::npos);
+    std::printf("[test] Home skips unsupported library views before persistence OK\n");
+}
+
+static void testCatalogScopeConfiguredBeforeHomePopulation()
+{
+    std::printf("[test] Catalog scope precedes Home population\n");
+    const std::string appSource = readTestBytes("src/app/App.cpp");
+    const auto configure = appSource.find("configureCatalogScopeForSession();");
+    const auto home = appSource.find("goToHome();", configure);
+    CHECK(configure != std::string::npos && home != std::string::npos);
+    CHECK(appSource.find("catalog_scope_deferred_until_media_navigation")
+          == std::string::npos);
+    std::printf("[test] Catalog scope precedes Home population OK\n");
 }
 
 } // namespace

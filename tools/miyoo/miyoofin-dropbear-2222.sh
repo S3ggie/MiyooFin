@@ -13,6 +13,10 @@ PID_FILE=$BASE/run/dropbear-2222.pid
 LOG_FILE=$BASE/log/dropbear-2222.log
 DAEMON=$BASE/bin/dropbear
 PERSIST_HOST_KEY=$BASE/keys/dropbear_ed25519_host_key
+HANDOFF_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-mainui-handoff
+HANDOFF_RUNTIME=/tmp/miyoofin-mainui-handoff
+EXIT_SOURCE=/mnt/SDCARD/App/MiyooFin/tools/dropbear/miyoofin-graceful-exit
+EXIT_RUNTIME=/tmp/miyoofin-graceful-exit
 
 mkdir -p "$RUNTIME_SSH" "$RUNTIME_KEYS" "$BASE/run" "$BASE/log"
 chown 1000:1000 "$RUNTIME_HOME" "$RUNTIME_SSH"
@@ -31,6 +35,34 @@ if [ ! -f "$PERSIST_HOST_KEY" ]; then
 fi
 cp "$PERSIST_HOST_KEY" "$HOST_KEY"
 chmod 600 "$HOST_KEY"
+
+if [ ! -f "$HANDOFF_SOURCE" ]; then
+    echo "miyoofin-dropbear: missing MainUI handoff helper" >>"$LOG_FILE"
+    exit 1
+fi
+cp "$HANDOFF_SOURCE" "$HANDOFF_RUNTIME"
+chown 0:0 "$HANDOFF_RUNTIME"
+chmod 4755 "$HANDOFF_RUNTIME"
+owner_mode=$(stat -c '%u:%a' "$HANDOFF_RUNTIME" 2>/dev/null || true)
+[ "$owner_mode" = 0:4755 ] || {
+    echo "miyoofin-dropbear: unsafe MainUI handoff helper mode=$owner_mode" >>"$LOG_FILE"
+    rm -f "$HANDOFF_RUNTIME"
+    exit 1
+}
+
+if [ ! -f "$EXIT_SOURCE" ]; then
+    echo "miyoofin-dropbear: missing graceful-exit helper" >>"$LOG_FILE"
+    exit 1
+fi
+cp "$EXIT_SOURCE" "$EXIT_RUNTIME"
+chown 0:0 "$EXIT_RUNTIME"
+chmod 4755 "$EXIT_RUNTIME"
+owner_mode=$(stat -c '%u:%a' "$EXIT_RUNTIME" 2>/dev/null || true)
+[ "$owner_mode" = 0:4755 ] || {
+    echo "miyoofin-dropbear: unsafe graceful-exit helper mode=$owner_mode" >>"$LOG_FILE"
+    rm -f "$EXIT_RUNTIME"
+    exit 1
+}
 
 if [ -f "$PID_FILE" ]; then
     pid=$(sed -n '1p' "$PID_FILE" 2>/dev/null || true)

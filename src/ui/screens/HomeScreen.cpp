@@ -152,7 +152,7 @@ void HomeScreen::rebuildShowsPresentation()
                                       [&](const MediaItem &candidate) {
                                           return candidate.id == item.id;
                                       });
-            if (found != view.items.end() && isAnimeSeries(view, *found)) {
+            if (found != view.items.end() && isAnimeSeries(view.name, *found)) {
                 anime = true;
                 break;
             }

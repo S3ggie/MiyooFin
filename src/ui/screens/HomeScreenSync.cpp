@@ -147,11 +147,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
                 if (found == result.membershipsByItem.end())
                     continue;
                 for (const auto &membership : found->second) {
-                    CachedLibraryView view;
-                    view.id = membership.viewId;
-                    view.name = membership.viewName;
-                    view.collectionType = membership.collectionType;
-                    if (isAnimeSeries(view, item)) {
+                    if (isAnimeSeries(membership.viewName, item)) {
                         m_animeItemIds.insert(item.id);
                         break;
                     }
@@ -361,13 +357,9 @@ void HomeScreen::startFetch()
                         }, pageErr)) { catalogRefreshFailed = true; break; }
                     mediaCount += static_cast<uint32_t>(page.items.size());
                     if (view.collectionType == "tvshows") {
-                        CachedLibraryView classificationView;
-                        classificationView.id = view.id;
-                        classificationView.name = view.name;
-                        classificationView.collectionType = view.collectionType;
                         std::lock_guard<std::mutex> lock(m_fetchMutex);
                         for (const auto &item : page.items)
-                            if (isAnimeSeries(classificationView, item))
+                            if (isAnimeSeries(view.name, item))
                                 m_animeItemIds.insert(item.id);
                     }
                     std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",

@@ -22,6 +22,25 @@ std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem> 
     return out;
 }
 
+std::vector<HomePosterJob> planHomeRailPosterJobs(
+    const std::vector<MediaItem> &continueWatching,
+    const std::vector<MediaItem> &recentlyAdded)
+{
+    std::vector<HomePosterJob> out;
+    std::set<std::string> seen;
+    const auto add = [&](const MediaItem &item) {
+        const DisplayArtwork artwork = displayArtworkForItem(item);
+        if (!artwork.valid()) return;
+        const std::string key = homeArtworkKey(item);
+        if (!seen.insert(key).second) return;
+        out.push_back({item.id, artwork.imageType, artwork.tag,
+                       artwork.width, artwork.height});
+    };
+    for (const auto &item : continueWatching) add(item);
+    for (const auto &item : recentlyAdded) add(item);
+    return out;
+}
+
 std::vector<HomePosterJob> planHomePosterJobs(const LibrarySnapshot &snapshot)
 {
     std::vector<HomePosterJob> out; std::set<std::string> seen;

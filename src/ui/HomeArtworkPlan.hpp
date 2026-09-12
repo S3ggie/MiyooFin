@@ -18,6 +18,9 @@ struct HomePosterJob {
 
 std::string homeArtworkKey(const MediaItem &item);
 std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem> &items);
+std::vector<HomePosterJob> planHomeRailPosterJobs(
+    const std::vector<MediaItem> &continueWatching,
+    const std::vector<MediaItem> &recentlyAdded);
 std::vector<HomePosterJob> planHomePosterJobs(const LibrarySnapshot &snapshot);
 std::vector<HomePosterJob> planSeasonPosterJobs(const std::vector<MediaItem> &seasons);
 

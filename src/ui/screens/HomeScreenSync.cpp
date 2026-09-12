@@ -313,6 +313,7 @@ void HomeScreen::startFetch()
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
+        queuePosterJobs(planHomeRailPosterJobs(cw, ra));
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
@@ -365,6 +366,8 @@ void HomeScreen::startFetch()
                     }
                     std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
                                 page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
+                    if (start == 0)
+                        queuePosterJobs(planMediaPagePosterJobs(page.items));
                     if (m_catalogDb) {
                         CatalogDbMediaPageWrite writePage;
                         writePage.items = page.items;

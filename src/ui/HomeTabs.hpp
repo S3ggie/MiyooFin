@@ -9,6 +9,7 @@
 namespace miyoofin {
 
 void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
+void updateRecentlyAddedRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
 std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
 std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot);
 std::vector<std::string> tabNames(const std::vector<TabData> &tabs);

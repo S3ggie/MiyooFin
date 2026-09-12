@@ -814,6 +814,7 @@ int main()
     testCatalogDbProjectionParity();
     testCatalogDbLibrarySnapshotSeed();
     testCatalogDbTopLevelSyncStagingLifecycle();
+    testLibrarySyncTeardownDuringStagedGeneration();
     testCatalogDbBoundedMediaPaging();
     testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();

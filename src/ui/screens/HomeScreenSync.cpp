@@ -452,6 +452,8 @@ void HomeScreen::finishFetch()
     if (m_fetchComplete.load() && m_fetchThread.joinable()) {
         m_fetchThread.join();
         if (m_fetchCacheSaved) { m_cachedSnapshot=m_remoteSnapshot; m_haveCachedSnapshot=true; }
+        if (!m_remoteSnapshot.recentlyAdded.empty())
+            updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
         m_fetchDone.store(false);
     }
 }

@@ -24,6 +24,22 @@ void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<Med
     }
 }
 
+void updateRecentlyAddedRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items)
+{
+    auto homeIt = std::find_if(tabs.begin(), tabs.end(), [](const TabData &tab) { return tab.name == "Home"; });
+    if (homeIt == tabs.end() || items.empty()) return;
+    auto &rows = homeIt->rows;
+    auto recentIt = std::find_if(rows.begin(), rows.end(), [](const MediaRow &row) { return row.label == "Recently Added"; });
+    if (recentIt != rows.end()) {
+        recentIt->items = items;
+        return;
+    }
+    if (rows.size() == 1 && rows[0].label.empty() && rows[0].items.empty()) rows.clear();
+    auto continueIt = std::find_if(rows.begin(), rows.end(), [](const MediaRow &row) { return row.label == "Continue Watching"; });
+    const auto insertAt = continueIt == rows.end() ? rows.end() : std::next(continueIt);
+    rows.insert(insertAt, {"Recently Added", items});
+}
+
 std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views)
 {
     std::vector<MediaItem> out; std::map<std::string, bool> seen;

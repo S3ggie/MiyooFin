@@ -128,12 +128,6 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         const std::size_t remove = window.size() - kWindowLimit;
         window.erase(window.begin(),
                      window.begin() + static_cast<std::ptrdiff_t>(remove));
-        if (state.type == "movie")
-            m_activeCard = std::max(0, m_activeCard - static_cast<int>(remove));
-        else {
-            m_showSelected = std::max(0, m_showSelected - static_cast<int>(remove));
-            m_animeSelected = std::max(0, m_animeSelected - static_cast<int>(remove));
-        }
     }
     state.next = result.next;
     state.hasMore = result.hasMore;

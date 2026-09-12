@@ -2,11 +2,10 @@
 
 #include "CatalogCompatibility.hpp"
 #include "../data/MediaItem.hpp"
-#include "../net/JellyfinApi.hpp"
 #include "../download/DownloadStore.hpp"
 #include "MediaItemSql.hpp"
 #include "CatalogDbSchema.hpp"
-#include "../ui/TitleOrganization.hpp"
+#include "CatalogPrimitives.hpp"
 #include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
@@ -131,7 +130,7 @@ constexpr std::size_t kMaxReconcileSeries = 4096;
 
 bool validScopeIdentity(const std::string &serverUrl, const std::string &userId)
 {
-    const std::string normalizedUrl = JellyfinApi::normaliseUrl(serverUrl);
+    const std::string normalizedUrl = catalog::normalizeIdentityUrl(serverUrl);
     const std::size_t schemeEnd = normalizedUrl.find("://");
     return schemeEnd != std::string::npos
         && schemeEnd + 3 < normalizedUrl.size()
@@ -154,14 +153,12 @@ bool makeDirectories(const std::string &path)
 
 std::string catalogPath(const std::string &scopeKey)
 {
-    const std::string snapshot = LibraryCache::cachePath("cache", scopeKey);
-    const std::size_t slash = snapshot.find_last_of('/');
-    return snapshot.substr(0, slash + 1) + "catalog.sqlite3";
+    return catalog::catalogPath("cache", scopeKey);
 }
 
 std::string migratingPath(const std::string &scopeKey)
 {
-    return catalogPath(scopeKey) + ".migrating";
+    return catalog::migratingCatalogPath("cache", scopeKey);
 }
 
 struct MigrationPathPresence {
@@ -475,7 +472,7 @@ bool backfillOrganizationalSortKeys(sqlite3 *db, std::string &error)
         const char *id = reinterpret_cast<const char *>(sqlite3_column_text(read, 0));
         const char *title = reinterpret_cast<const char *>(sqlite3_column_text(read, 1));
         sqlite3_reset(write); sqlite3_clear_bindings(write);
-        if (!id || sqlite3_bind_text(write, 1, organizationalSortKey(title ? title : "").c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
+        if (!id || sqlite3_bind_text(write, 1, catalog::organizationalSortKey(title ? title : "").c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK
             || sqlite3_bind_text(write, 2, id, -1, SQLITE_TRANSIENT) != SQLITE_OK
             || sqlite3_step(write) != SQLITE_DONE) { error = sqlite3_errmsg(db); sqlite3_finalize(read); sqlite3_finalize(write); return false; }
     }
@@ -487,7 +484,7 @@ bool maintainOrganizationalSortKey(sqlite3 *db, const MediaItem &item,
 {
     sqlite3_stmt *statement = nullptr;
     if (sqlite3_prepare_v2(db, "UPDATE media_items SET organizational_sort_key=?1 WHERE id=?2", -1, &statement, nullptr) != SQLITE_OK) { error = sqlite3_errmsg(db); return false; }
-    const std::string key = organizationalSortKey(item.title);
+    const std::string key = catalog::organizationalSortKey(item.title);
     const bool ok = sqlite3_bind_text(statement, 1, key.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK
         && sqlite3_bind_text(statement, 2, item.id.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK
         && sqlite3_step(statement) == SQLITE_DONE;
@@ -871,7 +868,7 @@ std::uint64_t CatalogDb::configureScope(const std::string &serverUrl,
 {
     const bool validIdentity = validScopeIdentity(serverUrl, userId);
     const std::string scopeKey = validIdentity
-        ? LibraryCache::scopeKey(serverUrl, userId) : std::string();
+        ? catalog::scopeKey(serverUrl, userId) : std::string();
     std::uint64_t epoch;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -3332,7 +3329,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     }
     if (!result.items.empty()) {
         const auto &item=result.items.back();
-        result.next.sortKey=organizationalSortKey(item.title);
+        result.next.sortKey=catalog::organizationalSortKey(item.title);
         result.next.title=item.title;
         result.next.id=item.id;
         result.next.valid=true;

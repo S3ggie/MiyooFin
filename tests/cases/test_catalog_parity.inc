@@ -5,6 +5,8 @@
 #include <tuple>
 #include <vector>
 
+#include "../../src/catalog/CatalogPrimitives.hpp"
+
 namespace {
 
 bool catalogParityItemEqual(const MediaItem &expected,
@@ -459,6 +461,8 @@ static void testCatalogDbBoundedMediaPaging()
     const std::string user = "media-pages-user";
     const auto paths = catalogMigrationTestPaths(url, user);
     removeCatalogMigrationTestPaths(paths);
+    CHECK(LibraryCache::scopeKey(url, user) == "184a8ca0cca21a05");
+    CHECK(miyoofin::catalog::scopeKey(url, user) == "184a8ca0cca21a05");
 
     std::vector<MediaItem> movies;
     const std::vector<std::string> titles = {
@@ -492,6 +496,12 @@ static void testCatalogDbBoundedMediaPaging()
         CHECK(collectCatalogPageIds(db, "movie", -1, pageSize, epoch)
               == expectedIds);
     }
+    for (const auto &item : movies) {
+        CHECK(organizationalSortKey(item.title)
+              == miyoofin::catalog::organizationalSortKey(item.title));
+        CHECK(alphabetIndex(item.title)
+              == miyoofin::catalog::alphabetIndex(item.title));
+    }
     const auto repeated = collectCatalogPageIds(db, "movie", -1, 3, epoch);
     CHECK(repeated == collectCatalogPageIds(db, "movie", -1, 3, epoch));
 
@@ -515,6 +525,16 @@ static void testCatalogDbBoundedMediaPaging()
     const auto plan = db.runMediaPageQueryPlanForTest("movie", -1);
     CHECK(plan.success && plan.workerOwned && plan.mediaPageUsesSortIndex
           && plan.mediaPageAvoidsTempSort);
+
+    const std::string catalogSource = readTestBytes("src/catalog/CatalogDb.cpp");
+    const std::string catalogHeader = readTestBytes("src/catalog/CatalogDb.hpp");
+    CHECK(catalogSource.find("JellyfinApi") == std::string::npos);
+    CHECK(catalogSource.find("LibraryCache::") == std::string::npos);
+    CHECK(catalogSource.find("TitleOrganization") == std::string::npos);
+    CHECK(catalogHeader.find("JellyfinApi") == std::string::npos);
+    CHECK(catalogHeader.find("LibraryCache") == std::string::npos);
+    CHECK(catalogHeader.find("TitleOrganization") == std::string::npos);
+    CHECK(catalogSource.find("CatalogPrimitives.hpp") != std::string::npos);
 
     CatalogDb empty;
     const auto emptyEpoch = empty.configureScope(

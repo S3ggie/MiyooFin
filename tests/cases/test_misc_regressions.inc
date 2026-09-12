@@ -144,6 +144,35 @@ static void testBoundedPagePosterPlanning()
     std::printf("[test] bounded media page poster planning OK\n");
 }
 
+static void testHomeRailPosterPlanning()
+{
+    std::printf("[test] Home rail poster planning\n");
+    MediaItem cw=titledMovie("cw-poster", "Continue");
+    cw.imageTags["Primary"]="cw-tag";
+    MediaItem recent=titledMovie("recent-poster", "Recent");
+    recent.imageTags["Primary"]="recent-tag";
+    MediaItem duplicate=cw;
+    MediaItem missing=titledMovie("no-poster", "No poster");
+    const auto jobs=planHomeRailPosterJobs({cw}, {recent, duplicate, missing});
+    CHECK(jobs.size()==2);
+    CHECK(jobs[0].itemId=="cw-poster" && jobs[1].itemId=="recent-poster");
+    CHECK(jobs[0].width==64 && jobs[0].height==96
+          && jobs[1].width==64 && jobs[1].height==96);
+    std::printf("[test] Home rail poster planning OK\n");
+}
+
+static void testInitialHomeArtworkScheduling()
+{
+    std::printf("[test] initial Home artwork scheduling\n");
+    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("queuePosterJobs(planHomeRailPosterJobs(cw, ra))")
+          != std::string::npos);
+    CHECK(source.find("if (start == 0)") != std::string::npos);
+    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(page.items))")
+          != std::string::npos);
+    std::printf("[test] initial Home artwork scheduling OK\n");
+}
+
 static void testShowsFocusPreservedDuringIncrementalRefresh()
 {
     std::printf("[test] Shows/Anime focus survives incremental refresh\n");
@@ -209,6 +238,8 @@ static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
     testBoundedPagePosterPlanning();
+    testHomeRailPosterPlanning();
+    testInitialHomeArtworkScheduling();
     testShowsFocusPreservedDuringIncrementalRefresh();
     testHomeGridPositionHelpers();
     testRecentlyAddedWarmPublication();

@@ -318,8 +318,8 @@ bool HomeScreen::handleAction(Action action)
     }
     switch (action) {
     case Action::Up:
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);clampShowsNavigation();return true;}
-        if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus > 0) --m_movieAlphabetFocus; } else if (currentRow()) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),-1,0); }
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid){if(m_showSelected>0)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);else if(m_showPage.hasEarlier)requestEarlierMediaPage(m_showPage);}else{if(m_animeSelected>0)m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);else if(m_animePage.hasEarlier)requestEarlierMediaPage(m_animePage);}clampShowsNavigation();return true;}
+        if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus > 0) --m_movieAlphabetFocus; } else if (currentRow()) { if (m_activeCard > 0) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),-1,0); else if (m_moviePage.hasEarlier) requestEarlierMediaPage(m_moviePage); } }
         else m_activeRow--;
         clampNavigation(); return true;
     case Action::Down:

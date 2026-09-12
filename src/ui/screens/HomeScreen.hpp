@@ -166,6 +166,8 @@ private:
         std::vector<MediaItem> items;
         CatalogDbPageCursor next;
         bool hasMore = true;
+        bool hasEarlier = false;
+        bool replaceWindowOnNextPage = false;
         bool inFlight = false;
         std::shared_ptr<std::atomic_bool> cancellation;
         std::future<library::MediaPage> future;
@@ -342,6 +344,7 @@ private:
     void refreshShowsFilter();
     void resetMediaPaging();
     void requestMediaPage(MediaPageState &state);
+    void requestEarlierMediaPage(MediaPageState &state);
     void finishMediaPage(MediaPageState &state);
     void updateMediaPaging();
     const MediaItem *showsSelectedItem() const;

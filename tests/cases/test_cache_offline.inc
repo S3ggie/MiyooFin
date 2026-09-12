@@ -261,4 +261,125 @@ static void testOfflineLibraryQuery(){
     CHECK(root.movies[0].items[0].title=="Canonical movie");
     CHECK(root.shows.size()==1 && root.shows[0].items.size()==1);
     CHECK(root.shows[0].items[0].id=="s1");
+
+    char rootTemplate[]="/tmp/miyoofin-offline-no-librarycache-XXXXXX";
+    char *rootPath=::mkdtemp(rootTemplate);
+    CHECK(rootPath!=nullptr);
+    if (!rootPath) return;
+    const std::string storeRoot(rootPath);
+    const std::string catalogUrl =
+        "https://sqlite-offline-no-librarycache-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string catalogUser = "offline-no-librarycache-user";
+    const std::string scope = DownloadStore::scopeKey(catalogUrl, catalogUser);
+    DownloadStore store(storeRoot);
+    auto writeComplete = [&](DownloadItem item, const std::string &bytes) {
+        item.state = DownloadState::Complete;
+        item.expectedSize = bytes.size();
+        item.chunkSize = bytes.size();
+        item.downloadedBytes = bytes.size();
+        CHECK(store.ensureHlsDirectories(scope, item.itemId));
+        CHECK(::mkdir((store.itemPath(scope, item.itemId) + "/chunks").c_str(),
+                      0755) == 0);
+        FILE *chunk = std::fopen(store.chunkPath(scope, item.itemId, 0).c_str(),
+                                 "wb");
+        CHECK(chunk != nullptr);
+        if (chunk) {
+            CHECK(std::fwrite(bytes.data(), 1, bytes.size(), chunk)
+                  == bytes.size());
+            std::fclose(chunk);
+        }
+        CHECK(store.saveManifest(scope, item));
+        return item;
+    };
+    DownloadItem physicalMovie;
+    physicalMovie.itemId = "__task29_physical_movie__";
+    physicalMovie.itemType = "movie";
+    physicalMovie.title = "Fallback Movie Title";
+    physicalMovie = writeComplete(physicalMovie, "movie");
+    DownloadItem physicalEpisode;
+    physicalEpisode.itemId = "__task29_physical_episode__";
+    physicalEpisode.itemType = "episode";
+    physicalEpisode.title = "Fallback Episode Title";
+    physicalEpisode.seriesId = "__task29_fallback_series__";
+    physicalEpisode.seriesName = "Fallback Downloaded Show";
+    physicalEpisode.seasonId = "__task29_fallback_season__";
+    physicalEpisode.seasonName = "Fallback Season";
+    physicalEpisode.episodeNumber = 3;
+    physicalEpisode.seasonNumber = 1;
+    physicalEpisode = writeComplete(physicalEpisode, "episode");
+    CHECK(store.saveIndex(scope, {physicalMovie, physicalEpisode}));
+
+    std::vector<DownloadItem> loaded;
+    CHECK(store.loadCompleteMetadata(scope, loaded));
+    CHECK(loaded.size() == 2);
+    for (const auto &item : loaded)
+        CHECK(store.validateCompletedDownload(scope, item));
+    const std::string legacyPath =
+        "cache/library/" + LibraryCache::scopeKey(catalogUrl, catalogUser) +
+        "/library.bin";
+    std::remove(legacyPath.c_str());
+    CHECK(::access(legacyPath.c_str(), F_OK) != 0);
+
+    auto catalogDb = std::make_shared<CatalogDb>();
+    const auto epoch = catalogDb->configureScope(catalogUrl, catalogUser);
+    CHECK(catalogDb->waitForIdleForTest(std::chrono::seconds(2)));
+    MediaItem canonicalMovie;
+    canonicalMovie.id = physicalMovie.itemId;
+    canonicalMovie.title = "Canonical Catalog Movie";
+    canonicalMovie.type = "movie";
+    canonicalMovie.imageTags["Primary"] = "task29-canonical-primary";
+    MediaItem onlineOnly;
+    onlineOnly.id = "__task29_online_only__";
+    onlineOnly.title = "Online Only Movie";
+    onlineOnly.type = "movie";
+    CatalogDbMediaPageWrite page;
+    page.items = {canonicalMovie, onlineOnly};
+    page.viewId = "task29-movies";
+    page.viewName = "Movies";
+    page.collectionType = "movies";
+    page.viewOrdinal = 0;
+    page.finalPage = true;
+    CHECK(catalogDb->upsertMediaPage(page).get().success);
+    library::LibraryQuery query(catalogDb, epoch);
+    const auto catalogPage = query.movies(-1, 8).get();
+    CHECK(catalogPage.success && catalogPage.items.size() == 2);
+    std::vector<MediaItem> metadata;
+    for (const auto &item : catalogPage.items)
+        if (item.id == physicalMovie.itemId) metadata.push_back(item);
+    const auto offlineRoot = OfflineLibraryQuery::build(
+        DownloadSnapshot{loaded}, metadata);
+    CHECK(offlineRoot.movies.size() == 1
+          && offlineRoot.movies[0].items.size() == 1
+          && offlineRoot.movies[0].items[0].id == physicalMovie.itemId
+          && offlineRoot.movies[0].items[0].title == "Canonical Catalog Movie"
+          && offlineRoot.movies[0].items[0].imageTags.at("Primary")
+                 == "task29-canonical-primary");
+    CHECK(offlineRoot.shows.size() == 1
+          && offlineRoot.shows[0].items.size() == 1
+          && offlineRoot.shows[0].items[0].id
+                 == physicalEpisode.seriesId
+          && offlineRoot.shows[0].items[0].title
+                 == physicalEpisode.title);
+    CHECK(offlineRoot.movies[0].items[0].id != onlineOnly.id);
+    const auto offlineHierarchy = OfflineLibraryQuery::hierarchy(loaded);
+    CHECK(offlineHierarchy.movies.size() == 1
+          && offlineHierarchy.movies[0].id == physicalMovie.itemId
+          && offlineHierarchy.episodesBySeason.at(physicalEpisode.seasonId)
+                 .size() == 1);
+    const std::string offlineQuerySource =
+        readTestBytes("src/library/OfflineLibraryQuery.cpp");
+    CHECK(offlineQuerySource.find("LibraryCache::load") == std::string::npos);
+    catalogDb.reset();
+    store.removeItem(scope, physicalMovie.itemId);
+    store.removeItem(scope, physicalEpisode.itemId);
+    std::remove((store.scopePath(scope) + "/index.v1").c_str());
+    ::rmdir((store.scopePath(scope) + "/items").c_str());
+    ::rmdir(store.scopePath(scope).c_str());
+    ::rmdir(storeRoot.c_str());
+    const std::string catalogPath =
+        "cache/library/" + LibraryCache::scopeKey(catalogUrl, catalogUser);
+    std::remove((catalogPath + "/catalog.sqlite3").c_str());
+    std::remove((catalogPath + "/catalog.sqlite3.tmp").c_str());
+    ::rmdir(catalogPath.c_str());
 }

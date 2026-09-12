@@ -814,6 +814,57 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(hasAnimeView);
     }
     removeCatalogMigrationTestPaths(paths);
+
+    const std::string multiViewUrl =
+        "https://sqlite-multiple-tv-views-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const auto multiViewPaths = catalogMigrationTestPaths(multiViewUrl,
+                                                          "media-membership-user");
+    removeCatalogMigrationTestPaths(multiViewPaths);
+    {
+        CatalogDb db;
+        CHECK(configureCatalogParityDb(db, multiViewUrl,
+                                       "media-membership-user"));
+        MediaItem shared = catalogParityItem(
+            "__task23_shared_series__", "show", "Shared Series");
+        MediaItem firstOnly = catalogParityItem(
+            "__task23_first_only_series__", "show", "First Library Series");
+        MediaItem secondOnly = catalogParityItem(
+            "__task23_second_only_series__", "show", "Second Library Series");
+
+        CHECK(db.beginTopLevelSync(40).get().success);
+        CatalogDbMediaPageWrite firstView;
+        firstView.items = {shared, firstOnly};
+        firstView.viewId = "task23-first-tv-view";
+        firstView.viewName = "Task 23 First TV View";
+        firstView.collectionType = "tvshows";
+        firstView.viewOrdinal = 0;
+        firstView.syncGeneration = 40;
+        CHECK(db.upsertMediaPage(firstView).get().success);
+        CatalogDbMediaPageWrite secondView = firstView;
+        secondView.items = {shared, secondOnly};
+        secondView.viewId = "task23-second-tv-view";
+        secondView.viewName = "Task 23 Second TV View";
+        secondView.viewOrdinal = 1;
+        CHECK(db.upsertMediaPage(secondView).get().success);
+        CHECK(db.finalizeTopLevelSync(40).get().success);
+
+        const auto page = db.readMediaPage("show", -1, 8).get();
+        CHECK(page.success && page.items.size() == 3 && !page.hasMore);
+        std::set<std::string> ids;
+        for (const auto &item : page.items) ids.insert(item.id);
+        CHECK(ids.size() == 3 && ids.count(shared.id) == 1
+              && ids.count(firstOnly.id) == 1 && ids.count(secondOnly.id) == 1);
+        CHECK(page.membershipsByItem.at(shared.id).size() == 2);
+        CHECK(page.membershipsByItem.at(firstOnly.id).size() == 1);
+        CHECK(page.membershipsByItem.at(secondOnly.id).size() == 1);
+        const auto &sharedMemberships = page.membershipsByItem.at(shared.id);
+        CHECK(sharedMemberships[0].viewId == firstView.viewId
+              && sharedMemberships[1].viewId == secondView.viewId);
+        CHECK(page.membershipsByItem.at(secondOnly.id)[0].viewId
+              == secondView.viewId);
+    }
+    removeCatalogMigrationTestPaths(multiViewPaths);
     std::printf("[test] CatalogDb media pages preserve TV view membership OK\n");
 }
 

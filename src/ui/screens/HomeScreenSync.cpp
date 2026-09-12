@@ -186,6 +186,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     if (state.type == "movie") {
         m_movieWindow = window;
         refreshMovieFilter();
+        applyPendingDown(state);
     } else {
         {
             std::lock_guard<std::mutex> lock(m_fetchMutex);
@@ -202,6 +203,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
             }
         }
         rebuildShowsPresentation();
+        applyPendingDown(state);
     }
 }
 

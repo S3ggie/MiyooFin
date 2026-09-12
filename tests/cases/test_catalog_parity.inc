@@ -432,6 +432,54 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
                      == "task21-surviving-view");
     }
     removeCatalogMigrationTestPaths(deletedViewPaths);
+
+    const std::string movedItemUrl = url + "-moved-item";
+    const auto movedItemPaths = catalogMigrationTestPaths(movedItemUrl, user);
+    removeCatalogMigrationTestPaths(movedItemPaths);
+    {
+        CatalogDb db;
+        CHECK(configureCatalogParityDb(db, movedItemUrl, user));
+        MediaItem moved = catalogParityItem(
+            "__task22_moved_item__", "movie", "Moved Library Item");
+        MediaItem stable = catalogParityItem(
+            "__task22_stable_item__", "movie", "Stable Library Item");
+
+        CHECK(db.beginTopLevelSync(30).get().success);
+        CatalogDbMediaPageWrite viewA;
+        viewA.items = {moved};
+        viewA.viewId = "task22-view-a";
+        viewA.viewName = "Task 22 View A";
+        viewA.collectionType = "movies";
+        viewA.viewOrdinal = 0;
+        viewA.syncGeneration = 30;
+        CHECK(db.upsertMediaPage(viewA).get().success);
+        CHECK(db.finalizeTopLevelSync(30).get().success);
+
+        CHECK(db.beginTopLevelSync(31).get().success);
+        CatalogDbMediaPageWrite viewB = viewA;
+        viewB.items = {moved, stable};
+        viewB.viewId = "task22-view-b";
+        viewB.viewName = "Task 22 View B";
+        viewB.syncGeneration = 31;
+        CHECK(db.upsertMediaPage(viewB).get().success);
+        CHECK(db.finalizeTopLevelSync(31).get().success);
+
+        const auto firstPage = db.readMediaPage("movie", -1, 1).get();
+        CHECK(firstPage.success && firstPage.items.size() == 1
+              && firstPage.items[0].id == moved.id && firstPage.hasMore);
+        CHECK(firstPage.membershipsByItem.count(moved.id) == 1
+              && firstPage.membershipsByItem.at(moved.id).size() == 1
+              && firstPage.membershipsByItem.at(moved.id)[0].viewId
+                     == "task22-view-b");
+        if (firstPage.success && firstPage.hasMore) {
+            const auto secondPage =
+                db.readMediaPage("movie", -1, 1, firstPage.next).get();
+            CHECK(secondPage.success && secondPage.items.size() == 1
+                  && secondPage.items[0].id == stable.id
+                  && !secondPage.hasMore);
+        }
+    }
+    removeCatalogMigrationTestPaths(movedItemPaths);
     removeCatalogMigrationTestPaths(paths);
 }
 

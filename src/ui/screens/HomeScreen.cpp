@@ -40,6 +40,7 @@ HomeScreen::~HomeScreen()
         m_fetchThread.join();
     if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
+    if (m_animePage.cancellation) m_animePage.cancellation->store(true);
     if (m_fetchCancellation) m_fetchCancellation->store(true);
     if (m_fetchThread.joinable())
         m_fetchThread.join();
@@ -90,7 +91,11 @@ std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLib
 
 void HomeScreen::rebuildShowsPresentation()
 {
-    const std::vector<MediaItem> rawWindow = m_showPage.items;
+    std::vector<MediaItem> rawWindow = m_showPage.items;
+    std::set<std::string> rawIds;
+    for (const auto &item : rawWindow) rawIds.insert(item.id);
+    for (const auto &item : m_animePage.items)
+        if (rawIds.insert(item.id).second) rawWindow.push_back(item);
     m_showWindow.clear();
     m_animeWindow.clear();
     const auto &views = (presentationOffline() ? m_offlineSnapshot

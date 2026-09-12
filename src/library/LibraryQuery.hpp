@@ -39,6 +39,8 @@ public:
                                    const CatalogDbPageCursor &after = {});
     std::future<MediaPage> shows(int alphabetLetter, std::size_t limit,
                                  const CatalogDbPageCursor &after = {});
+    std::future<MediaPage> anime(int alphabetLetter, std::size_t limit,
+                                 const CatalogDbPageCursor &after = {});
     std::future<HierarchyPage> seasons(
         const std::string &seriesId,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});

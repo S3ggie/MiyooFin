@@ -68,6 +68,7 @@ void HomeScreen::resetMediaPaging()
     };
     reset(m_moviePage, "movie", m_movieActiveLetter);
     reset(m_showPage, "show", m_showsActiveLetter);
+    reset(m_animePage, "anime", m_showsActiveLetter);
     m_movieWindow.clear();
     m_showWindow.clear();
     m_animeWindow.clear();
@@ -84,9 +85,12 @@ void HomeScreen::requestMediaPage(MediaPageState &state)
     if (!m_libraryQuery || state.inFlight || !state.hasMore)
         return;
     state.cancellation = std::make_shared<std::atomic_bool>(false);
-    state.future = state.type == "movie"
-        ? m_libraryQuery->movies(state.letter, 24, state.next)
-        : m_libraryQuery->shows(state.letter, 24, state.next);
+    if (state.type == "movie")
+        state.future = m_libraryQuery->movies(state.letter, 24, state.next);
+    else if (state.type == "anime")
+        state.future = m_libraryQuery->anime(state.letter, 64, state.next);
+    else
+        state.future = m_libraryQuery->shows(state.letter, 24, state.next);
     state.inFlight = true;
     if (!m_firstMediaPageReadLogged) {
         m_firstMediaPageReadLogged = true;
@@ -116,7 +120,9 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         uiDiagnostics().log(
             "[HomeScreen] startup stage=first_useful_home_ready");
     }
-    auto &window = state.type == "movie" ? m_moviePage.items : m_showPage.items;
+    auto &window = state.type == "movie"
+        ? m_moviePage.items
+        : state.type == "anime" ? m_animePage.items : m_showPage.items;
     std::set<std::string> known;
     for (const auto &item : window)
         known.insert(item.id);
@@ -157,6 +163,7 @@ void HomeScreen::updateMediaPaging()
 {
     finishMediaPage(m_moviePage);
     finishMediaPage(m_showPage);
+    finishMediaPage(m_animePage);
     if (activeTabNamed("Movies")) {
         const auto &rows = m_tabs[tabIndex("Movies")].rows;
         const auto &items = rows.empty() ? m_movieWindow : rows[0].items;
@@ -165,11 +172,10 @@ void HomeScreen::updateMediaPaging()
     } else if (activeTabNamed("Shows")) {
         const int showCount = static_cast<int>(m_filteredShows.size());
         const int animeCount = static_cast<int>(m_filteredAnime.size());
-        if ((m_showsFocus == ShowsFocus::AnimeGrid
-             && (animeCount == 0 || m_animeSelected + 4 >= animeCount))
-            || (m_showsFocus != ShowsFocus::AnimeGrid
-                && (showCount == 0 || m_showSelected + 4 >= showCount)))
+        if (showCount == 0 || m_showSelected + 4 >= showCount)
             requestMediaPage(m_showPage);
+        if (animeCount == 0 || m_animeSelected + 4 >= animeCount)
+            requestMediaPage(m_animePage);
     }
 }
 

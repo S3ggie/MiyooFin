@@ -736,6 +736,7 @@ struct CatalogDb::LibraryReadCommand {
 };
 struct CatalogDb::MediaPageCommand {
     std::string type; int letter = -1; std::size_t limit = 0;
+    CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported;
     CatalogDbPageCursor after; CatalogDbJobMetadata metadata;
     std::promise<CatalogDbMediaPageResult> result;
 };
@@ -1413,8 +1414,9 @@ std::future<CatalogDbSyncState> CatalogDb::enqueueSyncStateWrite(
 
 std::future<CatalogDbMediaPageResult> CatalogDb::readMediaPage(
     const std::string &type, int alphabetLetter, std::size_t limit,
-    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
-{ return enqueueMediaPage(type, alphabetLetter, limit, after, metadata); }
+    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata,
+    CatalogDbMediaPageFilter filter)
+{ return enqueueMediaPage(type, alphabetLetter, limit, after, metadata, filter); }
 
 CatalogDbPopulationStatus CatalogDb::populationStatus() const
 { std::lock_guard<std::mutex> lock(m_mutex); return m_populationStatus; }
@@ -1444,9 +1446,10 @@ std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
 
 std::future<CatalogDbMediaPageResult> CatalogDb::enqueueMediaPage(
     const std::string &type, int alphabetLetter, std::size_t limit,
-    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata)
+    const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata,
+    CatalogDbMediaPageFilter filter)
 {
-    auto command=std::make_shared<MediaPageCommand>(); command->type=type; command->letter=alphabetLetter; command->limit=std::min<std::size_t>(limit, 64); command->after=after; command->metadata=metadata;
+    auto command=std::make_shared<MediaPageCommand>(); command->type=type; command->letter=alphabetLetter; command->limit=std::min<std::size_t>(limit, 64); command->filter=filter; command->after=after; command->metadata=metadata;
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
     if(m_stopping){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::ScopeNotReady;r.message="CatalogDb is stopping";command->result.set_value(std::move(r));return future;}
     if(command->limit==0 || (type!="movie" && type!="show")){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::SqliteError;r.message="invalid media page request";command->result.set_value(std::move(r));return future;}
@@ -2838,6 +2841,16 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     sqlite3_stmt *statement=nullptr, *genres=nullptr, *tags=nullptr,
                  *memberships=nullptr;
     const std::string indexName = "idx_media_" + command->type + "_sort";
+    const std::string animeFilter = command->filter == CatalogDbMediaPageFilter::Anime
+        ? " AND (EXISTS (SELECT 1 FROM library_membership anime_membership "
+          "JOIN library_views anime_views ON anime_views.id=anime_membership.view_id "
+          "WHERE anime_membership.item_id=media_items.id "
+          "AND anime_views.collection_type='tvshows' "
+          "AND lower(anime_views.name) LIKE '%anime%') "
+          "OR EXISTS (SELECT 1 FROM item_genres anime_genres "
+          "WHERE anime_genres.item_id=media_items.id "
+          "AND lower(anime_genres.genre)='anime'))"
+        : "";
     const std::string sql =
         "SELECT id,kind,title,overview,production_year,community_rating,"
         "etag,played,progress,playback_position_ticks,index_number,"
@@ -2848,6 +2861,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
         "JOIN library_views ON library_views.id=library_membership.view_id "
         "WHERE library_membership.item_id=media_items.id "
         "AND library_views.collection_type=?10) AND "
+        "1=1" + animeFilter + " AND "
         "(?2 < 0 OR (organizational_sort_key>=?3 AND "
         "organizational_sort_key<?4)) AND (?5=0 OR "
         "(organizational_sort_key,title,id)>(?6,?7,?8)) "

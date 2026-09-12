@@ -1091,6 +1091,17 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(!animeFor(items.at(control.id)));
         CHECK(animeFor(items.at(shared.id)));
         CHECK(page.membershipsByItem.at(shared.id).size() == 2);
+
+        const auto animePage = query.anime(-1, 8).get();
+        CHECK(animePage.success && animePage.items.size() == 3
+              && !animePage.hasMore);
+        std::set<std::string> animeIds;
+        for (const auto &item : animePage.items) animeIds.insert(item.id);
+        CHECK(animeIds.size() == 3
+              && animeIds.count(animeByView.id) == 1
+              && animeIds.count(animeByGenre.id) == 1
+              && animeIds.count(shared.id) == 1
+              && animeIds.count(control.id) == 0);
     }
     removeCatalogMigrationTestPaths(animePaths);
 

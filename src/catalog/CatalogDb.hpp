@@ -236,6 +236,11 @@ struct CatalogDbPageCursor {
     bool valid = false;
 };
 
+enum class CatalogDbMediaPageFilter {
+    Supported,
+    Anime,
+};
+
 struct CatalogDbMediaPageMembership {
     std::string viewId;
     std::string viewName;
@@ -400,7 +405,8 @@ public:
     std::future<CatalogDbMediaPageResult> readMediaPage(
         const std::string &type, int alphabetLetter, std::size_t limit,
         const CatalogDbPageCursor &after = {},
-        const CatalogDbJobMetadata &metadata = {});
+        const CatalogDbJobMetadata &metadata = {},
+        CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported);
 
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
@@ -487,7 +493,8 @@ private:
         const CatalogDbJobMetadata &metadata);
     std::future<CatalogDbMediaPageResult> enqueueMediaPage(
         const std::string &type, int alphabetLetter, std::size_t limit,
-        const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata);
+        const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata,
+        CatalogDbMediaPageFilter filter);
     std::future<CatalogDbMediaPageUpsertResult> enqueueMediaPageUpsert(
         const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
         int failAfterRows = -1);

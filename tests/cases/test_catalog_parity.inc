@@ -338,6 +338,43 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
         checkCatalogParityItems(legacyAfter.episodesBySeason[season.id],
                                 sqliteKeepEpisodes.items);
     }
+
+    const std::string mediaUrl = url + "-media";
+    const auto mediaPaths = catalogMigrationTestPaths(mediaUrl, user);
+    removeCatalogMigrationTestPaths(mediaPaths);
+    {
+        CatalogDb db;
+        CHECK(configureCatalogParityDb(db, mediaUrl, user));
+        const auto generationA = db.beginTopLevelSync(10).get();
+        CHECK(generationA.success);
+        CatalogDbMediaPageWrite first;
+        first.items = {
+            catalogParityItem("__task20_removed_item__", "movie",
+                              "Removed Item"),
+            catalogParityItem("__task20_remaining_item__", "movie",
+                              "Remaining Item")};
+        first.viewId = "task20-movies";
+        first.viewName = "Task 20 Movies";
+        first.collectionType = "movies";
+        first.syncGeneration = 10;
+        CHECK(db.upsertMediaPage(first).get().success);
+        CHECK(db.finalizeTopLevelSync(10).get().success);
+
+        const auto generationB = db.beginTopLevelSync(11).get();
+        CHECK(generationB.success);
+        CatalogDbMediaPageWrite second = first;
+        second.items = {first.items[1]};
+        second.syncGeneration = 11;
+        CHECK(db.upsertMediaPage(second).get().success);
+        CHECK(db.finalizeTopLevelSync(11).get().success);
+        const auto page = db.readMediaPage("movie", -1, 8).get();
+        CHECK(page.success && page.items.size() == 1
+              && page.items[0].id == "__task20_remaining_item__");
+        CHECK(page.membershipsByItem.size() == 1
+              && page.membershipsByItem.at(
+                     "__task20_remaining_item__").size() == 1);
+    }
+    removeCatalogMigrationTestPaths(mediaPaths);
     removeCatalogMigrationTestPaths(paths);
 }
 

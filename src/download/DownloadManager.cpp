@@ -21,8 +21,8 @@ void publishDownloadGauges(const std::vector<DownloadItem> &items,
 }
 }
 DownloadManager::DownloadManager(const Session&s,const std::string&r):m_store(r){configure(s);m_thread=std::thread(&DownloadManager::worker,this);m_planThread=std::thread(&DownloadManager::planner,this);m_reconcileThread=std::thread(&DownloadManager::reconciler,this);}
-DownloadManager::~DownloadManager(){{std::lock_guard<std::mutex>l(m_mutex);m_stop=true;persistLocked();}m_wake.notify_all();m_planWake.notify_all();m_reconcileWake.notify_all();if(m_thread.joinable())m_thread.join();if(m_planThread.joinable())m_planThread.join();if(m_reconcileThread.joinable())m_reconcileThread.join();}
-void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_mutex);persistLocked();++m_generation;m_session=s;m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_deleteRequested.clear();m_progressSamples.clear();m_persistRequested=false;
+DownloadManager::~DownloadManager(){{std::lock_guard<std::mutex>l(m_mutex);m_stop=true;if(m_activePlanCancellation)m_activePlanCancellation->store(true);for(auto &job:m_planJobs)if(job.cancellation)job.cancellation->store(true);persistLocked();}m_wake.notify_all();m_planWake.notify_all();m_reconcileWake.notify_all();if(m_thread.joinable())m_thread.join();if(m_planThread.joinable())m_planThread.join();if(m_reconcileThread.joinable())m_reconcileThread.join();}
+void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_mutex);if(m_activePlanCancellation)m_activePlanCancellation->store(true);for(auto &job:m_planJobs)if(job.cancellation)job.cancellation->store(true);persistLocked();++m_generation;m_session=s;m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_deleteRequested.clear();m_progressSamples.clear();m_persistRequested=false;
     // Never let a failed index load leak its partial result into a rebuild.
     // Both paths use independent vectors, then publish one complete result.
     std::vector<DownloadItem> loaded;

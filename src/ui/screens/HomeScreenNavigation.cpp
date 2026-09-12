@@ -36,14 +36,29 @@ static int clampMovieGridScrollCompact(int selected, int count, int currentScrol
 void HomeScreen::refreshMovieFilter()
 {
     const int movies=tabIndex("Movies"); if (movies < 0) return;
+    const MediaItem *previousItem=currentItem();
+    const std::string selectedId=previousItem ? previousItem->id : "";
+    const int previousSelected=m_activeCard;
+    const int previousScroll=m_rowScroll;
     std::vector<MediaItem> displayed;
     for (const auto &item : m_movieWindow) {
         if (movieMatchesAlphabetFilter(item.title, m_movieActiveLetter))
             displayed.push_back(item);
     }
     m_tabs[movies].rows = {{"Movies", std::move(displayed)}};
-    m_activeRow = 0; m_activeCard = 0; m_rowScroll = 0; m_cardScroll = 0;
-    m_selectedArtwork = {}; m_selectedArtworkId.clear(); m_selectedArtworkAttempted = false;
+    m_activeRow = 0;
+    m_activeCard = restoreSelectionIndex(m_tabs[movies].rows[0].items,
+                                         selectedId, previousSelected);
+    m_rowScroll = preserveGridScroll(m_activeCard,
+                                     static_cast<int>(m_tabs[movies].rows[0].items.size()),
+                                     previousScroll, MOVIE_GRID_COLUMNS, MOVIE_GRID_ROWS);
+    m_cardScroll = 0;
+    const MediaItem *current= currentItem();
+    if (!current || current->id != selectedId) {
+        m_selectedArtwork = {};
+        m_selectedArtworkId.clear();
+        m_selectedArtworkAttempted = false;
+    }
 }
 
 HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
@@ -60,6 +75,33 @@ HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
     return ShowsFocusState::AlphabetRail;
 }
 
+int HomeScreen::restoreSelectionIndex(const std::vector<MediaItem> &items,
+                                      const std::string &selectedId,
+                                      int fallback)
+{
+    if (items.empty()) return 0;
+    if (!selectedId.empty()) {
+        for (int i=0; i<static_cast<int>(items.size()); ++i)
+            if (items[i].id == selectedId) return i;
+    }
+    return std::max(0, std::min(fallback, static_cast<int>(items.size())-1));
+}
+
+int HomeScreen::preserveGridScroll(int selected, int count, int currentScroll,
+                                   int columns, int rows)
+{
+    if (count <= 0 || columns <= 0 || rows <= 0) return 0;
+    selected=std::max(0,std::min(selected,count-1));
+    const int lastRow=(count-1)/columns;
+    const int maxScroll=std::max(0,lastRow-rows+1);
+    currentScroll=std::max(0,std::min(currentScroll,maxScroll));
+    const int selectedRow=selected/columns;
+    if (selectedRow < currentScroll) currentScroll=selectedRow;
+    if (selectedRow >= currentScroll+rows)
+        currentScroll=selectedRow-rows+1;
+    return std::max(0,std::min(currentScroll,maxScroll));
+}
+
 void HomeScreen::refreshShowsFilter()
 {
     const ShowsFocusState previousFocus =
@@ -67,6 +109,10 @@ void HomeScreen::refreshShowsFilter()
         : m_showsFocus == ShowsFocus::ShowsGrid ? ShowsFocusState::ShowsGrid
         : ShowsFocusState::AlphabetRail;
     const std::string selectedId = m_showsPreviewId;
+    const int previousShowSelected=m_showSelected;
+    const int previousAnimeSelected=m_animeSelected;
+    const int previousShowScroll=m_showScroll;
+    const int previousAnimeScroll=m_animeScroll;
     m_filteredShows.clear();
     m_filteredAnime.clear();
     for (const auto &item : m_showWindow)
@@ -75,23 +121,17 @@ void HomeScreen::refreshShowsFilter()
     for (const auto &item : m_animeWindow)
         if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
             m_filteredAnime.push_back(item);
-    m_showSelected = m_animeSelected = m_showScroll = m_animeScroll = 0;
     const ShowsFocusState nextFocus = showsFocusAfterRefresh(
         previousFocus, !m_filteredShows.empty(), !m_filteredAnime.empty());
     m_showsFocus = nextFocus == ShowsFocusState::AnimeGrid ? ShowsFocus::AnimeGrid
         : nextFocus == ShowsFocusState::ShowsGrid ? ShowsFocus::ShowsGrid
         : ShowsFocus::AlphabetRail;
-    auto restore = [&](const std::vector<MediaItem> &items, int &selected) {
-        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-            if (items[i].id == selectedId) {
-                selected = i;
-                return true;
-            }
-        }
-        return false;
-    };
-    if (!restore(m_filteredShows, m_showSelected))
-        restore(m_filteredAnime, m_animeSelected);
+    m_showSelected=restoreSelectionIndex(m_filteredShows,selectedId,previousShowSelected);
+    m_animeSelected=restoreSelectionIndex(m_filteredAnime,selectedId,previousAnimeSelected);
+    m_showScroll=preserveGridScroll(m_showSelected,static_cast<int>(m_filteredShows.size()),
+                                     previousShowScroll,SHOWS_GRID_COLUMNS,SHOWS_GRID_ROWS);
+    m_animeScroll=preserveGridScroll(m_animeSelected,static_cast<int>(m_filteredAnime.size()),
+                                     previousAnimeScroll,SHOWS_GRID_COLUMNS,SHOWS_GRID_ROWS);
     if (const MediaItem *item = showsSelectedItem())
         m_showsPreviewId = item->id;
 }

@@ -139,6 +139,18 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
     CHECK_EQ(dualRows[1].value,"http://192.168.1.212:8096");
 }
 static void testSeriesCachedSeasonHandoff(){
+    const std::string seriesSource=readTestBytes("src/ui/screens/SeriesScreen.cpp");
+    const std::string episodeSource=readTestBytes("src/ui/screens/EpisodeBrowserScreen.cpp");
+    CHECK(seriesSource.find("JellyfinApi::getSeasons")==std::string::npos);
+    CHECK(seriesSource.find("catalogDb->getSeasons")==std::string::npos);
+    CHECK(seriesSource.find("catalogDb->stageSeriesHierarchy")==std::string::npos);
+    CHECK(seriesSource.find("m_libraryQuery")!=std::string::npos);
+    CHECK(seriesSource.find("m_librarySync")!=std::string::npos);
+    CHECK(episodeSource.find("JellyfinApi::getEpisodes")==std::string::npos);
+    CHECK(episodeSource.find("catalogDb->getEpisodes")==std::string::npos);
+    CHECK(episodeSource.find("catalogDb->reconcileSeasonHierarchy")==std::string::npos);
+    CHECK(episodeSource.find("m_libraryQuery")!=std::string::npos);
+    CHECK(episodeSource.find("m_librarySync")!=std::string::npos);
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
     // A nonempty RAM handoff is ready before enter(), so push has no catalog I/O.
     SeriesScreen warm(session,show,{},false,{cached}); CHECK(warm.diagnosticSeasonsReady()); CHECK(warm.diagnosticSeasons().size()==(size_t)1&&warm.diagnosticSeasons()[0].id==cached.id);

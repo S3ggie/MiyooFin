@@ -1,7 +1,10 @@
 #include "LibrarySync.hpp"
 #include "OfflineLibraryQuery.hpp"
 #include "../download/DownloadStore.hpp"
+#include "../net/JellyfinApi.hpp"
+#include "../net/RouteRequest.hpp"
 #include <cerrno>
+#include <ctime>
 #include <future>
 #include <unistd.h>
 
@@ -32,6 +35,156 @@ std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::finalize(std::uin
 std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::abort(std::uint64_t generation) {
     m_inFlight = false;
     return m_db->abortTopLevelSync(generation, m_metadata);
+}
+std::future<library::HierarchyRefreshResult>
+library::LibrarySync::refreshSeasons(
+    const MediaItem &series,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    const Session session = m_session;
+    const auto db = m_db;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto serviceCancellation = m_cancel;
+    const auto operationCancellation = cancellation;
+    return std::async(std::launch::async,
+        [session, db, metadata, serviceCancellation, operationCancellation,
+         series] {
+            HierarchyRefreshResult result;
+            const auto cancelled = [&] {
+                return (serviceCancellation && serviceCancellation->load())
+                    || (operationCancellation && operationCancellation->load());
+            };
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "season refresh cancelled";
+                return result;
+            }
+
+            std::string error;
+            std::vector<MediaItem> seasons;
+            const bool networkOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getSeasons(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, series.id, seasons, error,
+                        operationCancellation
+                            ? operationCancellation.get()
+                            : serviceCancellation.get());
+                }, error);
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "season refresh cancelled";
+                return result;
+            }
+            if (!networkOk) {
+                result.message = error;
+                return result;
+            }
+
+            if (db) {
+                CatalogDbJobMetadata writeMetadata = metadata;
+                writeMetadata.cancellation = operationCancellation
+                    ? operationCancellation : serviceCancellation;
+                const auto written = db->stageSeriesHierarchy(
+                    series, seasons, {}, 0,
+                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                    false, writeMetadata).get();
+                if (written.cancelled || written.superseded || !written.success) {
+                    result.cancelled = written.cancelled;
+                    result.superseded = written.superseded;
+                    result.error = written.error;
+                    result.message = written.message;
+                    return result;
+                }
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "season refresh cancelled";
+                return result;
+            }
+            result.success = true;
+            result.items = std::move(seasons);
+            return result;
+        });
+}
+
+std::future<library::HierarchyRefreshResult>
+library::LibrarySync::refreshEpisodes(
+    const MediaItem &series, const MediaItem &season,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    const Session session = m_session;
+    const auto db = m_db;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto serviceCancellation = m_cancel;
+    const auto operationCancellation = cancellation;
+    return std::async(std::launch::async,
+        [session, db, metadata, serviceCancellation, operationCancellation,
+         series, season] {
+            HierarchyRefreshResult result;
+            const auto cancelled = [&] {
+                return (serviceCancellation && serviceCancellation->load())
+                    || (operationCancellation && operationCancellation->load());
+            };
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "episode refresh cancelled";
+                return result;
+            }
+
+            std::string error;
+            std::vector<MediaItem> episodes;
+            const bool networkOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getEpisodes(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, series.id, season.id, episodes,
+                        error,
+                        operationCancellation
+                            ? operationCancellation.get()
+                            : serviceCancellation.get());
+                }, error);
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "episode refresh cancelled";
+                return result;
+            }
+            if (!networkOk) {
+                result.message = error;
+                return result;
+            }
+
+            if (db) {
+                CatalogDbJobMetadata writeMetadata = metadata;
+                writeMetadata.cancellation = operationCancellation
+                    ? operationCancellation : serviceCancellation;
+                const auto written = db->reconcileSeasonHierarchy(
+                    series, season, episodes, 0,
+                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                    writeMetadata).get();
+                if (written.cancelled || written.superseded || !written.success) {
+                    result.cancelled = written.cancelled;
+                    result.superseded = written.superseded;
+                    result.error = written.error;
+                    result.message = written.message;
+                    return result;
+                }
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "episode refresh cancelled";
+                return result;
+            }
+            result.success = true;
+            result.items = std::move(episodes);
+            return result;
+        });
 }
 std::future<library::OfflineRebuildResult>
 library::LibrarySync::reconstructOfflineDownloads(

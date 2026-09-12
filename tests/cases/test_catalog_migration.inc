@@ -199,6 +199,77 @@ static void testCatalogDbFreshBootstrapPathStates()
     removeCatalogMigrationTestPaths(final);
 }
 
+static void testCatalogDbFreshAuthoritativeLibraryGeneration()
+{
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-fresh-authoritative-" + suffix + ".example";
+    const std::string user = "fresh-authoritative-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    CHECK(::access(paths.finalPath.c_str(), F_OK) != 0);
+
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto scope = db->scopeState();
+    CHECK(scope.ready && scope.openState == CatalogDbOpenState::CreatedV3);
+
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    auto sync = std::make_shared<library::LibrarySync>(session, db, epoch);
+    const std::uint64_t generation = 1;
+    CHECK(sync->begin(generation).get().success);
+    const auto item = [](const char *id, const char *type,
+                         const char *title) {
+        MediaItem value;
+        value.id = id;
+        value.type = type;
+        value.title = title;
+        return value;
+    };
+
+    CatalogDbMediaPageWrite moviePage;
+    moviePage.items = {item("__task18_fresh_movie__", "movie", "Fresh Movie")};
+    moviePage.viewId = "fresh-movies";
+    moviePage.viewName = "Fresh Movies";
+    moviePage.collectionType = "movies";
+    moviePage.syncGeneration = generation;
+    moviePage.finalPage = true;
+    CHECK(sync->stage(moviePage).get().success);
+
+    CatalogDbMediaPageWrite showPage;
+    showPage.items = {item("__task18_fresh_show__", "show", "Fresh Show")};
+    showPage.viewId = "fresh-shows";
+    showPage.viewName = "Fresh Shows";
+    showPage.collectionType = "tvshows";
+    showPage.syncGeneration = generation;
+    showPage.finalPage = true;
+    CHECK(sync->stage(showPage).get().success);
+    const auto finalized = sync->finalize(generation).get();
+    CHECK(finalized.success && finalized.workerOwned);
+
+    library::LibraryQuery query(db, epoch);
+    const auto movies = query.movies(-1, 8).get();
+    const auto shows = query.shows(-1, 8).get();
+    CHECK(movies.success && movies.items.size() == 1
+          && movies.items[0].id == "__task18_fresh_movie__");
+    CHECK(shows.success && shows.items.size() == 1
+          && shows.items[0].id == "__task18_fresh_show__");
+
+    const auto sqlite = db->runSqliteDiagnosticsForTest();
+    CHECK(sqlite.success && sqlite.foreignKeys == "1"
+          && sqlite.trustedSchema == "0");
+    const auto schema = db->runSchemaDiagnosticsForTest();
+    CHECK(schema.success && schema.exactSchema
+          && schema.applicationId == 0x4D59464E
+          && schema.userVersion == 3 && schema.foreignKeyCascade
+          && schema.checkConstraints);
+    removeCatalogMigrationTestPaths(paths);
+}
+
 static void testCatalogDbFreshBootstrapUnsupportedFinalPreserved()
 {
     const std::string suffix =

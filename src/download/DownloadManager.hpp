@@ -3,14 +3,19 @@
 #include "DownloadStore.hpp"
 #include "../net/Session.hpp"
 #include "../data/MediaItem.hpp"
-#include "../catalog/CatalogDb.hpp"
 #include <condition_variable>
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <map>
 #include <set>
 #include <deque>
+#include <memory>
 namespace miyoofin {
+namespace library {
+class LibraryQuery;
+class LibrarySync;
+}
 struct DownloadSnapshot { std::vector<DownloadItem> items; std::uint64_t freeBytes=0, reservedBytes=0, localBytes=0; bool playbackActive=false; };
 // In-memory-only rolling transfer-rate samples.  Entries are recorded only
 // when bytes arrive, so short HLS gaps do not look like zero-speed transfers.
@@ -21,7 +26,14 @@ struct RecentSpeedSample {
 class DownloadManager {
 public:
     explicit DownloadManager(const Session &session={}, const std::string &root="downloads"); ~DownloadManager();
-    void setCatalogDb(std::shared_ptr<CatalogDb> catalogDb) { std::lock_guard<std::mutex> lock(m_mutex); m_catalogDb=std::move(catalogDb); }
+    void setLibraryServices(
+        std::shared_ptr<library::LibraryQuery> libraryQuery,
+        std::shared_ptr<library::LibrarySync> librarySync)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_libraryQuery = std::move(libraryQuery);
+        m_librarySync = std::move(librarySync);
+    }
     void configure(const Session &session); void setPlaybackActive(bool active); void enqueue(const DownloadItem &item); void enqueue(const std::vector<DownloadItem> &items);
     void pause(const std::string &itemId); void resume(const std::string &itemId); void retry(const std::string &itemId); void requestReconcile(); bool redownload(const std::string &itemId); bool erase(const std::string &itemId, std::string *error=nullptr);
     DownloadSnapshot snapshot() const; bool hasComplete(const std::string &itemId) const; std::string scope() const { return m_scope; }
@@ -55,8 +67,10 @@ public:
 private:
     void worker(); void planner(); void reconciler(); bool transfer(DownloadItem &item, const Session &session, const std::string &scope, std::uint64_t generation); bool waitForHlsSegmentRetry(const std::string &itemId, const std::string &scope, std::uint64_t generation, unsigned seconds); void persistLocked(); std::uint64_t freeBytes() const;
     DownloadStore m_store; Session m_session; std::string m_scope; mutable std::mutex m_mutex; std::condition_variable m_wake, m_planWake, m_reconcileWake; std::thread m_thread, m_planThread, m_reconcileThread; bool m_stop=false,m_playback=false,m_reconcileRequested=false,m_persistRequested=false; std::uint64_t m_generation=0, m_nextPlanId=1, m_persistRevision=0; std::set<std::string> m_deleteRequested; std::map<std::string,RecentSpeedSample> m_progressSamples; std::vector<DownloadItem> m_items;
-    std::shared_ptr<CatalogDb> m_catalogDb;
-    struct PlanJob { std::uint64_t id, generation; Session session; std::vector<MediaItem> items; std::string seriesId, seasonId; MediaItem series, season; std::shared_ptr<CatalogDb> catalogDb; CatalogDbJobMetadata catalogMetadata; };
+    std::shared_ptr<library::LibraryQuery> m_libraryQuery;
+    std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<std::atomic_bool> m_activePlanCancellation;
+    struct PlanJob { std::uint64_t id, generation; Session session; std::vector<MediaItem> items; std::string seriesId, seasonId; MediaItem series, season; std::shared_ptr<library::LibraryQuery> libraryQuery; std::shared_ptr<library::LibrarySync> librarySync; std::shared_ptr<std::atomic_bool> cancellation; };
     std::deque<PlanJob> m_planJobs; std::map<std::uint64_t, DownloadPlanSnapshot> m_plans;
 };
 }

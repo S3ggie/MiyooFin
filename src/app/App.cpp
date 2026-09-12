@@ -233,7 +233,6 @@ bool App::init()
         : "[App] startup stage=session_not_ready");
     recoverPlaybackResult();
     m_downloadManager = std::make_shared<DownloadManager>(m_session);
-    m_downloadManager->setCatalogDb(m_catalogDb);
     m_deviceId = DeviceIdentity::loadOrCreate();
     printf("[App] Device ID: %s\n", m_deviceId.c_str());
 
@@ -330,12 +329,17 @@ void App::configureCatalogScopeForSession()
             m_session, m_catalogDb, m_catalogScopeEpoch);
         m_libraryQuery = std::make_shared<library::LibraryQuery>(
             m_catalogDb, m_catalogScopeEpoch);
+        if (m_downloadManager)
+            m_downloadManager->setLibraryServices(m_libraryQuery,
+                                                   m_librarySync);
         uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
         m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
         m_librarySync.reset();
         m_libraryQuery.reset();
+        if (m_downloadManager)
+            m_downloadManager->setLibraryServices({}, {});
     }
 }
 
@@ -439,7 +443,12 @@ void App::logout()
 {
     printf("[App] Logging out\n");
     if (m_catalogDb) m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
-    if (m_downloadManager) m_downloadManager->configure(Session{});
+    if (m_downloadManager) {
+        m_downloadManager->setLibraryServices({}, {});
+        m_downloadManager->configure(Session{});
+    }
+    m_librarySync.reset();
+    m_libraryQuery.reset();
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_session.clear(); }
     Session::remove();
 }

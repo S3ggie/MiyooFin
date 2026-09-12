@@ -1,3 +1,6 @@
+#include "../../src/library/LibraryQuery.hpp"
+#include "../../src/library/LibrarySync.hpp"
+
 static void testDownloadInterruptStates()
 {
     std::printf("[test] download interrupt state mapping\n");
@@ -325,7 +328,7 @@ static void testHlsFailureClassification()
 
 static void testCatalogDbHierarchyPlanning()
 {
-    std::printf("[test] DownloadManager CatalogDb hierarchy estimate\n");
+    std::printf("[test] DownloadManager shared hierarchy policy\n");
     const std::string suffix=std::to_string((long long)getpid());
     Session session; session.serverUrl="https://download-catalog-"+suffix+".example"; session.userId="download-user-"+suffix;
     auto catalog=std::make_shared<CatalogDb>();
@@ -334,7 +337,10 @@ static void testCatalogDbHierarchyPlanning()
     const auto seeded=catalog->seedHierarchyQueryFixturesForTest();
     CHECK(seeded.success&&seeded.hierarchyFixture);
     DownloadManager manager(session,"output/test/catalog-plan-downloads-"+suffix);
-    manager.setCatalogDb(catalog);
+    auto libraryQuery = std::make_shared<library::LibraryQuery>(catalog, epoch);
+    auto librarySync = std::make_shared<library::LibrarySync>(session, catalog,
+                                                               epoch);
+    manager.setLibraryServices(libraryQuery, librarySync);
     MediaItem series; series.id="__task10_series__"; series.type="show";
     MediaItem season; season.id="__task10_season_a__"; season.type="season"; season.seriesId=series.id;
     const std::uint64_t planId=manager.requestSeasonPlan(series,season);
@@ -348,5 +354,5 @@ static void testCatalogDbHierarchyPlanning()
     CHECK(hierarchyEstimate);
     CHECK(epoch==catalog->scopeState().requestedEpoch);
     CHECK(catalog->getEpisodes(season.id).get().items.size()==(size_t)3);
-    std::printf("[test] DownloadManager CatalogDb hierarchy estimate OK\n");
+    std::printf("[test] DownloadManager shared hierarchy policy OK\n");
 }

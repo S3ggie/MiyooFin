@@ -1,10 +1,11 @@
 #include "DownloadManager.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
+#include "../library/LibraryQuery.hpp"
+#include "../library/LibrarySync.hpp"
 #include "DownloadSupport.hpp"
 #include "../app/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
-#include <ctime>
 
 namespace miyoofin {
 namespace {
@@ -38,27 +39,28 @@ std::uint64_t DownloadManager::requestPlan(const std::vector<MediaItem>&items){
         UiDiagnostics::Scope scope("DownloadManager::requestPlan mutex wait",false);
         l.lock();
     }
-    std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=items.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}, {}, {}});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;
+    std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=items.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}, {}, {}, std::make_shared<std::atomic_bool>(false)});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;
 }
 std::uint64_t DownloadManager::requestSeriesPlan(const std::string&seriesId){MediaItem series;series.id=seriesId;return requestSeriesPlan(series);}
 std::uint64_t DownloadManager::requestSeasonPlan(const std::string&seriesId,const std::string&seasonId){MediaItem series,season;series.id=seriesId;season.id=seasonId;season.seriesId=seriesId;return requestSeasonPlan(series,season);}
 std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
 {
-    std::shared_ptr<CatalogDb> catalogDb;
+    std::shared_ptr<library::LibraryQuery> libraryQuery;
+    std::shared_ptr<library::LibrarySync> librarySync;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        catalogDb = m_catalogDb;
+        libraryQuery = m_libraryQuery;
+        librarySync = m_librarySync;
     }
-    CatalogDbJobMetadata metadata;
-    if (catalogDb)
-        metadata.scopeEpoch = catalogDb->scopeState().requestedEpoch;
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t id=m_nextPlanId++;
     DownloadPlanSnapshot snapshot;
     snapshot.id=id;
     snapshot.state=DownloadPlanState::Planning;
     m_plans[id]=snapshot;
-    m_planJobs.push_back({id,m_generation,m_session,{},series.id,"",series,{},catalogDb,metadata});
+    m_planJobs.push_back({id,m_generation,m_session,{},series.id,"",series,{},
+                          libraryQuery,librarySync,
+                          std::make_shared<std::atomic_bool>(false)});
     performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
         static_cast<std::uint32_t>(m_planJobs.size()));
     publishDownloadGauges(m_items,m_planJobs.size());
@@ -68,14 +70,13 @@ std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
 std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
                                                  const MediaItem &season)
 {
-    std::shared_ptr<CatalogDb> catalogDb;
+    std::shared_ptr<library::LibraryQuery> libraryQuery;
+    std::shared_ptr<library::LibrarySync> librarySync;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        catalogDb = m_catalogDb;
+        libraryQuery = m_libraryQuery;
+        librarySync = m_librarySync;
     }
-    CatalogDbJobMetadata metadata;
-    if (catalogDb)
-        metadata.scopeEpoch = catalogDb->scopeState().requestedEpoch;
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t id=m_nextPlanId++;
     DownloadPlanSnapshot snapshot;
@@ -83,7 +84,8 @@ std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
     snapshot.state=DownloadPlanState::Planning;
     m_plans[id]=snapshot;
     m_planJobs.push_back({id,m_generation,m_session,{},series.id,season.id,
-                          series,season,catalogDb,metadata});
+                          series,season,libraryQuery,librarySync,
+                          std::make_shared<std::atomic_bool>(false)});
     performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
         static_cast<std::uint32_t>(m_planJobs.size()));
     publishDownloadGauges(m_items,m_planJobs.size());
@@ -106,6 +108,7 @@ void DownloadManager::planner()
                 return;
             job = std::move(m_planJobs.front());
             m_planJobs.pop_front();
+            m_activePlanCancellation = job.cancellation;
             performanceTelemetry().setWorkerQueueDepth(
                 WorkerId::DownloadPlanner,
                 static_cast<std::uint32_t>(m_planJobs.size()));
@@ -119,8 +122,8 @@ void DownloadManager::planner()
         std::map<std::string, std::vector<MediaItem>> hierarchy;
         std::string error;
         bool hierarchyReady = false;
-        bool hierarchyFromCatalog = false;
-        bool catalogSuperseded = false;
+        bool hierarchySuperseded = false;
+        const auto cancellation = job.cancellation;
 
         auto publishEstimate = [&](const std::vector<MediaItem> &items) {
             if (items.empty())
@@ -146,12 +149,12 @@ void DownloadManager::planner()
 
         auto queryEpisodes = [&](const std::string &seasonId,
                                  std::vector<MediaItem> &episodes) {
-            if (!job.catalogDb)
+            if (!job.libraryQuery)
                 return false;
-            const CatalogDbHierarchyResult result =
-                job.catalogDb->getEpisodes(seasonId, job.catalogMetadata).get();
+            const library::HierarchyPage result =
+                job.libraryQuery->episodes(seasonId, cancellation).get();
             if (result.superseded || result.cancelled) {
-                catalogSuperseded = true;
+                hierarchySuperseded = true;
                 return false;
             }
             if (!result.success)
@@ -160,42 +163,78 @@ void DownloadManager::planner()
             return !episodes.empty();
         };
 
+        auto refreshEpisodes = [&](const MediaItem &series,
+                                   const MediaItem &season,
+                                   std::vector<MediaItem> &episodes) {
+            if (!job.librarySync) {
+                error = "LibrarySync service unavailable";
+                return false;
+            }
+            const library::HierarchyRefreshResult result =
+                job.librarySync->refreshEpisodes(series, season,
+                                                 cancellation).get();
+            if (result.superseded || result.cancelled) {
+                hierarchySuperseded = true;
+                return false;
+            }
+            if (!result.success) {
+                error = result.message.empty()
+                    ? "LibrarySync episode refresh failed" : result.message;
+                return false;
+            }
+            episodes = result.items;
+            return true;
+        };
+
+        auto refreshSeasons = [&](const MediaItem &series,
+                                  std::vector<MediaItem> &refreshed) {
+            if (!job.librarySync) {
+                error = "LibrarySync service unavailable";
+                return false;
+            }
+            const library::HierarchyRefreshResult result =
+                job.librarySync->refreshSeasons(series, cancellation).get();
+            if (result.superseded || result.cancelled) {
+                hierarchySuperseded = true;
+                return false;
+            }
+            if (!result.success) {
+                error = result.message.empty()
+                    ? "LibrarySync season refresh failed" : result.message;
+                return false;
+            }
+            refreshed = result.items;
+            return true;
+        };
+
         if (!job.seriesId.empty() && !job.seasonId.empty()) {
             std::vector<MediaItem> cached;
             hierarchyReady = queryEpisodes(job.seasonId, cached);
             if (hierarchyReady) {
                 media = cached;
-                hierarchyFromCatalog = true;
                 MediaItem season = job.season;
                 season.id = job.seasonId;
                 season.seriesId = job.seriesId;
                 seasons.push_back(std::move(season));
                 hierarchy[job.seasonId] = media;
             }
-            if (!hierarchyReady && !catalogSuperseded) {
+            if (!hierarchyReady && !hierarchySuperseded) {
                 media.clear();
-                hierarchyReady = RouteRequest(job.session).run(
-                    [&](const std::string &base) {
-                        return JellyfinApi::getEpisodes(
-                            base, job.session.accessToken, job.session.userId,
-                            job.session.deviceId, job.seriesId, job.seasonId,
-                            media, error);
-                    }, error);
+                MediaItem season = job.season;
+                season.id = job.seasonId;
+                season.seriesId = job.seriesId;
+                hierarchyReady = refreshEpisodes(job.series, season, media);
                 if (hierarchyReady) {
-                    MediaItem season = job.season;
-                    season.id = job.seasonId;
-                    season.seriesId = job.seriesId;
                     seasons.push_back(std::move(season));
                     hierarchy[job.seasonId] = media;
                 }
             }
         } else if (!job.seriesId.empty()) {
-            if (job.catalogDb) {
-                const CatalogDbHierarchyResult cachedSeasons =
-                    job.catalogDb->getSeasons(job.seriesId,
-                                              job.catalogMetadata).get();
+            if (job.libraryQuery) {
+                const library::HierarchyPage cachedSeasons =
+                    job.libraryQuery->seasons(job.seriesId, cancellation).get();
                 if (cachedSeasons.superseded || cachedSeasons.cancelled) {
-                    catalogSuperseded = true;
+                    hierarchySuperseded = true;
                 } else if (cachedSeasons.success
                            && !cachedSeasons.items.empty()) {
                     bool allCached = true;
@@ -211,32 +250,19 @@ void DownloadManager::planner()
                                      episodes.end());
                     }
                     hierarchyReady = allCached;
-                    hierarchyFromCatalog = allCached;
                     if (!allCached)
                         media.clear();
                 }
             }
-            if (!hierarchyReady && !catalogSuperseded) {
+            if (!hierarchyReady && !hierarchySuperseded && error.empty()) {
                 seasons.clear();
                 media.clear();
                 hierarchy.clear();
-                hierarchyReady = RouteRequest(job.session).run(
-                    [&](const std::string &base) {
-                        return JellyfinApi::getSeasons(
-                            base, job.session.accessToken, job.session.userId,
-                            job.session.deviceId, job.seriesId, seasons, error);
-                    }, error);
+                hierarchyReady = refreshSeasons(job.series, seasons);
                 if (hierarchyReady) {
                     for (const auto &season : seasons) {
                         std::vector<MediaItem> episodes;
-                        if (!RouteRequest(job.session).run(
-                                [&](const std::string &base) {
-                                    return JellyfinApi::getEpisodes(
-                                        base, job.session.accessToken,
-                                        job.session.userId, job.session.deviceId,
-                                        job.seriesId, season.id, episodes,
-                                        error);
-                                }, error)) {
+                        if (!refreshEpisodes(job.series, season, episodes)) {
                             hierarchyReady = false;
                             break;
                         }
@@ -251,29 +277,8 @@ void DownloadManager::planner()
         if (hierarchyReady)
             publishEstimate(media);
 
-        if (hierarchyReady && !hierarchyFromCatalog && job.catalogDb) {
-            MediaItem series = job.series;
-            series.id = job.seriesId;
-            CatalogDbHierarchyWriteResult stored;
-            if (!job.seasonId.empty()) {
-                stored = job.catalogDb->reconcileSeasonHierarchy(
-                    series, seasons.front(), hierarchy[job.seasonId],
-                    job.generation,
-                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
-                    job.catalogMetadata).get();
-            } else {
-                stored = job.catalogDb->upsertSeriesHierarchy(
-                    series, seasons, hierarchy, job.generation,
-                    static_cast<std::int64_t>(std::time(nullptr)) * 1000,
-                    job.catalogMetadata).get();
-            }
-            if (!stored.success) {
-                error = stored.message.empty()
-                    ? "CatalogDb hierarchy write failed" : stored.message;
-            }
-        }
-        if (catalogSuperseded && error.empty())
-            error = "CatalogDb hierarchy plan superseded";
+        if (hierarchySuperseded && error.empty())
+            error = "Library hierarchy plan superseded";
 
         std::vector<DownloadItem> out;
         std::set<std::string> seen;
@@ -302,6 +307,8 @@ void DownloadManager::planner()
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto plan = m_plans.find(job.id);
         if (plan == m_plans.end() || job.generation != m_generation) {
+            if (m_activePlanCancellation == job.cancellation)
+                m_activePlanCancellation.reset();
             performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,
                                                    false);
             continue;
@@ -316,6 +323,8 @@ void DownloadManager::planner()
             plan->second.state = calculated.error.empty()
                 ? DownloadPlanState::Ready : DownloadPlanState::Error;
         }
+        if (m_activePlanCancellation == job.cancellation)
+            m_activePlanCancellation.reset();
         performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner,
                                                false);
     }

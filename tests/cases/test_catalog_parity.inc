@@ -1163,6 +1163,131 @@ static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
     CHECK(source.find("completeTelemetry(catalogRefreshFailed ? Outcome::Failure")
           != std::string::npos);
     CHECK(source.find("if (optionalRailFailed) break") == std::string::npos);
+
+    const int resumeListener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(resumeListener >= 0);
+    if (resumeListener >= 0) {
+        int reuse = 1;
+        ::setsockopt(resumeListener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                     sizeof(reuse));
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(0);
+        CHECK(::bind(resumeListener,
+                     reinterpret_cast<sockaddr *>(&address),
+                     sizeof(address)) == 0);
+        socklen_t addressSize = sizeof(address);
+        CHECK(::getsockname(resumeListener,
+                            reinterpret_cast<sockaddr *>(&address),
+                            &addressSize) == 0);
+        CHECK(::listen(resumeListener, 1) == 0);
+        std::thread resumeServer([&] {
+            const int client = ::accept(resumeListener, nullptr, nullptr);
+            if (client >= 0) {
+                char buffer[2048];
+                (void)::recv(client, buffer, sizeof(buffer), 0);
+                ::close(client);
+            }
+        });
+        std::vector<MediaItem> resumeItems;
+        std::string resumeError;
+        const bool resumeOk = JellyfinApi::getResumeItems(
+            "http://127.0.0.1:" +
+                std::to_string(ntohs(address.sin_port)),
+            "token", "user", "device", 12, resumeItems, resumeError);
+        resumeServer.join();
+        ::close(resumeListener);
+        CHECK(!resumeOk && !resumeError.empty());
+    }
+
+    const int latestListener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(latestListener >= 0);
+    if (latestListener >= 0) {
+        int reuse = 1;
+        ::setsockopt(latestListener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                     sizeof(reuse));
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(0);
+        CHECK(::bind(latestListener,
+                     reinterpret_cast<sockaddr *>(&address),
+                     sizeof(address)) == 0);
+        socklen_t addressSize = sizeof(address);
+        CHECK(::getsockname(latestListener,
+                            reinterpret_cast<sockaddr *>(&address),
+                            &addressSize) == 0);
+        CHECK(::listen(latestListener, 1) == 0);
+        const std::string body =
+            R"({"Items":[{"Id":"__task26_recent__","Type":"Movie","Name":"Recent Item"}]})";
+        std::thread latestServer([&] {
+            const int client = ::accept(latestListener, nullptr, nullptr);
+            if (client >= 0) {
+                char buffer[2048];
+                (void)::recv(client, buffer, sizeof(buffer), 0);
+                const std::string response =
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    "Content-Length: " + std::to_string(body.size()) +
+                    "\r\nConnection: close\r\n\r\n" + body;
+                (void)::send(client, response.data(), response.size(), 0);
+                ::close(client);
+            }
+        });
+        std::vector<MediaItem> latestItems;
+        std::string latestError;
+        const bool latestOk = JellyfinApi::getLatestItems(
+            "http://127.0.0.1:" +
+                std::to_string(ntohs(address.sin_port)),
+            "token", "user", "device", 16, latestItems, latestError);
+        latestServer.join();
+        ::close(latestListener);
+        CHECK(latestOk && latestError.empty() && latestItems.size() == 1
+              && latestItems[0].id == "__task26_recent__");
+    }
+
+    const std::string catalogUrl =
+        "https://sqlite-continue-watching-failure-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string catalogUser = "continue-watching-failure-user";
+    const auto paths = catalogMigrationTestPaths(catalogUrl, catalogUser);
+    removeCatalogMigrationTestPaths(paths);
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(catalogUrl, catalogUser);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = catalogUrl;
+        session.userId = catalogUser;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+        CHECK(sync->begin(70).get().success);
+        CatalogDbMediaPageWrite movies;
+        movies.items = {catalogParityItem(
+            "__task26_catalog_movie__", "movie", "Catalog Movie")};
+        movies.viewId = "task26-movies";
+        movies.viewName = "Movies";
+        movies.collectionType = "movies";
+        movies.syncGeneration = 70;
+        CHECK(sync->stage(movies).get().success);
+        CatalogDbMediaPageWrite shows = movies;
+        shows.items = {catalogParityItem(
+            "__task26_catalog_show__", "show", "Catalog Show")};
+        shows.viewId = "task26-shows";
+        shows.viewName = "Shows";
+        shows.collectionType = "tvshows";
+        CHECK(sync->stage(shows).get().success);
+        CHECK(sync->finalize(70).get().success);
+
+        library::LibraryQuery query(db, epoch);
+        const auto moviePage = query.movies(-1, 8).get();
+        const auto showPage = query.shows(-1, 8).get();
+        CHECK(moviePage.success && moviePage.items.size() == 1
+              && moviePage.items[0].id == "__task26_catalog_movie__");
+        CHECK(showPage.success && showPage.items.size() == 1
+              && showPage.items[0].id == "__task26_catalog_show__");
+    }
+    removeCatalogMigrationTestPaths(paths);
     std::printf("[test] Home optional rail failures are isolated OK\n");
 }
 

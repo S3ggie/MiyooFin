@@ -693,6 +693,73 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     removeCatalogMigrationTestPaths(paths);
 }
 
+void testLibrarySyncTeardownDuringStagedGeneration()
+{
+    std::printf("[test] LibrarySync teardown during staged generation\n");
+    const std::string url =
+        "https://sqlite-library-sync-teardown-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string user = "library-sync-teardown-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    {
+        auto sync = std::make_unique<library::LibrarySync>(
+            session, db, epoch);
+        CHECK(sync->begin(300).get().success);
+        CatalogDbMediaPageWrite committedPage;
+        committedPage.items = {catalogParityItem(
+            "__task30_committed_movie__", "movie", "Committed Movie")};
+        committedPage.viewId = "task30-committed-movies";
+        committedPage.viewName = "Committed Movies";
+        committedPage.collectionType = "movies";
+        committedPage.viewOrdinal = 0;
+        committedPage.syncGeneration = 300;
+        CHECK(sync->stage(committedPage).get().success);
+        CHECK(sync->finalize(300).get().success);
+        CHECK(sync->writeSyncState(300, 300, 300).get().success);
+
+        db->setWorkerPausedForTest(true);
+        auto pendingBegin = sync->begin(301);
+        CatalogDbMediaPageWrite stagedPage = committedPage;
+        stagedPage.items = {catalogParityItem(
+            "__task30_unpublished_movie__", "movie", "Unpublished Movie")};
+        stagedPage.viewId = "task30-unpublished-movies";
+        stagedPage.viewName = "Unpublished Movies";
+        stagedPage.syncGeneration = 301;
+        auto pendingStage = sync->stage(stagedPage);
+        sync.reset();
+
+        db->setWorkerPausedForTest(false);
+        const auto beginResult = pendingBegin.get();
+        const auto stageResult = pendingStage.get();
+        CHECK(beginResult.success && beginResult.generation == 301);
+        CHECK(!stageResult.success
+              && (stageResult.cancelled || stageResult.superseded));
+    }
+
+    db.reset();
+    auto reopened = std::make_shared<CatalogDb>();
+    const auto reopenedEpoch = reopened->configureScope(url, user);
+    CHECK(reopened->waitForIdleForTest(std::chrono::seconds(2)));
+    library::LibraryQuery query(reopened, reopenedEpoch);
+    const auto movies = query.movies(-1, 8).get();
+    CHECK(movies.success && movies.items.size() == 1
+          && movies.items[0].id == "__task30_committed_movie__");
+    const auto syncState = reopened->readSyncState(
+        false, 0, 0, {0, reopenedEpoch, {}}).get();
+    CHECK(syncState.success && syncState.committedGeneration == 300);
+    reopened.reset();
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] LibrarySync teardown during staged generation OK\n");
+}
+
 static std::vector<std::string> collectCatalogPageIds(
     CatalogDb &db, const std::string &type, int letter, std::size_t pageSize,
     std::uint64_t epoch)

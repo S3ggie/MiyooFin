@@ -10,6 +10,20 @@
 
 namespace miyoofin {
 namespace library {
+namespace {
+
+std::future<CatalogDbHierarchyWriteResult> rejectedHierarchyWrite(
+    const char *message)
+{
+    std::promise<CatalogDbHierarchyWriteResult> promise;
+    CatalogDbHierarchyWriteResult result;
+    result.error = CatalogDbErrorCategory::ConfigurationFailed;
+    result.message = message;
+    promise.set_value(std::move(result));
+    return promise.get_future();
+}
+
+}
 library::LibrarySync::LibrarySync(Session session, std::shared_ptr<CatalogDb> db,
                          std::uint64_t scopeEpoch)
     : m_session(std::move(session)), m_db(std::move(db)),
@@ -186,6 +200,48 @@ library::LibrarySync::refreshEpisodes(
             return result;
         });
 }
+
+std::future<CatalogDbReconcileResult>
+library::LibrarySync::reconcileSeries(
+    const std::vector<MediaItem> &series, bool authoritative,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    CatalogDbJobMetadata metadata = m_metadata;
+    metadata.cancellation = cancellation ? cancellation : m_cancel;
+    return m_db->reconcileSeries(series, authoritative, metadata);
+}
+
+std::future<CatalogDbHierarchyWriteResult>
+library::LibrarySync::stageSeriesHierarchy(
+    const MediaItem &series, const std::vector<MediaItem> &seasons,
+    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+    std::uint64_t generation, bool complete,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    if (!complete)
+        return rejectedHierarchyWrite(
+            "incomplete hierarchy is not eligible for CatalogDb commit");
+    if (!m_db)
+        return rejectedHierarchyWrite("CatalogDb service is unavailable");
+    CatalogDbJobMetadata metadata = m_metadata;
+    metadata.cancellation = cancellation ? cancellation : m_cancel;
+    return m_db->stageSeriesHierarchy(series, seasons, episodesBySeason,
+                                       generation,
+                                       static_cast<std::int64_t>(std::time(nullptr)) * 1000,
+                                       true, metadata);
+}
+
+std::future<CatalogDbSyncState> library::LibrarySync::writeSyncState(
+    std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+    std::uint64_t committedGeneration,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    CatalogDbJobMetadata metadata = m_metadata;
+    metadata.cancellation = cancellation ? cancellation : m_cancel;
+    return m_db->writeSyncState(lastSuccessfulMs, lastReconcileMs,
+                                committedGeneration, metadata);
+}
+
 std::future<library::OfflineRebuildResult>
 library::LibrarySync::reconstructOfflineDownloads(
     const std::string &downloadRoot)

@@ -677,6 +677,26 @@ static void testCatalogDbMediaPagePreservesViewMembership()
 
 void testLibraryCacheHomeParityHarness()
 {
+    const std::string hierarchySource =
+        readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
+    CHECK(hierarchySource.find("getSeasons(") == std::string::npos);
+    CHECK(hierarchySource.find("getEpisodes(") == std::string::npos);
+    CHECK(hierarchySource.find("submitCatalogHierarchy") == std::string::npos);
+    CHECK(hierarchySource.find("m_libraryQuery->seasons")
+          != std::string::npos);
+    CHECK(hierarchySource.find("m_libraryQuery->episodes")
+          != std::string::npos);
+    CHECK(hierarchySource.find("m_librarySync->refreshSeasons")
+          != std::string::npos);
+    CHECK(hierarchySource.find("m_librarySync->refreshEpisodes")
+          != std::string::npos);
+    const std::string lifecycleSource =
+        readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(lifecycleSource.find("submitCatalogHierarchy")
+          == std::string::npos);
+    CHECK(lifecycleSource.find("m_catalogDb->stageSeriesHierarchy")
+          == std::string::npos);
+
     LibrarySnapshot snapshot;
     MediaItem a = catalogParityItem("__task30_a__", "movie", "The apple");
     MediaItem b = catalogParityItem("__task30_b__", "movie", "APPLE");

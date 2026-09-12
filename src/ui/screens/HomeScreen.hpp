@@ -70,13 +70,6 @@ public:
     static SettingsRowAction settingsRowAction(int row, const Session &session);
     static const char *lastApiRouteValue();
 
-    /// Submit the same complete subtree used by the online hierarchy worker.
-    /// This narrow seam keeps the worker-to-CatalogDb boundary regression-testable.
-    std::future<CatalogDbHierarchyWriteResult> submitCatalogHierarchyForTest(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, bool complete);
-
     /// True when the user has confirmed logout (App handles the transition).
     bool logoutRequested() const { return m_logoutRequested; }
     /// True when the user has confirmed changing servers (App handles the transition).
@@ -263,11 +256,6 @@ private:
                              const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
     bool publishHierarchyCheckpoint(std::uint64_t generation);
-    std::future<CatalogDbHierarchyWriteResult> submitCatalogHierarchy(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, bool complete,
-        const std::shared_ptr<std::atomic_bool> &cancellation);
     std::string syncStatusText() const;
     void decodeWorker();
     void drainDecodedArtwork();

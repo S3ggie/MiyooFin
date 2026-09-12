@@ -610,6 +610,86 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
     auto stale = db.beginTopLevelSync(103, {0, epoch, {}}).get();
     CHECK(!stale.success && stale.error == CatalogDbErrorCategory::ScopeNotReady);
+
+    const std::string rollbackUrl = url + "-task28";
+    const std::string rollbackUser = user + "-task28";
+    const auto rollbackPaths =
+        catalogMigrationTestPaths(rollbackUrl, rollbackUser);
+    removeCatalogMigrationTestPaths(rollbackPaths);
+    {
+        auto rollbackDb = std::make_shared<CatalogDb>();
+        const auto rollbackEpoch =
+            rollbackDb->configureScope(rollbackUrl, rollbackUser);
+        CHECK(rollbackDb->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = rollbackUrl;
+        session.userId = rollbackUser;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, rollbackDb, rollbackEpoch);
+
+        CHECK(sync->begin(200).get().success);
+        CatalogDbMediaPageWrite generationAMovies;
+        generationAMovies.items = {
+            catalogParityItem("__task28_a_movie_1__", "movie", "A Movie 1"),
+            catalogParityItem("__task28_a_movie_2__", "movie", "A Movie 2")};
+        generationAMovies.viewId = "task28-a-movies";
+        generationAMovies.viewName = "A Movies";
+        generationAMovies.collectionType = "movies";
+        generationAMovies.viewOrdinal = 0;
+        generationAMovies.syncGeneration = 200;
+        CHECK(sync->stage(generationAMovies).get().success);
+        CatalogDbMediaPageWrite generationAShows = generationAMovies;
+        generationAShows.items = {catalogParityItem(
+            "__task28_a_show__", "show", "A Show")};
+        generationAShows.viewId = "task28-a-shows";
+        generationAShows.viewName = "A Shows";
+        generationAShows.collectionType = "tvshows";
+        generationAShows.viewOrdinal = 1;
+        CHECK(sync->stage(generationAShows).get().success);
+        CHECK(sync->finalize(200).get().success);
+
+        library::LibraryQuery query(rollbackDb, rollbackEpoch);
+        const auto beforeMovies = query.movies(-1, 8).get();
+        const auto beforeShows = query.shows(-1, 8).get();
+        CHECK(beforeMovies.success && beforeMovies.items.size() == 2);
+        CHECK(beforeShows.success && beforeShows.items.size() == 1
+              && beforeShows.items[0].id == "__task28_a_show__");
+
+        CHECK(sync->begin(201).get().success);
+        CatalogDbMediaPageWrite generationB = generationAMovies;
+        generationB.items = {catalogParityItem(
+            "__task28_b_movie__", "movie", "B Movie")};
+        generationB.viewId = "task28-b-movies";
+        generationB.viewName = "B Movies";
+        generationB.syncGeneration = 201;
+        CHECK(sync->stage(generationB).get().success);
+        CHECK(sync->abort(201).get().success);
+
+        const auto afterCancelMovies = query.movies(-1, 8).get();
+        const auto afterCancelShows = query.shows(-1, 8).get();
+        CHECK(afterCancelMovies.success && afterCancelMovies.items.size() == 2);
+        CHECK(afterCancelShows.success && afterCancelShows.items.size() == 1
+              && afterCancelShows.items[0].id == "__task28_a_show__");
+        CHECK(std::none_of(afterCancelMovies.items.begin(),
+                           afterCancelMovies.items.end(),
+                           [](const MediaItem &item) {
+                               return item.id == "__task28_b_movie__";
+                           }));
+
+        CHECK(sync->begin(202).get().success);
+        CatalogDbMediaPageWrite generationC = generationAMovies;
+        generationC.items = {catalogParityItem(
+            "__task28_c_movie__", "movie", "C Movie")};
+        generationC.viewId = "task28-c-movies";
+        generationC.viewName = "C Movies";
+        generationC.syncGeneration = 202;
+        CHECK(sync->stage(generationC).get().success);
+        CHECK(sync->finalize(202).get().success);
+        const auto afterC = query.movies(-1, 8).get();
+        CHECK(afterC.success && afterC.items.size() == 1
+              && afterC.items[0].id == "__task28_c_movie__");
+    }
+    removeCatalogMigrationTestPaths(rollbackPaths);
     removeCatalogMigrationTestPaths(paths);
 }
 

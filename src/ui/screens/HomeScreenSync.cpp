@@ -294,10 +294,21 @@ void HomeScreen::startFetch()
                 warmTabs.push_back({"Settings", {{"", {}}}});
                 {
                     std::lock_guard<std::mutex> lock(m_fetchMutex);
+                    for (const auto &item : shows.items) {
+                        const auto found = shows.membershipsByItem.find(item.id);
+                        if (found == shows.membershipsByItem.end()) continue;
+                        for (const auto &membership : found->second) {
+                            if (isAnimeSeries(membership.viewName, item)) {
+                                m_animeItemIds.insert(item.id);
+                                break;
+                            }
+                        }
+                    }
                     m_fetchResult = std::move(warmTabs);
                 }
                 uiDiagnostics().log(
                     "[HomeScreen] startup stage=warm_sqlite_catalog_ready");
+                initialPagePublished = true;
                 m_fetchReady.store(true);
             }
         }
@@ -449,14 +460,24 @@ void HomeScreen::finishFetch()
                 std::lock_guard<std::mutex> lock(m_fetchMutex);
                 publishedTabs = std::move(m_fetchResult);
             }
+            const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
             const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            if (!warmWindows.movies.empty()) {
+                m_moviePage.items = warmWindows.movies;
+                m_movieWindow = warmWindows.movies;
+                refreshMovieFilter();
+            }
+            if (!warmWindows.shows.empty()) {
+                m_showPage.items = warmWindows.shows;
+                rebuildShowsPresentation();
+            }
         }
     }
     if (m_fetchComplete.load() && m_fetchThread.joinable()) {
         m_fetchThread.join();
         if (m_fetchCacheSaved) { m_cachedSnapshot=m_remoteSnapshot; m_haveCachedSnapshot=true; }
-        if (!m_remoteSnapshot.recentlyAdded.empty())
-            updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
+        updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
+        updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
         m_fetchDone.store(false);
     }
 }

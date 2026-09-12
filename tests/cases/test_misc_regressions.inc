@@ -234,6 +234,38 @@ static void testRecentlyAddedWarmPublication()
     std::printf("[test] Recently Added warm publication OK\n");
 }
 
+static void testWarmHomeCatalogWindows()
+{
+    std::printf("[test] warm Home catalog windows\n");
+    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("initialPagePublished = true") != std::string::npos);
+    CHECK(source.find("mediaWindowsFromTabs") != std::string::npos);
+    CHECK(source.find("m_moviePage.items = warmWindows.movies")
+          != std::string::npos);
+    CHECK(source.find("m_showPage.items = warmWindows.shows")
+          != std::string::npos);
+    CHECK(source.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
+          != std::string::npos);
+    std::printf("[test] warm Home catalog windows OK\n");
+}
+
+static void testWarmMediaWindowsExtraction()
+{
+    std::printf("[test] warm media windows extraction\n");
+    MediaItem movie=titledMovie("warm-movie", "Warm movie");
+    MediaItem show=titledShow("warm-show", "Warm show");
+    std::vector<TabData> tabs={
+        {"Home", {{"", {}}}},
+        {"Movies", {{"Movies", {movie}}}},
+        {"Shows", {{"Shows", {show}}}}};
+    const HomeMediaWindows windows=mediaWindowsFromTabs(tabs);
+    CHECK(windows.movies.size()==1 && windows.movies[0].id==movie.id);
+    CHECK(windows.shows.size()==1 && windows.shows[0].id==show.id);
+    CHECK(mediaWindowsFromTabs({{"Home", {{"", {}}}}}).movies.empty());
+    CHECK(mediaWindowsFromTabs({{"Home", {{"", {}}}}}).shows.empty());
+    std::printf("[test] warm media windows extraction OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
@@ -243,6 +275,8 @@ static void testShowsPresentation()
     testShowsFocusPreservedDuringIncrementalRefresh();
     testHomeGridPositionHelpers();
     testRecentlyAddedWarmPublication();
+    testWarmHomeCatalogWindows();
+    testWarmMediaWindowsExtraction();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));

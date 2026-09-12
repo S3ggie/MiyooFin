@@ -10,6 +10,11 @@ namespace miyoofin {
 
 void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
 void updateRecentlyAddedRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
+struct HomeMediaWindows {
+    std::vector<MediaItem> movies;
+    std::vector<MediaItem> shows;
+};
+HomeMediaWindows mediaWindowsFromTabs(const std::vector<TabData> &tabs);
 std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
 std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot);
 std::vector<std::string> tabNames(const std::vector<TabData> &tabs);

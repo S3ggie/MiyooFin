@@ -46,8 +46,26 @@ void HomeScreen::refreshMovieFilter()
     m_selectedArtwork = {}; m_selectedArtworkId.clear(); m_selectedArtworkAttempted = false;
 }
 
+HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
+    ShowsFocusState previous, bool hasShows, bool hasAnime)
+{
+    if (previous == ShowsFocusState::AnimeGrid && hasAnime)
+        return ShowsFocusState::AnimeGrid;
+    if (previous == ShowsFocusState::ShowsGrid && hasShows)
+        return ShowsFocusState::ShowsGrid;
+    if (hasShows)
+        return ShowsFocusState::ShowsGrid;
+    if (hasAnime)
+        return ShowsFocusState::AnimeGrid;
+    return ShowsFocusState::AlphabetRail;
+}
+
 void HomeScreen::refreshShowsFilter()
 {
+    const ShowsFocusState previousFocus =
+        m_showsFocus == ShowsFocus::AnimeGrid ? ShowsFocusState::AnimeGrid
+        : m_showsFocus == ShowsFocus::ShowsGrid ? ShowsFocusState::ShowsGrid
+        : ShowsFocusState::AlphabetRail;
     const std::string selectedId = m_showsPreviewId;
     m_filteredShows.clear();
     m_filteredAnime.clear();
@@ -58,8 +76,10 @@ void HomeScreen::refreshShowsFilter()
         if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
             m_filteredAnime.push_back(item);
     m_showSelected = m_animeSelected = m_showScroll = m_animeScroll = 0;
-    m_showsFocus = !m_filteredShows.empty() ? ShowsFocus::ShowsGrid
-        : !m_filteredAnime.empty() ? ShowsFocus::AnimeGrid
+    const ShowsFocusState nextFocus = showsFocusAfterRefresh(
+        previousFocus, !m_filteredShows.empty(), !m_filteredAnime.empty());
+    m_showsFocus = nextFocus == ShowsFocusState::AnimeGrid ? ShowsFocus::AnimeGrid
+        : nextFocus == ShowsFocusState::ShowsGrid ? ShowsFocus::ShowsGrid
         : ShowsFocus::AlphabetRail;
     auto restore = [&](const std::vector<MediaItem> &items, int &selected) {
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {

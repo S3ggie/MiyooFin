@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "../data/MediaItem.hpp"
-#include "../cache/LibraryCache.hpp"
+#include "CatalogCompatibility.hpp"
 
 struct sqlite3;
 struct sqlite3_stmt;

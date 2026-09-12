@@ -38,6 +38,7 @@ SRCS := \
     src/app/RemoteExitSignal.cpp \
     src/catalog/CatalogDb.cpp \
     src/catalog/MediaItemSql.cpp \
+    src/catalog/CatalogCompatibility.cpp \
     src/app/UiDiagnostics.cpp \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \

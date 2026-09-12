@@ -2,6 +2,7 @@
 #define MIYOOFIN_OFFLINE_LIBRARY_QUERY_HPP
 
 #include "../data/MediaItem.hpp"
+#include "../cache/LibraryCache.hpp"
 #include "../download/DownloadManager.hpp"
 #include <vector>
 

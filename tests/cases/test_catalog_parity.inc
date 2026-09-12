@@ -946,6 +946,74 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(page.membershipsByItem.at(shared.id).size() == 2);
     }
     removeCatalogMigrationTestPaths(animePaths);
+
+    const std::string playlistUrl =
+        "https://sqlite-playlist-interleave-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string playlistUser = "playlist-interleave-user";
+    const auto playlistPaths =
+        catalogMigrationTestPaths(playlistUrl, playlistUser);
+    removeCatalogMigrationTestPaths(playlistPaths);
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(playlistUrl, playlistUser);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = playlistUrl;
+        session.userId = playlistUser;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+        MediaItem movie = catalogParityItem(
+            "__task25_supported_movie__", "movie", "Supported Movie");
+        MediaItem playlistOnly = catalogParityItem(
+            "__task25_playlist_only__", "movie", "Playlist Only Item");
+        MediaItem show = catalogParityItem(
+            "__task25_later_tv_show__", "show", "Later TV Show");
+
+        CHECK(sync->begin(60).get().success);
+        CatalogDbMediaPageWrite movies;
+        movies.items = {movie};
+        movies.viewId = "task25-movies";
+        movies.viewName = "Movies";
+        movies.collectionType = "movies";
+        movies.viewOrdinal = 0;
+        movies.syncGeneration = 60;
+        CHECK(sync->stage(movies).get().success);
+        CatalogDbMediaPageWrite playlist = movies;
+        playlist.items = {movie, playlistOnly};
+        playlist.viewId = "task25-playlist";
+        playlist.viewName = "Watch Playlist";
+        playlist.collectionType = "playlists";
+        playlist.viewOrdinal = 1;
+        CHECK(sync->stage(playlist).get().success);
+        CatalogDbMediaPageWrite tv = movies;
+        tv.items = {show};
+        tv.viewId = "task25-tv";
+        tv.viewName = "TV Shows";
+        tv.collectionType = "tvshows";
+        tv.viewOrdinal = 2;
+        CHECK(sync->stage(tv).get().success);
+        CHECK(sync->finalize(60).get().success);
+
+        library::LibraryQuery query(db, epoch);
+        const auto moviePage = query.movies(-1, 8).get();
+        const auto showPage = query.shows(-1, 8).get();
+        CHECK(moviePage.success && moviePage.items.size() == 1
+              && moviePage.items[0].id == movie.id);
+        CHECK(showPage.success && showPage.items.size() == 1
+              && showPage.items[0].id == show.id);
+        const auto &movieMemberships = moviePage.membershipsByItem.at(movie.id);
+        const bool hasSupportedMovieMembership = std::any_of(
+            movieMemberships.begin(), movieMemberships.end(),
+            [&](const CatalogDbMediaPageMembership &membership) {
+                return membership.viewId == movies.viewId
+                    && membership.collectionType == "movies";
+            });
+        CHECK(hasSupportedMovieMembership);
+        CHECK(moviePage.membershipsByItem.count(playlistOnly.id) == 0);
+        CHECK(showPage.membershipsByItem.count(playlistOnly.id) == 0);
+    }
+    removeCatalogMigrationTestPaths(playlistPaths);
     std::printf("[test] CatalogDb media pages preserve TV view membership OK\n");
 }
 

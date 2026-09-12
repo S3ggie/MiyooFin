@@ -865,6 +865,87 @@ static void testCatalogDbMediaPagePreservesViewMembership()
               == secondView.viewId);
     }
     removeCatalogMigrationTestPaths(multiViewPaths);
+
+    const std::string animeUrl =
+        "https://sqlite-anime-membership-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string animeUser = "anime-membership-user";
+    const auto animePaths = catalogMigrationTestPaths(animeUrl, animeUser);
+    removeCatalogMigrationTestPaths(animePaths);
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(animeUrl, animeUser);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = animeUrl;
+        session.userId = animeUser;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+
+        MediaItem animeByView = catalogParityItem(
+            "__task24_anime_by_view__", "show", "Anime By View");
+        animeByView.genres = {"Action"};
+        animeByView.imageTags["Primary"] = "task24-view-primary";
+        MediaItem animeByGenre = catalogParityItem(
+            "__task24_anime_by_genre__", "show", "Anime By Genre");
+        animeByGenre.genres = {"Anime"};
+        animeByGenre.imageTags["Primary"] = "task24-genre-primary";
+        MediaItem control = catalogParityItem(
+            "__task24_control_show__", "show", "Control Show");
+        control.genres = {"Drama"};
+        control.imageTags["Primary"] = "task24-control-primary";
+        MediaItem shared = catalogParityItem(
+            "__task24_normal_and_anime__", "show", "Normal And Anime");
+        shared.genres = {"Drama"};
+        shared.imageTags["Primary"] = "task24-shared-primary";
+
+        CHECK(sync->begin(50).get().success);
+        CatalogDbMediaPageWrite shows;
+        shows.items = {animeByGenre, control, shared};
+        shows.viewId = "task24-shows";
+        shows.viewName = "Shows";
+        shows.collectionType = "tvshows";
+        shows.viewOrdinal = 0;
+        shows.syncGeneration = 50;
+        CHECK(sync->stage(shows).get().success);
+        CatalogDbMediaPageWrite anime = shows;
+        anime.items = {animeByView, shared};
+        anime.viewId = "task24-anime";
+        anime.viewName = "Anime Library";
+        anime.viewOrdinal = 1;
+        CHECK(sync->stage(anime).get().success);
+        CHECK(sync->finalize(50).get().success);
+
+        library::LibraryQuery query(db, epoch);
+        const auto page = query.shows(-1, 8).get();
+        CHECK(page.success && page.items.size() == 4 && !page.hasMore);
+        std::map<std::string, MediaItem> items;
+        for (const auto &item : page.items) items[item.id] = item;
+        CHECK(items.size() == 4);
+        CHECK(items.at(animeByView.id).imageTags.at("Primary")
+              == "task24-view-primary");
+        CHECK(items.at(animeByGenre.id).imageTags.at("Primary")
+              == "task24-genre-primary");
+        CHECK(items.at(control.id).imageTags.at("Primary")
+              == "task24-control-primary");
+        CHECK(items.at(shared.id).imageTags.at("Primary")
+              == "task24-shared-primary");
+
+        const auto animeFor = [&](const MediaItem &item) {
+            const auto &memberships = page.membershipsByItem.at(item.id);
+            return std::any_of(
+                memberships.begin(), memberships.end(),
+                [&](const CatalogDbMediaPageMembership &membership) {
+                    return isAnimeSeries(membership.viewName, item);
+                });
+        };
+        CHECK(animeFor(items.at(animeByView.id)));
+        CHECK(animeFor(items.at(animeByGenre.id)));
+        CHECK(!animeFor(items.at(control.id)));
+        CHECK(animeFor(items.at(shared.id)));
+        CHECK(page.membershipsByItem.at(shared.id).size() == 2);
+    }
+    removeCatalogMigrationTestPaths(animePaths);
     std::printf("[test] CatalogDb media pages preserve TV view membership OK\n");
 }
 

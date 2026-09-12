@@ -877,6 +877,72 @@ static void testHomeUsesCatalogBeforeNetworkRefresh()
     if (enter != std::string::npos && leave != std::string::npos)
         CHECK(source.substr(enter, leave - enter).find(
                   "m_loadState = LoadState::Ready") == std::string::npos);
+
+    const std::string suffix =
+        std::to_string(static_cast<long long>(getpid()));
+    const std::string url =
+        "https://sqlite-warm-home-" + suffix + ".example";
+    const std::string user = "warm-home-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(url, user);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = url;
+        session.userId = user;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+        CHECK(sync->begin(1).get().success);
+
+        CatalogDbMediaPageWrite moviePage;
+        moviePage.items = {catalogParityItem(
+            "__task19_warm_movie__", "movie", "Warm Movie")};
+        moviePage.viewId = "warm-movies";
+        moviePage.viewName = "Warm Movies";
+        moviePage.collectionType = "movies";
+        moviePage.syncGeneration = 1;
+        CHECK(sync->stage(moviePage).get().success);
+
+        CatalogDbMediaPageWrite showPage;
+        showPage.items = {catalogParityItem(
+            "__task19_warm_show__", "show", "Warm Show")};
+        showPage.viewId = "warm-shows";
+        showPage.viewName = "Warm Shows";
+        showPage.collectionType = "tvshows";
+        showPage.syncGeneration = 1;
+        CHECK(sync->stage(showPage).get().success);
+        CHECK(sync->finalize(1).get().success);
+    }
+
+    {
+        auto reopened = std::make_shared<CatalogDb>();
+        const auto epoch = reopened->configureScope(url, user);
+        CHECK(reopened->waitForIdleForTest(std::chrono::seconds(2)));
+        CHECK(reopened->scopeState().openState == CatalogDbOpenState::SupportedV3);
+        library::LibraryQuery query(reopened, epoch);
+        const auto movies = query.movies(-1, 8).get();
+        const auto shows = query.shows(-1, 8).get();
+        CHECK(movies.success && movies.items.size() == 1
+              && movies.items[0].id == "__task19_warm_movie__");
+        CHECK(shows.success && shows.items.size() == 1
+              && shows.items[0].id == "__task19_warm_show__");
+        CHECK(movies.membershipsByItem.at("__task19_warm_movie__").size() == 1);
+        CHECK(shows.membershipsByItem.at("__task19_warm_show__").size() == 1);
+
+        Session session;
+        session.serverUrl = url;
+        session.userId = user;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, reopened, epoch);
+        CHECK(sync->begin(2).get().success);
+        CHECK(sync->abort(2).get().success);
+        const auto afterFailure = query.movies(-1, 8).get();
+        CHECK(afterFailure.success && afterFailure.items.size() == 1
+              && afterFailure.items[0].id == "__task19_warm_movie__");
+    }
+    removeCatalogMigrationTestPaths(paths);
     std::printf("[test] Home uses CatalogDb before network refresh OK\n");
 }
 

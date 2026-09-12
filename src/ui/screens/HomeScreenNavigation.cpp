@@ -37,7 +37,7 @@ void HomeScreen::refreshMovieFilter()
 {
     const int movies=tabIndex("Movies"); if (movies < 0) return;
     const MediaItem *previousItem=currentItem();
-    const std::string selectedId=previousItem ? previousItem->id : "";
+    const std::string selectedId=previousItem ? previousItem->id : m_moviePreviewId;
     const int previousSelected=m_activeCard;
     const int previousScroll=m_rowScroll;
     std::vector<MediaItem> displayed;
@@ -59,6 +59,7 @@ void HomeScreen::refreshMovieFilter()
         m_selectedArtworkId.clear();
         m_selectedArtworkAttempted = false;
     }
+    if (current) m_moviePreviewId = current->id;
 }
 
 HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
@@ -108,7 +109,8 @@ void HomeScreen::refreshShowsFilter()
         m_showsFocus == ShowsFocus::AnimeGrid ? ShowsFocusState::AnimeGrid
         : m_showsFocus == ShowsFocus::ShowsGrid ? ShowsFocusState::ShowsGrid
         : ShowsFocusState::AlphabetRail;
-    const std::string selectedId = m_showsPreviewId;
+    const MediaItem *previousItem = showsSelectedItem();
+    const std::string selectedId = previousItem ? previousItem->id : m_showsPreviewId;
     const int previousShowSelected=m_showSelected;
     const int previousAnimeSelected=m_animeSelected;
     const int previousShowScroll=m_showScroll;
@@ -136,7 +138,7 @@ void HomeScreen::refreshShowsFilter()
         m_showsPreviewId = item->id;
 }
 const MediaItem *HomeScreen::showsSelectedItem() const { const std::vector<MediaItem>*v=m_showsFocus==ShowsFocus::AnimeGrid?&m_filteredAnime:&m_filteredShows;int n=m_showsFocus==ShowsFocus::AnimeGrid?m_animeSelected:m_showSelected;if(n>=0&&n<(int)v->size())return &(*v)[n];for(const auto&i:m_filteredShows)if(i.id==m_showsPreviewId)return &i;for(const auto&i:m_filteredAnime)if(i.id==m_showsPreviewId)return &i;return nullptr; }
-void HomeScreen::clampShowsNavigation() { if(!m_filteredShows.empty()){m_showSelected=std::max(0,std::min(m_showSelected,(int)m_filteredShows.size()-1));m_showScroll=clampShowsGridScroll(m_showSelected,m_filteredShows.size(),m_showScroll);}else m_showSelected=m_showScroll=0;if(!m_filteredAnime.empty()){m_animeSelected=std::max(0,std::min(m_animeSelected,(int)m_filteredAnime.size()-1));m_animeScroll=clampShowsGridScroll(m_animeSelected,m_filteredAnime.size(),m_animeScroll);}else m_animeSelected=m_animeScroll=0; }
+void HomeScreen::clampShowsNavigation() { if(!m_filteredShows.empty()){m_showSelected=std::max(0,std::min(m_showSelected,(int)m_filteredShows.size()-1));m_showScroll=clampShowsGridScroll(m_showSelected,m_filteredShows.size(),m_showScroll);}else m_showSelected=m_showScroll=0;if(!m_filteredAnime.empty()){m_animeSelected=std::max(0,std::min(m_animeSelected,(int)m_filteredAnime.size()-1));m_animeScroll=clampShowsGridScroll(m_animeSelected,m_filteredAnime.size(),m_animeScroll);}else m_animeSelected=m_animeScroll=0;if(const MediaItem*item=showsSelectedItem())m_showsPreviewId=item->id; }
 
 int HomeScreen::moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const
 {
@@ -200,6 +202,8 @@ void HomeScreen::clampNavigation()
         m_rowScroll = clampMovieGridScrollCompact(
             m_activeCard, (int)items.size(), m_rowScroll);
         m_cardScroll = 0;
+        if (const MediaItem *item = currentItem())
+            m_moviePreviewId = item->id;
         return;
     }
     if (activeTabNamed("Shows")) { clampShowsNavigation(); return; }

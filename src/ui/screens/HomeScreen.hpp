@@ -147,6 +147,7 @@ private:
     ShowsFocus m_showsFocus = ShowsFocus::AlphabetRail;
     int m_showSelected=0, m_animeSelected=0, m_showScroll=0, m_animeScroll=0;
     int m_showsAlphabetFocus=0, m_showsActiveLetter=-1;
+    std::string m_moviePreviewId;
     std::string m_showsPreviewId;
 
     // Session info for API calls

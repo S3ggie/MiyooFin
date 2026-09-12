@@ -105,6 +105,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;
+    queuePosterJobs(planMediaPagePosterJobs(result.items));
     if (!m_firstMediaPageReadCompletedLogged) {
         m_firstMediaPageReadCompletedLogged = true;
         uiDiagnostics().log(

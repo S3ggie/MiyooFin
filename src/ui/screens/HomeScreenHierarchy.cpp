@@ -50,7 +50,7 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs)
         queued.insert(job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height));
     for (auto &job : jobs) {
         std::string key=job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height);
-        if (queued.insert(key).second && !ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+        if (queued.insert(key).second)
             m_pendingPosterJobs.push_back(std::move(job));
     }
     performanceTelemetry().setWorkerQueueDepth(
@@ -62,7 +62,8 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySn
 {
     std::vector<PosterJob> out;
     for (auto &job : planHomePosterJobs(snapshot))
-        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
+        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+            out.push_back(std::move(job));
     return out;
 }
 
@@ -70,7 +71,8 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std
 {
     std::vector<PosterJob> out;
     for (auto &job : planSeasonPosterJobs(seasons))
-        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) out.push_back(std::move(job));
+        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+            out.push_back(std::move(job));
     return out;
 }
 
@@ -221,7 +223,7 @@ void HomeScreen::posterWorker()
     for (;;) {
         std::vector<PosterJob> jobs;
         { std::unique_lock<std::mutex> lock(m_posterMutex); m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();}); if(m_stopPosterWorker) return; jobs.swap(m_pendingPosterJobs); performanceTelemetry().setWorkerQueueDepth(WorkerId::HomePoster, 0); performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true); }
-        for(const auto &job:jobs){ HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster); if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty()){ if(ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size())) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster); else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); } else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); }
+        for(const auto &job:jobs){ if(ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) continue; HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster); if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty()){ if(ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size())) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster); else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); } else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); }
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
         std::lock_guard<std::mutex> lock(m_posterMutex);
         performanceTelemetry().setWorkerQueueDepth(

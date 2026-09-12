@@ -8,6 +8,20 @@ std::string homeArtworkKey(const MediaItem &item)
     return buildRowArtworkKey(item);
 }
 
+std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem> &items)
+{
+    std::vector<HomePosterJob> out;
+    std::set<std::string> seen;
+    for (const auto &item : items) {
+        DisplayArtwork artwork=displayArtworkForItem(item);
+        if (!artwork.valid()) continue;
+        const std::string key=homeArtworkKey(item);
+        if (!seen.insert(key).second) continue;
+        out.push_back({item.id,artwork.imageType,artwork.tag,artwork.width,artwork.height});
+    }
+    return out;
+}
+
 std::vector<HomePosterJob> planHomePosterJobs(const LibrarySnapshot &snapshot)
 {
     std::vector<HomePosterJob> out; std::set<std::string> seen;

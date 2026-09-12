@@ -122,6 +122,28 @@ static void testMovieAlphabetFocus()
 }
 
 static MediaItem titledShow(const std::string &id, const std::string &title, const std::string &genre="") { MediaItem i; i.id=id;i.title=title;i.type="show";if(!genre.empty())i.genres={genre};return i; }
+static void testBoundedPagePosterPlanning()
+{
+    std::printf("[test] bounded media page poster planning\n");
+    MediaItem show=titledShow("show-page","Show page");
+    show.imageTags["Primary"]="show-tag";
+    MediaItem anime=titledShow("anime-page","Anime page");
+    anime.imageTags["Primary"]="anime-tag";
+    MediaItem movie; movie.id="movie-page"; movie.title="Movie page";
+    movie.type="movie"; movie.imageTags["Primary"]="movie-tag";
+    MediaItem missing=titledShow("missing-page","No poster");
+    MediaItem empty=titledShow("empty-page","Empty tag");
+    empty.imageTags["Primary"]="";
+    const auto jobs=planMediaPagePosterJobs({show,anime,movie,missing,empty});
+    CHECK(jobs.size()==3);
+    CHECK(jobs[0].itemId=="show-page" && jobs[1].itemId=="anime-page"
+          && jobs[2].itemId=="movie-page");
+    CHECK(jobs[0].width==64 && jobs[0].height==96
+          && jobs[1].width==64 && jobs[1].height==96
+          && jobs[2].width==64 && jobs[2].height==96);
+    std::printf("[test] bounded media page poster planning OK\n");
+}
+
 static void testShowsFocusPreservedDuringIncrementalRefresh()
 {
     std::printf("[test] Shows/Anime focus survives incremental refresh\n");
@@ -146,6 +168,7 @@ static void testShowsFocusPreservedDuringIncrementalRefresh()
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
+    testBoundedPagePosterPlanning();
     testShowsFocusPreservedDuringIncrementalRefresh();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));

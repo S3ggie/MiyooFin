@@ -2,22 +2,8 @@
 #include "../../net/RouteStatus.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include <cstdio>
-#include <ctime>
 
 namespace miyoofin {
-
-static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
-
-static std::future<CatalogDbHierarchyWriteResult> rejectedCatalogHierarchy(
-    const char *message)
-{
-    std::promise<CatalogDbHierarchyWriteResult> promise;
-    CatalogDbHierarchyWriteResult result;
-    result.error = CatalogDbErrorCategory::ConfigurationFailed;
-    result.message = message;
-    promise.set_value(std::move(result));
-    return promise.get_future();
-}
 
 HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<DownloadManager> downloads,
@@ -97,34 +83,6 @@ int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selecte
 const char *HomeScreen::lastApiRouteValue()
 {
     return RouteStatus::label(RouteStatus::latest());
-}
-
-std::future<CatalogDbHierarchyWriteResult>
-HomeScreen::submitCatalogHierarchyForTest(
-    const MediaItem &series, const std::vector<MediaItem> &seasons,
-    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-    std::uint64_t generation, bool complete)
-{
-    return submitCatalogHierarchy(series, seasons, episodesBySeason,
-                                  generation, complete, {});
-}
-
-std::future<CatalogDbHierarchyWriteResult> HomeScreen::submitCatalogHierarchy(
-    const MediaItem &series, const std::vector<MediaItem> &seasons,
-    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-    std::uint64_t generation, bool complete,
-    const std::shared_ptr<std::atomic_bool> &cancellation)
-{
-    if (!complete)
-        return rejectedCatalogHierarchy(
-            "incomplete hierarchy is not eligible for CatalogDb commit");
-    if (!m_catalogDb)
-        return rejectedCatalogHierarchy("CatalogDb service is unavailable");
-    CatalogDbJobMetadata metadata = m_catalogMetadata;
-    metadata.cancellation = cancellation;
-    return m_catalogDb->stageSeriesHierarchy(
-        series, seasons, episodesBySeason, generation, wallClockMs(), true,
-        metadata);
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)

@@ -403,9 +403,11 @@ static void testHomeCatalogHierarchyIntegration()
     session.accessToken = "synthetic-token";
     session.userId = user;
     {
-        HomeScreen home(session, {}, db, epoch);
+        auto librarySync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+        HomeScreen home(session, {}, db, epoch, librarySync);
 
-        auto online = home.submitCatalogHierarchyForTest(
+        auto online = librarySync->stageSeriesHierarchy(
             series, {season}, episodes, 1, true).get();
         CHECK(online.success && online.workerOwned);
         auto afterSeries=db->readSyncState(false,0,0).get();
@@ -420,7 +422,7 @@ static void testHomeCatalogHierarchyIntegration()
 
         MediaItem invalidSeries = series;
         invalidSeries.type = "movie";
-        auto failed = home.submitCatalogHierarchyForTest(
+        auto failed = librarySync->stageSeriesHierarchy(
             invalidSeries, {season}, episodes, 2, true).get();
         CHECK(!failed.success && !failed.cancelled && !failed.superseded);
         CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
@@ -432,20 +434,20 @@ static void testHomeCatalogHierarchyIntegration()
         CHECK(db->stageSeriesHierarchy(
                   series, {season}, {{season.id, {offlineEpisode}}},
                   2, 2000, false).get().success);
-        auto authoritative = home.submitCatalogHierarchyForTest(
+        auto authoritative = librarySync->stageSeriesHierarchy(
             series, {season}, episodes, 3, true).get();
         CHECK(authoritative.success);
         auto reconciled = db->getEpisodes(season.id).get();
         CHECK(reconciled.success && reconciled.items.size() == 1
               && reconciled.items[0].title == episode.title);
 
-        auto repeated = home.submitCatalogHierarchyForTest(
+        auto repeated = librarySync->stageSeriesHierarchy(
             series, {season}, episodes, 4, true).get();
         CHECK(repeated.success);
         auto repeatedRead = db->getEpisodes(season.id).get();
         CHECK(repeatedRead.success && repeatedRead.items.size() == 1);
 
-        auto incomplete = home.submitCatalogHierarchyForTest(
+        auto incomplete = librarySync->stageSeriesHierarchy(
             series, {season}, {{season.id, {}}}, 5, false).get();
         CHECK(!incomplete.success && !incomplete.cancelled
               && !incomplete.superseded);
@@ -471,7 +473,7 @@ static void testHomeCatalogHierarchyIntegration()
         staleMetadata.scopeEpoch=epoch;
         auto staleCheckpoint=db->writeSyncState(5000,4500,6,staleMetadata).get();
         CHECK(!staleCheckpoint.success && staleCheckpoint.superseded);
-        auto stale = home.submitCatalogHierarchyForTest(
+        auto stale = librarySync->stageSeriesHierarchy(
             series, {season}, episodes, 6, true).get();
         CHECK(!stale.success && stale.superseded);
         auto otherRead = db->getSeasons(series.id).get();

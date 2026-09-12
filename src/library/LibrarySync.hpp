@@ -61,6 +61,18 @@ public:
     std::future<HierarchyRefreshResult> refreshEpisodes(
         const MediaItem &series, const MediaItem &season,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<CatalogDbReconcileResult> reconcileSeries(
+        const std::vector<MediaItem> &series, bool authoritative,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<CatalogDbHierarchyWriteResult> stageSeriesHierarchy(
+        const MediaItem &series, const std::vector<MediaItem> &seasons,
+        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
+        std::uint64_t generation, bool complete,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<CatalogDbSyncState> writeSyncState(
+        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+        std::uint64_t committedGeneration,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<OfflineRebuildResult> reconstructOfflineDownloads(
         const std::string &downloadRoot = "downloads");
     Status status() const;

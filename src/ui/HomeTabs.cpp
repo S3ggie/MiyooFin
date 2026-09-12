@@ -40,6 +40,17 @@ void updateRecentlyAddedRow(std::vector<TabData> &tabs, const std::vector<MediaI
     rows.insert(insertAt, {"Recently Added", items});
 }
 
+HomeMediaWindows mediaWindowsFromTabs(const std::vector<TabData> &tabs)
+{
+    HomeMediaWindows out;
+    for (const auto &tab : tabs) {
+        if (tab.rows.empty()) continue;
+        if (tab.name == "Movies") out.movies = tab.rows.front().items;
+        if (tab.name == "Shows") out.shows = tab.rows.front().items;
+    }
+    return out;
+}
+
 std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views)
 {
     std::vector<MediaItem> out; std::map<std::string, bool> seen;

@@ -1,11 +1,17 @@
 #include "LibrarySync.hpp"
+#include "OfflineLibraryQuery.hpp"
+#include "../download/DownloadStore.hpp"
+#include <cerrno>
+#include <future>
+#include <unistd.h>
 
 namespace miyoofin {
 namespace library {
 library::LibrarySync::LibrarySync(Session session, std::shared_ptr<CatalogDb> db,
                          std::uint64_t scopeEpoch)
     : m_session(std::move(session)), m_db(std::move(db)),
-      m_cancel(std::make_shared<std::atomic_bool>(false)) {
+      m_cancel(std::make_shared<std::atomic_bool>(false)),
+      m_offlineGeneration(std::make_shared<std::atomic<std::uint64_t>>(0)) {
     m_metadata.scopeEpoch = scopeEpoch;
     m_metadata.cancellation = m_cancel;
 }
@@ -27,8 +33,141 @@ std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::abort(std::uint64
     m_inFlight = false;
     return m_db->abortTopLevelSync(generation, m_metadata);
 }
+std::future<library::OfflineRebuildResult>
+library::LibrarySync::reconstructOfflineDownloads(
+    const std::string &downloadRoot)
+{
+    const auto db = m_db;
+    const Session session = m_session;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto cancellation = m_cancel;
+    const auto reconstructionGeneration = m_offlineGeneration;
+    const auto operationCancellation =
+        std::make_shared<std::atomic_bool>(false);
+    {
+        std::lock_guard<std::mutex> lock(m_offlineMutex);
+        if (m_offlineCancellation)
+            m_offlineCancellation->store(true);
+        m_offlineCancellation = operationCancellation;
+    }
+    const std::uint64_t generation = ++(*reconstructionGeneration);
+    return std::async(std::launch::async,
+        [db, session, metadata, cancellation, reconstructionGeneration,
+         operationCancellation, generation, downloadRoot] {
+            OfflineRebuildResult result;
+            const auto current = [&] {
+                if (cancellation && cancellation->load()) {
+                    result.cancelled = true;
+                    result.error = CatalogDbErrorCategory::Superseded;
+                    result.message = "offline catalog reconstruction cancelled";
+                    return false;
+                }
+                if (operationCancellation->load()) {
+                    result.superseded = true;
+                    result.error = CatalogDbErrorCategory::Superseded;
+                    result.message =
+                        "offline catalog reconstruction superseded";
+                    return false;
+                }
+                if (reconstructionGeneration->load() != generation) {
+                    result.superseded = true;
+                    result.error = CatalogDbErrorCategory::Superseded;
+                    result.message = "offline catalog reconstruction superseded";
+                    return false;
+                }
+                return true;
+            };
+            if (!current()) return result;
+
+            DownloadStore store(downloadRoot);
+            const std::string scope =
+                DownloadStore::scopeKey(session.serverUrl, session.userId);
+            std::vector<DownloadItem> downloads;
+            std::string error;
+            if (!store.loadCompleteMetadata(scope, downloads, &error)) {
+                const std::string indexPath = store.scopePath(scope) + "/index.v1";
+                const bool indexMissing = ::access(indexPath.c_str(), F_OK) != 0;
+                const int accessError = errno;
+                if (indexMissing && accessError == ENOENT) {
+                    result.success = true;
+                    result.skipped = true;
+                    result.message = "no durable download metadata";
+                    return result;
+                }
+                result.error = CatalogDbErrorCategory::CorruptOrIo;
+                result.message = error.empty()
+                    ? "download metadata could not be read" : error;
+                return result;
+            }
+
+            const OfflineLibraryQuery::Hierarchy hierarchy =
+                OfflineLibraryQuery::hierarchy(downloads);
+            CatalogDbJobMetadata writeMetadata = metadata;
+            writeMetadata.cancellation = operationCancellation;
+            const auto write = [&](const MediaItem &root,
+                                   const std::vector<MediaItem> &seasons,
+                                   const std::map<std::string,
+                                                  std::vector<MediaItem>> &episodes) {
+                if (!current()) return false;
+                const auto written = db->stageSeriesHierarchy(
+                    root, seasons, episodes, 0, 0, false, writeMetadata).get();
+                result.itemsUpserted += written.rowsWritten;
+                if (written.cancelled) {
+                    result.cancelled = true;
+                    result.error = written.error;
+                    result.message = written.message;
+                    return false;
+                }
+                if (written.superseded) {
+                    result.superseded = true;
+                    result.error = written.error;
+                    result.message = written.message;
+                    return false;
+                }
+                if (!written.success) {
+                    result.error = written.error;
+                    result.message = written.message;
+                    return false;
+                }
+                return true;
+            };
+
+            for (const auto &movie : hierarchy.movies) {
+                if (!write(movie, {}, {})) return result;
+            }
+            result.containersSynthesized =
+                hierarchy.series.size() + hierarchy.seasons.size();
+            for (const auto &seriesEntry : hierarchy.series) {
+                std::vector<MediaItem> seasons;
+                std::map<std::string, std::vector<MediaItem>> episodes;
+                for (const auto &seasonEntry : hierarchy.seasons) {
+                    if (seasonEntry.second.seriesId != seriesEntry.first)
+                        continue;
+                    seasons.push_back(seasonEntry.second);
+                    const auto found = hierarchy.episodesBySeason.find(
+                        seasonEntry.first);
+                    episodes.emplace(seasonEntry.first,
+                                     found == hierarchy.episodesBySeason.end()
+                                         ? std::vector<MediaItem>{}
+                                         : found->second);
+                }
+                if (!write(seriesEntry.second, seasons, episodes))
+                    return result;
+            }
+            if (!current()) return result;
+            result.success = true;
+            return result;
+        });
+}
 library::LibrarySync::Status library::LibrarySync::status() const {
     return {m_inFlight.load(), m_generation.load(), m_success.load()};
 }
-void library::LibrarySync::cancel() noexcept { if (m_cancel) m_cancel->store(true); }
+void library::LibrarySync::cancel() noexcept
+{
+    if (m_cancel)
+        m_cancel->store(true);
+    std::lock_guard<std::mutex> lock(m_offlineMutex);
+    if (m_offlineCancellation)
+        m_offlineCancellation->store(true);
+}
 }

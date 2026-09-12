@@ -212,18 +212,6 @@ struct CatalogDbReconcileResult {
     std::size_t seriesDeleted = 0;
 };
 
-struct CatalogDbOfflineRebuildResult {
-    bool success = false;
-    bool workerOwned = false;
-    bool skipped = false;
-    bool cancelled = false;
-    bool superseded = false;
-    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
-    std::string message;
-    std::size_t itemsUpserted = 0;
-    std::size_t containersSynthesized = 0;
-};
-
 struct CatalogDbSyncState {
     bool success = false;
     bool workerOwned = false;
@@ -403,13 +391,6 @@ public:
     std::future<CatalogDbReconcileResult> reconcileSeriesForTest(
         const std::vector<MediaItem> &series, bool authoritative,
         int failAfterRows);
-    /// Rebuild the minimum browsable hierarchy from durable download
-    /// metadata. This is read-only with respect to DownloadStore and remains
-    /// incomplete until a later authoritative Jellyfin reconciliation.
-    std::future<CatalogDbOfflineRebuildResult>
-    reconstructOfflineDownloads(
-        const std::string &downloadRoot = "downloads",
-        const CatalogDbJobMetadata &metadata = {});
     /// Read the SQLite hierarchy checkpoint on the CatalogDb worker.  A
     /// non-empty legacy seed is imported only while the SQLite row is still
     /// at its initial zero value; the legacy file is never written.
@@ -484,7 +465,6 @@ private:
     struct QueryCommand;
     struct HierarchyWriteCommand;
     struct ReconcileCommand;
-    struct OfflineRebuildCommand;
     struct SyncStateCommand;
     struct LibrarySeedCommand;
     struct LibraryReadCommand;
@@ -503,8 +483,6 @@ private:
         const std::shared_ptr<HierarchyWriteCommand> &command);
     void processReconcile(
         const std::shared_ptr<ReconcileCommand> &command);
-    void processOfflineRebuild(
-        const std::shared_ptr<OfflineRebuildCommand> &command);
     void processSyncState(
         const std::shared_ptr<SyncStateCommand> &command);
     void processLibrarySeed(
@@ -522,9 +500,6 @@ private:
     std::future<CatalogDbReconcileResult> enqueueReconcile(
         const std::vector<MediaItem> &series, bool authoritative,
         const CatalogDbJobMetadata &metadata, int failAfterRows);
-    std::future<CatalogDbOfflineRebuildResult> enqueueOfflineRebuild(
-        const std::string &downloadRoot,
-        const CatalogDbJobMetadata &metadata);
     std::future<CatalogDbSyncState> enqueueSyncStateRead(
         bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
         std::int64_t legacyLastReconcileMs,
@@ -561,7 +536,6 @@ private:
     std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
     std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
     std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
-    std::deque<std::shared_ptr<OfflineRebuildCommand>> m_offlineCommands;
     std::deque<std::shared_ptr<SyncStateCommand>> m_syncStateCommands;
     std::deque<std::shared_ptr<LibrarySeedCommand>> m_librarySeedCommands;
     std::deque<std::shared_ptr<LibraryReadCommand>> m_libraryReadCommands;

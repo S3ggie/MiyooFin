@@ -22,6 +22,7 @@ CatalogDb public API imports LibraryCache and preserves full-snapshot APIs that 
 - `src/catalog/CatalogDb.hpp`
 - `src/catalog/CatalogDb.cpp`
 - `src/cache/LibraryCache.*` only for compatibility relocation
+- `src/library/OfflineLibraryQuery.hpp`
 - `Makefile`
 - `Makefile.cross`
 - `tests/cases/test_catalog_parity.inc`

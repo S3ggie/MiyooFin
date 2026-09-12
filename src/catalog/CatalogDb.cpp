@@ -1,6 +1,6 @@
 #include "CatalogDb.hpp"
 
-#include "../cache/LibraryCache.hpp"
+#include "CatalogCompatibility.hpp"
 #include "../data/MediaItem.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../download/DownloadStore.hpp"

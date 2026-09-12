@@ -122,9 +122,31 @@ static void testMovieAlphabetFocus()
 }
 
 static MediaItem titledShow(const std::string &id, const std::string &title, const std::string &genre="") { MediaItem i; i.id=id;i.title=title;i.type="show";if(!genre.empty())i.genres={genre};return i; }
+static void testShowsFocusPreservedDuringIncrementalRefresh()
+{
+    std::printf("[test] Shows/Anime focus survives incremental refresh\n");
+    using Focus = HomeScreen::ShowsFocusState;
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::AnimeGrid, true, true)
+          == Focus::AnimeGrid);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::ShowsGrid, true, true)
+          == Focus::ShowsGrid);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::AnimeGrid, false, true)
+          == Focus::AnimeGrid);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::ShowsGrid, true, false)
+          == Focus::ShowsGrid);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::AnimeGrid, false, false)
+          == Focus::AlphabetRail);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::AlphabetRail, true, true)
+          == Focus::ShowsGrid);
+    CHECK(HomeScreen::showsFocusAfterRefresh(Focus::AlphabetRail, false, true)
+          == Focus::AnimeGrid);
+    std::printf("[test] Shows/Anime focus survives incremental refresh OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
+    testShowsFocusPreservedDuringIncrementalRefresh();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));

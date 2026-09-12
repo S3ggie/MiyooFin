@@ -42,6 +42,8 @@ namespace miyoofin {
 /// Fetches real library data from the server on a background thread.
 class HomeScreen : public Screen {
 public:
+    enum class ShowsFocusState { ShowsGrid, AnimeGrid, AlphabetRail };
+
     using SettingsRowAction = HomeSettingsRowAction;
     using SettingsAddressRow = HomeSettingsAddressRow;
     using PosterJob = HomePosterJob;
@@ -99,6 +101,9 @@ public:
     /// Keep a named tab across a layout change, falling back to Movies.
     static int transitionTabIndex(const std::vector<TabData> &from, int selected,
                                   const std::vector<TabData> &to);
+    static ShowsFocusState showsFocusAfterRefresh(ShowsFocusState previous,
+                                                   bool hasShows,
+                                                   bool hasAnime);
     /// Season posters use the exact dimensions of SeriesScreen's grid.
     static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
 

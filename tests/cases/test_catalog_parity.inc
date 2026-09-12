@@ -1288,6 +1288,114 @@ static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
               && showPage.items[0].id == "__task26_catalog_show__");
     }
     removeCatalogMigrationTestPaths(paths);
+
+    const auto runRailFixture = [](bool latest, bool respond,
+                                   std::vector<MediaItem> &items,
+                                   std::string &error) {
+        const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener < 0) return false;
+        int reuse = 1;
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                     sizeof(reuse));
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(0);
+        if (::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                   sizeof(address)) != 0) {
+            ::close(listener);
+            return false;
+        }
+        socklen_t addressSize = sizeof(address);
+        if (::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                          &addressSize) != 0
+            || ::listen(listener, 1) != 0) {
+            ::close(listener);
+            return false;
+        }
+        const std::string body = latest
+            ? R"({"Items":[{"Id":"__task27_latest__","Type":"Movie","Name":"Latest Item"}]})"
+            : R"({"Items":[{"Id":"__task27_resume__","Type":"Movie","Name":"Resume Item"}]})";
+        std::thread server([&] {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client >= 0) {
+                char buffer[2048];
+                (void)::recv(client, buffer, sizeof(buffer), 0);
+                if (respond) {
+                    const std::string response =
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                        "Content-Length: " + std::to_string(body.size()) +
+                        "\r\nConnection: close\r\n\r\n" + body;
+                    (void)::send(client, response.data(), response.size(), 0);
+                }
+                ::close(client);
+            }
+        });
+        const std::string url = "http://127.0.0.1:" +
+            std::to_string(ntohs(address.sin_port));
+        const bool ok = latest
+            ? JellyfinApi::getLatestItems(url, "token", "user", "device",
+                                           16, items, error)
+            : JellyfinApi::getResumeItems(url, "token", "user", "device",
+                                          12, items, error);
+        server.join();
+        ::close(listener);
+        return ok;
+    };
+    std::vector<MediaItem> resumed;
+    std::string resumeError;
+    CHECK(runRailFixture(false, true, resumed, resumeError)
+          && resumeError.empty() && resumed.size() == 1
+          && resumed[0].id == "__task27_resume__");
+    std::vector<MediaItem> latest;
+    std::string latestError;
+    CHECK(!runRailFixture(true, false, latest, latestError)
+          && !latestError.empty());
+
+    const std::string recentCatalogUrl =
+        "https://sqlite-recently-added-failure-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const std::string recentCatalogUser = "recently-added-failure-user";
+    const auto recentPaths =
+        catalogMigrationTestPaths(recentCatalogUrl, recentCatalogUser);
+    removeCatalogMigrationTestPaths(recentPaths);
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch =
+            db->configureScope(recentCatalogUrl, recentCatalogUser);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = recentCatalogUrl;
+        session.userId = recentCatalogUser;
+        auto sync = std::make_shared<library::LibrarySync>(
+            session, db, epoch);
+        CHECK(sync->begin(80).get().success);
+        CatalogDbMediaPageWrite movies;
+        movies.items = {catalogParityItem(
+            "__task27_catalog_movie__", "movie", "Catalog Movie")};
+        movies.viewId = "task27-movies";
+        movies.viewName = "Movies";
+        movies.collectionType = "movies";
+        movies.syncGeneration = 80;
+        CHECK(sync->stage(movies).get().success);
+        CatalogDbMediaPageWrite shows = movies;
+        shows.items = {catalogParityItem(
+            "__task27_catalog_show__", "show", "Catalog Show")};
+        shows.viewId = "task27-shows";
+        shows.viewName = "Shows";
+        shows.collectionType = "tvshows";
+        CHECK(sync->stage(shows).get().success);
+        CHECK(sync->finalize(80).get().success);
+
+        library::LibraryQuery query(db, epoch);
+        const auto moviePage = query.movies(-1, 8).get();
+        const auto showPage = query.shows(-1, 8).get();
+        CHECK(moviePage.success && moviePage.items.size() == 1
+              && moviePage.items[0].id == "__task27_catalog_movie__");
+        CHECK(showPage.success && showPage.items.size() == 1
+              && showPage.items[0].id == "__task27_catalog_show__");
+    }
+    removeCatalogMigrationTestPaths(recentPaths);
     std::printf("[test] Home optional rail failures are isolated OK\n");
 }
 

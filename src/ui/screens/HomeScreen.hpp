@@ -169,7 +169,7 @@ private:
         std::shared_ptr<std::atomic_bool> cancellation;
         std::future<library::MediaPage> future;
     };
-    MediaPageState m_moviePage, m_showPage;
+    MediaPageState m_moviePage, m_showPage, m_animePage;
 
     // Logout (two-step confirm on Y)
     bool m_logoutArmed = false;

@@ -26,7 +26,20 @@ std::future<MediaPage> LibraryQuery::movies(int letter, std::size_t limit,
 
 std::future<MediaPage> LibraryQuery::shows(int letter, std::size_t limit,
                                             const CatalogDbPageCursor &after) {
-    auto f = m_db->readMediaPage("show", letter, limit, after, metadata());
+    auto f = m_db->readMediaPage("show", letter, limit, after, metadata(),
+                                 CatalogDbMediaPageFilter::Supported);
+    return std::async(std::launch::async, [f = std::move(f)]() mutable {
+        auto r = f.get(); MediaPage out;
+        out.success=r.success; out.cancelled=r.cancelled; out.superseded=r.superseded;
+        out.error=r.error; out.message=std::move(r.message); out.hasMore=r.hasMore;
+        out.items=std::move(r.items); out.membershipsByItem=std::move(r.membershipsByItem); out.next=std::move(r.next); return out;
+    });
+}
+
+std::future<MediaPage> LibraryQuery::anime(int letter, std::size_t limit,
+                                            const CatalogDbPageCursor &after) {
+    auto f = m_db->readMediaPage("show", letter, limit, after, metadata(),
+                                 CatalogDbMediaPageFilter::Anime);
     return std::async(std::launch::async, [f = std::move(f)]() mutable {
         auto r = f.get(); MediaPage out;
         out.success=r.success; out.cancelled=r.cancelled; out.superseded=r.superseded;

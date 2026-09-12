@@ -767,6 +767,7 @@ static void testHomePreservesAnimeMembershipDuringBoundedReads()
     const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(source.find("m_animeItemIds") != std::string::npos);
     CHECK(source.find("isAnimeSeries") != std::string::npos);
+    CHECK(source.find("CachedLibraryView classificationView") == std::string::npos);
     CHECK(source.find("view.name") != std::string::npos);
     std::printf("[test] Home preserves Anime membership during bounded reads OK\n");
 }

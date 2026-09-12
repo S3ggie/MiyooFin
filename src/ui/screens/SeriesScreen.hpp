@@ -7,6 +7,8 @@
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../catalog/CatalogDb.hpp"
+#include "../../library/LibraryQuery.hpp"
+#include "../../library/LibrarySync.hpp"
 #include <memory>
 #include <map>
 #include <string>
@@ -24,7 +26,9 @@ class SeriesScreen : public Screen {
 public:
     SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
                  std::vector<MediaItem> cachedSeasons={}, bool downloadedOnly=false,
-                 std::shared_ptr<CatalogDb> catalogDb={}, std::uint64_t catalogScopeEpoch=0);
+                 std::shared_ptr<CatalogDb> catalogDb={}, std::uint64_t catalogScopeEpoch=0,
+                 std::shared_ptr<library::LibrarySync> librarySync={},
+                 std::shared_ptr<library::LibraryQuery> libraryQuery={});
     ~SeriesScreen() override;
 
     void enter() override;
@@ -69,6 +73,8 @@ private:
     MediaItem     m_series;
     std::shared_ptr<DownloadManager> m_downloads;
     std::shared_ptr<CatalogDb> m_catalogDb;
+    std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     CatalogDbJobMetadata m_catalogMetadata;
     bool m_networkOffline=false, m_downloadedOnly=false;
     std::uint64_t m_planId = 0; bool m_confirmDownload = false; bool m_planWholeSeries = false;
@@ -77,6 +83,7 @@ private:
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;
     std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedSeasonsDone=false; std::vector<MediaItem> m_fetchSeasons, m_cachedSeasons; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
+    std::shared_ptr<std::atomic_bool> m_catalogCancellation = std::make_shared<std::atomic_bool>(false);
 
     // Grid scroll state (row offset, not item index)
     int           m_seasonScroll = 0;  // kept for reset compatibility

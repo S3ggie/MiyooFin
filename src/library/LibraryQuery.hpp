@@ -2,6 +2,7 @@
 #define MIYOOFIN_LIBRARY_QUERY_HPP
 
 #include "../catalog/CatalogDb.hpp"
+#include <atomic>
 #include <future>
 #include <memory>
 #include <map>
@@ -38,13 +39,18 @@ public:
                                    const CatalogDbPageCursor &after = {});
     std::future<MediaPage> shows(int alphabetLetter, std::size_t limit,
                                  const CatalogDbPageCursor &after = {});
-    std::future<HierarchyPage> seasons(const std::string &seriesId);
-    std::future<HierarchyPage> episodes(const std::string &seasonId);
+    std::future<HierarchyPage> seasons(
+        const std::string &seriesId,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<HierarchyPage> episodes(
+        const std::string &seasonId,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::uint64_t scopeEpoch() const { return m_scopeEpoch; }
 
 private:
     std::shared_ptr<CatalogDb> m_db;
-    CatalogDbJobMetadata metadata() const;
+    CatalogDbJobMetadata metadata(
+        const std::shared_ptr<std::atomic_bool> &cancellation = {}) const;
     std::uint64_t m_scopeEpoch;
 };
 

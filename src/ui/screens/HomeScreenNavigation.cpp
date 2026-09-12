@@ -301,7 +301,7 @@ bool HomeScreen::handleAction(Action action)
         else { m_logoutArmed = true; m_logoutTimer = 3000; }
         return true;
     case Action::Confirm: {
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;resetMediaPaging();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));return true;}return true;}
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){m_showsActiveLetter=m_showsActiveLetter==m_showsAlphabetFocus?-1:m_showsAlphabetFocus;resetMediaPaging();return true;}if(const MediaItem*i=showsSelectedItem()){m_stack->push(std::make_unique<SeriesScreen>(m_session,*i,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch,m_librarySync,m_libraryQuery));return true;}return true;}
         if (activeTabNamed("Movies") && m_movieRailFocused) {
             m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             resetMediaPaging();
@@ -312,7 +312,7 @@ bool HomeScreen::handleAction(Action action)
         if (item) {
             printf("[HomeScreen] Select: %s (%s)\n", item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
-                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch));
+                m_stack->push(std::make_unique<SeriesScreen>(m_session, *item,m_downloads,m_libraryOffline,std::vector<MediaItem>{},presentationOffline(),m_catalogDb,m_catalogMetadata.scopeEpoch,m_librarySync,m_libraryQuery));
                 return true;
             }
             if (item->type == "movie") {
@@ -352,7 +352,7 @@ bool HomeScreen::handleAction(Action action)
                     m_stack->push(std::make_unique<EpisodeBrowserScreen>(
                         m_session, series, season, item->id, m_downloads,
                         m_libraryOffline, presentationOffline(), m_catalogDb,
-                        m_catalogMetadata.scopeEpoch));
+                        m_catalogMetadata.scopeEpoch, m_librarySync, m_libraryQuery));
                     return true;
                 }
                 printf("[HomeScreen] Cannot open episode browser: missing series/season context\n");

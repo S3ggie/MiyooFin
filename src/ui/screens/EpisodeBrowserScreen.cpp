@@ -2,8 +2,6 @@
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../app/UiDiagnostics.hpp"
-#include "../../net/JellyfinApi.hpp"
-#include "../../net/RouteRequest.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include <algorithm>
@@ -96,17 +94,27 @@ EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            std::shared_ptr<DownloadManager> downloads,
                                            bool networkOffline, bool downloadedOnly,
                                            std::shared_ptr<CatalogDb> catalogDb,
-                                           std::uint64_t catalogScopeEpoch)
+                                           std::uint64_t catalogScopeEpoch,
+                                           std::shared_ptr<library::LibrarySync> librarySync,
+                                           std::shared_ptr<library::LibraryQuery> libraryQuery)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
     , m_downloads(std::move(downloads))
     , m_catalogDb(std::move(catalogDb))
+    , m_librarySync(std::move(librarySync))
+    , m_libraryQuery(std::move(libraryQuery))
     , m_networkOffline(networkOffline)
     , m_downloadedOnly(downloadedOnly)
 {
     m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
+    if (m_catalogDb && !m_librarySync)
+        m_librarySync = std::make_shared<library::LibrarySync>(
+            m_session, m_catalogDb, catalogScopeEpoch);
+    if (m_catalogDb && !m_libraryQuery)
+        m_libraryQuery = std::make_shared<library::LibraryQuery>(
+            m_catalogDb, catalogScopeEpoch);
 }
 
 // -------------------------------------------------------------------
@@ -214,6 +222,7 @@ void EpisodeBrowserScreen::leave()
     UiDiagnostics::Scope scope("EpisodeBrowserScreen::workerShutdown");
     printf("[EpisodeBrowserScreen] leave\n");
     m_fetchCancelled.store(true, std::memory_order_release);
+    m_catalogCancellation->store(true, std::memory_order_release);
     m_workerCancelled.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);
@@ -239,18 +248,20 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         m_cachedEpisodesDone=false;
     }
     m_fetchCancelled.store(false, std::memory_order_release);
+    m_catalogCancellation->store(false, std::memory_order_release);
     const Session s=m_session;
     const MediaItem seriesItem=m_series, seasonItem=m_season;
     const std::string sid=m_series.id, season=m_season.id;
     const bool networkOffline=m_networkOffline;
     const bool downloadedOnly=m_downloadedOnly;
     const bool loadCached=loadCachedEpisodes;
-    const std::shared_ptr<CatalogDb> catalogDb=m_catalogDb;
-    const CatalogDbJobMetadata catalogMetadata=m_catalogMetadata;
+    const std::shared_ptr<library::LibraryQuery> libraryQuery=m_libraryQuery;
+    const std::shared_ptr<library::LibrarySync> librarySync=m_librarySync;
+    const std::shared_ptr<std::atomic_bool> cancellation=m_catalogCancellation;
     const std::shared_ptr<DownloadManager> downloads=m_downloads;
     m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,
                                networkOffline,downloadedOnly,loadCached,
-                               catalogDb,catalogMetadata,downloads](){
+                               libraryQuery,librarySync,cancellation,downloads](){
         PerformanceTelemetry &telemetry=performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::EpisodeFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 1);
@@ -336,9 +347,9 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         std::vector<MediaItem> cached;
         bool cacheReadOk = true;
         if(loadCached) {
-            if (catalogDb) {
-                const CatalogDbHierarchyResult cacheResult =
-                    catalogDb->getEpisodes(season, catalogMetadata).get();
+            if (libraryQuery) {
+                const library::HierarchyPage cacheResult =
+                    libraryQuery->episodes(season, cancellation).get();
                 cacheReadOk = cacheResult.success;
                 if (cacheResult.success)
                     cached = cacheResult.items;
@@ -374,22 +385,19 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
             completeTelemetry(Outcome::Cancelled);
             return;
         }
-        std::vector<MediaItem>v;std::string e;
-        bool ok=RouteRequest(s).run([&](const std::string &base){return JellyfinApi::getEpisodes(base,s.accessToken,s.userId,s.deviceId,sid,season,v,e,&m_fetchCancelled);},e);
+        std::vector<MediaItem>v;std::string e;bool ok=false;
+        if (librarySync) {
+            const library::HierarchyRefreshResult refreshed =
+                librarySync->refreshEpisodes(seriesItem, seasonItem,
+                                              cancellation).get();
+            ok = refreshed.success;
+            v = refreshed.items;
+            e = refreshed.message;
+        } else {
+            e = "LibrarySync service unavailable";
+        }
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
-            if (catalogDb) {
-                const CatalogDbHierarchyWriteResult writeResult =
-                    catalogDb->reconcileSeasonHierarchy(
-                        seriesItem, seasonItem, v, catalogMetadata.generation,
-                        static_cast<std::int64_t>(std::time(nullptr)) * 1000,
-                        catalogMetadata).get();
-                if (!writeResult.success) {
-                    ok = false;
-                    e = writeResult.message.empty()
-                        ? "CatalogDb episode write failed" : writeResult.message;
-                }
-            }
-            if (ok && downloadedOnly)
+            if (downloadedOnly)
                 v = downloadedEpisodes(std::move(v));
         }
         {

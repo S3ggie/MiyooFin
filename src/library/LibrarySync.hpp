@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace miyoofin {
 namespace library {
@@ -23,6 +24,15 @@ struct OfflineRebuildResult {
     std::string message;
     std::size_t itemsUpserted = 0;
     std::size_t containersSynthesized = 0;
+};
+
+struct HierarchyRefreshResult {
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::vector<MediaItem> items;
 };
 
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
@@ -45,6 +55,12 @@ public:
         const CatalogDbMediaPageWrite &page);
     std::future<CatalogDbTopLevelSyncResult> finalize(std::uint64_t generation);
     std::future<CatalogDbTopLevelSyncResult> abort(std::uint64_t generation);
+    std::future<HierarchyRefreshResult> refreshSeasons(
+        const MediaItem &series,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<HierarchyRefreshResult> refreshEpisodes(
+        const MediaItem &series, const MediaItem &season,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<OfflineRebuildResult> reconstructOfflineDownloads(
         const std::string &downloadRoot = "downloads");
     Status status() const;

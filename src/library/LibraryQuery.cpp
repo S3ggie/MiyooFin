@@ -5,9 +5,11 @@ namespace miyoofin::library {
 LibraryQuery::LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t epoch)
     : m_db(std::move(db)), m_scopeEpoch(epoch) {}
 
-CatalogDbJobMetadata LibraryQuery::metadata() const {
+CatalogDbJobMetadata LibraryQuery::metadata(
+    const std::shared_ptr<std::atomic_bool> &cancellation) const {
     CatalogDbJobMetadata m;
     m.scopeEpoch = m_scopeEpoch;
+    m.cancellation = cancellation;
     return m;
 }
 
@@ -33,12 +35,16 @@ std::future<MediaPage> LibraryQuery::shows(int letter, std::size_t limit,
     });
 }
 
-std::future<HierarchyPage> LibraryQuery::seasons(const std::string &id) {
-    auto f=m_db->getSeasons(id, metadata());
+std::future<HierarchyPage> LibraryQuery::seasons(
+    const std::string &id,
+    const std::shared_ptr<std::atomic_bool> &cancellation) {
+    auto f=m_db->getSeasons(id, metadata(cancellation));
     return std::async(std::launch::async,[f=std::move(f)]() mutable { auto r=f.get(); HierarchyPage o; o.success=r.success;o.cancelled=r.cancelled;o.superseded=r.superseded;o.error=r.error;o.message=std::move(r.message);o.items=std::move(r.items);return o; });
 }
-std::future<HierarchyPage> LibraryQuery::episodes(const std::string &id) {
-    auto f=m_db->getEpisodes(id, metadata());
+std::future<HierarchyPage> LibraryQuery::episodes(
+    const std::string &id,
+    const std::shared_ptr<std::atomic_bool> &cancellation) {
+    auto f=m_db->getEpisodes(id, metadata(cancellation));
     return std::async(std::launch::async,[f=std::move(f)]() mutable { auto r=f.get(); HierarchyPage o; o.success=r.success;o.cancelled=r.cancelled;o.superseded=r.superseded;o.error=r.error;o.message=std::move(r.message);o.items=std::move(r.items);return o; });
 }
 }

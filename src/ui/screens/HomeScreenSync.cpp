@@ -99,6 +99,21 @@ void HomeScreen::requestMediaPage(MediaPageState &state)
     }
 }
 
+void HomeScreen::requestEarlierMediaPage(MediaPageState &state)
+{
+    if (!m_libraryQuery || state.inFlight || !state.hasEarlier)
+        return;
+    const std::string type = state.type;
+    const int letter = state.letter;
+    if (state.cancellation)
+        state.cancellation->store(true);
+    state = MediaPageState{};
+    state.type = type;
+    state.letter = letter;
+    state.replaceWindowOnNextPage = true;
+    requestMediaPage(state);
+}
+
 void HomeScreen::finishMediaPage(MediaPageState &state)
 {
     if (!state.inFlight || !state.future.valid()
@@ -123,17 +138,48 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     auto &window = state.type == "movie"
         ? m_moviePage.items
         : state.type == "anime" ? m_animePage.items : m_showPage.items;
-    std::set<std::string> known;
-    for (const auto &item : window)
-        known.insert(item.id);
-    for (const auto &item : result.items)
-        if (known.insert(item.id).second)
-            window.push_back(item);
+    if (state.replaceWindowOnNextPage) {
+        window = result.items;
+        state.replaceWindowOnNextPage = false;
+        state.hasEarlier = false;
+    } else {
+        std::set<std::string> known;
+        for (const auto &item : window)
+            known.insert(item.id);
+        for (const auto &item : result.items)
+            if (known.insert(item.id).second)
+                window.push_back(item);
+    }
     static constexpr std::size_t kWindowLimit = 96;
     if (window.size() > kWindowLimit) {
         const std::size_t remove = window.size() - kWindowLimit;
+        std::size_t removedGridItems = 0;
+        if (state.type == "movie") {
+            const int removedRows = static_cast<int>((remove + 7) / 8);
+            m_rowScroll = m_rowScroll > removedRows
+                ? m_rowScroll - removedRows : 0;
+        } else {
+            const auto &filtered = state.type == "anime"
+                ? m_animeWindow : m_showWindow;
+            for (std::size_t i = 0; i < remove; ++i) {
+                for (const auto &item : filtered) {
+                    if (item.id == window[i].id) {
+                        ++removedGridItems;
+                        break;
+                    }
+                }
+            }
+            const int removedRows = static_cast<int>((removedGridItems + 3) / 4);
+            if (state.type == "anime")
+                m_animeScroll = m_animeScroll > removedRows
+                    ? m_animeScroll - removedRows : 0;
+            else
+                m_showScroll = m_showScroll > removedRows
+                    ? m_showScroll - removedRows : 0;
+        }
         window.erase(window.begin(),
                      window.begin() + static_cast<std::ptrdiff_t>(remove));
+        state.hasEarlier = true;
     }
     state.next = result.next;
     state.hasMore = result.hasMore;

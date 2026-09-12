@@ -311,6 +311,20 @@ static void testHomeRefreshPreservesActiveGridSelection()
     std::printf("[test] Home refresh preserves active grid selection OK\n");
 }
 
+static void testHomeBoundedPagesCanRewind()
+{
+    std::printf("[test] Home bounded pages rewind without cursor jumps\n");
+    const std::string header=readTestBytes("src/ui/screens/HomeScreen.hpp");
+    const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(header.find("hasEarlier") != std::string::npos);
+    CHECK(header.find("replaceWindowOnNextPage") != std::string::npos);
+    CHECK(navigation.find("requestEarlierMediaPage") != std::string::npos);
+    CHECK(sync.find("replaceWindowOnNextPage") != std::string::npos);
+    CHECK(sync.find("hasEarlier = true") != std::string::npos);
+    std::printf("[test] Home bounded pages rewind without cursor jumps OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
@@ -325,6 +339,7 @@ static void testShowsPresentation()
     testAnimeSelectionSurvivesSharedWindowTrim();
     testHomeUsesDedicatedAnimeCatalogPage();
     testHomeRefreshPreservesActiveGridSelection();
+    testHomeBoundedPagesCanRewind();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));

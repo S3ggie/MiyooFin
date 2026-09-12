@@ -168,6 +168,7 @@ private:
         bool hasMore = true;
         bool hasEarlier = false;
         bool replaceWindowOnNextPage = false;
+        bool pendingDown = false;
         bool inFlight = false;
         std::shared_ptr<std::atomic_bool> cancellation;
         std::future<library::MediaPage> future;
@@ -346,6 +347,7 @@ private:
     void requestMediaPage(MediaPageState &state);
     void requestEarlierMediaPage(MediaPageState &state);
     void finishMediaPage(MediaPageState &state);
+    void applyPendingDown(MediaPageState &state);
     void updateMediaPaging();
     const MediaItem *showsSelectedItem() const;
     void clampShowsNavigation();

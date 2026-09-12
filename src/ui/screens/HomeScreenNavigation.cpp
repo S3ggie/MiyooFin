@@ -23,6 +23,14 @@ static bool gridAtTopRow(int selected, int columns)
     return selected >= 0 && selected < columns;
 }
 
+static bool gridAtBottomRow(int selected, int count, int columns)
+{
+    if (count <= 0 || columns <= 0 || selected < 0)
+        return false;
+    selected = std::min(selected, count - 1);
+    return selected / columns == (count - 1) / columns;
+}
+
 static int clampMovieGridScrollCompact(int selected, int count, int currentScroll)
 {
     if (count <= 0) return 0;
@@ -321,6 +329,15 @@ bool HomeScreen::handleAction(Action action)
         if (action != Action::NextTab && action != Action::PrevTab) return true;
         m_settingsScroll=std::max(0,std::min(m_settingsSelected,settingsRowCount(m_session)-SETTINGS_VISIBLE_ROWS));
     }
+    auto queueDownAtPageEdge = [this](MediaPageState &page, int selected,
+                                      int count, int columns) {
+        if (!gridAtBottomRow(selected, count, columns) || !page.hasMore)
+            return false;
+        page.pendingDown = true;
+        requestMediaPage(page);
+        return true;
+    };
+
     switch (action) {
     case Action::Up:
         if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid){if(gridAtTopRow(m_showSelected,SHOWS_GRID_COLUMNS))requestEarlierMediaPage(m_showPage);else m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);}else{if(gridAtTopRow(m_animeSelected,SHOWS_GRID_COLUMNS))requestEarlierMediaPage(m_animePage);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);}clampShowsNavigation();return true;}
@@ -328,8 +345,8 @@ bool HomeScreen::handleAction(Action action)
         else m_activeRow--;
         clampNavigation(); return true;
     case Action::Down:
-        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus<25)++m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),1,0);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),1,0);clampShowsNavigation();return true;}
-        if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus < 25) ++m_movieAlphabetFocus; } else if (currentRow()) m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),1,0); }
+        if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus<25)++m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid){const bool heldForPage=queueDownAtPageEdge(m_showPage,m_showSelected,m_filteredShows.size(),SHOWS_GRID_COLUMNS);if(!heldForPage)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),1,0);}else{const bool heldForPage=queueDownAtPageEdge(m_animePage,m_animeSelected,m_filteredAnime.size(),SHOWS_GRID_COLUMNS);if(!heldForPage)m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),1,0);}clampShowsNavigation();return true;}
+        if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus < 25) ++m_movieAlphabetFocus; } else if (currentRow()) { const int count=static_cast<int>(currentRow()->items.size()); const bool heldForPage=queueDownAtPageEdge(m_moviePage,m_activeCard,count,MOVIE_GRID_COLUMNS); if(!heldForPage)m_activeCard=moveMovieGridCompact(m_activeCard,count,1,0); } }
         else m_activeRow++;
         clampNavigation(); return true;
     case Action::Left:
@@ -438,6 +455,31 @@ bool HomeScreen::handleAction(Action action)
         return false;
     default: return false;
     }
+}
+
+void HomeScreen::applyPendingDown(MediaPageState &state)
+{
+    if (!state.pendingDown)
+        return;
+    state.pendingDown = false;
+    if (state.type == "movie") {
+        if (activeTabNamed("Movies")) {
+            if (const MediaRow *row = currentRow())
+                m_activeCard = moveMovieGridCompact(
+                    m_activeCard, static_cast<int>(row->items.size()), 1, 0);
+            clampNavigation();
+        }
+        return;
+    }
+    if (!activeTabNamed("Shows"))
+        return;
+    if (state.type == "anime")
+        m_animeSelected = moveShowsGrid(
+            m_animeSelected, m_filteredAnime.size(), 1, 0);
+    else
+        m_showSelected = moveShowsGrid(
+            m_showSelected, m_filteredShows.size(), 1, 0);
+    clampShowsNavigation();
 }
 
 } // namespace miyoofin

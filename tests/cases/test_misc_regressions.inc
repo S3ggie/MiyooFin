@@ -165,11 +165,29 @@ static void testShowsFocusPreservedDuringIncrementalRefresh()
     std::printf("[test] Shows/Anime focus survives incremental refresh OK\n");
 }
 
+static void testHomeGridPositionHelpers()
+{
+    std::printf("[test] Home grid position survives incremental refresh\n");
+    std::vector<MediaItem> items;
+    for (const char *id : {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"}) {
+        MediaItem item; item.id=id; item.title=id; items.push_back(item);
+    }
+    CHECK(HomeScreen::restoreSelectionIndex(items,"j",0)==9);
+    CHECK(HomeScreen::restoreSelectionIndex(items,"missing",9)==9);
+    CHECK(HomeScreen::restoreSelectionIndex(items,"missing",99)==12);
+    CHECK(HomeScreen::preserveGridScroll(9,20,2,4,3)==2);
+    CHECK(HomeScreen::preserveGridScroll(12,20,2,4,3)==2);
+    CHECK(HomeScreen::preserveGridScroll(12,20,0,4,3)==1);
+    CHECK(HomeScreen::preserveGridScroll(2,3,99,4,3)==0);
+    std::printf("[test] Home grid position survives incremental refresh OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
     testBoundedPagePosterPlanning();
     testShowsFocusPreservedDuringIncrementalRefresh();
+    testHomeGridPositionHelpers();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));

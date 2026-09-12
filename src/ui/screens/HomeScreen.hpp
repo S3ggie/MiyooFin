@@ -104,6 +104,11 @@ public:
     static ShowsFocusState showsFocusAfterRefresh(ShowsFocusState previous,
                                                    bool hasShows,
                                                    bool hasAnime);
+    static int restoreSelectionIndex(const std::vector<MediaItem> &items,
+                                     const std::string &selectedId,
+                                     int fallback);
+    static int preserveGridScroll(int selected, int count, int currentScroll,
+                                  int columns, int rows);
     /// Season posters use the exact dimensions of SeriesScreen's grid.
     static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
 

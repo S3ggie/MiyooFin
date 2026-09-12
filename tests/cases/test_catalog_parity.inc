@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../src/catalog/CatalogPrimitives.hpp"
+#include "../../src/catalog/CatalogCompatibility.hpp"
 
 namespace {
 
@@ -349,31 +350,70 @@ void testCatalogDbLibrarySnapshotSeed()
     CatalogDb db;
     const auto epoch = db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+    const auto connection = db.connectionStateForTest();
+    CHECK(connection.open && connection.workerOwned);
+    const std::string catalogHeader = readTestBytes("src/catalog/CatalogDb.hpp");
+    const std::string catalogSource = readTestBytes("src/catalog/CatalogDb.cpp");
+    const std::string compatibilityHeader =
+        readTestBytes("src/catalog/CatalogCompatibility.hpp");
+    const std::string compatibilitySource =
+        readTestBytes("src/catalog/CatalogCompatibility.cpp");
+    CHECK(catalogHeader.find("LibrarySnapshot") == std::string::npos);
+    CHECK(catalogHeader.find("seedLibrarySnapshot") == std::string::npos);
+    CHECK(catalogHeader.find("readLibrarySnapshot") == std::string::npos);
+    CHECK(catalogSource.find("LibrarySnapshot") == std::string::npos);
+    CHECK(catalogSource.find("seedLibrarySnapshot") == std::string::npos);
+    CHECK(catalogSource.find("readLibrarySnapshot") == std::string::npos);
+    CHECK(compatibilityHeader.find("class CatalogCompatibility")
+          != std::string::npos);
+    CHECK(compatibilitySource.find("enqueueLibrarySeed")
+          != std::string::npos);
+    CHECK(compatibilitySource.find("enqueueLibraryRead")
+          != std::string::npos);
+    CHECK(compatibilitySource.find("sqlite3_") == std::string::npos);
+    const char *runtimeSources[] = {
+        "src/app/App.cpp", "src/ui/screens/HomeScreen.cpp",
+        "src/ui/screens/SeriesScreen.cpp",
+        "src/ui/screens/EpisodeBrowserScreen.cpp",
+        "src/download/DownloadManager.cpp", "src/library/LibrarySync.cpp",
+        "src/library/LibraryQuery.cpp", "src/library/OfflineLibraryQuery.cpp"};
+    for (const char *path : runtimeSources) {
+        const std::string source = readTestBytes(path);
+        CHECK(source.find("seedLibrarySnapshot") == std::string::npos);
+        CHECK(source.find("readLibrarySnapshot") == std::string::npos);
+    }
     LibrarySnapshot snapshot;
     MediaItem movie = catalogParityItem("__task29_movie__", "movie", "Seed Movie");
     MediaItem secondMovie = catalogParityItem("__task29_movie_2__", "movie", "Seed Movie 2");
     snapshot.movies.push_back({"movies", "Movies", "movies", {movie}});
     snapshot.movies[0].items.push_back(secondMovie);
     snapshot.continueWatching.push_back(movie);
-    auto first = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    auto first = CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get();
     CHECK(first.success && first.workerOwned && first.itemsUpserted == 2
           && first.viewsWritten == 1 && first.homeItemsWritten == 1);
-    auto read = db.readLibrarySnapshot({0, epoch, {}}).get();
+    auto read = CatalogCompatibility::readLibrarySnapshot(
+        db, {0, epoch, {}}).get();
     CHECK(read.success && read.snapshot.movies.size() == 1
           && read.snapshot.movies[0].collectionType == "movies"
           && read.snapshot.continueWatching.size() == 1
           && read.snapshot.continueWatching[0].id == movie.id);
-    auto second = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    auto second = CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get();
     CHECK(second.success && second.itemsUpserted == 2 && second.viewsWritten == 1);
-    auto failed = db.seedLibrarySnapshotForTest(snapshot, 1, {0, epoch, {}}).get();
+    auto failed = CatalogCompatibility::seedLibrarySnapshotForTest(
+        db, snapshot, 1, {0, epoch, {}}).get();
     CHECK(!failed.success && failed.error == CatalogDbErrorCategory::SqliteError);
-    auto recovered = db.seedLibrarySnapshot(LibrarySnapshot{}, {0, epoch, {}}).get();
+    auto recovered = CatalogCompatibility::seedLibrarySnapshot(
+        db, LibrarySnapshot{}, {0, epoch, {}}).get();
     CHECK(recovered.success && recovered.itemsUpserted == 0);
     auto nextEpoch = db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-    auto stale = db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get();
+    auto stale = CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get();
     CHECK(!stale.success && stale.superseded);
-    auto empty = db.seedLibrarySnapshot(LibrarySnapshot{}, {0, nextEpoch, {}}).get();
+    auto empty = CatalogCompatibility::seedLibrarySnapshot(
+        db, LibrarySnapshot{}, {0, nextEpoch, {}}).get();
     CHECK(empty.success && empty.itemsUpserted == 0 && empty.viewsWritten == 0);
     removeCatalogMigrationTestPaths(paths);
 }
@@ -390,8 +430,10 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     LibrarySnapshot snapshot;
     snapshot.movies.push_back({"movies", "Movies", "movies",
                                 {catalogParityItem("__stage_movie__", "movie", "Stage Movie")} });
-    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
-    auto before = db.readLibrarySnapshot({0, epoch, {}}).get();
+    CHECK(CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get().success);
+    auto before = CatalogCompatibility::readLibrarySnapshot(
+        db, {0, epoch, {}}).get();
     auto begin = db.beginTopLevelSync(101, {0, epoch, {}}).get();
     CHECK(begin.success && begin.workerOwned && begin.generation == 101);
     auto newer = db.beginTopLevelSync(102, {0, epoch, {}}).get();
@@ -400,7 +442,8 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     CHECK(abort.success && abort.workerOwned);
     auto repeatAbort = db.abortTopLevelSync(102, {0, epoch, {}}).get();
     CHECK(repeatAbort.success);
-    auto after = db.readLibrarySnapshot({0, epoch, {}}).get();
+    auto after = CatalogCompatibility::readLibrarySnapshot(
+        db, {0, epoch, {}}).get();
     CHECK(before.success && after.success && after.snapshot.movies.size() == 1
           && after.snapshot.movies[0].items.size() == 1
           && after.snapshot.movies[0].items[0].id == "__stage_movie__");
@@ -412,7 +455,8 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
     CHECK(db.upsertMediaPage(replacement, {0, epoch, {}}).get().success);
     auto finalized = db.finalizeTopLevelSync(104, {0, epoch, {}}).get();
     CHECK(finalized.success && finalized.workerOwned);
-    auto published = db.readLibrarySnapshot({0, epoch, {}}).get();
+    auto published = CatalogCompatibility::readLibrarySnapshot(
+        db, {0, epoch, {}}).get();
     CHECK(published.success && published.snapshot.movies.size() == 1
           && published.snapshot.movies[0].items.size() == 1
           && published.snapshot.movies[0].items[0].id == "__replacement_movie__");
@@ -484,7 +528,8 @@ static void testCatalogDbBoundedMediaPaging()
     CatalogDb db;
     const auto epoch = db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+    CHECK(CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get().success);
 
     auto expected = movies;
     std::sort(expected.begin(), expected.end(), organizationalLess);
@@ -515,7 +560,8 @@ static void testCatalogDbBoundedMediaPaging()
     }
 
     snapshot.movies[0].items[0].title = "Aardvark";
-    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+    CHECK(CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get().success);
     expected = snapshot.movies[0].items;
     std::sort(expected.begin(), expected.end(), organizationalLess);
     expectedIds.clear();
@@ -607,7 +653,8 @@ static void testCatalogDbMediaPagePreservesViewMembership()
     CatalogDb db;
     const auto epoch = db.configureScope(url, user);
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-    CHECK(db.seedLibrarySnapshot(snapshot, {0, epoch, {}}).get().success);
+    CHECK(CatalogCompatibility::seedLibrarySnapshot(
+        db, snapshot, {0, epoch, {}}).get().success);
 
     const auto page = db.readMediaPage(
         "show", -1, 8, {}, {0, epoch, {}}).get();
@@ -674,7 +721,8 @@ static void testCatalogDbMediaPageUpsertAndPopulation()
     CatalogDbMediaPageWrite final = first; final.items = {item}; final.finalPage = true;
     CHECK(db.upsertMediaPage(final, metadata).get().success);
     CHECK(db.populationStatus().state == CatalogDbPopulationState::Ready);
-    auto snapshot = db.readLibrarySnapshot(metadata).get();
+    auto snapshot = CatalogCompatibility::readLibrarySnapshot(
+        db, metadata).get();
     CHECK(snapshot.success && snapshot.snapshot.movies.size() == 1
           && snapshot.snapshot.movies[0].items.size() == 1
           && snapshot.snapshot.movies[0].items[0].title == "Updated Page Item");
@@ -709,7 +757,8 @@ static void testCatalogDbMediaPageTopLevelStaging()
                     catalogParityItem("staged-b", "movie", "B")};
     staged.syncGeneration = 77; staged.ordinalStart = 4;
     CHECK(db.upsertMediaPage(staged, metadata).get().success);
-    auto before = db.readLibrarySnapshot(metadata).get();
+    auto before = CatalogCompatibility::readLibrarySnapshot(
+        db, metadata).get();
     CHECK(before.success && before.snapshot.movies.size() == 1
           && before.snapshot.movies[0].items[0].id == "live-stage");
     auto stale = staged; stale.syncGeneration = 76;
@@ -717,7 +766,8 @@ static void testCatalogDbMediaPageTopLevelStaging()
     auto failed = staged; failed.items = {catalogParityItem("rollback-stage", "movie", "R")};
     CHECK(!db.upsertMediaPageForTest(failed, 0, metadata).get().success);
     CHECK(db.abortTopLevelSync(77, metadata).get().success);
-    auto after = db.readLibrarySnapshot(metadata).get();
+    auto after = CatalogCompatibility::readLibrarySnapshot(
+        db, metadata).get();
     CHECK(after.success && after.snapshot.movies[0].items[0].id == "live-stage");
     std::printf("[test] CatalogDb staged media page writes OK\n");
 }

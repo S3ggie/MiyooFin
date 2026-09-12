@@ -1,4 +1,32 @@
 #include "CatalogCompatibility.hpp"
 
-// Kept as a separate translation unit so future compatibility conversion can
-// be removed without reopening the normal CatalogDb query surface.
+namespace miyoofin {
+
+std::future<CatalogCompatibilitySeedResult>
+CatalogCompatibility::seedLibrarySnapshot(
+    CatalogDb &db, const LibrarySnapshot &snapshot,
+    const CatalogDbJobMetadata &metadata)
+{
+    CatalogCompatibilitySeedRequest request;
+    request.snapshot = snapshot;
+    return db.enqueueLibrarySeed(request, metadata);
+}
+
+std::future<CatalogCompatibilitySeedResult>
+CatalogCompatibility::seedLibrarySnapshotForTest(
+    CatalogDb &db, const LibrarySnapshot &snapshot, int failAfterWrites,
+    const CatalogDbJobMetadata &metadata)
+{
+    CatalogCompatibilitySeedRequest request;
+    request.snapshot = snapshot;
+    return db.enqueueLibrarySeed(request, metadata, failAfterWrites);
+}
+
+std::future<CatalogCompatibilityReadResult>
+CatalogCompatibility::readLibrarySnapshot(
+    CatalogDb &db, const CatalogDbJobMetadata &metadata)
+{
+    return db.enqueueLibraryRead(metadata);
+}
+
+}

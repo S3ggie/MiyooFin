@@ -17,12 +17,16 @@
 #include <vector>
 
 #include "../data/MediaItem.hpp"
-#include "CatalogCompatibility.hpp"
 
 struct sqlite3;
 struct sqlite3_stmt;
 
 namespace miyoofin {
+
+class CatalogCompatibility;
+struct CatalogCompatibilitySeedRequest;
+struct CatalogCompatibilitySeedResult;
+struct CatalogCompatibilityReadResult;
 
 enum class CatalogDbPriority : unsigned char {
     InteractiveRead,
@@ -225,32 +229,6 @@ struct CatalogDbSyncState {
     std::uint64_t committedGeneration = 0;
 };
 
-struct CatalogDbLibrarySeedResult {
-    // Compatibility bridge for legacy LibrarySnapshot persistence. Normal
-    // top-level synchronization stages library membership/pages directly and
-    // leaves Home rails ephemeral.
-    bool success = false;
-    bool workerOwned = false;
-    bool cancelled = false;
-    bool superseded = false;
-    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
-    std::string message;
-    std::size_t itemsUpserted = 0;
-    std::size_t viewsWritten = 0;
-    std::size_t homeItemsWritten = 0;
-};
-struct CatalogDbLibraryReadResult {
-    // Compatibility read bridge; Home runtime does not use home_items as rail
-    // authority.
-    bool success = false;
-    bool workerOwned = false;
-    bool cancelled = false;
-    bool superseded = false;
-    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
-    std::string message;
-    LibrarySnapshot snapshot;
-};
-
 struct CatalogDbPageCursor {
     std::string sortKey;
     std::string title;
@@ -403,12 +381,6 @@ public:
         std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
         std::uint64_t committedGeneration,
         const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshot(
-        const LibrarySnapshot &snapshot,
-        const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbLibrarySeedResult> seedLibrarySnapshotForTest(
-        const LibrarySnapshot &snapshot, int failAfterWrites,
-        const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbMediaPageUpsertResult> upsertMediaPage(
         const CatalogDbMediaPageWrite &page,
         const CatalogDbJobMetadata &metadata = {});
@@ -422,8 +394,6 @@ public:
     std::future<CatalogDbTopLevelSyncResult> finalizeTopLevelSync(
         std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
     CatalogDbPopulationStatus populationStatus() const;
-    std::future<CatalogDbLibraryReadResult> readLibrarySnapshot(
-        const CatalogDbJobMetadata &metadata = {});
     /// Read one bounded, deterministically ordered movie/show page. All SQL
     /// work is performed by the CatalogDb worker; cursor fields are the full
     /// organizational ordering tuple.
@@ -443,6 +413,7 @@ public:
     std::vector<CatalogDbJobReport> jobReportsForTest() const;
 
 private:
+    friend class CatalogCompatibility;
     struct Job {
         CatalogDbPriority priority;
         CatalogDbJobMetadata metadata;
@@ -508,10 +479,11 @@ private:
         std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
         std::uint64_t committedGeneration,
         const CatalogDbJobMetadata &metadata);
-    std::future<CatalogDbLibrarySeedResult> enqueueLibrarySeed(
-        const LibrarySnapshot &snapshot, const CatalogDbJobMetadata &metadata,
+    std::future<CatalogCompatibilitySeedResult> enqueueLibrarySeed(
+        const CatalogCompatibilitySeedRequest &request,
+        const CatalogDbJobMetadata &metadata,
         int failAfterWrites = -1);
-    std::future<CatalogDbLibraryReadResult> enqueueLibraryRead(
+    std::future<CatalogCompatibilityReadResult> enqueueLibraryRead(
         const CatalogDbJobMetadata &metadata);
     std::future<CatalogDbMediaPageResult> enqueueMediaPage(
         const std::string &type, int alphabetLetter, std::size_t limit,

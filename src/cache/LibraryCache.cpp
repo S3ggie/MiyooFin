@@ -1,5 +1,5 @@
 #include "LibraryCache.hpp"
-#include "../net/JellyfinApi.hpp"
+#include "../catalog/CatalogPrimitives.hpp"
 #include <cstdio>
 #include <cstdint>
 #include <cerrno>
@@ -33,8 +33,8 @@ bool gv(const std::vector<unsigned char>&b,size_t&p,std::vector<CachedLibraryVie
 std::string tag(const MediaItem&i){auto p=i.imageTags.find("Primary");return p==i.imageTags.end()?"":p->second;}
 bool mkdirs(const std::string&p){for(size_t i=1;i<=p.size();++i)if(i==p.size()||p[i]=='/') {auto d=p.substr(0,i);if(!d.empty()&&::mkdir(d.c_str(),0755)&&errno!=EEXIST)return false;}return true;}
 }
-std::string LibraryCache::scopeKey(const std::string&u,const std::string&id){std::string s=JellyfinApi::normaliseUrl(u)+"\n"+id;uint64_t h=1469598103934665603ULL;for(unsigned char c:s){h^=c;h*=1099511628211ULL;}char x[17];std::snprintf(x,sizeof x,"%016llx",(unsigned long long)h);return x;}
-std::string LibraryCache::cachePath(const std::string&r,const std::string&s){return r+"/library/"+s+"/snapshot.v1";}
+std::string LibraryCache::scopeKey(const std::string&u,const std::string&id){return catalog::scopeKey(u,id);}
+std::string LibraryCache::cachePath(const std::string&r,const std::string&s){return catalog::cachePath(r,s);}
 bool LibraryCache::save(const std::string&path,const LibrarySnapshot&s,std::string*e){auto slash=path.find_last_of('/');if(slash!=std::string::npos&&!mkdirs(path.substr(0,slash))){if(e)*e="mkdir failed";return false;}std::vector<unsigned char>b={'M','F','L','C'};put32(b,VERSION);pv(b,s.movies);pv(b,s.shows);pm(b,s.continueWatching);pm(b,s.recentlyAdded);std::string tmp=path+".tmp";FILE*f=std::fopen(tmp.c_str(),"wb");if(!f){if(e)*e="open failed";return false;}bool ok=std::fwrite(b.data(),1,b.size(),f)==b.size(); if(std::fclose(f)!=0)ok=false; if(!ok||std::rename(tmp.c_str(),path.c_str())!=0){std::remove(tmp.c_str());if(e)*e="write/rename failed";return false;}return true;}
 bool LibraryCache::load(const std::string&path,LibrarySnapshot&o,std::string*e,bool *needsRefresh){FILE*f=std::fopen(path.c_str(),"rb");if(!f){if(e)*e="not found";return false;}std::fseek(f,0,SEEK_END);long z=std::ftell(f);std::fseek(f,0,SEEK_SET);if(z<8||z>128*1024*1024){std::fclose(f);if(e)*e="invalid size";return false;}std::vector<unsigned char>b((size_t)z);bool ok=std::fread(b.data(),1,b.size(),f)==b.size();std::fclose(f);size_t p=0;uint32_t v;LibrarySnapshot t;if(!ok||b[0]!='M'||b[1]!='F'||b[2]!='L'||b[3]!='C'||(p=4,!get32(b,p,v))||v<1||v>VERSION||!gv(b,p,t.movies)||!gv(b,p,t.shows)||(v>=2&&(!gm(b,p,t.continueWatching)||!gm(b,p,t.recentlyAdded)))||p!=b.size()){if(e)*e="invalid cache";return false;}if(needsRefresh)*needsRefresh=(v<VERSION);o=std::move(t);return true;}
 bool LibraryCache::itemEquivalent(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId;}

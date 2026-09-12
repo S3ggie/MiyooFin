@@ -132,7 +132,7 @@ Ordinary tasks inside a phase proceed one at a time without asking for confirmat
 - [12 — Make Home consume LibrarySync and LibraryQuery](tasks/12-home-consumes-librarysync-and-libraryquery.md)
 - [13 — Isolate LibrarySnapshot compatibility bridge](tasks/13-isolate-librarysnapshot-compatibility-bridge.md)
 - [14 — Remove CachedLibraryView reconstruction from SQLite membership handling](tasks/14-remove-cachedlibraryview-membership-reconstruction.md)
-- [15 — Narrow CatalogDb to SQLite persistence/query execution](tasks/15-narrow-catalogdb-dependencies.md)
+- [15A–15C + final 15 — Narrow CatalogDb to SQLite persistence/query execution](tasks/15-narrow-catalogdb-dependencies.md)
 - [16 — Unify Series and EpisodeBrowser refresh policy](tasks/16-unify-series-episode-refresh-policy.md)
 - [17 — Unify DownloadManager hierarchy policy](tasks/17-unify-download-planner-hierarchy-policy.md)
 - [18 — Validate fresh database behavior](tasks/18-validate-fresh-database.md)

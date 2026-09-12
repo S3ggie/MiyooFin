@@ -6,6 +6,41 @@
 
 Remove network/UI/download/cache orchestration dependencies from CatalogDb while preserving worker/connection/schema/migrations/transactions/bounded primitives.
 
+## Approved decomposition
+
+This roadmap task is executed as four mechanically small steps:
+
+1. **15A — neutral identity/path/sort primitives**: move URL identity,
+   scope-key/path, and organizational ordering algorithms into one pure
+   lower catalog helper.
+2. **15B — DownloadStore-backed offline reconstruction**: move durable
+   download metadata reconstruction out of CatalogDb.
+3. **15C — snapshot compatibility isolation**: keep legacy snapshot seed/read
+   behavior behind the compatibility/test boundary.
+4. **Final Task 15 — dependency enforcement**: remove the remaining upward
+   dependencies and enforce the clean CatalogDb boundary with `refactor-check`.
+
+15A, 15B, and 15C each have their own commit and validation boundary. The
+final Task 15 commit follows only after all three prerequisites pass.
+
+### 15A execution boundary
+
+15A is limited to the neutral identity/path/sort move. Its Allowed Files are:
+
+- `src/catalog/CatalogDb.cpp`
+- `src/catalog/CatalogDb.hpp`
+- `src/catalog/CatalogPrimitives.hpp`
+- `src/ui/TitleOrganization.hpp`
+- `src/cache/LibraryCache.*`
+- `Makefile`
+- `Makefile.cross`
+- `tests/cases/test_catalog_migration.inc`
+- `tests/cases/test_catalog_parity.inc`
+- this roadmap/task documentation as needed to record the decomposition
+
+15B, 15C, and the final dependency-enforcement step are not part of the 15A
+commit and require their own task boundaries before implementation.
+
 ## Why
 
 CatalogDb currently reaches upward into JellyfinApi, DownloadStore, LibraryCache, UI sorting, and app diagnostics.

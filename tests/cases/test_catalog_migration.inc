@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "../../vendor/sqlite/sqlite3.h"
+#include "../../src/catalog/CatalogPrimitives.hpp"
 
 namespace {
 
@@ -22,10 +23,15 @@ CatalogMigrationTestPaths catalogMigrationTestPaths(
 {
     CatalogMigrationTestPaths paths;
     paths.scope = LibraryCache::scopeKey(url, user);
+    CHECK(paths.scope == miyoofin::catalog::scopeKey(url, user));
     paths.libraryDirectory = "cache/library/" + paths.scope;
     paths.offlineDirectory = "cache/offline/" + paths.scope;
     paths.finalPath = paths.libraryDirectory + "/catalog.sqlite3";
     paths.migratingPath = paths.finalPath + ".migrating";
+    CHECK(paths.finalPath
+          == miyoofin::catalog::catalogPath("cache", paths.scope));
+    CHECK(paths.migratingPath
+          == miyoofin::catalog::migratingCatalogPath("cache", paths.scope));
     paths.legacyPath = paths.offlineDirectory + "/catalog.v1";
     return paths;
 }

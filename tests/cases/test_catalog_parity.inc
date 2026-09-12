@@ -375,6 +375,63 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
                      "__task20_remaining_item__").size() == 1);
     }
     removeCatalogMigrationTestPaths(mediaPaths);
+
+    const std::string deletedViewUrl = url + "-deleted-view";
+    const auto deletedViewPaths =
+        catalogMigrationTestPaths(deletedViewUrl, user);
+    removeCatalogMigrationTestPaths(deletedViewPaths);
+    {
+        CatalogDb db;
+        CHECK(configureCatalogParityDb(db, deletedViewUrl, user));
+        MediaItem surviving = catalogParityItem(
+            "__task21_surviving_view_item__", "movie", "Surviving View Item");
+        MediaItem deletedOnly = catalogParityItem(
+            "__task21_deleted_view_item__", "movie", "Deleted View Item");
+
+        CHECK(db.beginTopLevelSync(20).get().success);
+        CatalogDbMediaPageWrite survivingView;
+        survivingView.items = {surviving};
+        survivingView.viewId = "task21-surviving-view";
+        survivingView.viewName = "Task 21 Surviving View";
+        survivingView.collectionType = "movies";
+        survivingView.viewOrdinal = 0;
+        survivingView.syncGeneration = 20;
+        CHECK(db.upsertMediaPage(survivingView).get().success);
+        CatalogDbMediaPageWrite deletedView = survivingView;
+        deletedView.items = {surviving, deletedOnly};
+        deletedView.viewId = "task21-deleted-view";
+        deletedView.viewName = "Task 21 Deleted View";
+        deletedView.viewOrdinal = 1;
+        CHECK(db.upsertMediaPage(deletedView).get().success);
+        CHECK(db.finalizeTopLevelSync(20).get().success);
+
+        CHECK(db.beginTopLevelSync(21).get().success);
+        survivingView.syncGeneration = 21;
+        CHECK(db.upsertMediaPage(survivingView).get().success);
+        CHECK(db.finalizeTopLevelSync(21).get().success);
+
+        const auto descriptors = CatalogCompatibility::readLibrarySnapshot(
+            db, {0, db.scopeState().requestedEpoch, {}})
+                                     .get();
+        CHECK(descriptors.success && descriptors.snapshot.movies.size() == 1);
+        if (descriptors.success && descriptors.snapshot.movies.size() == 1) {
+            CHECK(descriptors.snapshot.movies[0].id
+                  == "task21-surviving-view");
+            CHECK(descriptors.snapshot.movies[0].name
+                  == "Task 21 Surviving View");
+            CHECK(descriptors.snapshot.movies[0].items.size() == 1);
+            CHECK(descriptors.snapshot.movies[0].items[0].id == surviving.id);
+        }
+
+        const auto page = db.readMediaPage("movie", -1, 8).get();
+        CHECK(page.success && page.items.size() == 1
+              && page.items[0].id == surviving.id);
+        CHECK(page.membershipsByItem.size() == 1
+              && page.membershipsByItem.at(surviving.id).size() == 1
+              && page.membershipsByItem.at(surviving.id)[0].viewId
+                     == "task21-surviving-view");
+    }
+    removeCatalogMigrationTestPaths(deletedViewPaths);
     removeCatalogMigrationTestPaths(paths);
 }
 

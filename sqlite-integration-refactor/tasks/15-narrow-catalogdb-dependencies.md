@@ -41,6 +41,68 @@ final Task 15 commit follows only after all three prerequisites pass.
 15B, 15C, and the final dependency-enforcement step are not part of the 15A
 commit and require their own task boundaries before implementation.
 
+### Final Task 15 — dependency enforcement
+
+The final step is a narrow post-15C boundary audit and enforcement cleanup. It
+must preserve the production ownership moves already completed by 15A, 15B,
+and 15C; it is not another architectural redesign.
+
+#### Final-step target boundary
+
+`CatalogDb` owns SQLite persistence and query execution only. It may directly
+depend on SQLite, lower catalog/data primitives, `MediaItemSql`,
+schema/migration/bootstrap code, bounded query/write primitives, generic
+diagnostics/telemetry, and the private compatibility worker machinery required
+by `CatalogCompatibility`.
+
+`CatalogDb` must not directly own or depend on Jellyfin network APIs,
+`DownloadStore`, UI sorting/presentation helpers, offline reconstruction
+orchestration, normal `LibrarySnapshot` orchestration, or legacy whole-file
+persistence policy.
+
+#### Final-step Allowed Files
+
+- `src/catalog/CatalogDb.cpp`
+- `src/catalog/CatalogDb.hpp`
+- `src/catalog/MediaItemSql.*`
+- `src/library/*` only for narrow call-site adaptation if genuinely required
+- `Makefile`
+- `Makefile.cross`
+- `tests/cases/test_catalog_migration.inc`
+- `tests/cases/test_catalog_parity.inc`
+- `tools/refactor-check.sh` for narrow CatalogDb source-boundary checks only
+- this roadmap/task documentation as needed to record the final definition
+
+#### Final-step required result
+
+1. `CatalogDb` has no direct `JellyfinApi`, `DownloadStore`, or UI
+   sorting/presentation dependency.
+2. Offline reconstruction remains outside `CatalogDb`, and normal public
+   snapshot seed/read APIs are not exposed by `CatalogDb`.
+3. Compatibility-only snapshot work remains reachable through
+   `CatalogCompatibility` while its SQL executes on the existing worker.
+4. Scope-key/path/sort logic comes from neutral catalog primitives.
+5. SQLite execution remains on the existing worker/connection; schema v3,
+   bounded reads, and atomic bootstrap remain unchanged.
+
+#### Final-step refactor-check
+
+Inspect and retain the existing `make refactor-check` flow. Add only
+straightforward source checks for prohibited direct `CatalogDb` dependencies
+when the audit shows an enforcement gap. The checks must cover regressions
+toward `JellyfinApi`, `DownloadStore`, UI title/presentation helpers, and
+public `LibrarySnapshot` seed/read orchestration without becoming a generic
+architecture-lint framework.
+
+#### Final-step validation and stop conditions
+
+Run every validation command in the parent Task 15 definition. Stop without
+broadening scope if cleanup needs an unallowed production file, would delete
+compatibility behavior, change schema v3/bootstrap/bounded reads/worker
+ownership, alter behavior outside this boundary, or require a broad lint
+framework. Original SQLite Task 34 remains paused, and Task 16 or later work
+must not begin.
+
 ## Why
 
 CatalogDb currently reaches upward into JellyfinApi, DownloadStore, LibraryCache, UI sorting, and app diagnostics.

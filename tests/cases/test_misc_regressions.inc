@@ -266,6 +266,23 @@ static void testWarmMediaWindowsExtraction()
     std::printf("[test] warm media windows extraction OK\n");
 }
 
+static void testAnimeSelectionSurvivesSharedWindowTrim()
+{
+    std::printf("[test] Anime selection survives shared window trim\n");
+    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(source.find("m_showSelected = std::max(0, m_showSelected -")
+          == std::string::npos);
+    CHECK(source.find("m_animeSelected = std::max(0, m_animeSelected -")
+          == std::string::npos);
+    CHECK(source.find("rebuildShowsPresentation();") != std::string::npos);
+    CHECK(HomeScreen::restoreSelectionIndex(
+              {titledShow("show-a", "Show A"), titledShow("anime-b", "Anime B")},
+              "anime-b", 0) == 1);
+    CHECK(HomeScreen::restoreSelectionIndex(
+              {titledShow("anime-c", "Anime C")}, "trimmed", 4) == 0);
+    std::printf("[test] Anime selection survives shared window trim OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
@@ -277,6 +294,7 @@ static void testShowsPresentation()
     testRecentlyAddedWarmPublication();
     testWarmHomeCatalogWindows();
     testWarmMediaWindowsExtraction();
+    testAnimeSelectionSurvivesSharedWindowTrim();
     CHECK_EQ(organizationalTitle("The Boys"),"Boys"); CHECK_EQ(organizationalTitle("The Last of Us"),"Last of Us"); CHECK_EQ(organizationalTitle("The Simpsons"),"Simpsons"); CHECK_EQ(organizationalTitle("The"),"The"); CHECK_EQ(organizationalTitle("There She Goes"),"There She Goes");
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));

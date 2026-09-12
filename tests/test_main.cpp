@@ -804,6 +804,7 @@ int main()
     testCatalogDbAtomicHierarchyWrite();
     testCatalogDbAuthoritativeReconcile();
     testCatalogDbFreshBootstrapPathStates();
+    testCatalogDbFreshAuthoritativeLibraryGeneration();
     testCatalogDbFreshBootstrapUnsupportedFinalPreserved();
     testCatalogDbFreshBootstrapPathError();
     testCatalogDbJellyfinHierarchyStaging();

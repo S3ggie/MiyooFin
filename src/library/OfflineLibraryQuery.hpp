@@ -4,6 +4,8 @@
 #include "../data/MediaItem.hpp"
 #include "../cache/LibraryCache.hpp"
 #include "../download/DownloadManager.hpp"
+#include <map>
+#include <string>
 #include <vector>
 
 namespace miyoofin {
@@ -15,7 +17,15 @@ class OfflineLibraryQuery {
 public:
     static constexpr std::size_t kMetadataBatchSize = 64;
 
+    struct Hierarchy {
+        std::vector<MediaItem> movies;
+        std::map<std::string, MediaItem> series;
+        std::map<std::string, MediaItem> seasons;
+        std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+    };
+
     static bool isAvailable(DownloadState state);
+    static Hierarchy hierarchy(const std::vector<DownloadItem> &downloads);
     static std::vector<std::vector<std::string>> metadataBatches(
         const DownloadSnapshot &downloads);
     static LibrarySnapshot build(const DownloadSnapshot &downloads,

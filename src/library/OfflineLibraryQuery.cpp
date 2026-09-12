@@ -21,11 +21,85 @@ MediaItem fallback(const DownloadItem &download) {
     item.playbackPositionTicks = download.playbackPositionTicks;
     return item;
 }
+
+void addContainer(std::map<std::string, MediaItem> &items,
+                  const std::string &id, const std::string &type,
+                  const std::string &title, const std::string &seriesId,
+                  std::int32_t index)
+{
+    auto found = items.find(id);
+    if (found == items.end()) {
+        MediaItem item;
+        item.id = id;
+        item.type = type;
+        item.title = title.empty() ? id : title;
+        item.seriesId = seriesId;
+        item.indexNumber = index;
+        items.emplace(id, std::move(item));
+    } else if (found->second.title > title && !title.empty()) {
+        found->second.title = title;
+    }
+}
 }
 
 bool OfflineLibraryQuery::isAvailable(DownloadState state) {
     return state == DownloadState::Complete || state == DownloadState::LocalOnly
         || state == DownloadState::UpdateAvailable;
+}
+
+OfflineLibraryQuery::Hierarchy OfflineLibraryQuery::hierarchy(
+    const std::vector<DownloadItem> &downloads)
+{
+    Hierarchy result;
+    std::vector<DownloadItem> ordered = downloads;
+    std::sort(ordered.begin(), ordered.end(),
+              [](const DownloadItem &left, const DownloadItem &right) {
+                  return left.itemId < right.itemId;
+              });
+    for (const auto &download : ordered) {
+        if (!isAvailable(download.state) || download.itemId.empty()) continue;
+        if (download.itemType == "movie") {
+            MediaItem movie;
+            movie.id = download.itemId;
+            movie.type = "movie";
+            movie.title = download.title.empty() ? download.itemId
+                                                  : download.title;
+            movie.runTimeTicks = download.runtimeTicks;
+            movie.playbackPositionTicks = download.playbackPositionTicks;
+            movie.progress = movie.runTimeTicks > 0
+                ? static_cast<float>(movie.playbackPositionTicks)
+                    / static_cast<float>(movie.runTimeTicks)
+                : 0.0f;
+            result.movies.push_back(std::move(movie));
+            continue;
+        }
+        if (download.itemType != "episode"
+            || download.seriesId.empty() || download.seasonId.empty()) {
+            continue;
+        }
+        addContainer(result.series, download.seriesId, "show",
+                     download.seriesName, {}, 0);
+        addContainer(result.seasons, download.seasonId, "season",
+                     download.seasonName, download.seriesId,
+                     download.seasonNumber);
+        MediaItem episode = fallback(download);
+        episode.type = "episode";
+        episode.progress = episode.runTimeTicks > 0
+            ? static_cast<float>(episode.playbackPositionTicks)
+                / static_cast<float>(episode.runTimeTicks)
+            : 0.0f;
+        result.episodesBySeason[download.seasonId].push_back(
+            std::move(episode));
+    }
+    for (auto &entry : result.episodesBySeason) {
+        std::sort(entry.second.begin(), entry.second.end(),
+                  [](const MediaItem &left, const MediaItem &right) {
+                      if (left.indexNumber != right.indexNumber)
+                          return left.indexNumber < right.indexNumber;
+                      return left.id < right.id;
+                  });
+    }
+    return result;
 }
 
 std::vector<std::vector<std::string>> OfflineLibraryQuery::metadataBatches(

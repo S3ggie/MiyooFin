@@ -4,12 +4,26 @@
 #include "../catalog/CatalogDb.hpp"
 #include "../net/Session.hpp"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <string>
 
 namespace miyoofin {
 namespace library {
+
+struct OfflineRebuildResult {
+    bool success = false;
+    bool skipped = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t itemsUpserted = 0;
+    std::size_t containersSynthesized = 0;
+};
 
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
 // CatalogDb remains the sole SQLite executor; this class owns only the
@@ -31,6 +45,8 @@ public:
         const CatalogDbMediaPageWrite &page);
     std::future<CatalogDbTopLevelSyncResult> finalize(std::uint64_t generation);
     std::future<CatalogDbTopLevelSyncResult> abort(std::uint64_t generation);
+    std::future<OfflineRebuildResult> reconstructOfflineDownloads(
+        const std::string &downloadRoot = "downloads");
     Status status() const;
     void cancel() noexcept;
 
@@ -40,6 +56,9 @@ private:
     CatalogDbJobMetadata m_metadata;
     std::shared_ptr<std::atomic_bool> m_cancel;
     std::atomic<std::uint64_t> m_generation{0};
+    std::shared_ptr<std::atomic<std::uint64_t>> m_offlineGeneration;
+    std::shared_ptr<std::atomic_bool> m_offlineCancellation;
+    mutable std::mutex m_offlineMutex;
     std::atomic<bool> m_inFlight{false};
     std::atomic<bool> m_success{false};
 };

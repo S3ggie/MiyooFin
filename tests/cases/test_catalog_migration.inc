@@ -540,6 +540,7 @@ static void testCatalogDbOfflineDownloadReconstruction()
     DownloadItem movie = episode;
     movie.itemId = "__task16_downloaded_movie__";
     movie.itemType = "movie";
+    movie.state = DownloadState::LocalOnly;
     movie.title = "Downloaded Movie";
     movie.seriesId.clear();
     movie.seriesName.clear();
@@ -548,6 +549,11 @@ static void testCatalogDbOfflineDownloadReconstruction()
     movie.seasonNumber = 0;
     movie.episodeNumber = 0;
     movie.playbackPositionTicks = 400;
+    DownloadItem updateAvailableMovie = movie;
+    updateAvailableMovie.itemId = "__task15b_update_available_movie__";
+    updateAvailableMovie.title = "Update Available Movie";
+    updateAvailableMovie.state = DownloadState::UpdateAvailable;
+    updateAvailableMovie.playbackPositionTicks = 500;
     DownloadItem missing = episode;
     missing.itemId = "__task16_missing_parent_episode__";
     missing.title = "Unparented Download";
@@ -555,7 +561,8 @@ static void testCatalogDbOfflineDownloadReconstruction()
     missing.seriesName.clear();
     missing.seasonId.clear();
     missing.seasonName.clear();
-    const std::vector<DownloadItem> fixtures = {episode, movie, missing};
+    const std::vector<DownloadItem> fixtures = {
+        episode, movie, updateAvailableMovie, missing};
     for (const auto &item : fixtures) {
         CHECK(store.saveManifest(scope, item));
     }
@@ -566,14 +573,18 @@ static void testCatalogDbOfflineDownloadReconstruction()
         readTestBytes(store.manifestPath(scope, movie.itemId));
 
     {
-        CatalogDb db;
-        CHECK(db.configureScope(url, user) != 0);
-        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-        auto rebuilt = db.reconstructOfflineDownloads(root).get();
-        CHECK(rebuilt.success && rebuilt.workerOwned && !rebuilt.skipped);
-        CHECK(rebuilt.itemsUpserted == 4 && rebuilt.containersSynthesized == 2);
-        const auto seasons = db.getSeasons(episode.seriesId).get();
-        const auto episodes = db.getEpisodes(episode.seasonId).get();
+        auto db = std::make_shared<CatalogDb>();
+        CHECK(db->configureScope(url, user) != 0);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = url;
+        session.userId = user;
+        library::LibrarySync sync(session, db, db->scopeState().requestedEpoch);
+        auto rebuilt = sync.reconstructOfflineDownloads(root).get();
+        CHECK(rebuilt.success && !rebuilt.skipped);
+        CHECK(rebuilt.itemsUpserted == 5 && rebuilt.containersSynthesized == 2);
+        const auto seasons = db->getSeasons(episode.seriesId).get();
+        const auto episodes = db->getEpisodes(episode.seasonId).get();
         CHECK(seasons.success && seasons.items.size() == 1
               && seasons.items[0].id == episode.seasonId);
         CHECK(episodes.success && episodes.items.size() == 1
@@ -586,20 +597,63 @@ static void testCatalogDbOfflineDownloadReconstruction()
         CHECK(readHierarchyCheckpoint(paths.finalPath, episode.seriesId,
                                       checkpointComplete, generation));
         CHECK(!checkpointComplete);
-        auto repeated = db.reconstructOfflineDownloads(root).get();
-        CHECK(repeated.success && repeated.itemsUpserted == 4);
+        auto repeated = sync.reconstructOfflineDownloads(root).get();
+        CHECK(repeated.success && repeated.itemsUpserted == 5);
         std::string movieTitle;
         std::int64_t moviePosition = -1;
         CHECK(readOfflineMovie(paths.finalPath, movie.itemId, movieTitle,
                                moviePosition));
         CHECK(movieTitle == movie.title && moviePosition == 400);
-        CHECK(db.getEpisodes(missing.seasonId).get().items.empty());
+        CHECK(db->getEpisodes(missing.seasonId).get().items.empty());
+        CHECK(readOfflineMovie(paths.finalPath, updateAvailableMovie.itemId,
+                               movieTitle, moviePosition));
+        CHECK(movieTitle == updateAvailableMovie.title
+              && moviePosition == updateAvailableMovie.playbackPositionTicks);
+
+        const std::string catalogSource = readTestBytes("src/catalog/CatalogDb.cpp");
+        const std::string catalogHeader = readTestBytes("src/catalog/CatalogDb.hpp");
+        CHECK(catalogSource.find("DownloadStore") == std::string::npos);
+        CHECK(catalogSource.find("reconstructOfflineDownloads") == std::string::npos);
+        CHECK(catalogSource.find("processOfflineRebuild") == std::string::npos);
+        CHECK(catalogHeader.find("DownloadStore") == std::string::npos);
+        CHECK(catalogHeader.find("reconstructOfflineDownloads") == std::string::npos);
+
+        writeCatalogMigrationFile(store.scopePath(scope) + "/index.v1",
+                                  "invalid download index\n");
+        auto corrupt = sync.reconstructOfflineDownloads(root).get();
+        CHECK(!corrupt.success && !corrupt.skipped
+              && corrupt.error == CatalogDbErrorCategory::CorruptOrIo);
+
+        std::remove((store.scopePath(scope) + "/index.v1").c_str());
+        auto missingMetadata = sync.reconstructOfflineDownloads(root).get();
+        CHECK(missingMetadata.success && missingMetadata.skipped);
+        CHECK(store.saveIndex(scope, fixtures));
     }
     std::vector<DownloadItem> loaded;
-    CHECK(store.loadCompleteMetadata(scope, loaded) && loaded.size() == 3);
+    CHECK(store.loadCompleteMetadata(scope, loaded) && loaded.size() == 4);
     CHECK(readTestBytes(store.manifestPath(scope, episode.itemId))
           == episodeBefore);
     CHECK(readTestBytes(store.manifestPath(scope, movie.itemId)) == movieBefore);
+
+    {
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(url, user);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        Session session;
+        session.serverUrl = url;
+        session.userId = user;
+        library::LibrarySync sync(session, db, epoch);
+        db->setWorkerPausedForTest(true);
+        auto first = sync.reconstructOfflineDownloads(root);
+        auto second = sync.reconstructOfflineDownloads(root);
+        db->setWorkerPausedForTest(false);
+        const auto firstResult = first.get();
+        const auto secondResult = second.get();
+        CHECK((firstResult.superseded || firstResult.cancelled)
+              && !firstResult.success && firstResult.itemsUpserted == 0);
+        CHECK(secondResult.success && !secondResult.skipped);
+    }
+
     for (const auto &item : fixtures) {
         store.removeItem(scope, item.itemId);
     }
@@ -640,14 +694,19 @@ static void testCatalogDbOfflineRebuildAfterScopeActivation()
     CHECK(store.saveIndex(scope, {episode}));
 
     {
-        CatalogDb db;
-        CHECK(db.configureScope(url, user) != 0);
-        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
-        const auto state = db.scopeState();
+        auto db = std::make_shared<CatalogDb>();
+        const auto epoch = db->configureScope(url, user);
+        CHECK(epoch != 0);
+        CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+        const auto state = db->scopeState();
         CHECK(state.ready);
-        CHECK(db.reconstructOfflineDownloads(root, {}).get().success);
-        const auto seasons = db.getSeasons(episode.seriesId).get();
-        const auto episodes = db.getEpisodes(episode.seasonId).get();
+        Session session;
+        session.serverUrl = url;
+        session.userId = user;
+        library::LibrarySync sync(session, db, epoch);
+        CHECK(sync.reconstructOfflineDownloads(root).get().success);
+        const auto seasons = db->getSeasons(episode.seriesId).get();
+        const auto episodes = db->getEpisodes(episode.seasonId).get();
         CHECK(seasons.success && seasons.items.size() == 1
               && seasons.items[0].id == episode.seasonId);
         CHECK(episodes.success && episodes.items.size() == 1

@@ -101,8 +101,12 @@ library::LibrarySync::refreshSeasons(
                 CatalogDbJobMetadata writeMetadata = metadata;
                 writeMetadata.cancellation = operationCancellation
                     ? operationCancellation : serviceCancellation;
+                std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+                for (const auto &season : seasons)
+                    episodesBySeason.emplace(season.id,
+                                             std::vector<MediaItem>{});
                 const auto written = db->stageSeriesHierarchy(
-                    series, seasons, {}, 0,
+                    series, seasons, episodesBySeason, 0,
                     static_cast<std::int64_t>(std::time(nullptr)) * 1000,
                     false, writeMetadata).get();
                 if (written.cancelled || written.superseded || !written.success) {

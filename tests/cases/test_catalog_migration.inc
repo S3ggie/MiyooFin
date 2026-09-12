@@ -362,8 +362,109 @@ static bool readHierarchyCheckpoint(const std::string &path,
     return prepared && rc == SQLITE_ROW;
 }
 
+static void testLibrarySyncRefreshSeasonsUsesValidPartialHierarchy()
+{
+    std::printf("[test] LibrarySync season refresh preserves partial hierarchy\n");
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    CHECK(::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                       sizeof(reuse)) == 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 1) == 0);
+
+    const std::string url =
+        "http://127.0.0.1:" + std::to_string(ntohs(address.sin_port));
+    const std::string user = "season-refresh-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+
+    MediaItem series;
+    series.id = "__season_refresh_series__";
+    series.type = "show";
+    series.title = "Season Refresh Series";
+    MediaItem seasonOne;
+    seasonOne.id = "__season_refresh_season_one__";
+    seasonOne.type = "season";
+    seasonOne.seriesId = series.id;
+    seasonOne.title = "Season One";
+    MediaItem seasonTwo = seasonOne;
+    seasonTwo.id = "__season_refresh_season_two__";
+    seasonTwo.title = "Season Two";
+    MediaItem episode;
+    episode.id = "__season_refresh_episode__";
+    episode.type = "episode";
+    episode.seriesId = series.id;
+    episode.seasonId = seasonOne.id;
+    episode.title = "Retained Episode";
+
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->stageSeriesHierarchy(
+              series, {seasonOne, seasonTwo},
+              {{seasonOne.id, {episode}}, {seasonTwo.id, {}}},
+              1, 1000, true).get().success);
+
+    const std::string body =
+        R"({"Items":[
+            {"Id":"__season_refresh_season_one__","Type":"Season",
+             "SeriesId":"__season_refresh_series__","Name":"Season One",
+             "IndexNumber":1},
+            {"Id":"__season_refresh_season_two__","Type":"Season",
+             "SeriesId":"__season_refresh_series__","Name":"Season Two",
+             "IndexNumber":2}
+        ]})";
+    std::thread server([&] {
+        const int client = ::accept(listener, nullptr, nullptr);
+        if (client < 0) return;
+        char buffer[4096];
+        (void)::recv(client, buffer, sizeof(buffer), 0);
+        const std::string response =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n" + body;
+        (void)::send(client, response.data(), response.size(), 0);
+        ::close(client);
+    });
+
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    session.accessToken = "season-refresh-token";
+    session.deviceId = "season-refresh-device";
+    library::LibrarySync sync(session, db, epoch);
+    const auto refreshed = sync.refreshSeasons(series).get();
+    server.join();
+    ::close(listener);
+
+    CHECK(refreshed.success && refreshed.items.size() == 2);
+    const auto seasons = db->getSeasons(series.id).get();
+    CHECK(seasons.success && seasons.items.size() == 2);
+    const auto retained = db->getEpisodes(seasonOne.id).get();
+    CHECK(retained.success && retained.items.size() == 1
+          && retained.items[0].id == episode.id);
+    bool complete = true;
+    std::int64_t generation = -1;
+    CHECK(readHierarchyCheckpoint(paths.finalPath, series.id,
+                                  complete, generation));
+    CHECK(!complete && generation == 0);
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] LibrarySync season refresh preserves partial hierarchy OK\n");
+}
+
 static void testCatalogDbJellyfinHierarchyStaging()
 {
+    testLibrarySyncRefreshSeasonsUsesValidPartialHierarchy();
     const std::string suffix =
         std::to_string(static_cast<long long>(getpid()));
     const std::string url =

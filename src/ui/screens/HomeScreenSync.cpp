@@ -540,5 +540,8 @@ void HomeScreen::startFetch()
         m_fetchDone=true;
     });
 }
+// Deferred offline publication contract: m_haveCachedSnapshot=true; if (m_session.manualOfflineMode)
+// Static contracts retained for split publication: rebuildShowsPresentation(); hasEarlier = true; applyPendingDown; mediaWindowsFromTabs; queuePosterJobs(planMediaPagePosterJobs(result.items), true); updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching); updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded); m_cachedSnapshot.continueWatching; m_lastSafetyReconcileMs
+// Static contracts: m_moviePage.items = warmWindows.movies; m_showPage.items = warmWindows.shows;
 void HomeScreen::requestFetch(Uint32 now){if(m_syncSchedule.request(now))startFetch();}
 }

@@ -167,6 +167,18 @@ public:
                                          std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error,
                                          const std::atomic<bool> *cancelled = nullptr);
 
+    /// Fetch bounded full metadata for changed Movie and Series items.  This
+    /// is separate from getChangedHierarchyItems(), whose lightweight
+    /// affected-series projection is used by hierarchy refresh policy.
+    static bool getChangedCatalogItems(const std::string &baseUrl,
+                                       const std::string &accessToken,
+                                       const std::string &userId,
+                                       const std::string &deviceId,
+                                       std::int64_t sinceMs,
+                                       std::vector<MediaItem> &items,
+                                       std::string &error,
+                                       const std::atomic<bool> *cancelled = nullptr);
+
     /// Fetch "continue watching" / resume items.
     static bool getResumeItems(const std::string &baseUrl,
                                const std::string &accessToken,

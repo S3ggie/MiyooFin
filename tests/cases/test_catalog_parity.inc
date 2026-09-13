@@ -1258,9 +1258,105 @@ static void testLegacyWholeFilePersistenceRetired()
           == std::string::npos);
 }
 
+static void testLibrarySyncChangedMetadataCatchUp()
+{
+    std::printf("[test] LibrarySync changed metadata catch-up\n");
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 1) == 0);
+
+    const std::string url = "http://127.0.0.1:" +
+        std::to_string(ntohs(address.sin_port));
+    const std::string user = "changed-metadata-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    auto sync = std::make_shared<library::LibrarySync>(session, db, epoch);
+    const MediaItem original = catalogParityItem(
+        "__task36_changed_movie__", "movie", "Original Movie");
+    const MediaItem unrelated = catalogParityItem(
+        "__task36_unrelated_movie__", "movie", "Unrelated Movie");
+    CatalogDbMediaPageWrite seed;
+    seed.items = {original, unrelated};
+    seed.viewId = "task36-movies";
+    seed.viewName = "Movies";
+    seed.collectionType = "movies";
+    seed.finalPage = true;
+    CHECK(sync->stage(seed).get().success);
+
+    const std::string body =
+        R"({"Items":[{"Id":"__task36_changed_movie__","Type":"Movie",
+        "Name":"Updated Movie","Overview":"Updated overview",
+        "ProductionYear":2027,"CommunityRating":9.1,
+        "Etag":"updated-etag","ImageTags":{"Primary":"updated-primary"}}]})";
+    std::thread server([&] {
+        const int client = ::accept(listener, nullptr, nullptr);
+        if (client < 0) return;
+        char buffer[4096];
+        std::string request;
+        while (request.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+            if (received <= 0) break;
+            request.append(buffer, static_cast<size_t>(received));
+        }
+        const std::string response =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n" + body;
+        (void)::send(client, response.data(), response.size(), 0);
+        ::close(client);
+    });
+
+    const auto result = sync->catchUpChangedCatalog(1700000000123LL).get();
+    server.join();
+    ::close(listener);
+    CHECK(result.success && result.itemsUpserted == 1);
+    library::LibraryQuery query(db, epoch);
+    const auto page = query.movies(-1, 8).get();
+    CHECK(page.success && page.items.size() == 2);
+    if (page.success && page.items.size() == 2) {
+        const auto changed = std::find_if(
+            page.items.begin(), page.items.end(), [&](const MediaItem &item) {
+                return item.id == original.id;
+            });
+        const auto kept = std::find_if(
+            page.items.begin(), page.items.end(), [&](const MediaItem &item) {
+                return item.id == unrelated.id;
+            });
+        CHECK(changed != page.items.end() && changed->title == "Updated Movie");
+        CHECK(changed != page.items.end()
+              && changed->imageTags.at("Primary") == "updated-primary");
+        CHECK(kept != page.items.end() && kept->title == unrelated.title);
+    }
+    const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
+    CHECK(state.success && state.lastSuccessfulMs > 0);
+    sync.reset();
+    db.reset();
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] LibrarySync changed metadata catch-up OK\n");
+}
+
 static void testCatalogDbMediaPageUpsertAndPopulation()
 {
     std::printf("[test] CatalogDb page upsert atomicity and population states\n");
+    testLibrarySyncChangedMetadataCatchUp();
     CatalogDb db;
     const auto epoch = db.configureScope("https://page-upsert.example", "user");
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));

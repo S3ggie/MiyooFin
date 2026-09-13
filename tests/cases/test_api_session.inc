@@ -980,11 +980,180 @@ static void testLibraryItemsBoundedPageHttp()
 }
 
 // -------------------------------------------------------------------
+// Test: changed catalog metadata is bounded, conservative, and resilient
+// -------------------------------------------------------------------
+static void testChangedCatalogMetadataQuery()
+{
+    std::printf("[test] Changed catalog metadata query\n");
+
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    CHECK(::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                       sizeof(reuse)) == 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 2) == 0);
+
+    const auto itemJson = [](int index) {
+        return std::string("{\"Id\":\"changed-")
+            + std::to_string(index)
+            + "\",\"Type\":\"Movie\",\"Name\":\"Changed Movie "
+            + std::to_string(index)
+            + "\",\"Overview\":\"Updated overview\","
+              "\"ProductionYear\":2026,\"CommunityRating\":8.5,"
+              "\"Etag\":\"etag-changed\",\"ImageTags\":"
+              "{\"Primary\":\"primary-changed\"}}";
+    };
+    const auto pageBody = [&](int start, int count) {
+        std::string body = R"({"Items":[)";
+        for (int index = start; index < start + count; ++index) {
+            if (index != start) body += ',';
+            body += itemJson(index);
+        }
+        body += "]}";
+        return body;
+    };
+    const std::string firstBody = pageBody(0, 100);
+    const std::string finalBody = pageBody(100, 1);
+    std::vector<std::string> requests(2);
+    std::thread server([&] {
+        for (int page = 0; page < 2; ++page) {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client < 0) return;
+            char buffer[4096];
+            std::string captured;
+            while (captured.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+                if (received <= 0) break;
+                captured.append(buffer, static_cast<size_t>(received));
+            }
+            requests[static_cast<size_t>(page)] = captured;
+            const std::string &body = page == 0 ? firstBody : finalBody;
+            const std::string response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) +
+                "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        }
+    });
+
+    const auto port = ntohs(address.sin_port);
+    std::vector<MediaItem> items;
+    std::string error;
+    CHECK(JellyfinApi::getChangedCatalogItems(
+        "http://127.0.0.1:" + std::to_string(port), "test-token", "user123",
+        "device123", 1700000000123LL, items, error));
+    server.join();
+    ::close(listener);
+    CHECK(error.empty());
+    CHECK(items.size() == 101);
+    if (items.size() == 101) {
+        CHECK_EQ(items[0].id, "changed-0");
+        CHECK_EQ(items[0].title, "Changed Movie 0");
+        CHECK_EQ(items[0].overview, "Updated overview");
+        CHECK_EQ(items[0].imageTags.at("Primary"), "primary-changed");
+    }
+    CHECK(requests[0].find("IncludeItemTypes=Movie,Series") != std::string::npos);
+    CHECK(requests[0].find("SortBy=DateLastSaved") != std::string::npos);
+    CHECK(requests[0].find("MinDateLastSaved=2023-11-14T22:13:19.0000000Z")
+          != std::string::npos);
+    CHECK(requests[0].find("Fields=Overview,Genres,CommunityRating,UserData,"
+                            "ImageTags,RunTimeTicks,SeriesName,SeriesId,"
+                            "SeasonId,ParentIndexNumber,IndexNumber,Etag")
+          != std::string::npos);
+    CHECK(requests[1].find("StartIndex=100") != std::string::npos);
+
+    const auto singleResponse = [](const std::string &body, int status,
+                                   bool expectedSuccess,
+                                   std::string &request) {
+        const int socketFd = ::socket(AF_INET, SOCK_STREAM, 0);
+        CHECK(socketFd >= 0);
+        if (socketFd < 0) return std::string();
+        int socketReuse = 1;
+        ::setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &socketReuse,
+                     sizeof(socketReuse));
+        sockaddr_in socketAddress{};
+        socketAddress.sin_family = AF_INET;
+        socketAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        socketAddress.sin_port = htons(0);
+        CHECK(::bind(socketFd, reinterpret_cast<sockaddr *>(&socketAddress),
+                     sizeof(socketAddress)) == 0);
+        socklen_t socketAddressSize = sizeof(socketAddress);
+        ::getsockname(socketFd, reinterpret_cast<sockaddr *>(&socketAddress),
+                      &socketAddressSize);
+        CHECK(::listen(socketFd, 1) == 0);
+        std::thread responseServer([&] {
+            const int client = ::accept(socketFd, nullptr, nullptr);
+            if (client < 0) return;
+            char buffer[1024];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+                if (received <= 0) break;
+                request.append(buffer, static_cast<size_t>(received));
+            }
+            const std::string response = "HTTP/1.1 " + std::to_string(status)
+                + " Response\r\nContent-Type: application/json\r\n"
+                  "Content-Length: " + std::to_string(body.size())
+                + "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        });
+        const std::string base = "http://127.0.0.1:"
+            + std::to_string(ntohs(socketAddress.sin_port));
+        std::vector<MediaItem> responseItems;
+        std::string responseError;
+        const bool ok = JellyfinApi::getChangedCatalogItems(
+            base, "token", "user", "device", 1700000000000LL,
+            responseItems, responseError);
+        responseServer.join();
+        ::close(socketFd);
+        CHECK(ok == expectedSuccess);
+        return responseError;
+    };
+
+    std::string emptyRequest;
+    // An empty page is a successful no-op.
+    {
+        const std::string emptyError = singleResponse(
+            R"({"Items":[]})", 200, true, emptyRequest);
+        CHECK(emptyError.empty());
+    }
+    std::string malformedRequest;
+    const std::string malformedError = singleResponse(
+        R"({"Items":[)" , 200, false, malformedRequest);
+    CHECK(malformedError.find("Malformed") != std::string::npos);
+    std::string failureRequest;
+    const std::string failureError = singleResponse(
+        "server unavailable", 503, false, failureRequest);
+    CHECK(failureError.find("HTTP 503") != std::string::npos);
+
+    std::atomic<bool> cancelled{true};
+    std::vector<MediaItem> cancelledItems;
+    std::string cancelledError;
+    CHECK(!JellyfinApi::getChangedCatalogItems(
+        "http://127.0.0.1:1", "token", "user", "device", 1700000000000LL,
+        cancelledItems, cancelledError, &cancelled));
+    CHECK(cancelledError == "Callback aborted");
+    std::printf("[test] Changed catalog metadata query OK\n");
+}
+
+// -------------------------------------------------------------------
 // Test: ChangedHierarchy uses only the affected-series projection
 // -------------------------------------------------------------------
 static void testChangedHierarchyLightweightProjection()
 {
     std::printf("[test] ChangedHierarchy lightweight projection\n");
+    testChangedCatalogMetadataQuery();
 
     const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
     CHECK(listener >= 0);

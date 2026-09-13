@@ -738,6 +738,7 @@ struct CatalogDb::MediaPageCommand {
     std::string type; int letter = -1; std::size_t limit = 0;
     CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported;
     CatalogDbPageCursor after; CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
     std::promise<CatalogDbMediaPageResult> result;
 };
 struct CatalogDb::MediaPageUpsertCommand {
@@ -1455,7 +1456,11 @@ std::future<CatalogDbMediaPageResult> CatalogDb::enqueueMediaPage(
     if(command->limit==0 || (type!="movie" && type!="show")){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::SqliteError;r.message="invalid media page request";command->result.set_value(std::move(r));return future;}
     if(m_pendingJobs>=kMaxPendingJobs){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb page queue is full";command->result.set_value(std::move(r));return future;}
     command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation; command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
-    m_mediaPageCommands.push_back(command); ++m_pendingJobs; m_wake.notify_one(); return future;
+    command->enqueuedMonotonicUs = telemetryNowIfEnabled();
+    m_mediaPageCommands.push_back(command); ++m_pendingJobs;
+    performanceTelemetry().setCatalogDbQueueDepth(
+        static_cast<std::uint32_t>(m_pendingJobs));
+    m_wake.notify_one(); return future;
 }
 
 std::future<CatalogCompatibilityReadResult> CatalogDb::enqueueLibraryRead(
@@ -2827,6 +2832,29 @@ void CatalogDb::processTopLevelSync(
 void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &command)
 {
     CatalogDbMediaPageResult result; result.workerOwned=true;
+    const std::uint64_t queryStartUs = telemetryNowIfEnabled();
+    catalogDiagnostic("read_media_page_dequeued");
+    auto finish = [&] {
+        const std::uint64_t endUs = telemetryNowIfEnabled();
+        if (queryStartUs != 0 && endUs >= queryStartUs)
+            performanceTelemetry().recordCatalogDbQuery(endUs - queryStartUs);
+        if (command->enqueuedMonotonicUs != 0
+            && endUs >= command->enqueuedMonotonicUs) {
+            performanceTelemetry().recordCatalogDbQueueWait(
+                endUs - command->enqueuedMonotonicUs);
+        }
+        if (result.cancelled || result.superseded) {
+            catalogDiagnostic("read_media_page_cancelled");
+            performanceTelemetry().addCatalogDbCancelled();
+        } else if (result.success) {
+            catalogDiagnostic("read_media_page_ready");
+            performanceTelemetry().addCatalogDbCompleted();
+        } else {
+            catalogDiagnostic("read_media_page_failed");
+            performanceTelemetry().addCatalogDbFailed();
+        }
+        command->result.set_value(std::move(result));
+    };
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command->metadata.generation != m_generation
@@ -2834,7 +2862,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
             || !m_scopeReady) {
             result.superseded=true;
             result.error=CatalogDbErrorCategory::Superseded;
-            command->result.set_value(std::move(result));
+            finish();
             return;
         }
     }
@@ -2887,7 +2915,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
         result.message=sqlite3_errmsg(m_db);
         sqlite3_finalize(statement); sqlite3_finalize(genres);
         sqlite3_finalize(tags); sqlite3_finalize(memberships);
-        command->result.set_value(std::move(result));
+        finish();
         return;
     }
     const std::string lower = command->letter >= 0
@@ -2957,7 +2985,7 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     sqlite3_finalize(memberships);
     if (!result.cancelled&&result.error==CatalogDbErrorCategory::None)
         result.success=true;
-    command->result.set_value(std::move(result));
+    finish();
 }
 
 void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command)

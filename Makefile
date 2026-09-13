@@ -135,6 +135,8 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/EpisodeBrowserPlayback.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserDownloads.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsScreen.cpp \
+    $(SRC_DIR)/ui/screens/MovieDetailsWorker.cpp \
+    $(SRC_DIR)/ui/screens/MovieDetailsRender.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
     $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp \
     $(TELEMETRY_SRCS)
@@ -274,6 +276,8 @@ TEST_PROD_SRCS := \
                src/ui/screens/EpisodeBrowserPlayback.cpp \
                src/ui/screens/EpisodeBrowserDownloads.cpp \
                src/ui/screens/MovieDetailsScreen.cpp \
+               src/ui/screens/MovieDetailsWorker.cpp \
+               src/ui/screens/MovieDetailsRender.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp \
                $(TELEMETRY_TEST_SRCS)

@@ -54,6 +54,7 @@ SRCS        := \
     $(SRC_DIR)/app/App.cpp \
     $(SRC_DIR)/app/RemoteExitSignal.cpp \
     $(SRC_DIR)/catalog/CatalogDb.cpp \
+    $(SRC_DIR)/catalog/CatalogDbWrite.cpp \
     $(SRC_DIR)/catalog/CatalogDbSchema.cpp \
     $(SRC_DIR)/catalog/MediaItemSql.cpp \
     $(SRC_DIR)/catalog/CatalogCompatibility.cpp \
@@ -197,6 +198,7 @@ TEST_PROD_SRCS := \
                src/net/Session.cpp \
                src/net/DeviceIdentity.cpp \
                src/catalog/CatalogDb.cpp \
+               src/catalog/CatalogDbWrite.cpp \
                src/catalog/CatalogDbSchema.cpp \
                src/catalog/MediaItemSql.cpp \
                src/catalog/CatalogCompatibility.cpp \

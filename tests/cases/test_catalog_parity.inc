@@ -7,6 +7,7 @@
 
 #include "../../src/catalog/CatalogPrimitives.hpp"
 #include "../../src/catalog/CatalogCompatibility.hpp"
+#include "../../src/net/JellyfinLibraryEvents.hpp"
 
 namespace {
 
@@ -86,6 +87,95 @@ bool configureCatalogParityDb(CatalogDb &db, const std::string &url,
     }
     const auto state = db.scopeState();
     return state.requestedEpoch == epoch && state.ready;
+}
+
+void testLibrarySyncAppliesLiveCatalogChanges()
+{
+    std::printf("[test] LibrarySync applies live catalog changes\n");
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 1) == 0);
+
+    const std::string url = "http://127.0.0.1:" +
+        std::to_string(ntohs(address.sin_port));
+    const std::string scopeUrl = "http://live-catalog-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    CatalogDb db;
+    CHECK(configureCatalogParityDb(db, scopeUrl, "live-user"));
+    const auto epoch = db.scopeState().requestedEpoch;
+    const auto metadata = CatalogDbJobMetadata{0, epoch, {}};
+    MediaItem old = catalogParityItem("live-old", "movie", "Old title");
+    MediaItem removed = catalogParityItem("live-removed", "movie", "Gone");
+    CatalogDbMediaPageWrite seed;
+    seed.items = {old, removed};
+    seed.viewId = "live-movies";
+    seed.viewName = "Movies";
+    seed.collectionType = "movies";
+    CHECK(db.upsertMediaPage(seed, metadata).get().success);
+
+    std::string request;
+    const std::string body =
+        R"({"Items":[{"Id":"live-old","Type":"Movie","Name":"Updated title"},{"Id":"live-new","Type":"Movie","Name":"New title"}]})";
+    std::thread server([&]() {
+        const int client = ::accept(listener, nullptr, nullptr);
+        if (client < 0) return;
+        char buffer[4096];
+        while (request.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+            if (received <= 0) break;
+            request.append(buffer, static_cast<size_t>(received));
+        }
+        const std::string response =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n" + body;
+        (void)::send(client, response.data(), response.size(), 0);
+        ::close(client);
+    });
+
+    Session session;
+    session.serverUrl = url;
+    session.accessToken = "live-token";
+    session.userId = "live-user";
+    session.deviceId = "live-device";
+    auto sync = std::make_shared<library::LibrarySync>(
+        session, std::shared_ptr<CatalogDb>(&db, [](CatalogDb *) {}), epoch);
+    JellyfinLibraryChangeBatch batch;
+    batch.itemsAdded = {"live-new", "live-new"};
+    batch.itemsUpdated = {"live-old", "live-old"};
+    batch.itemsRemoved = {"live-removed", "live-removed"};
+    const auto result = sync->applyLibraryChanges(batch).get();
+    server.join();
+    ::close(listener);
+    CHECK(result.success && !result.catchUpRequired);
+    CHECK(result.itemsFetched == 2 && result.itemsUpserted == 2);
+    CHECK(result.itemsRemoved == 1);
+    CHECK(request.find("Ids=") != std::string::npos);
+    const auto updated = db.readMediaItemsByIds({"live-old", "live-new"}, metadata).get();
+    CHECK(updated.success && updated.items.size() == 2);
+    if (updated.success && updated.items.size() == 2) {
+        CHECK(std::find_if(updated.items.begin(), updated.items.end(),
+                           [](const MediaItem &item) {
+                               return item.id == "live-old"
+                                   && item.title == "Updated title";
+                           }) != updated.items.end());
+    }
+    const auto deleted = db.readMediaItemsByIds({"live-removed"}, metadata).get();
+    CHECK(deleted.success && deleted.items.empty());
+    sync.reset();
+    std::printf("[test] LibrarySync applies live catalog changes OK\n");
 }
 
 void testCatalogDbProjectionParity()
@@ -1496,6 +1586,7 @@ static void testLibrarySyncAuthoritativeMembershipReconcile()
 static void testCatalogDbMediaPageTopLevelStaging()
 {
     std::printf("[test] CatalogDb staged media page writes\n");
+    testLibrarySyncAppliesLiveCatalogChanges();
     testLibrarySyncAuthoritativeMembershipReconcile();
     CatalogDb db;
     const auto epoch = db.configureScope("https://page-stage.example", "user");

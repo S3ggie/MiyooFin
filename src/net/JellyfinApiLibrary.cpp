@@ -289,6 +289,78 @@ bool JellyfinApi::getChangedCatalogItems(
     }
 }
 
+bool JellyfinApi::getItemsByIds(
+    const std::string &baseUrl, const std::string &accessToken,
+    const std::string &userId, const std::string &deviceId,
+    const std::vector<std::string> &itemIds, std::vector<MediaItem> &items,
+    std::string &error, const std::atomic<bool> *cancelled)
+{
+    constexpr std::size_t maxItemIds = 64;
+    items.clear();
+    if (itemIds.empty() || itemIds.size() > maxItemIds) {
+        error = "item-by-ID query exceeds bounded limit";
+        return false;
+    }
+    for (const auto &id : itemIds) {
+        if (id.empty()) {
+            error = "item-by-ID query contains an empty ID";
+            return false;
+        }
+    }
+    if (cancelled && cancelled->load()) {
+        error = "Callback aborted";
+        return false;
+    }
+
+    std::string joinedIds;
+    for (const auto &id : itemIds) {
+        if (!joinedIds.empty()) joinedIds += ',';
+        joinedIds += id;
+    }
+    const std::string url = baseUrl + "/Users/" + userId + "/Items?Ids="
+        + joinedIds
+        + "&IncludeItemTypes=Movie,Series,Season,Episode"
+          "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+          "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
+          "IndexNumber,Etag";
+    HttpClient client;
+    client.setTimeoutSec(15);
+    HttpResponse response;
+    TelemetryRequestScope request(RequestKind::LibraryItems);
+    if (!client.perform("GET", url.c_str(), buildAuthHeaders(accessToken, deviceId),
+                       {}, response, error, cancelled)) {
+        if (error.empty()) error = "Could not reach server";
+        return false;
+    }
+    if (!response.ok()) {
+        error = "Items by ID failed (HTTP "
+            + std::to_string(response.status) + ")";
+        return false;
+    }
+    const std::string rawItems = jsonRawValue(response.body, "Items");
+    if (rawItems.empty() || rawItems.front() != '[') {
+        error = "Malformed items-by-ID response";
+        return false;
+    }
+    const auto itemStrings = jsonExtractArray(response.body, "Items");
+    if (itemStrings.empty() && rawItems != "[]") {
+        error = "Malformed items-by-ID response";
+        return false;
+    }
+    for (const auto &raw : itemStrings) {
+        MediaItem item = jsonToMediaItem(raw);
+        if (item.id.empty()
+            || (item.type != "movie" && item.type != "show"
+                && item.type != "season" && item.type != "episode")) {
+            error = "Malformed items-by-ID item";
+            items.clear();
+            return false;
+        }
+        items.push_back(std::move(item));
+    }
+    return true;
+}
+
 
 std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,
                                               const std::string &userId,

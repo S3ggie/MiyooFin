@@ -40,6 +40,8 @@ SRCS := \
     src/catalog/CatalogDbWrite.cpp \
     src/catalog/CatalogDbSchema.cpp \
     src/catalog/CatalogDbQuery.cpp \
+    src/catalog/CatalogDbSyncState.cpp \
+    src/catalog/CatalogDbHierarchy.cpp \
     src/catalog/MediaItemSql.cpp \
     src/catalog/CatalogCompatibility.cpp \
     src/app/UiDiagnostics.cpp \

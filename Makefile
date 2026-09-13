@@ -57,6 +57,8 @@ SRCS        := \
     $(SRC_DIR)/catalog/CatalogDbWrite.cpp \
     $(SRC_DIR)/catalog/CatalogDbSchema.cpp \
     $(SRC_DIR)/catalog/CatalogDbQuery.cpp \
+    $(SRC_DIR)/catalog/CatalogDbSyncState.cpp \
+    $(SRC_DIR)/catalog/CatalogDbHierarchy.cpp \
     $(SRC_DIR)/catalog/MediaItemSql.cpp \
     $(SRC_DIR)/catalog/CatalogCompatibility.cpp \
     $(SRC_DIR)/app/UiDiagnostics.cpp \
@@ -202,6 +204,8 @@ TEST_PROD_SRCS := \
                src/catalog/CatalogDbWrite.cpp \
                src/catalog/CatalogDbSchema.cpp \
                src/catalog/CatalogDbQuery.cpp \
+               src/catalog/CatalogDbSyncState.cpp \
+               src/catalog/CatalogDbHierarchy.cpp \
                src/catalog/MediaItemSql.cpp \
                src/catalog/CatalogCompatibility.cpp \
                src/image/stb_image_impl.cpp \

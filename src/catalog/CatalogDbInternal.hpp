@@ -54,6 +54,36 @@ struct CatalogDb::MediaPageCommand {
     std::promise<CatalogDbMediaPageResult> result;
 };
 
+struct CatalogDb::ReconcileCommand {
+    std::vector<MediaItem> series;
+    bool authoritative = false;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    int failAfterRows = -1;
+    std::promise<CatalogDbReconcileResult> result;
+};
+
+struct CatalogDb::SyncStateCommand {
+    bool write = false;
+    bool legacyAvailable = false;
+    std::int64_t legacyLastSuccessfulMs = 0;
+    std::int64_t legacyLastReconcileMs = 0;
+    std::int64_t lastSuccessfulMs = 0;
+    std::int64_t lastReconcileMs = 0;
+    std::uint64_t committedGeneration = 0;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    std::promise<CatalogDbSyncState> result;
+};
+
+struct CatalogDb::LibrarySeedCommand {
+    CatalogCompatibilitySeedRequest request;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    int failAfterWrites = -1;
+    std::promise<CatalogCompatibilitySeedResult> result;
+};
+
 struct CatalogDb::HierarchyWriteCommand {
     MediaItem series;
     std::vector<MediaItem> seasons;

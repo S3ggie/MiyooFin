@@ -6,6 +6,9 @@ run_dir=$(mktemp -d "${TMPDIR:-/tmp}/miyoofin-test-run.XXXXXX")
 trap 'rm -rf "$run_dir"' EXIT HUP INT TERM
 TEST_BINARIES='test_catalog
 test_api_session
+test_api_core
+test_api_events
+test_session
 test_ui_foundation
 test_cache_offline
 test_artwork_episode

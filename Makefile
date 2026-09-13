@@ -181,7 +181,7 @@ TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 TEST_GROUPS := catalog api_session ui_foundation cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
-               catalog_parity_query catalog_parity_hierarchy catalog_parity_sync
+               catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := \
                src/net/JellyfinApi.cpp \
@@ -269,7 +269,10 @@ $(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
-output/test/test_api_session: tests/cases/test_api_session.inc
+output/test/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
+output/test/test_api_core: tests/cases/test_api_core.inc
+output/test/test_api_events: tests/cases/test_api_events.inc
+output/test/test_session: tests/cases/test_session.inc
 output/test/test_ui_foundation: tests/cases/test_ui_foundation.inc
 output/test/test_cache_offline: tests/cases/test_cache_offline.inc
 output/test/test_artwork_episode: tests/cases/test_artwork_episode.inc

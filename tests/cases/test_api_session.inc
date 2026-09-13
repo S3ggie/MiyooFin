@@ -1147,12 +1147,50 @@ static void testChangedCatalogMetadataQuery()
     std::printf("[test] Changed catalog metadata query OK\n");
 }
 
+#include "../../src/net/JellyfinLibraryEvents.hpp"
+
+static void testLibraryChangedEventParsing()
+{
+    std::printf("[test] LibraryChanged event parsing\n");
+    JellyfinLibraryChangeBatch batch;
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"LibraryChanged","Data":"{\"ItemsAdded\":[\"a\",\"a\"],\"ItemsRemoved\":[\"r\"],\"ItemsUpdated\":[\"u\",\"u\"]}"})",
+        batch) == JellyfinLibraryEventParse::Parsed);
+    CHECK(batch.itemsAdded.size() == 2 && batch.itemsAdded[0] == "a"
+          && batch.itemsAdded[1] == "a");
+    CHECK(batch.itemsRemoved.size() == 1 && batch.itemsRemoved[0] == "r");
+    CHECK(batch.itemsUpdated.size() == 2 && batch.itemsUpdated[0] == "u"
+          && batch.itemsUpdated[1] == "u");
+
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"LibraryChanged","Data":{"ItemsUpdated":["u2"]}})",
+        batch) == JellyfinLibraryEventParse::Parsed);
+    CHECK(batch.itemsAdded.empty() && batch.itemsRemoved.empty());
+    CHECK(batch.itemsUpdated.size() == 1 && batch.itemsUpdated[0] == "u2");
+
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"KeepAlive","Data":"{}"})", batch)
+        == JellyfinLibraryEventParse::Ignored);
+    CHECK(JellyfinLibraryEvents::parseMessage("{bad", batch)
+        == JellyfinLibraryEventParse::Malformed);
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"LibraryChanged","Data":{"ItemsAdded":42}})", batch)
+        == JellyfinLibraryEventParse::Malformed);
+    std::string oversized(32769, 'x');
+    CHECK(JellyfinLibraryEvents::parseMessage(oversized, batch)
+        == JellyfinLibraryEventParse::Oversized);
+    std::printf("[test] LibraryChanged event parsing OK\n");
+}
+
 // -------------------------------------------------------------------
 // Test: ChangedHierarchy uses only the affected-series projection
 // -------------------------------------------------------------------
 static void testChangedHierarchyLightweightProjection()
 {
     std::printf("[test] ChangedHierarchy lightweight projection\n");
+    testLibraryChangedEventParsing();
     testChangedCatalogMetadataQuery();
 
     const int listener = ::socket(AF_INET, SOCK_STREAM, 0);

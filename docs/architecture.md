@@ -65,8 +65,8 @@ src/
     DownloadReconcile.*          Reconcile policy
   playback/                      Playback request and offline journal
 include/miyoofin/                 Public identity/version headers
-tests/test_main.cpp               Single test harness and dispatch
-tests/cases/*.inc                 Included test groups in one translation unit
+tests/test_*.cpp                  Focused test-binary wrappers and aggregate runner
+tests/cases/*.inc                 Test cases shared by focused wrappers
 assets/, distributions/, docs/    Runtime assets, OnionOS packaging, documentation
 output/                           Gitignored build artifacts
 ```
@@ -90,9 +90,12 @@ reconciliation, and HLS transfer/progress work are separated into their own impl
 This preserves segmented resumable downloads, `.part` recovery, retries, pause/resume/retry/delete,
 and download reconciliation.
 
-The test harness stays in `tests/test_main.cpp`, while related cases are grouped in included
-`tests/cases/*.inc` files. They remain one translation unit so shared fixtures, helpers, and test
-behavior stay compatible.
+The test cases remain grouped in `tests/cases/*.inc` files, but focused `tests/test_*.cpp` wrappers
+compile them into independent binaries. `tests/test_support.hpp` contains shared fixtures and
+assertion support, while `output/test/test_runner` runs every group for the aggregate test target.
+Production sources are compiled once into reusable test objects and archived for selective linker
+extraction, so changing one case only rebuilds and relinks its focused binary. Desktop-only runtime
+checks are exposed through the separate `Makefile.desktop` targets rather than `make test`.
 
 ## Performance telemetry architecture
 

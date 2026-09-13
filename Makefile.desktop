@@ -1,0 +1,9 @@
+# Desktop development targets are separate from the core build and test graph.
+
+.PHONY: desktop-run desktop-test
+
+desktop-run: all bridge reporter
+	@sh tools/desktop-run.sh
+
+desktop-test:
+	@sh tests/test_desktop_runtime.sh

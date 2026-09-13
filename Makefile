@@ -122,6 +122,7 @@ SRCS        := \
 
 OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
 OBJS        += $(SQLITE_HOST_OBJ)
+DEPS        := $(OBJS:.o=.d)
 OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/image output/build/net output/build/cache \
                output/build/download output/build/catalog \
@@ -131,6 +132,9 @@ OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/playback
 
 TARGET      := output/build/miyoofin
+
+.DEFAULT_GOAL := all
+-include $(DEPS)
 
 # -------------------------------------------------------------------
 # Host build
@@ -143,11 +147,11 @@ $(TARGET): $(OBJS) | output/build
 	@echo "  [LINK] $@"
 
 output/build/%.o: src/%.cpp | $(OUT_DIRS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 $(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
-	$(CC) $(SQLITE_CFLAGS) -I$(SQLITE_DIR) -c -o $@ $<
+	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 # Create output directories
@@ -176,7 +180,10 @@ RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
-TEST_SRCS   := tests/test_main.cpp \
+TEST_GROUPS := catalog api_session ui_foundation cache_offline \
+               artwork_episode downloads misc playback telemetry
+TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
+TEST_PROD_SRCS := \
                src/net/JellyfinApi.cpp \
                src/net/JellyfinApiJson.cpp \
                src/net/JellyfinApiAuth.cpp \
@@ -214,6 +221,7 @@ TEST_SRCS   := tests/test_main.cpp \
                src/ui/HomeSettingsModel.cpp \
                src/ui/HomeTabs.cpp \
                src/ui/HomeArtworkPlan.cpp \
+               src/input/InputManager.cpp \
                src/app/ScreenStack.cpp \
                src/app/RemoteExitSignal.cpp \
                src/app/UiDiagnostics.cpp \
@@ -238,6 +246,10 @@ TEST_SRCS   := tests/test_main.cpp \
                src/playback/PlaybackRequest.cpp \
                src/playback/OfflinePlaybackJournal.cpp \
                $(TELEMETRY_TEST_SRCS)
+TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=output/test/objects/%.o)
+TEST_PROD_DEPS := $(TEST_PROD_OBJS:.o=.d)
+TEST_PROD_LIB := output/test/libmiyoofin-test.a
+-include $(TEST_PROD_DEPS)
 
 .PHONY: test
 test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
@@ -253,9 +265,34 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 refactor-check:
 	@sh tools/refactor-check.sh
 
-$(TEST_TARGET): $(TEST_SRCS) $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $^ $(CURL_LIBS) $(SDL_LIBS)
+$(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | output/test
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
+
+$(TEST_GROUP_TARGETS): tests/test_support.hpp
+output/test/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity.inc
+output/test/test_api_session: tests/cases/test_api_session.inc
+output/test/test_ui_foundation: tests/cases/test_ui_foundation.inc
+output/test/test_cache_offline: tests/cases/test_cache_offline.inc
+output/test/test_artwork_episode: tests/cases/test_artwork_episode.inc
+output/test/test_downloads: tests/cases/test_downloads.inc
+output/test/test_misc: tests/cases/test_misc_regressions.inc
+output/test/test_playback: tests/cases/test_playback_ui.inc
+output/test/test_telemetry: tests/cases/test_telemetry.inc
+
+output/test/objects/%.o: src/%.cpp | output/test
+	@mkdir -p $(@D)
+	$(CXX) $(TEST_CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
+	@echo "  [CC]   $@"
+
+$(TEST_PROD_LIB): $(TEST_PROD_OBJS) | output/test
+	rm -f $@
+	$(AR) rcs $@ $^
+	@echo "  [AR]   $@"
+
+$(TEST_TARGET): tests/test_runner.sh $(TEST_GROUP_TARGETS) | output/test
+	cp tests/test_runner.sh $@
+	chmod +x $@
 
 $(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^
@@ -480,6 +517,8 @@ help:
 	@echo "  make test    — Run unit tests"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
+	@echo "  make desktop-run — Run the host desktop development runtime"
+	@echo "  make desktop-test — Check desktop runtime wiring"
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"
@@ -487,3 +526,5 @@ help:
 	@echo "  make update-ca-bundle — Refresh cacert.pem from curl's Mozilla CA bundle"
 	@echo "  make clean   — Remove output/"
 	@echo "  make help    — This message"
+
+-include Makefile.desktop

@@ -52,6 +52,7 @@ endif
 SRCS        := \
     $(SRC_DIR)/main.cpp \
     $(SRC_DIR)/app/App.cpp \
+    $(SRC_DIR)/app/AppSession.cpp \
     $(SRC_DIR)/app/RemoteExitSignal.cpp \
     $(SRC_DIR)/catalog/CatalogDb.cpp \
     $(SRC_DIR)/catalog/CatalogDbWrite.cpp \

@@ -130,6 +130,7 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/SeriesScreenNavigation.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreenRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
+    $(SRC_DIR)/ui/screens/EpisodeBrowserData.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserArtwork.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserPlayback.cpp \
@@ -271,6 +272,7 @@ TEST_PROD_SRCS := \
                src/ui/screens/SeriesScreenNavigation.cpp \
                src/ui/screens/SeriesScreenRender.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
+               src/ui/screens/EpisodeBrowserData.cpp \
                src/ui/screens/EpisodeBrowserRender.cpp \
                src/ui/screens/EpisodeBrowserArtwork.cpp \
                src/ui/screens/EpisodeBrowserPlayback.cpp \

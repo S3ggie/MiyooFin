@@ -2,28 +2,25 @@
 
 ## Main Agent Role
 
-The main Codex chat is a lightweight coordinator.
+The main Codex chat is the default implementer for normal coding, debugging, refactoring, and testing.
 
-For any substantial coding, debugging, or implementation task:
+For substantial coding, debugging, refactoring, or testing tasks, the main agent should:
 
 1. Read the user's request.
 2. Check the current Git HEAD and run `git status --short`.
-3. Spawn one implementation subagent to perform the actual repository inspection, coding, and focused testing.
-4. Give that subagent the user's full requirements and these repository rules.
-5. Wait for the implementation subagent to finish.
-6. Review its concise report and validation results.
-7. Perform only minimal additional inspection if something failed, is unclear, or contradicts the requirements.
-8. Give the user the final concise report.
+3. Inspect the relevant repository areas, make the narrowest correct changes, and preserve unrelated work.
+4. Add or update focused tests when appropriate.
+5. Run the required validation.
+6. Give the user the final concise report.
 
-The main agent should normally NOT:
+Use subagents selectively only when:
 
-* deeply inspect the codebase itself;
-* spend substantial context reading implementation files;
-* independently reproduce work already assigned to the implementation subagent;
-* rewrite code already handled by the implementation subagent;
-* repeatedly reread the repository just to verify routine successful work.
+* multiple investigations are genuinely independent;
+* a risky change benefits from independent review;
+* the main agent is blocked or materially uncertain;
+* or the user explicitly requests one.
 
-The implementation subagent is responsible for:
+When a subagent is used, give it the user's full requirements and these repository rules. The subagent may be responsible for:
 
 * locating the relevant code;
 * understanding the affected architecture;
@@ -31,19 +28,9 @@ The implementation subagent is responsible for:
 * preserving unrelated work;
 * adding or updating focused tests;
 * running the required validation;
-* returning a concise implementation report to the main agent.
+* returning a concise report to the main agent.
 
 Use only one code-editing subagent at a time.
-
-For tiny and obvious edits, the main agent may implement directly.
-
-Do not spawn scout or reviewer agents by default. Use an additional read-only subagent only when:
-
-* the implementation is unusually risky;
-* the coding subagent reports uncertainty;
-* tests or builds fail;
-* the result appears inconsistent;
-* or the user explicitly requests another review.
 
 The user should only need to interact with the main Codex chat.
 
@@ -144,6 +131,18 @@ Do not bundle unrelated cleanup or features into a bug fix.
 
 Do not claim hardware behavior is verified unless it was actually tested on the Miyoo Mini Plus.
 
+## Test Organization
+
+* Add tests to the smallest relevant focused test group.
+* Do not recreate `tests/test_main.cpp`.
+* Give each new major subsystem its own `tests/test_<group>.cpp` binary.
+* Register new test binaries in `TEST_GROUPS` and the shared list in `tests/test_runner.sh`.
+* Keep shared fixtures in `tests/test_support.hpp` or a narrowly scoped support file.
+* Do not include production `.cpp` files from tests.
+* If a test group exceeds roughly 1,000 lines or takes more than 15–20 seconds to compile, split it instead of extending it indefinitely.
+* During development, run the focused binary first, then run `make test -j2` once before completion.
+* Do not use `make -B` unless dependency tracking is proven incorrect.
+
 ## Validation
 
 For normal C++ changes, run as applicable:
@@ -186,3 +185,11 @@ Keep the report concise and include:
 Do not dump large diffs, source listings, compiler output, or subagent transcripts unless specifically requested.
 
 Do not commit or deploy merely because validation passed.
+
+## Repository Discovery
+
+* After the repository is indexed with Context Mode, prefer `ctx_search` for broad repository discovery and questions about where functionality, architecture, or related code lives.
+* Prefer `ctx_batch_execute` when several repository searches or inspections can be gathered together.
+* Use normal `Search`, `Read`, `rg`, or other native tools for narrow exact verification once the relevant files or symbols are known.
+* Do not use Context Mode mechanically when a direct targeted read or exact search is simpler.
+* Avoid repeatedly searching or rereading repository areas that Context Mode has already located unless verification is necessary.

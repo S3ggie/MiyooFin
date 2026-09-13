@@ -41,6 +41,19 @@ struct CatalogDb::QueryCommand {
     std::promise<CatalogDbHierarchyResult> result;
 };
 
+struct CatalogDb::LibraryReadCommand {
+    CatalogDbJobMetadata metadata;
+    std::promise<CatalogCompatibilityReadResult> result;
+};
+
+struct CatalogDb::MediaPageCommand {
+    std::string type; int letter = -1; std::size_t limit = 0;
+    CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported;
+    CatalogDbPageCursor after; CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    std::promise<CatalogDbMediaPageResult> result;
+};
+
 struct CatalogDb::HierarchyWriteCommand {
     MediaItem series;
     std::vector<MediaItem> seasons;

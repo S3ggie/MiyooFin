@@ -234,11 +234,11 @@ fi
 PLAYBACK_MODE=${MIYOOFIN_PLAYBACK_MODE:-onion}
 case "$PLAYBACK_MODE" in
     onion)
-        export SDL_VIDEODRIVER=mmiyoo
-        export SDL_AUDIODRIVER=mmiyoo
+        unset SDL_VIDEODRIVER
+        unset SDL_AUDIODRIVER
         PLAYBACK_FFPLAY_BIN=/mnt/SDCARD/.tmp_update/bin/ffplay
         PLAYBACK_FFPLAY_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so
-        playback_log "player_env mode=onion SDL_VIDEODRIVER=$SDL_VIDEODRIVER SDL_AUDIODRIVER=$SDL_AUDIODRIVER LD_PRELOAD=$PLAYBACK_FFPLAY_PRELOAD"
+        playback_log "player_env mode=onion SDL_VIDEODRIVER=(native) SDL_AUDIODRIVER=(native) LD_PRELOAD=$PLAYBACK_FFPLAY_PRELOAD"
         ;;
     desktop)
         unset SDL_VIDEODRIVER

@@ -272,24 +272,6 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
     episode.seasonId = season.id;
     episode.parentIndexNumber = season.indexNumber;
 
-    CHECK(OfflineCatalog::save(paths.legacyPath, OfflineCatalogSnapshot{}));
-    MediaItem mergedSeason = season;
-    mergedSeason.title = "Merged Season";
-    MediaItem mergedEpisode = episode;
-    mergedEpisode.title = "Merged Episode";
-    CHECK(OfflineCatalog::storeDiscoveredHierarchy(
-        paths.legacyPath, series, {season}, {{season.id, {episode}}}));
-    CHECK(OfflineCatalog::storeDiscoveredHierarchy(
-        paths.legacyPath, series, {mergedSeason},
-        {{season.id, {mergedEpisode, mergedEpisode}}}));
-    OfflineCatalogSnapshot mergedLegacy;
-    CHECK(OfflineCatalog::load(paths.legacyPath, mergedLegacy));
-    CHECK(mergedLegacy.seasonsBySeries[series.id].size() == 1);
-    CHECK(mergedLegacy.episodesBySeason[season.id].size() == 1);
-    CHECK(mergedLegacy.seasonsBySeries[series.id][0].title == "Merged Season");
-    CHECK(mergedLegacy.episodesBySeason[season.id][0].title
-          == "Merged Episode");
-
     MediaItem removedSeries = series;
     removedSeries.id = "__task16_removed_series__";
     removedSeries.title = "Removed Series";
@@ -300,25 +282,12 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
     removedEpisode.id = "__task16_removed_episode__";
     removedEpisode.seriesId = removedSeries.id;
     removedEpisode.seasonId = removedSeason.id;
-    mergedLegacy.series[removedSeries.id] = removedSeries;
-    mergedLegacy.seasonsBySeries[removedSeries.id] = {removedSeason};
-    mergedLegacy.episodesBySeason[removedSeason.id] = {removedEpisode};
-    CHECK(OfflineCatalog::save(paths.legacyPath, mergedLegacy));
-    CHECK(OfflineCatalog::reconcileSeries(paths.legacyPath, {series}));
-    OfflineCatalogSnapshot legacyAfter = {};
-    CHECK(OfflineCatalog::load(paths.legacyPath, legacyAfter));
-    CHECK(legacyAfter.series.count(series.id) == 1);
-    CHECK(legacyAfter.series.count(removedSeries.id) == 0);
-    CHECK(legacyAfter.seasonsBySeries.count(removedSeries.id) == 0);
-    CHECK(legacyAfter.episodesBySeason.count(removedSeason.id) == 0);
-
-    std::remove(paths.legacyPath.c_str());
     {
         CatalogDb db;
         CHECK(configureCatalogParityDb(db, url, user));
         CHECK(db.upsertSeriesHierarchy(series,
-                                       legacyAfter.seasonsBySeries[series.id],
-                                       legacyAfter.episodesBySeason, 1, 100)
+                                       {season},
+                                       {{season.id, {episode}}}, 1, 100)
                   .get()
                   .success);
         CHECK(db.upsertSeriesHierarchy(removedSeries, {removedSeason},
@@ -333,9 +302,9 @@ void testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity()
         const auto sqliteKeepSeasons = db.getSeasons(series.id).get();
         const auto sqliteKeepEpisodes = db.getEpisodes(season.id).get();
         CHECK(sqliteKeepSeasons.success && sqliteKeepEpisodes.success);
-        checkCatalogParityItems(legacyAfter.seasonsBySeries[series.id],
+        checkCatalogParityItems({season},
                                 sqliteKeepSeasons.items);
-        checkCatalogParityItems(legacyAfter.episodesBySeason[season.id],
+        checkCatalogParityItems({episode},
                                 sqliteKeepEpisodes.items);
     }
 
@@ -1219,6 +1188,30 @@ void testLibraryCacheHomeParityHarness()
     CHECK(tabs[2].rows.size() == 1 && tabs[2].rows[0].label == "Shows"
           && tabs[2].rows[0].items[0].id == a.id);
     CHECK(offlineTabsFromSnapshot(snapshot).size() == 4);
+}
+
+static void testLegacyWholeFilePersistenceRetired()
+{
+    const std::string libraryCacheSource =
+        readTestBytes("src/cache/LibraryCache.cpp");
+    const std::string syncStateSource =
+        readTestBytes("src/cache/SyncState.cpp");
+    const std::string offlineCatalogHeader =
+        readTestBytes("src/cache/OfflineCatalog.hpp");
+    const std::string makefile = readTestBytes("Makefile");
+    const std::string crossMakefile = readTestBytes("Makefile.cross");
+
+    CHECK(libraryCacheSource.find("LibraryCache::save")
+          == std::string::npos);
+    CHECK(syncStateSource.find("SyncStateStore::save")
+          == std::string::npos);
+    CHECK(offlineCatalogHeader.find("OfflineCatalog::")
+          == std::string::npos);
+    CHECK(::access("src/cache/OfflineCatalog.cpp", F_OK) != 0);
+    CHECK(makefile.find("src/cache/OfflineCatalog.cpp")
+          == std::string::npos);
+    CHECK(crossMakefile.find("src/cache/OfflineCatalog.cpp")
+          == std::string::npos);
 }
 
 static void testCatalogDbMediaPageUpsertAndPopulation()

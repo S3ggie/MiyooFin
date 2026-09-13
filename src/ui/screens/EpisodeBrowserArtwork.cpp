@@ -1,7 +1,6 @@
 #include "EpisodeBrowserScreen.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../../cache/ImageCache.hpp"
-#include "../../cache/OfflineCatalog.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"

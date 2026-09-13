@@ -31,5 +31,6 @@ int main()
     testHomeUsesCatalogBeforeNetworkRefresh(); testLibraryCacheHomeParityHarness();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
+    testLegacyWholeFilePersistenceRetired();
     return miyoofin_test::finish("catalog");
 }

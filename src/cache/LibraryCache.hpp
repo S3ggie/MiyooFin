@@ -19,8 +19,8 @@ struct StalePoster { std::string itemId, tag; };
 class LibraryCache {
 public:
     static std::string scopeKey(const std::string &serverUrl, const std::string &userId);
-    static std::string cachePath(const std::string &root, const std::string &scope);
-    static bool save(const std::string &path, const LibrarySnapshot &snapshot, std::string *error=nullptr);
+    // Read-only compatibility reader for existing snapshot files. Normal
+    // runtime catalog/home state is owned by CatalogDb.
     static bool load(const std::string &path, LibrarySnapshot &snapshot, std::string *error=nullptr,
                      bool *needsRefresh=nullptr);
     static ReconcileStats reconcile(const LibrarySnapshot &oldSnapshot, const LibrarySnapshot &remoteSnapshot,

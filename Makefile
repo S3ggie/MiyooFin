@@ -180,7 +180,8 @@ CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 TEST_GROUPS := catalog api_session ui_foundation cache_offline \
-               artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema
+               artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
+               catalog_parity_query catalog_parity_hierarchy catalog_parity_sync
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := \
                src/net/JellyfinApi.cpp \
@@ -268,7 +269,6 @@ $(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
-output/test/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity.inc
 output/test/test_api_session: tests/cases/test_api_session.inc
 output/test/test_ui_foundation: tests/cases/test_ui_foundation.inc
 output/test/test_cache_offline: tests/cases/test_cache_offline.inc
@@ -280,6 +280,10 @@ output/test/test_telemetry: tests/cases/test_telemetry_core.inc
 output/test/test_telemetry_format: tests/cases/test_telemetry_format.inc
 output/test/test_telemetry_service: tests/cases/test_telemetry_service.inc
 output/test/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc
+output/test/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_hierarchy.inc tests/cases/test_catalog_parity_sync.inc
+output/test/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
+output/test/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc
+output/test/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
 
 output/test/objects/%.o: src/%.cpp | output/test
 	@mkdir -p $(@D)

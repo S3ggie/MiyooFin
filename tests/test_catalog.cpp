@@ -1,7 +1,10 @@
 #include "test_support.hpp"
 #include "cases/test_catalog_core.inc"
 #include "cases/test_catalog_migration.inc"
-#include "cases/test_catalog_parity.inc"
+#include "cases/test_catalog_parity_support.hpp"
+#include "cases/test_catalog_parity_hierarchy.inc"
+#include "cases/test_catalog_parity_sync.inc"
+#include "cases/test_catalog_parity_query.inc"
 
 int main()
 {

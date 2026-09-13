@@ -106,6 +106,9 @@ SRCS := \
     src/ui/screens/AuthCheckScreen.cpp \
     src/ui/screens/InputDiagnosticsScreen.cpp \
     src/ui/screens/SeriesScreen.cpp \
+    src/ui/screens/SeriesScreenWorker.cpp \
+    src/ui/screens/SeriesScreenNavigation.cpp \
+    src/ui/screens/SeriesScreenRender.cpp \
     src/ui/screens/EpisodeBrowserScreen.cpp \
     src/ui/screens/EpisodeBrowserRender.cpp \
     src/ui/screens/EpisodeBrowserArtwork.cpp \

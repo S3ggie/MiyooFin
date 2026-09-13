@@ -8,7 +8,6 @@ TEST_BINARIES='test_catalog
 test_api_session
 test_api_core
 test_api_events
-test_session
 test_ui_foundation
 test_cache_offline
 test_artwork_episode
@@ -16,12 +15,10 @@ test_downloads
 test_misc
 test_playback
 test_telemetry
-test_telemetry_format
 test_telemetry_service
-test_telemetry_schema
 test_catalog_parity_query
 test_catalog_parity_hierarchy
-test_catalog_parity_sync'
+'
 pids=
 
 for test_binary in $TEST_BINARIES
@@ -34,6 +31,15 @@ status=0
 for pid in $pids
 do
     if ! wait "$pid"; then
+        status=1
+    fi
+done
+
+# These groups have timing-sensitive fixture/codecs; run them serially after
+# the independent groups complete.
+for serialized_test in test_catalog test_catalog_parity_sync test_telemetry_format test_telemetry_schema test_session
+do
+    if ! "$TEST_DIR/$serialized_test" >"$run_dir/$serialized_test.log" 2>&1; then
         status=1
     fi
 done

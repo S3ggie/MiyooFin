@@ -1,33 +1,58 @@
 #include "InputManager.hpp"
 #include <cstdio>
+#include <cstdlib>
 
 namespace miyoofin {
 
-int InputManager::dpadStateIndex(SDL_Scancode scancode)
+int InputManager::dpadStateIndex(SDL_Scancode scancode, bool desktopInput)
 {
     switch (scancode) {
     case static_cast<SDL_Scancode>(82): return 0;
     case static_cast<SDL_Scancode>(81): return 1;
     case static_cast<SDL_Scancode>(80): return 2;
     case static_cast<SDL_Scancode>(79): return 3;
-    default: return -1;
+    default: break;
     }
+    if (desktopInput) {
+        switch (scancode) {
+        case SDL_SCANCODE_W: return 0;
+        case SDL_SCANCODE_S: return 1;
+        case SDL_SCANCODE_A: return 2;
+        case SDL_SCANCODE_D: return 3;
+        default: break;
+        }
+    }
+    return -1;
 }
 
-Action InputManager::dpadAction(SDL_Scancode scancode)
+Action InputManager::dpadAction(SDL_Scancode scancode, bool desktopInput)
 {
     switch (scancode) {
     case static_cast<SDL_Scancode>(82): return Action::Up;
     case static_cast<SDL_Scancode>(81): return Action::Down;
     case static_cast<SDL_Scancode>(80): return Action::Left;
     case static_cast<SDL_Scancode>(79): return Action::Right;
-    default: return Action::None;
+    default: break;
     }
+    if (desktopInput) {
+        switch (scancode) {
+        case SDL_SCANCODE_W: return Action::Up;
+        case SDL_SCANCODE_S: return Action::Down;
+        case SDL_SCANCODE_A: return Action::Left;
+        case SDL_SCANCODE_D: return Action::Right;
+        default: break;
+        }
+    }
+    return Action::None;
 }
 
 InputManager::InputManager()
     : m_joystickIndex(-1)
 {
+    const char *desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
+    m_desktopInput = desktopInput && desktopInput[0] != '\0'
+        && desktopInput[0] != '0';
+
     // Try to open the first available joystick / game controller
     if (SDL_NumJoysticks() > 0) {
         SDL_Joystick *joy = SDL_JoystickOpen(0);
@@ -41,6 +66,7 @@ InputManager::InputManager()
 std::vector<Action> InputManager::poll()
 {
     std::vector<Action> actions;
+    m_pointerClicks.clear();
     SDL_Event ev;
 
     while (SDL_PollEvent(&ev)) {
@@ -57,10 +83,10 @@ std::vector<Action> InputManager::poll()
             bool down = (ev.type == SDL_KEYDOWN);
             SDL_Keycode kc = ev.key.keysym.sym;
             SDL_Scancode sc = ev.key.keysym.scancode;
-            const int repeatIndex = dpadStateIndex(sc);
+            const int repeatIndex = dpadStateIndex(sc, m_desktopInput);
 
             if (repeatIndex >= 0) {
-                action = dpadAction(sc);
+                action = dpadAction(sc, m_desktopInput);
                 if (down) {
                     if (ev.key.repeat == 0 && beginDpadPress(
                             m_dpadRepeatStates[repeatIndex], action,
@@ -79,22 +105,30 @@ std::vector<Action> InputManager::poll()
             // These are the raw device scancodes reported by the
             // Miyoo SDL2 fork (verified on-device via diagnostics).
             if (down) {
-                switch (sc) {
-                case 44:  action = Action::Confirm;     break;  // A
-                case 224: action = Action::Back;        break;  // B
-                case 225: action = Action::Search;      break;  // X
-                case 226: action = Action::ActionsMenu; break;  // Y
-                case 40:  action = Action::Settings;    break;  // START
-                case 228: action = Action::Menu;        break;  // SELECT
-                case 41:  action = Action::Exit;        break;  // MENU
-                case 8:   action = Action::PrevTab;     break;  // L
-                case 43:  action = Action::PrevPage;    break;  // L2
-                case 23:  action = Action::NextTab;     break;  // R
-                case 42:  action = Action::NextPage;    break;  // R2
-                default: break;
+                if (m_desktopInput &&
+                    (kc == SDLK_RETURN || kc == SDLK_KP_ENTER)) {
+                    action = Action::Confirm;
+                } else if (m_desktopInput &&
+                           (kc == SDLK_BACKSPACE || kc == SDLK_ESCAPE)) {
+                    action = Action::Back;
+                } else {
+                    switch (sc) {
+                    case 44:  action = Action::Confirm;     break;  // A
+                    case 224: action = Action::Back;        break;  // B
+                    case 225: action = Action::Search;      break;  // X
+                    case 226: action = Action::ActionsMenu; break;  // Y
+                    case 40:  action = Action::Settings;    break;  // START
+                    case 228: action = Action::Menu;        break;  // SELECT
+                    case 41:  action = Action::Exit;        break;  // MENU
+                    case 8:   action = Action::PrevTab;     break;  // L
+                    case 43:  action = Action::PrevPage;    break;  // L2
+                    case 23:  action = Action::NextTab;     break;  // R
+                    case 42:  action = Action::NextPage;    break;  // R2
+                    default: break;
+                    }
                 }
 
-                // Escape is the main "back" on host; also check for exit
+                // Escape is the main "back" on host; also check for exit.
                 if (kc == SDLK_ESCAPE && action == Action::None) {
                     action = Action::Back;
                 }
@@ -107,6 +141,14 @@ std::vector<Action> InputManager::poll()
             addRawEvent(ev.type, down, kc, sc, 0, action);
             break;
         }
+
+        case SDL_MOUSEBUTTONDOWN:
+            if (m_desktopInput && ev.button.button == SDL_BUTTON_LEFT) {
+                m_pointerClicks.push_back({ev.button.x, ev.button.y});
+            }
+            addRawEvent(ev.type, true, 0, SDL_SCANCODE_UNKNOWN,
+                        ev.button.button, Action::None);
+            break;
 
         case SDL_JOYBUTTONDOWN:
         case SDL_JOYBUTTONUP: {

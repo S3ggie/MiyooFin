@@ -1,5 +1,7 @@
 #include "HomeArtworkPlan.hpp"
+#include "TitleOrganization.hpp"
 #include <set>
+#include <algorithm>
 
 namespace miyoofin {
 
@@ -12,12 +14,20 @@ std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem> 
 {
     std::vector<HomePosterJob> out;
     std::set<std::string> seen;
-    for (const auto &item : items) {
-        DisplayArtwork artwork=displayArtworkForItem(item);
+    std::vector<const MediaItem *> ordered;
+    ordered.reserve(items.size());
+    for (const auto &item : items)
+        ordered.push_back(&item);
+    std::sort(ordered.begin(), ordered.end(), [](const MediaItem *left,
+                                                 const MediaItem *right) {
+        return organizationalLess(*left, *right);
+    });
+    for (const MediaItem *item : ordered) {
+        DisplayArtwork artwork=displayArtworkForItem(*item);
         if (!artwork.valid()) continue;
-        const std::string key=homeArtworkKey(item);
+        const std::string key=homeArtworkKey(*item);
         if (!seen.insert(key).second) continue;
-        out.push_back({item.id,artwork.imageType,artwork.tag,artwork.width,artwork.height});
+        out.push_back({item->id,artwork.imageType,artwork.tag,artwork.width,artwork.height});
     }
     return out;
 }

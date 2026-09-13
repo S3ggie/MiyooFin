@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <curl/curl.h>
 
 namespace miyoofin {
 
@@ -31,6 +32,9 @@ struct BinaryHttpResponse {
 class HttpClient {
 public:
     HttpClient();
+    ~HttpClient();
+    HttpClient(const HttpClient &) = delete;
+    HttpClient &operator=(const HttpClient &) = delete;
 
     /// Perform a GET request.
     /// @return true if the HTTP status code is 200 and the body is non-empty.
@@ -87,6 +91,7 @@ public:
 private:
     long m_timeoutSec = 5;
     long m_connectTimeoutSec = 5;
+    CURL *m_curl = nullptr;
 };
 
 } // namespace miyoofin

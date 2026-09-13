@@ -59,6 +59,7 @@ public:
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
+    bool handlePointerClick(int x, int y) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface *fb) override;
     const char *diagnosticName() const override { return "HomeScreen"; }
@@ -97,11 +98,17 @@ public:
     /// Pure online Home projection; exposed to keep its cached row semantics testable.
     static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
     static std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot);
+    static library::MediaPage offlineMediaPage(const LibrarySnapshot &snapshot,
+                                                const std::string &type,
+                                                int alphabetLetter,
+                                                std::size_t limit,
+                                                const CatalogDbPageCursor &after = {});
     /// Offline contains only locally playable libraries; Home is intentionally absent.
     static std::vector<std::string> tabNames(const std::vector<TabData> &tabs);
     /// Keep a named tab across a layout change, falling back to Movies.
     static int transitionTabIndex(const std::vector<TabData> &from, int selected,
                                   const std::vector<TabData> &to);
+    static int tabIndexAtPoint(const std::vector<TabData> &tabs, int x, int y);
     static ShowsFocusState showsFocusAfterRefresh(ShowsFocusState previous,
                                                    bool hasShows,
                                                    bool hasAnime);
@@ -220,16 +227,22 @@ private:
     SyncState m_syncState;
     bool m_forceHierarchyReconcile = false;
     LibrarySyncSchedule m_syncSchedule;
+    std::atomic<size_t> m_metadataCompleted{0}, m_metadataTotal{0};
+    std::atomic<bool> m_metadataActive{false};
+    std::atomic<size_t> m_artworkCompleted{0}, m_artworkTotal{0};
+    std::atomic<bool> m_artworkActive{false};
+    std::atomic<bool> m_artworkPlanningComplete{false};
     bool m_libraryOffline = false;
     bool m_catalogScopeReadyLogged = false;
     bool m_firstMediaPageReadLogged = false;
     bool m_firstMediaPageReadCompletedLogged = false;
     bool m_firstUsefulHomeLogged = false;
     bool m_firstInteractiveFrameLogged = false;
-    std::thread m_posterThread;
+    std::vector<std::thread> m_posterThreads;
     std::mutex m_posterMutex;
     std::condition_variable m_posterWake;
-    std::vector<PosterJob> m_pendingPosterJobs;
+    std::deque<PosterJob> m_pendingPosterJobs;
+    std::set<std::string> m_artworkProgressKeys;
     bool m_stopPosterWorker = false;
     // Hierarchy discovery is deliberately a single background worker: it keeps
     // startup and the SDL thread free while placing a firm bound on requests.
@@ -265,7 +278,7 @@ private:
     void applyOfflineProjection();
     void prepareOfflineProjection();
     void startPosterSync(const LibrarySnapshot &snapshot);
-    void queuePosterJobs(std::vector<PosterJob> jobs);
+    void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
     void posterWorker();
     void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
                              const std::set<std::string> &changedSeries={});
@@ -349,6 +362,7 @@ private:
     const MediaItem *currentItem() const;
 
     void clampNavigation();
+    void activateTab(int index);
     void drawTabBar(SDL_Surface *fb);
     void drawInfoPanel(SDL_Surface *fb);
     void drawRowList(SDL_Surface *fb);

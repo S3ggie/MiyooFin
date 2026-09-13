@@ -114,6 +114,13 @@ The intermittent audio-only FFplay/mmiyoo display handoff defect is a separate s
 | C — validation | 18-31 | Lock every required cold/warm/membership/offline/cancellation scenario and validate real Miyoo correctness | **CP-C after Task 31** |
 | D — performance rebaseline | 32-33 | Fill measurement gaps and rebaseline on real Miyoo without speculative optimization | **CP-D after Task 33** |
 
+The following tasks are a proposed post-CP-D extension for incremental
+library synchronization.  They intentionally skip number 34: the original
+`sqlite-migration/tasks/34-retire-legacy-catalog-cache-sync-persistence.md`
+remains PAUSED and is not part of this extension.
+
+| E — incremental synchronization | 35-40 | Receive live Jellyfin changes, catch up after downtime, and retain periodic authoritative reconciliation | **CP-E after Task 40** |
+
 Ordinary tasks inside a phase proceed one at a time without asking for confirmation after every successful commit. Stop only at the checkpoint at the end of each phase, a task-specific hardware gate, or a genuine STOP condition.
 
 ## Task index
@@ -151,6 +158,12 @@ Ordinary tasks inside a phase proceed one at a time without asking for confirmat
 - [31 — Validate cold/warm correctness on real Miyoo](tasks/31-real-miyoo-cold-warm-correctness-validation.md)
 - [32 — Fill performance timeline instrumentation gaps](tasks/32-fill-performance-timeline-instrumentation-gaps.md)
 - [33 — Rebaseline SQLite integration performance on real Miyoo](tasks/33-real-miyoo-performance-rebaseline.md)
+- [35 — Define durable incremental-sync checkpoints](tasks/35-define-incremental-sync-checkpoints.md)
+- [36 — Catch up changed catalog metadata after downtime](tasks/36-catch-up-changed-catalog-metadata.md)
+- [37 — Reconcile authoritative membership and deletions](tasks/37-reconcile-membership-and-deletions.md)
+- [38 — Receive Jellyfin LibraryChanged events](tasks/38-receive-jellyfin-library-changed-events.md)
+- [39 — Apply live changes through LibrarySync](tasks/39-apply-live-library-changes-through-librarysync.md)
+- [40 — Publish relevant Home changes and retain safety reconciliation](tasks/40-publish-home-changes-and-safety-reconcile.md)
 
 ## Checkpoint acceptance
 

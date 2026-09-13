@@ -24,6 +24,14 @@ public:
     /// @return true if the screen consumed the action (stops propagation).
     virtual bool handleAction(Action action) = 0;
 
+    /// Process a desktop pointer click in framebuffer coordinates.
+    /// Hardware builds normally have no pointer events, so screens opt in.
+    virtual bool handlePointerClick(int x, int y) {
+        (void)x;
+        (void)y;
+        return false;
+    }
+
     /// Fixed-step update (dt in milliseconds).
     virtual void update(Uint32 dt) = 0;
 

@@ -34,7 +34,8 @@ HomeScreen::HomeScreen(const Session &session,
     m_tabs.push_back({"Shows", {{"", {}}}});
     m_tabs.push_back({"Downloads", {{"", {}}}});
     m_tabs.push_back({"Settings", {{"", {}}}});
-    m_posterThread = std::thread(&HomeScreen::posterWorker, this);
+    for (int i = 0; i < 2; ++i)
+        m_posterThreads.emplace_back(&HomeScreen::posterWorker, this);
     m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
 }
@@ -68,8 +69,9 @@ HomeScreen::~HomeScreen()
     m_hierarchyWake.notify_one();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
-    m_posterWake.notify_one();
-    if (m_posterThread.joinable()) m_posterThread.join();
+    m_posterWake.notify_all();
+    for (auto &thread : m_posterThreads)
+        if (thread.joinable()) thread.join();
     { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
     m_decodeWake.notify_one();
     if (m_decodeThread.joinable()) m_decodeThread.join();
@@ -96,6 +98,47 @@ void HomeScreen::cancelAsyncWork() noexcept
 void HomeScreen::updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items) { miyoofin::updateContinueWatchingRow(tabs, items); }
 std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::tabsFromSnapshot(s); }
 std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::offlineTabsFromSnapshot(s); }
+library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
+                                                const std::string &type,
+                                                int alphabetLetter,
+                                                std::size_t limit,
+                                                const CatalogDbPageCursor &after)
+{
+    std::vector<MediaItem> items;
+    if (type == "movie") {
+        items = combineMovieViews(snapshot.movies);
+    } else {
+        const ShowsPresentation presentation = makeShowsPresentation(snapshot.shows);
+        items = type == "anime" ? presentation.anime : presentation.shows;
+    }
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [alphabetLetter](const MediaItem &item) {
+                                   return !matchesAlphabetFilter(item.title, alphabetLetter);
+                               }),
+                items.end());
+    std::sort(items.begin(), items.end(), organizationalLess);
+
+    std::size_t start = 0;
+    if (after.valid) {
+        while (start < items.size() && items[start].id != after.id) ++start;
+        if (start < items.size()) ++start;
+    }
+    const std::size_t pageLimit = std::max<std::size_t>(1, limit);
+    const std::size_t end = std::min(items.size(), start + pageLimit);
+    library::MediaPage page;
+    page.success = true;
+    page.hasMore = end < items.size();
+    page.items.assign(items.begin() + static_cast<std::ptrdiff_t>(start),
+                      items.begin() + static_cast<std::ptrdiff_t>(end));
+    if (!page.items.empty()) {
+        const MediaItem &last = page.items.back();
+        page.next.valid = page.hasMore;
+        page.next.sortKey = organizationalSortKey(last.title);
+        page.next.title = last.title;
+        page.next.id = last.id;
+    }
+    return page;
+}
 std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData> &tabs) { return miyoofin::tabNames(tabs); }
 int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selected, const std::vector<TabData> &to) { return miyoofin::transitionTabIndex(from, selected, to); }
 

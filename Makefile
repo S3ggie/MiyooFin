@@ -180,7 +180,7 @@ CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 TEST_GROUPS := catalog api_session ui_foundation cache_offline \
-               artwork_episode downloads misc playback telemetry
+               artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := \
                src/net/JellyfinApi.cpp \
@@ -276,7 +276,10 @@ output/test/test_artwork_episode: tests/cases/test_artwork_episode.inc
 output/test/test_downloads: tests/cases/test_downloads.inc
 output/test/test_misc: tests/cases/test_misc_regressions.inc
 output/test/test_playback: tests/cases/test_playback_ui.inc
-output/test/test_telemetry: tests/cases/test_telemetry.inc
+output/test/test_telemetry: tests/cases/test_telemetry_core.inc
+output/test/test_telemetry_format: tests/cases/test_telemetry_format.inc
+output/test/test_telemetry_service: tests/cases/test_telemetry_service.inc
+output/test/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc
 
 output/test/objects/%.o: src/%.cpp | output/test
 	@mkdir -p $(@D)

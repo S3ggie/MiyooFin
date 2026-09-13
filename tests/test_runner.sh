@@ -12,7 +12,10 @@ test_artwork_episode
 test_downloads
 test_misc
 test_playback
-test_telemetry'
+test_telemetry
+test_telemetry_format
+test_telemetry_service
+test_telemetry_schema'
 pids=
 
 for test_binary in $TEST_BINARIES

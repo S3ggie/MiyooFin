@@ -1068,6 +1068,8 @@ static void testHttpClientTelemetry()
 }
 #endif
 
+static void testLibraryStartupTimelineMarkers();
+
 static void testTelemetrySchemaTypes()
 {
     std::printf("[test] telemetry schema IDs and record types\n");
@@ -2170,5 +2172,18 @@ static void testTelemetrySchemaTypes()
     CHECK(std::is_trivially_copyable<TelemetryHealth>::value);
     CHECK(std::is_trivially_copyable<SessionEvent>::value);
     CHECK(std::is_trivially_copyable<TelemetryRecord>::value);
+    testLibraryStartupTimelineMarkers();
     std::printf("[test] telemetry schema IDs and record types OK\n");
+}
+
+static void testLibraryStartupTimelineMarkers()
+{
+    std::printf("[test] library startup timeline markers\n");
+    std::ifstream source("src/catalog/CatalogDb.cpp");
+    CHECK(source.good());
+    const std::string contents((std::istreambuf_iterator<char>(source)),
+                               std::istreambuf_iterator<char>());
+    CHECK(contents.find("read_media_page_dequeued") != std::string::npos);
+    CHECK(contents.find("read_media_page_ready") != std::string::npos);
+    std::printf("[test] library startup timeline markers OK\n");
 }

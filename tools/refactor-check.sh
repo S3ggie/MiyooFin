@@ -16,5 +16,18 @@ for source in $catalogdb_sources; do
     fi
 done
 
+required_sources="CatalogDbSchema.cpp CatalogDbWrite.cpp CatalogDbQuery.cpp CatalogDbSyncState.cpp CatalogDbHierarchy.cpp LibrarySyncIncremental.cpp LibrarySyncEvents.cpp AppSession.cpp AppPlayback.cpp PerformanceTelemetryRecord.cpp PerformanceTelemetryService.cpp PerformanceTelemetrySnapshot.cpp SeriesScreenWorker.cpp SeriesScreenNavigation.cpp SeriesScreenRender.cpp MovieDetailsWorker.cpp MovieDetailsRender.cpp EpisodeBrowserData.cpp HomeScreenOffline.cpp HomeScreenSyncApply.cpp"
+for source in $required_sources; do
+    grep -q "$source" Makefile || { echo "missing host/test registration: $source"; exit 1; }
+    grep -q "$source" Makefile.cross || { echo "missing cross registration: $source"; exit 1; }
+done
+
+for source in src/ui/screens/MovieDetailsRender.cpp; do
+    if grep -nE 'HttpClient|RouteRequest|JellyfinApi|ArtworkUrl|curl/curl' "$source"; then
+        echo "render dependency boundary violation in $source"
+        exit 1
+    fi
+done
+
 make test
 git diff --check

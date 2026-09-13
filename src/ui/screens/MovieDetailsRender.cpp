@@ -3,12 +3,7 @@
 #include "../../app/UiDiagnostics.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
-#include "../../cache/ImageCache.hpp"
 #include "../../image/ImageDecoder.hpp"
-#include "../../net/ArtworkUrl.hpp"
-#include "../../net/HttpClient.hpp"
-#include "../../net/RouteRequest.hpp"
-#include "../../net/JellyfinApi.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>

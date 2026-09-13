@@ -39,12 +39,18 @@ ifeq ($(PERF_TELEMETRY),1)
 TELEMETRY_SRCS := \
     $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
     $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetryRecord.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetryService.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetrySnapshot.cpp \
     $(SRC_DIR)/diagnostics/MftFormat.cpp \
     $(SRC_DIR)/diagnostics/TelemetryWriter.cpp \
     $(SRC_DIR)/diagnostics/LinuxProcessMetrics.cpp
 TELEMETRY_TEST_SRCS := \
     $(SRC_DIR)/diagnostics/TelemetryConfig.cpp \
     $(SRC_DIR)/diagnostics/PerformanceTelemetry.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetryRecord.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetryService.cpp \
+    $(SRC_DIR)/diagnostics/PerformanceTelemetrySnapshot.cpp \
     $(SRC_DIR)/diagnostics/MftFormat.cpp \
     $(SRC_DIR)/diagnostics/TelemetryWriter.cpp \
     $(SRC_DIR)/diagnostics/LinuxProcessMetrics.cpp

@@ -126,6 +126,9 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/AuthCheckScreen.cpp \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp \
     $(SRC_DIR)/ui/screens/SeriesScreen.cpp \
+    $(SRC_DIR)/ui/screens/SeriesScreenWorker.cpp \
+    $(SRC_DIR)/ui/screens/SeriesScreenNavigation.cpp \
+    $(SRC_DIR)/ui/screens/SeriesScreenRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserArtwork.cpp \
@@ -262,6 +265,9 @@ TEST_PROD_SRCS := \
                src/ui/screens/ServerEntryScreen.cpp \
                src/ui/screens/LoginScreen.cpp \
                src/ui/screens/SeriesScreen.cpp \
+               src/ui/screens/SeriesScreenWorker.cpp \
+               src/ui/screens/SeriesScreenNavigation.cpp \
+               src/ui/screens/SeriesScreenRender.cpp \
                src/ui/screens/EpisodeBrowserScreen.cpp \
                src/ui/screens/EpisodeBrowserRender.cpp \
                src/ui/screens/EpisodeBrowserArtwork.cpp \

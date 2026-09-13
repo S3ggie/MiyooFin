@@ -23,7 +23,55 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace miyoofin::catalog_db_internal {
+namespace miyoofin {
+
+struct CatalogDb::QueryCommand {
+    enum class Kind : unsigned char {
+        Seasons,
+        Episodes,
+        MediaItemsByIds,
+        DeleteMediaItemsByIds,
+    };
+
+    Kind kind;
+    std::string parentId;
+    std::vector<std::string> itemIds;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    std::promise<CatalogDbHierarchyResult> result;
+};
+
+struct CatalogDb::HierarchyWriteCommand {
+    MediaItem series;
+    std::vector<MediaItem> seasons;
+    std::map<std::string, std::vector<MediaItem>> episodesBySeason;
+    std::uint64_t generation = 0;
+    std::int64_t refreshMs = 0;
+    bool complete = true;
+    bool seasonScoped = false;
+    CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
+    int failAfterRows = -1;
+    int cancelAfterRows = -1;
+    std::promise<CatalogDbHierarchyWriteResult> result;
+};
+
+struct CatalogDb::MediaPageUpsertCommand {
+    CatalogDbMediaPageWrite page;
+    CatalogDbJobMetadata metadata;
+    int failAfterRows = -1;
+    std::promise<CatalogDbMediaPageUpsertResult> result;
+};
+
+struct CatalogDb::TopLevelSyncCommand {
+    bool begin = false;
+    bool finalize = false;
+    std::uint64_t generation = 0;
+    CatalogDbJobMetadata metadata;
+    std::promise<CatalogDbTopLevelSyncResult> result;
+};
+
+namespace catalog_db_internal {
 
 
 static inline const char *migrationDecisionName(CatalogDbMigrationDecision value)
@@ -666,5 +714,5 @@ static inline bool validateReconcileInput(const std::vector<MediaItem> &series,
 }
 
 
-} // namespace miyoofin::catalog_db_internal
-
+} // namespace catalog_db_internal
+} // namespace miyoofin

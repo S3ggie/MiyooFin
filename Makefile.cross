@@ -37,6 +37,7 @@ SRCS := \
     src/app/App.cpp \
     src/app/RemoteExitSignal.cpp \
     src/catalog/CatalogDb.cpp \
+    src/catalog/CatalogDbWrite.cpp \
     src/catalog/CatalogDbSchema.cpp \
     src/catalog/MediaItemSql.cpp \
     src/catalog/CatalogCompatibility.cpp \

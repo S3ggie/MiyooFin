@@ -249,8 +249,10 @@ static void testPlaybackRunnerInitializesOnionSdlDrivers()
     const std::string source = readTestBytes("distributions/onionos/playback_runner.sh");
     CHECK(source.find("export SDL_VIDEODRIVER=mmiyoo") != std::string::npos);
     CHECK(source.find("export SDL_AUDIODRIVER=mmiyoo") != std::string::npos);
-    CHECK(source.find("unset SDL_VIDEODRIVER") == std::string::npos);
-    CHECK(source.find("unset SDL_AUDIODRIVER") == std::string::npos);
+    CHECK(source.find("unset SDL_VIDEODRIVER") != std::string::npos);
+    CHECK(source.find("unset SDL_AUDIODRIVER") != std::string::npos);
+    CHECK(source.find("MIYOOFIN_PLAYBACK_MODE") != std::string::npos);
+    CHECK(source.find("MIYOOFIN_FFPLAY_BIN") != std::string::npos);
     std::printf("[test] playback runner initializes Onion SDL drivers OK\n");
 }
 
@@ -446,6 +448,70 @@ static void testDpadHoldRepeatTiming()
     InputManager::resetDpadRepeatStates(states);
     for (const auto &cleared : states) CHECK(!cleared.held);
     std::printf("[test] D-pad hold repeat timing OK\n");
+}
+
+static void testDesktopKeyboardMapping()
+{
+    std::printf("[test] desktop keyboard mapping\n");
+    CHECK(SDL_Init(SDL_INIT_EVENTS) == 0);
+    setenv("MIYOOFIN_DESKTOP_INPUT", "1", 1);
+    InputManager input;
+    SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+
+    auto checkKey = [&](SDL_Keycode keycode, SDL_Scancode scancode,
+                        Action expected) {
+        SDL_Event event{};
+        event.type = SDL_KEYDOWN;
+        event.key.keysym.sym = keycode;
+        event.key.keysym.scancode = scancode;
+        event.key.repeat = 0;
+        CHECK(SDL_PushEvent(&event) == 1);
+        const auto actions = input.poll();
+        CHECK(actions.size() == 1 && actions[0] == expected);
+
+        event.type = SDL_KEYUP;
+        CHECK(SDL_PushEvent(&event) == 1);
+        input.poll();
+    };
+
+    checkKey(SDLK_w, SDL_SCANCODE_W, Action::Up);
+    checkKey(SDLK_a, SDL_SCANCODE_A, Action::Left);
+    checkKey(SDLK_s, SDL_SCANCODE_S, Action::Down);
+    checkKey(SDLK_d, SDL_SCANCODE_D, Action::Right);
+    checkKey(SDLK_RETURN, SDL_SCANCODE_RETURN, Action::Confirm);
+    checkKey(SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE, Action::Back);
+
+    SDL_Event click{};
+    click.type = SDL_MOUSEBUTTONDOWN;
+    click.button.button = SDL_BUTTON_LEFT;
+    click.button.x = 192;
+    click.button.y = 36;
+    CHECK(SDL_PushEvent(&click) == 1);
+    input.poll();
+    CHECK(input.pointerClicks().size() == 1
+          && input.pointerClicks()[0].x == 192
+          && input.pointerClicks()[0].y == 36);
+
+    unsetenv("MIYOOFIN_DESKTOP_INPUT");
+    SDL_QuitSubSystem(SDL_INIT_EVENTS);
+    std::printf("[test] desktop keyboard mapping OK\n");
+}
+
+static void testHomeTopTabHitTesting()
+{
+    std::printf("[test] Home top-tab hit testing\n");
+    const std::vector<TabData> tabs = {
+        {"Home", {}}, {"Movies", {}}, {"Shows", {}},
+        {"Downloads", {}}, {"Settings", {}}
+    };
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 8, 0) == 0);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 60, 12) == 1);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 124, 12) == 2);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 180, 12) == 3);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 268, 12) == 4);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 8, 24) == -1);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 400, 12) == -1);
+    std::printf("[test] Home top-tab hit testing OK\n");
 }
 
 // --- Playback progress display tests ---

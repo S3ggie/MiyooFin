@@ -53,12 +53,21 @@ inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
                                      bool metadataActive, bool syncSucceeded,
                                      const ShowsSyncProgress &shows={}, bool hierarchyActive=false,
                                      bool showsTab=false) {
+    (void)showsTab;
     if (tab < 0 || tab > 2) return "";
     if (offline && haveCache) return "OFFLINE";
-    if ((showsTab || tab == 2) && shows.total && (hierarchyActive || shows.completed < shows.total))
+    if (shows.total && (metadataActive || hierarchyActive
+                        || shows.completed < shows.total))
         return "SYNC " + std::to_string(shows.percent()) + "%";
     if (metadataActive) return "SYNCING...";
     return syncSucceeded ? "SYNCED" : "SYNCING...";
+}
+
+inline std::string artworkSyncStatus(bool active, bool planningComplete,
+                                     const ShowsSyncProgress &artwork={}) {
+    if (!active || !planningComplete || !artwork.total)
+        return "";
+    return "ART " + std::to_string(artwork.percent()) + "%";
 }
 } // namespace miyoofin
 

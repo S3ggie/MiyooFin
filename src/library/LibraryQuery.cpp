@@ -60,4 +60,10 @@ std::future<HierarchyPage> LibraryQuery::episodes(
     auto f=m_db->getEpisodes(id, metadata(cancellation));
     return std::async(std::launch::async,[f=std::move(f)]() mutable { auto r=f.get(); HierarchyPage o; o.success=r.success;o.cancelled=r.cancelled;o.superseded=r.superseded;o.error=r.error;o.message=std::move(r.message);o.items=std::move(r.items);return o; });
 }
+std::future<HierarchyPage> LibraryQuery::itemsByIds(
+    const std::vector<std::string> &itemIds,
+    const std::shared_ptr<std::atomic_bool> &cancellation) {
+    auto f=m_db->readMediaItemsByIds(itemIds, metadata(cancellation));
+    return std::async(std::launch::async,[f=std::move(f)]() mutable { auto r=f.get(); HierarchyPage o; o.success=r.success;o.cancelled=r.cancelled;o.superseded=r.superseded;o.error=r.error;o.message=std::move(r.message);o.items=std::move(r.items);return o; });
+}
 }

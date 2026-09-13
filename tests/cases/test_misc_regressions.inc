@@ -204,11 +204,22 @@ static void testBoundedPagePosterPlanning()
     empty.imageTags["Primary"]="";
     const auto jobs=planMediaPagePosterJobs({show,anime,movie,missing,empty});
     CHECK(jobs.size()==3);
-    CHECK(jobs[0].itemId=="show-page" && jobs[1].itemId=="anime-page"
-          && jobs[2].itemId=="movie-page");
+    CHECK(jobs[0].itemId=="anime-page" && jobs[1].itemId=="movie-page"
+          && jobs[2].itemId=="show-page");
     CHECK(jobs[0].width==64 && jobs[0].height==96
           && jobs[1].width==64 && jobs[1].height==96
           && jobs[2].width==64 && jobs[2].height==96);
+    MediaItem theBatman=titledMovie("the-batman", "The Batman");
+    theBatman.imageTags["Primary"]="the-batman-tag";
+    MediaItem alien=titledMovie("alien", "Alien");
+    alien.imageTags["Primary"]="alien-tag";
+    MediaItem theAmazing=titledMovie("the-amazing", "The Amazing Spider-Man");
+    theAmazing.imageTags["Primary"]="the-amazing-tag";
+    const auto ordered=planMediaPagePosterJobs({theBatman, alien, theAmazing});
+    CHECK(ordered.size()==3);
+    CHECK(ordered[0].itemId=="alien"
+          && ordered[1].itemId=="the-amazing"
+          && ordered[2].itemId=="the-batman");
     std::printf("[test] bounded media page poster planning OK\n");
 }
 
@@ -233,11 +244,26 @@ static void testInitialHomeArtworkScheduling()
 {
     std::printf("[test] initial Home artwork scheduling\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(source.find("queuePosterJobs(planHomeRailPosterJobs(cw, ra))")
+    CHECK(source.find("queuePosterJobs(planHomeRailPosterJobs(cw, ra), true)")
           != std::string::npos);
-    CHECK(source.find("if (start == 0)") != std::string::npos);
-    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(page.items))")
+    CHECK(source.find("if (start == 0)\n                        queuePosterJobs(planMediaPagePosterJobs(page.items), true)")
+          == std::string::npos);
+    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)")
           != std::string::npos);
+    const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(coordinator.find("m_posterThreads.emplace_back") != std::string::npos);
+    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(result.items), true)")
+          != std::string::npos);
+    CHECK(source.find("m_artworkPlanningComplete.store(false)")
+          != std::string::npos);
+    CHECK(source.find("m_artworkPlanningComplete.store(artworkPlanningComplete)")
+          != std::string::npos);
+    const std::string hierarchy=readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
+    CHECK(hierarchy.find("HttpClient client;") != std::string::npos);
+    CHECK(hierarchy.find("for (;;) {\n        PosterJob job;") != std::string::npos);
+    const std::string http=readTestBytes("src/net/HttpClient.hpp");
+    CHECK(http.find("CURL *m_curl") != std::string::npos);
+    CHECK(http.find("~HttpClient") != std::string::npos);
     std::printf("[test] initial Home artwork scheduling OK\n");
 }
 

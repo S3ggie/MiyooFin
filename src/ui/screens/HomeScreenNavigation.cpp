@@ -6,8 +6,10 @@
 #include "../ShowsBrowser.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include "../../app/ScreenStack.hpp"
+#include "../BitmapFont.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 
 namespace miyoofin {
@@ -176,6 +178,42 @@ const char *HomeScreen::diagnosticTabName() const { return currentTab().name.emp
 bool HomeScreen::activeTabNamed(const char *name) const { return currentTab().name==name; }
 int HomeScreen::tabIndex(const char *name) const { for(int i=0;i<(int)m_tabs.size();++i) if(m_tabs[i].name==name) return i; return -1; }
 
+int HomeScreen::tabIndexAtPoint(const std::vector<TabData> &tabs, int x, int y)
+{
+    static constexpr int TAB_Y = 0;
+    static constexpr int TAB_H = 24;
+    if (y < TAB_Y || y >= TAB_Y + TAB_H)
+        return -1;
+
+    int tabX = 8;
+    for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+        const int tabWidth = static_cast<int>(tabs[i].name.size())
+            * BitmapFont::GLYPH_W + 16;
+        if (x >= tabX && x < tabX + tabWidth)
+            return i;
+        tabX += tabWidth;
+    }
+    return -1;
+}
+
+void HomeScreen::activateTab(int index)
+{
+    if (index < 0 || index >= static_cast<int>(m_tabs.size()))
+        return;
+    m_activeTab = index;
+    m_movieRailFocused = false;
+    m_activeRow = 0; m_activeCard = 0;
+    m_rowScroll = 0; m_cardScroll = 0;
+    clampNavigation();
+    if (activeTabNamed("Movies") || activeTabNamed("Shows"))
+        requestFetch(SDL_GetTicks());
+    if ((activeTabNamed("Downloads") || activeTabNamed("Settings")) && m_downloads) {
+        if (activeTabNamed("Downloads"))
+            m_downloads->requestReconcile();
+        refreshDownloads();
+    }
+}
+
 const MediaRow *HomeScreen::currentRow() const
 {
     const auto &rows = currentTab().rows;
@@ -237,6 +275,17 @@ void HomeScreen::clampNavigation()
                                     640, HMARGIN, CARD_GAP);
 }
 
+bool HomeScreen::handlePointerClick(int x, int y)
+{
+    if (m_loadState != LoadState::Ready)
+        return false;
+    const int index = tabIndexAtPoint(m_tabs, x, y);
+    if (index < 0)
+        return false;
+    activateTab(index);
+    return true;
+}
+
 bool HomeScreen::handleAction(Action action)
 {
     // Back always dismisses an armed logout prompt before any screen-specific
@@ -293,12 +342,16 @@ bool HomeScreen::handleAction(Action action)
         }
         if (action == Action::Confirm) {
             switch (settingsRowAction(m_settingsSelected,m_session)) {
-            case SettingsRowAction::OfflineMode:
+            case SettingsRowAction::OfflineMode: {
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
-                m_session.save();
+                const bool sessionSaved = m_session.save();
+                std::printf("[HomeScreen] manual_offline_mode=%s saved=%s\n",
+                            m_session.manualOfflineMode ? "ON" : "OFF",
+                            sessionSaved ? "yes" : "no");
                 if (m_session.manualOfflineMode) applyPresentationProjection();
                 else if (!m_libraryOffline) restoreOnlinePresentation();
                 return true;
+            }
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;
                 return true;
@@ -369,18 +422,10 @@ bool HomeScreen::handleAction(Action action)
         else m_activeCard++;
         clampNavigation(); return true;
     case Action::NextTab:
-        m_activeTab = (m_activeTab + 1) % (int)m_tabs.size();
-        m_movieRailFocused = false;
-        m_activeRow = 0; m_activeCard = 0;
-        m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if((activeTabNamed("Downloads")||activeTabNamed("Settings"))&&m_downloads) { if(activeTabNamed("Downloads"))m_downloads->requestReconcile(); refreshDownloads(); } return true;
+        activateTab((m_activeTab + 1) % (int)m_tabs.size()); return true;
     case Action::PrevTab:
-        m_activeTab--;
-        if (m_activeTab < 0) m_activeTab = (int)m_tabs.size() - 1;
-        m_movieRailFocused = false;
-        m_activeRow = 0; m_activeCard = 0;
-        m_rowScroll = 0; m_cardScroll = 0;
-        clampNavigation(); if (activeTabNamed("Movies") || activeTabNamed("Shows")) requestFetch(SDL_GetTicks()); if((activeTabNamed("Downloads")||activeTabNamed("Settings"))&&m_downloads) { if(activeTabNamed("Downloads"))m_downloads->requestReconcile(); refreshDownloads(); } return true;
+        activateTab(m_activeTab > 0 ? m_activeTab - 1
+                                    : (int)m_tabs.size() - 1); return true;
     case Action::Search: return false;
     case Action::ActionsMenu:
         if (m_logoutArmed) { m_logoutRequested = true; }
@@ -425,6 +470,7 @@ bool HomeScreen::handleAction(Action action)
 
                     MediaItem season;
                     season.id = item->seasonId;
+                    season.seriesId = series.id;
                     season.type = "season";
                     season.indexNumber = item->parentIndexNumber;
                     if (item->parentIndexNumber > 0) {

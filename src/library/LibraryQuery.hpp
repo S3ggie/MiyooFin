@@ -47,6 +47,9 @@ public:
     std::future<HierarchyPage> episodes(
         const std::string &seasonId,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<HierarchyPage> itemsByIds(
+        const std::vector<std::string> &itemIds,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::uint64_t scopeEpoch() const { return m_scopeEpoch; }
 
 private:

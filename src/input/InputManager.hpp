@@ -22,6 +22,11 @@ struct RawEvent {
     Action      action;      // the tentative mapped action
 };
 
+struct PointerClick {
+    int x;
+    int y;
+};
+
 /// InputManager reads SDL events and converts them to logical actions.
 /// It also keeps a log of raw events for the diagnostics screen.
 class InputManager {
@@ -49,6 +54,11 @@ public:
 
     /// Access the raw event log (most recent events).
     const std::vector<RawEvent>& rawLog() const { return m_rawLog; }
+
+    /// Left-clicks captured during the most recent poll, in window pixels.
+    const std::vector<PointerClick>& pointerClicks() const {
+        return m_pointerClicks;
+    }
 
     /// Maximum number of raw events kept in the scrolling log.
     static constexpr int MAX_LOG_ENTRIES = 50;
@@ -87,11 +97,13 @@ public:
 
 private:
     std::vector<RawEvent> m_rawLog;
+    std::vector<PointerClick> m_pointerClicks;
     int m_joystickIndex;          // -1 if none opened
+    bool m_desktopInput = false;
     std::array<DpadRepeatState, 4> m_dpadRepeatStates;
 
-    static int dpadStateIndex(SDL_Scancode scancode);
-    static Action dpadAction(SDL_Scancode scancode);
+    static int dpadStateIndex(SDL_Scancode scancode, bool desktopInput);
+    static Action dpadAction(SDL_Scancode scancode, bool desktopInput);
 
     void addRawEvent(Uint32 type, bool isDown,
                      SDL_Keycode kc, SDL_Scancode sc,

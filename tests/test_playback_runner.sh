@@ -55,9 +55,10 @@ echo '[test] playback runner route-aware CA handling OK'
 
 # Onion's audioserver owns the OSS device.  FFplay must use the existing
 # padsp bridge and both Onion SDL drivers when it is launched from MiyooFin.
-grep -q '^export SDL_VIDEODRIVER=mmiyoo$' "$RUNNER" || fail 'runner does not select Onion video driver'
-grep -q '^export SDL_AUDIODRIVER=mmiyoo$' "$RUNNER" || fail 'runner does not select Onion audio driver'
-grep -q '^LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so ./bin/ffplay \\' "$RUNNER" || fail 'FFplay does not use Onion audio bridge'
+grep -q 'export SDL_VIDEODRIVER=mmiyoo' "$RUNNER" || fail 'runner does not select Onion video driver'
+grep -q 'export SDL_AUDIODRIVER=mmiyoo' "$RUNNER" || fail 'runner does not select Onion audio driver'
+grep -q 'PLAYBACK_FFPLAY_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so' "$RUNNER" || fail 'Onion audio bridge path is missing'
+grep -q 'LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \\' "$RUNNER" || fail 'FFplay does not use Onion audio bridge'
 ! grep -q 'ffplay_argv=.*\$PLAY_URL' "$RUNNER" || fail 'FFplay argv diagnostic leaks input URL'
 
 echo '[test] playback runner Onion DSP audio setup OK'

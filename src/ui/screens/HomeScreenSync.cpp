@@ -30,9 +30,17 @@ void HomeScreen::applyPresentationProjection() {
     // projection synthesize only the downloaded branches it needs.
     OfflineCatalogSnapshot catalog;
     OfflineLibraryProjection projection(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
-    m_fetchOfflineTabs=offlineTabsFromSnapshot(m_cachedSnapshot);
     m_fetchOfflineMovies.clear();
     m_fetchOfflineSnapshot=m_cachedSnapshot;
+    const std::vector<MediaItem> offlineMovies = projection.movies();
+    std::set<std::string> offlineMovieIds;
+    for (const auto &item : offlineMovies) offlineMovieIds.insert(item.id);
+    for (auto &view : m_fetchOfflineSnapshot.movies) {
+        std::vector<MediaItem> filtered;
+        for (const auto &item : view.items)
+            if (offlineMovieIds.count(item.id)) filtered.push_back(item);
+        view.items=std::move(filtered);
+    }
     for (auto &view : m_fetchOfflineSnapshot.shows) {
         std::vector<MediaItem> filtered;
         for (const auto &item : view.items) {
@@ -41,6 +49,7 @@ void HomeScreen::applyPresentationProjection() {
         }
         view.items=std::move(filtered);
     }
+    m_fetchOfflineTabs=offlineTabsFromSnapshot(m_fetchOfflineSnapshot);
     for (auto &tab : m_fetchOfflineTabs) {
         if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
         if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
@@ -82,9 +91,20 @@ void HomeScreen::resetMediaPaging()
 
 void HomeScreen::requestMediaPage(MediaPageState &state)
 {
-    if (!m_libraryQuery || state.inFlight || !state.hasMore)
+    if (state.inFlight || !state.hasMore)
         return;
     state.cancellation = std::make_shared<std::atomic_bool>(false);
+    if (presentationOffline()) {
+        std::promise<library::MediaPage> page;
+        page.set_value(offlineMediaPage(m_offlineSnapshot, state.type,
+                                        state.letter, state.type == "anime" ? 64 : 24,
+                                        state.next));
+        state.future = page.get_future();
+        state.inFlight = true;
+        return;
+    }
+    if (!m_libraryQuery)
+        return;
     if (state.type == "movie")
         state.future = m_libraryQuery->movies(state.letter, 24, state.next);
     else if (state.type == "anime")
@@ -124,7 +144,7 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;
-    queuePosterJobs(planMediaPagePosterJobs(result.items));
+    queuePosterJobs(planMediaPagePosterJobs(result.items), true);
     if (!m_firstMediaPageReadCompletedLogged) {
         m_firstMediaPageReadCompletedLogged = true;
         uiDiagnostics().log(
@@ -509,6 +529,10 @@ static void makeMediaTabsBounded(std::vector<TabData> &tabs)
 void HomeScreen::startFetch()
 {
     if (m_fetchThread.joinable()) return;
+    m_metadataCompleted.store(0);
+    m_metadataTotal.store(0);
+    m_metadataActive.store(true);
+    m_artworkPlanningComplete.store(false);
     m_fetchDone = false; m_fetchReady.store(false); m_fetchComplete.store(false);
     m_fetchPublished = false; m_fetchError.clear(); m_fetchResult.clear();
     m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
@@ -569,12 +593,31 @@ void HomeScreen::startFetch()
             telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
         };
         if (session.manualOfflineMode) {
+            const DownloadSnapshot downloads =
+                m_downloads ? m_downloads->snapshot() : DownloadSnapshot{};
+            std::vector<MediaItem> metadataItems;
+            if (m_libraryQuery) {
+                for (const auto &batch :
+                     OfflineLibraryQuery::metadataBatches(downloads)) {
+                    if (cancellation->load()) return;
+                    const auto metadataPage = m_libraryQuery->itemsByIds(
+                        batch, cancellation).get();
+                    if (metadataPage.cancelled || metadataPage.superseded)
+                        return;
+                    if (metadataPage.success) {
+                        metadataItems.insert(metadataItems.end(),
+                                              metadataPage.items.begin(),
+                                              metadataPage.items.end());
+                    }
+                }
+            }
             m_cachedSnapshot = OfflineLibraryQuery::build(
-                m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
+                downloads, metadataItems);
             m_haveCachedSnapshot = true;
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
             m_fetchCacheSaved = true;
+            m_metadataActive.store(false);
             completeTelemetry(Outcome::Success);
             m_fetchComplete.store(true);
             m_fetchReady.store(true);
@@ -598,7 +641,7 @@ void HomeScreen::startFetch()
                 "show", -1, 24, {}, metadata);
             const auto movies = warmMovies.get();
             const auto shows = warmShows.get();
-            if (movies.success || shows.success) {
+            if (!movies.items.empty() || !shows.items.empty()) {
                 std::vector<TabData> warmTabs;
                 warmTabs.push_back({"Home", {{"", {}}}});
                 if (!movies.items.empty())
@@ -643,7 +686,7 @@ void HomeScreen::startFetch()
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
-        queuePosterJobs(planHomeRailPosterJobs(cw, ra));
+        queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
@@ -660,6 +703,7 @@ void HomeScreen::startFetch()
                                              viewsErr, cancellation.get());
         }, viewsErr)) {
             catalogRefreshFailed = true;
+            m_fetchError = viewsErr.empty() ? "Failed to fetch libraries" : viewsErr;
         } else {
             uiDiagnostics().log("[HomeScreen] startup stage=views_finished");
             std::printf("[HomeScreen] population_coordinator views=%zu\n", views.size());
@@ -669,9 +713,16 @@ void HomeScreen::startFetch()
                             view.collectionType.c_str());
                 return true;
             }), views.end());
+            if (views.empty()) {
+                std::lock_guard<std::mutex> lock(m_fetchMutex);
+                m_fetchResult = JellyfinApi::buildTabs(views,cw,ra,{},{ });
+                m_fetchReady.store(true);
+            }
+            std::size_t metadataTotal = 0;
             for (const auto &view : views) {
                 const std::string types = view.collectionType == "tvshows" ? "Series" : "Movie";
                 int start = 0;
+                bool firstPageForView = true;
                 for (;;) {
                     if (cancellation->load()) { catalogRefreshFailed = true; break; }
                     LibraryItemsPage page;
@@ -686,8 +737,20 @@ void HomeScreen::startFetch()
                             return JellyfinApi::getLibraryItemsPage(
                                 base, token, uid, devId, view.id, types, start, 48,
                                 page, pageErr, cancellation.get());
-                        }, pageErr)) { catalogRefreshFailed = true; break; }
+                        }, pageErr)) {
+                        catalogRefreshFailed = true;
+                        m_fetchError = pageErr.empty() ? "Failed to fetch library page" : pageErr;
+                        break;
+                    }
                     mediaCount += static_cast<uint32_t>(page.items.size());
+                    if (firstPageForView) {
+                        metadataTotal += page.totalRecordCount > 0
+                            ? static_cast<std::size_t>(page.totalRecordCount)
+                            : page.items.size();
+                        m_metadataTotal.store(metadataTotal);
+                        firstPageForView = false;
+                    }
+                    m_metadataCompleted.fetch_add(page.items.size());
                     if (view.collectionType == "tvshows") {
                         std::lock_guard<std::mutex> lock(m_fetchMutex);
                         for (const auto &item : page.items)
@@ -696,8 +759,7 @@ void HomeScreen::startFetch()
                     }
                     std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
                                 page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
-                    if (start == 0)
-                        queuePosterJobs(planMediaPagePosterJobs(page.items));
+                    queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0);
                     if (m_catalogDb) {
                         CatalogDbMediaPageWrite writePage;
                         writePage.items = page.items;
@@ -712,6 +774,8 @@ void HomeScreen::startFetch()
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
                     if (!writeResult.success) {
                             catalogRefreshFailed = true;
+                            m_fetchError = writeResult.message.empty()
+                                ? "Failed to persist library page" : writeResult.message;
                             std::printf("[HomeScreen] page_write_failed error=%u cancelled=%d superseded=%d message=%s\n",
                                         static_cast<unsigned>(writeResult.error),
                                         writeResult.cancelled ? 1 : 0,
@@ -755,6 +819,12 @@ void HomeScreen::startFetch()
         } else if (topLevelSyncStarted) {
             m_librarySync->abort(syncGeneration).get();
         }
+        if (catalogRefreshFailed && m_fetchError.empty())
+            m_fetchError = "Library refresh failed";
+        const bool artworkPlanningComplete =
+            !catalogRefreshFailed && !cancellation->load();
+        m_artworkPlanningComplete.store(artworkPlanningComplete);
+        m_metadataActive.store(false);
         m_remoteSnapshot.continueWatching=cw;
         m_remoteSnapshot.recentlyAdded=ra;
         if (optionalRailFailed)
@@ -794,7 +864,15 @@ void HomeScreen::finishFetch()
     }
     if (m_fetchComplete.load() && m_fetchThread.joinable()) {
         m_fetchThread.join();
-        if (m_fetchCacheSaved) { m_cachedSnapshot=m_remoteSnapshot; m_haveCachedSnapshot=true; }
+        if (m_fetchCacheSaved) {
+            m_cachedSnapshot=m_remoteSnapshot;
+            m_haveCachedSnapshot=true;
+            // A user can enable manual offline mode while the first bounded
+            // sync is still completing.  The earlier projection attempt has
+            // no snapshot to consume, so apply it once the snapshot is ready.
+            if (m_session.manualOfflineMode)
+                applyPresentationProjection();
+        }
         updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
         updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
         m_fetchDone.store(false);

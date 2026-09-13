@@ -227,36 +227,71 @@ else
 fi
 
 # -------------------------------------------------------------------
-# Select Onion's native SDL drivers explicitly. The parent has synchronously
-# released its SDL/display resources before this child is spawned.
+# Select the player environment.  The packaged OnionOS path retains its
+# device-specific SDL/audio setup.  The host development path is explicit so
+# it never inherits Onion driver names or an ARM-only audio preload.
 # -------------------------------------------------------------------
-export SDL_VIDEODRIVER=mmiyoo
-export SDL_AUDIODRIVER=mmiyoo
-playback_log "player_env SDL_VIDEODRIVER=$SDL_VIDEODRIVER SDL_AUDIODRIVER=$SDL_AUDIODRIVER LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so"
+PLAYBACK_MODE=${MIYOOFIN_PLAYBACK_MODE:-onion}
+case "$PLAYBACK_MODE" in
+    onion)
+        export SDL_VIDEODRIVER=mmiyoo
+        export SDL_AUDIODRIVER=mmiyoo
+        PLAYBACK_FFPLAY_BIN=/mnt/SDCARD/.tmp_update/bin/ffplay
+        PLAYBACK_FFPLAY_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so
+        playback_log "player_env mode=onion SDL_VIDEODRIVER=$SDL_VIDEODRIVER SDL_AUDIODRIVER=$SDL_AUDIODRIVER LD_PRELOAD=$PLAYBACK_FFPLAY_PRELOAD"
+        ;;
+    desktop)
+        unset SDL_VIDEODRIVER
+        unset SDL_AUDIODRIVER
+        PLAYBACK_FFPLAY_BIN=${MIYOOFIN_FFPLAY_BIN:-ffplay}
+        PLAYBACK_FFPLAY_PRELOAD=
+        playback_log "player_env mode=desktop SDL_VIDEODRIVER=(default) SDL_AUDIODRIVER=(default) FFPLAY=$PLAYBACK_FFPLAY_BIN"
+        ;;
+    *)
+        playback_log "ERROR: Invalid playback mode"
+        cleanup_playback
+        rm -f playback-request.txt
+        trap - EXIT
+        exit 1
+        ;;
+esac
 
 # -------------------------------------------------------------------
-# Run Onion FFplay
+# Run FFplay
 # -------------------------------------------------------------------
-SYS=/mnt/SDCARD/.tmp_update
-playback_log "Starting FFplay with Onion SDL environment"
+if [ "$PLAYBACK_MODE" = onion ]; then
+    SYS=/mnt/SDCARD/.tmp_update
+    playback_log "Starting FFplay with Onion SDL environment"
+else
+    SYS=
+    playback_log "Starting FFplay with desktop SDL environment"
+fi
 # The bridge URL is intentionally redacted: keep argv shape without ever
 # persisting a possibly authenticated input URL.
 playback_log "ffplay_argv=-stats -autoexit -fs -vf=<redacted-filter> -i=<redacted-url>"
-cd "$SYS" || {
-    playback_log "ERROR: Cannot cd to $SYS"
-    cleanup_playback
-    rm -f playback-request.txt
-    trap - EXIT
-    exit 1
-}
-
-LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so ./bin/ffplay \
-    -stats \
-    -autoexit \
-    -fs \
-    -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
-    -i "$PLAY_URL" \
-    >> "$APP_DIR/playback-ffplay.log" 2>&1 &
+if [ "$PLAYBACK_MODE" = onion ]; then
+    cd "$SYS" || {
+        playback_log "ERROR: Cannot cd to $SYS"
+        cleanup_playback
+        rm -f playback-request.txt
+        trap - EXIT
+        exit 1
+    }
+    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \
+        -stats \
+        -autoexit \
+        -fs \
+        -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
+        -i "$PLAY_URL" \
+        >> "$APP_DIR/playback-ffplay.log" 2>&1 &
+else
+    "$PLAYBACK_FFPLAY_BIN" \
+        -stats \
+        -autoexit \
+        -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
+        -i "$PLAY_URL" \
+        >> "$APP_DIR/playback-ffplay.log" 2>&1 &
+fi
 
 FFPLAY_PID=$!
 playback_log "ffplay_spawned pid=$FFPLAY_PID"

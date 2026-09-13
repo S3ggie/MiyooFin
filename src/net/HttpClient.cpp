@@ -98,6 +98,12 @@ HttpClient::HttpClient()
     // Global init is handled once in main via curl_global_init
 }
 
+HttpClient::~HttpClient()
+{
+    if (m_curl)
+        curl_easy_cleanup(m_curl);
+}
+
 bool HttpClient::get(const std::string &url,
                      std::string &responseBody,
                      long &httpCode,
@@ -146,7 +152,7 @@ bool HttpClient::getBinary(const std::string &url,
     response.truncated = false;
     error.clear();
 
-    CURL *curl = curl_easy_init();
+    CURL *curl = m_curl ? m_curl : (m_curl = curl_easy_init());
     if (!curl) {
         error = "Failed to initialise libcurl easy handle";
         return false;
@@ -158,6 +164,7 @@ bool HttpClient::getBinary(const std::string &url,
     ctx.exceeded = false;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, binaryWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeoutSec);
@@ -165,9 +172,10 @@ bool HttpClient::getBinary(const std::string &url,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    if (!configureTls(curl, url, &error)) { curl_easy_cleanup(curl); return false; }
+    if (!configureTls(curl, url, &error)) return false;
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
     if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
+    else { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L); }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
@@ -190,14 +198,14 @@ bool HttpClient::getBinary(const std::string &url,
                              response.data.size(), 0,
                              res == CURLE_ABORTED_BY_CALLBACK, ctx.exceeded);
         error = std::string("Transport: ") + curl_easy_strerror(res);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
         curl_slist_free_all(headerList);
-        curl_easy_cleanup(curl);
         return false;
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
     curl_slist_free_all(headerList);
-    curl_easy_cleanup(curl);
 
     if (ctx.exceeded) {
         response.truncated = true;
@@ -222,7 +230,7 @@ bool HttpClient::perform(const std::string &method,
     response.body.clear();
     error.clear();
 
-    CURL *curl = curl_easy_init();
+    CURL *curl = m_curl ? m_curl : (m_curl = curl_easy_init());
     if (!curl) {
         error = "Failed to initialise libcurl easy handle";
         return false;
@@ -237,9 +245,10 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    if (!configureTls(curl, url, &error)) { curl_easy_cleanup(curl); return false; }
+    if (!configureTls(curl, url, &error)) return false;
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
     if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
+    else { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L); }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
@@ -257,6 +266,8 @@ bool HttpClient::perform(const std::string &method,
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)postBody.size());
         if (!headerList)
             headerList = curl_slist_append(headerList, "Content-Type: application/json");
+    } else {
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     }
 
     if (headerList)
@@ -272,14 +283,14 @@ bool HttpClient::perform(const std::string &method,
                              postBody.size(), res == CURLE_ABORTED_BY_CALLBACK,
                              false);
         error = classifyTransportError(res);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
         curl_slist_free_all(headerList);
-        curl_easy_cleanup(curl);
         return false;
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
     curl_slist_free_all(headerList);
-    curl_easy_cleanup(curl);
 
     recordNetworkRequest(timer, method == "POST" ? 2 : 1,
                          response.status, res, response.body.size(),

@@ -1280,6 +1280,16 @@ static void testCatalogDbMediaPagePreservesViewMembership()
 
 void testLibraryCacheHomeParityHarness()
 {
+    const std::string syncSource =
+        readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(syncSource.find("m_metadataActive.store(true)")
+          != std::string::npos);
+    CHECK(syncSource.find("m_metadataCompleted.fetch_add")
+          != std::string::npos);
+    const std::string episodeNavigationSource =
+        readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    CHECK(episodeNavigationSource.find("season.seriesId = series.id;")
+          != std::string::npos);
     const std::string hierarchySource =
         readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
     CHECK(hierarchySource.find("getSeasons(") == std::string::npos);
@@ -1906,6 +1916,13 @@ static void testHomePublishesAfterFirstBoundedPage()
     CHECK(lifecycle.find("if (m_fetchReady.load())") != std::string::npos);
     CHECK(source.find("m_fetchDone.store(true);\n                    }")
           == std::string::npos);
+    CHECK(source.find("if (!movies.items.empty() || !shows.items.empty())")
+          != std::string::npos);
+    CHECK(source.find("if (movies.success || shows.success)")
+          == std::string::npos);
+    CHECK(source.find("m_fetchError = viewsErr.empty()") != std::string::npos);
+    CHECK(source.find("m_fetchError = pageErr.empty()") != std::string::npos);
+    CHECK(source.find("if (views.empty())") != std::string::npos);
     std::printf("[test] Home publishes after first bounded page OK\n");
 }
 

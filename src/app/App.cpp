@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <cerrno>
+#include <cstdlib>
 #include <string>
 #include <chrono>
 
@@ -51,6 +52,12 @@ const char *playbackStartingLabel(Uint32 elapsedMs)
         phase = PLAYBACK_STARTING_PHASE_COUNT - 1;
     }
     return labels[phase];
+}
+
+bool desktopNativeWindowRequested() noexcept
+{
+    const char *value = std::getenv("MIYOOFIN_DESKTOP_WINDOW");
+    return value && value[0] != '\0' && value[0] != '0';
 }
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
@@ -173,8 +180,10 @@ bool App::init()
 
     SDL_DisplayMode dm;
     const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
-    const auto dimensions = displayDimensionsFor(
-        haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
+    const auto dimensions = desktopNativeWindowRequested()
+        ? DisplayDimensions{SCREEN_W, SCREEN_H}
+        : displayDimensionsFor(haveDesktopMode ? dm.w : 0,
+                               haveDesktopMode ? dm.h : 0);
     const int displayW = dimensions.width;
     const int displayH = dimensions.height;
     if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
@@ -492,8 +501,10 @@ bool App::resumePlatform()
 
     SDL_DisplayMode dm;
     const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
-    const auto dimensions = displayDimensionsFor(
-        haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
+    const auto dimensions = desktopNativeWindowRequested()
+        ? DisplayDimensions{SCREEN_W, SCREEN_H}
+        : displayDimensionsFor(haveDesktopMode ? dm.w : 0,
+                               haveDesktopMode ? dm.h : 0);
     const int displayW = dimensions.width;
     const int displayH = dimensions.height;
     if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
@@ -714,6 +725,22 @@ int App::run()
             FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Input);
 #endif
             std::vector<Action> actions = m_input.poll();
+            if (!m_playbackStarting) {
+                int windowW = 0;
+                int windowH = 0;
+                if (m_window)
+                    SDL_GetWindowSize(m_window, &windowW, &windowH);
+                for (const PointerClick &click : m_input.pointerClicks()) {
+                    Screen *active = m_stack.top();
+                    if (!active)
+                        continue;
+                    const int x = windowW > 0
+                        ? click.x * SCREEN_W / windowW : click.x;
+                    const int y = windowH > 0
+                        ? click.y * SCREEN_H / windowH : click.y;
+                    active->handlePointerClick(x, y);
+                }
+            }
             if (!m_playbackStarting && consumeRemoteExitRequest())
                 actions.push_back(Action::Exit);
             if (!m_playbackStarting) {

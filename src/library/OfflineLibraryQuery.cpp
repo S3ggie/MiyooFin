@@ -106,10 +106,15 @@ std::vector<std::vector<std::string>> OfflineLibraryQuery::metadataBatches(
     const DownloadSnapshot &downloads) {
     std::vector<std::string> ids;
     std::set<std::string> seen;
-    for (const auto &download : downloads.items)
-        if (isAvailable(download.state) && !download.itemId.empty()
+    for (const auto &download : downloads.items) {
+        if (!isAvailable(download.state)) continue;
+        if (download.itemType == "movie" && !download.itemId.empty()
             && seen.insert(download.itemId).second)
             ids.push_back(download.itemId);
+        if (download.itemType == "episode" && !download.seriesId.empty()
+            && seen.insert(download.seriesId).second)
+            ids.push_back(download.seriesId);
+    }
     std::vector<std::vector<std::string>> batches;
     for (std::size_t offset = 0; offset < ids.size(); offset += kMetadataBatchSize)
         batches.emplace_back(ids.begin() + offset,
@@ -130,7 +135,14 @@ LibrarySnapshot OfflineLibraryQuery::build(const DownloadSnapshot &downloads,
         if (item.type == "episode") {
             if (!item.seriesId.empty()) {
                 auto found = canonical.find(item.seriesId);
-                MediaItem series = found != canonical.end() ? found->second : fallback(download);
+                MediaItem series;
+                if (found != canonical.end()) {
+                    series = found->second;
+                } else {
+                    series = fallback(download);
+                    series.title = download.seriesName.empty()
+                        ? "Downloaded Show" : download.seriesName;
+                }
                 series.id = item.seriesId; series.type = "show";
                 if (series.title.empty()) series.title = download.seriesName.empty()
                     ? "Downloaded Show" : download.seriesName;

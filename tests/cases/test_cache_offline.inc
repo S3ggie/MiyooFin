@@ -92,6 +92,15 @@ static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::Logout);
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
+static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
+    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const auto snapshotReady=source.find("m_haveCachedSnapshot=true;");
+    CHECK(snapshotReady!=std::string::npos);
+    CHECK(source.find("if (m_session.manualOfflineMode)",
+                      snapshotReady)!=std::string::npos);
+    CHECK(navigation.find("manual_offline_mode=")!=std::string::npos);
+}
 
 static void testLanServerAddressClassificationAndSettingsLayout(){
     std::printf("[test] LAN server address classification and Settings layout\n");
@@ -244,8 +253,16 @@ static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(mov
     // than promoting a transient network failure to a fatal browsing error.
     CHECK_EQ(librarySyncStatus(0,true,true,false,true),"OFFLINE");
     CHECK_EQ(librarySyncStatus(1,true,false,true,true),"SYNCING...");
+    CHECK_EQ(librarySyncStatus(0,false,false,true,false,mid,true,false),
+             "SYNC 40%");
+    CHECK_EQ(librarySyncStatus(1,true,false,true,true,mid,true,false),
+             "SYNC 40%");
     CHECK_EQ(librarySyncStatus(2,true,false,false,true,mid,true),"SYNC 40%");
     CHECK_EQ(librarySyncStatus(2,true,false,false,true,done,false),"SYNCED");
+    CHECK_EQ(artworkSyncStatus(true, true, ShowsSyncProgress{48,120}), "ART 40%");
+    CHECK_EQ(artworkSyncStatus(true, true, ShowsSyncProgress{120,120}), "ART 100%");
+    CHECK_EQ(artworkSyncStatus(true, false, ShowsSyncProgress{48,120}), "");
+    CHECK_EQ(artworkSyncStatus(false, true, ShowsSyncProgress{120,120}), "");
 }
 static void testCacheRemoveNew(){std::string old=ImageCache::cacheDir();ImageCache::setCacheDir("/tmp/miyoofin-images/");unsigned char b[2]={1,2};CHECK(ImageCache::writeToCache("a",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::writeToCache("b",ImageType::Primary,"x",64,96,b,2));CHECK(ImageCache::removeCached("a",ImageType::Primary,"x",64,96));CHECK(!ImageCache::isCached("a",ImageType::Primary,"x",64,96));CHECK(ImageCache::isCached("b",ImageType::Primary,"x",64,96));ImageCache::setCacheDir(old);}
 
@@ -256,13 +273,15 @@ static void testOfflineLibraryQuery(){
     DownloadItem online; online.itemId="online"; online.itemType="movie"; online.state=DownloadState::Queued;
     downloads.items={movie,episode,online};
     auto batches=OfflineLibraryQuery::metadataBatches(downloads);
-    CHECK(batches.size()==1 && batches[0].size()==2);
+    CHECK(batches.size()==1 && batches[0].size()==2
+          && batches[0][0] == "m1" && batches[0][1] == "s1");
     MediaItem canonical=cacheItem("m1"); canonical.type="movie"; canonical.title="Canonical movie";
     auto root=OfflineLibraryQuery::build(downloads,{canonical});
     CHECK(root.movies.size()==1 && root.movies[0].items.size()==1);
     CHECK(root.movies[0].items[0].title=="Canonical movie");
     CHECK(root.shows.size()==1 && root.shows[0].items.size()==1);
-    CHECK(root.shows[0].items[0].id=="s1");
+    CHECK(root.shows[0].items[0].id=="s1"
+          && root.shows[0].items[0].title=="Fallback show");
 
     char rootTemplate[]="/tmp/miyoofin-offline-no-librarycache-XXXXXX";
     char *rootPath=::mkdtemp(rootTemplate);
@@ -343,12 +362,30 @@ static void testOfflineLibraryQuery(){
     page.viewOrdinal = 0;
     page.finalPage = true;
     CHECK(catalogDb->upsertMediaPage(page).get().success);
+    MediaItem canonicalSeries;
+    canonicalSeries.id = physicalEpisode.seriesId;
+    canonicalSeries.title = "Canonical Catalog Series";
+    canonicalSeries.type = "show";
+    canonicalSeries.imageTags["Primary"] = "task29-canonical-series-primary";
+    CatalogDbMediaPageWrite seriesPage;
+    seriesPage.items = {canonicalSeries};
+    seriesPage.viewId = "task29-shows";
+    seriesPage.viewName = "Shows";
+    seriesPage.collectionType = "tvshows";
+    seriesPage.viewOrdinal = 0;
+    seriesPage.finalPage = true;
+    CHECK(catalogDb->upsertMediaPage(seriesPage).get().success);
     library::LibraryQuery query(catalogDb, epoch);
     const auto catalogPage = query.movies(-1, 8).get();
     CHECK(catalogPage.success && catalogPage.items.size() == 2);
-    std::vector<MediaItem> metadata;
-    for (const auto &item : catalogPage.items)
-        if (item.id == physicalMovie.itemId) metadata.push_back(item);
+    const auto metadataPage = query.itemsByIds(
+        {physicalMovie.itemId, physicalEpisode.seriesId}).get();
+    CHECK(metadataPage.success && metadataPage.items.size() == 2);
+    std::vector<std::string> oversizedMetadataIds(65, "unused");
+    const auto oversizedMetadata = query.itemsByIds(oversizedMetadataIds).get();
+    CHECK(!oversizedMetadata.success
+          && oversizedMetadata.error == CatalogDbErrorCategory::ConfigurationFailed);
+    std::vector<MediaItem> metadata = metadataPage.items;
     const auto offlineRoot = OfflineLibraryQuery::build(
         DownloadSnapshot{loaded}, metadata);
     CHECK(offlineRoot.movies.size() == 1
@@ -362,7 +399,9 @@ static void testOfflineLibraryQuery(){
           && offlineRoot.shows[0].items[0].id
                  == physicalEpisode.seriesId
           && offlineRoot.shows[0].items[0].title
-                 == physicalEpisode.title);
+                 == "Canonical Catalog Series"
+          && offlineRoot.shows[0].items[0].imageTags.at("Primary")
+                 == "task29-canonical-series-primary");
     CHECK(offlineRoot.movies[0].items[0].id != onlineOnly.id);
     const auto offlineHierarchy = OfflineLibraryQuery::hierarchy(loaded);
     CHECK(offlineHierarchy.movies.size() == 1
@@ -384,4 +423,29 @@ static void testOfflineLibraryQuery(){
     std::remove((catalogPath + "/catalog.sqlite3").c_str());
     std::remove((catalogPath + "/catalog.sqlite3.tmp").c_str());
     ::rmdir(catalogPath.c_str());
+}
+
+static void testOfflineHomeMediaPage(){
+    std::printf("[test] offline Home media pages use downloaded snapshot\n");
+    LibrarySnapshot snapshot;
+    MediaItem movieA=cacheItem("movie-a"); movieA.type="movie"; movieA.title="Alpha Movie";
+    MediaItem movieB=cacheItem("movie-b"); movieB.type="movie"; movieB.title="Beta Movie";
+    snapshot.movies={{"movies","Movies","movies",{movieB,movieA}}};
+    MediaItem show=cacheItem("show"); show.type="show"; show.title="Normal Show";
+    MediaItem anime=cacheItem("anime"); anime.type="show"; anime.title="Anime Show";
+    snapshot.shows={{"shows","Shows","tvshows",{show}},
+                    {"anime","Anime","tvshows",{anime}}};
+
+    const auto first=HomeScreen::offlineMediaPage(snapshot,"movie",-1,1);
+    CHECK(first.success && first.items.size()==1 && first.items[0].id==movieA.id);
+    CHECK(first.hasMore && first.next.valid);
+    const auto second=HomeScreen::offlineMediaPage(snapshot,"movie",-1,1,first.next);
+    CHECK(second.success && second.items.size()==1 && second.items[0].id==movieB.id);
+    CHECK(!second.hasMore);
+
+    const auto shows=HomeScreen::offlineMediaPage(snapshot,"show",-1,24);
+    CHECK(shows.success && shows.items.size()==1 && shows.items[0].id==show.id);
+    const auto animePage=HomeScreen::offlineMediaPage(snapshot,"anime",-1,24);
+    CHECK(animePage.success && animePage.items.size()==1 && animePage.items[0].id==anime.id);
+    std::printf("[test] offline Home media pages use downloaded snapshot OK\n");
 }

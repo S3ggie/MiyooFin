@@ -39,23 +39,33 @@ bool HomeScreen::publishHierarchyCheckpoint(std::uint64_t generation)
 
 void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
 {
-    queuePosterJobs(collectPosterJobs(snapshot));
+    queuePosterJobs(planHomePosterJobs(snapshot));
 }
 
-void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs)
+void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority)
 {
     std::lock_guard<std::mutex> lock(m_posterMutex);
-    std::set<std::string> queued;
-    for (const auto &job : m_pendingPosterJobs)
-        queued.insert(job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height));
+    std::vector<PosterJob> newJobs;
     for (auto &job : jobs) {
-        std::string key=job.itemId + ":" + job.imageTag + ":" + std::to_string(job.width) + "x" + std::to_string(job.height);
-        if (queued.insert(key).second)
+        std::string key=job.itemId + ":" + std::to_string(static_cast<int>(job.imageType))
+            + ":" + job.imageTag + ":" + std::to_string(job.width) + "x"
+            + std::to_string(job.height);
+        if (m_artworkProgressKeys.insert(key).second) {
+            newJobs.push_back(std::move(job));
+            m_artworkTotal.fetch_add(1);
+            m_artworkActive.store(true);
+        }
+    }
+    if (highPriority) {
+        for (auto it = newJobs.rbegin(); it != newJobs.rend(); ++it)
+            m_pendingPosterJobs.insert(m_pendingPosterJobs.begin(), std::move(*it));
+    } else {
+        for (auto &job : newJobs)
             m_pendingPosterJobs.push_back(std::move(job));
     }
     performanceTelemetry().setWorkerQueueDepth(
         WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
-    m_posterWake.notify_one();
+    m_posterWake.notify_all();
 }
 
 std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySnapshot &snapshot)
@@ -143,7 +153,7 @@ void HomeScreen::hierarchyWorker()
                     series.id,catalogCancellation).get();
                 if (cached.success) {
                     cachedSeasons=std::move(cached.items);
-                    queuePosterJobs(collectSeasonPosterJobs(cachedSeasons));
+                    queuePosterJobs(planSeasonPosterJobs(cachedSeasons));
                     for (const auto &season : cachedSeasons)
                         (void)m_libraryQuery->episodes(
                             season.id,catalogCancellation).get();
@@ -175,7 +185,7 @@ void HomeScreen::hierarchyWorker()
                 continue;
             }
             std::vector<MediaItem> seasons=std::move(seasonRefresh.items);
-            queuePosterJobs(collectSeasonPosterJobs(seasons));
+            queuePosterJobs(planSeasonPosterJobs(seasons));
             bool complete=true;
             for (const auto &season : seasons) {
                 { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
@@ -220,14 +230,49 @@ void HomeScreen::hierarchyWorker()
 
 void HomeScreen::posterWorker()
 {
+    HttpClient client;
+    client.setTimeoutSec(8);
     for (;;) {
-        std::vector<PosterJob> jobs;
-        { std::unique_lock<std::mutex> lock(m_posterMutex); m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();}); if(m_stopPosterWorker) return; jobs.swap(m_pendingPosterJobs); performanceTelemetry().setWorkerQueueDepth(WorkerId::HomePoster, 0); performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true); }
-        for(const auto &job:jobs){ if(ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) continue; HttpClient client;client.setTimeoutSec(8);BinaryHttpResponse response;std::string error; TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster); if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty()){ if(ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size())) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster); else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); } else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster); }
+        PosterJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_posterMutex);
+            m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();});
+            if(m_stopPosterWorker) return;
+            job=std::move(m_pendingPosterJobs.front());
+            m_pendingPosterJobs.erase(m_pendingPosterJobs.begin());
+            performanceTelemetry().setWorkerQueueDepth(
+                WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
+            performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true);
+        }
+
+        bool complete=false;
+        if(ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) {
+            complete=true;
+        } else {
+            BinaryHttpResponse response; std::string error;
+            TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster);
+            if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty())
+                complete=ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size());
+        }
+        if (complete) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster);
+        else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster);
+        m_artworkCompleted.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lock(m_posterMutex);
+            if (!complete) {
+                const std::string key=job.itemId + ":"
+                    + std::to_string(static_cast<int>(job.imageType)) + ":"
+                    + job.imageTag + ":" + std::to_string(job.width) + "x"
+                    + std::to_string(job.height);
+                m_artworkProgressKeys.erase(key);
+            }
+            if (m_artworkCompleted.load() >= m_artworkTotal.load()
+                && m_pendingPosterJobs.empty())
+                m_artworkActive.store(false);
+            performanceTelemetry().setWorkerQueueDepth(
+                WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
+        }
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
-        std::lock_guard<std::mutex> lock(m_posterMutex);
-        performanceTelemetry().setWorkerQueueDepth(
-            WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
     }
 }
 

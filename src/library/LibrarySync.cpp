@@ -2,11 +2,13 @@
 #include "OfflineLibraryQuery.hpp"
 #include "../download/DownloadStore.hpp"
 #include "../net/JellyfinApi.hpp"
+#include "../net/JellyfinLibraryEvents.hpp"
 #include "../net/RouteRequest.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <ctime>
 #include <future>
+#include <set>
 #include <unistd.h>
 
 namespace miyoofin {
@@ -462,6 +464,134 @@ library::LibrarySync::reconcileAuthoritativeMembership(
             }
             result.success = true;
             result.generation = generation;
+            return result;
+        });
+}
+
+std::future<library::LiveLibraryChangeResult>
+library::LibrarySync::applyLibraryChanges(
+    const JellyfinLibraryChangeBatch &batch,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    const Session session = m_session;
+    const auto db = m_db;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto serviceCancellation = m_cancel;
+    const auto operationCancellation = cancellation;
+    return std::async(std::launch::async,
+        [session, db, metadata, serviceCancellation, operationCancellation,
+         batch] {
+            LiveLibraryChangeResult result;
+            result.catchUpRequired = batch.catchUpRequired;
+            const auto effectiveCancellation = operationCancellation
+                ? operationCancellation : serviceCancellation;
+            const auto cancelled = [&] {
+                return effectiveCancellation && effectiveCancellation->load();
+            };
+            if (!db) {
+                result.error = CatalogDbErrorCategory::ScopeNotReady;
+                result.message = "CatalogDb service is unavailable";
+                return result;
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "live library change application cancelled";
+                return result;
+            }
+
+            std::vector<std::string> itemIds;
+            std::set<std::string> seenIds;
+            for (const auto *ids : {&batch.itemsAdded, &batch.itemsUpdated,
+                                    &batch.itemsRemoved}) {
+                for (const auto &id : *ids) {
+                    if (id.empty()) continue;
+                    if (seenIds.insert(id).second) itemIds.push_back(id);
+                }
+            }
+            constexpr std::size_t maxItemIds = 64;
+            if (itemIds.size() > maxItemIds) {
+                result.error = CatalogDbErrorCategory::ConfigurationFailed;
+                result.message = "live library change batch exceeds bounded limit";
+                result.catchUpRequired = true;
+                return result;
+            }
+            if (itemIds.empty()) {
+                result.success = true;
+                return result;
+            }
+
+            std::vector<MediaItem> items;
+            std::string error;
+            const bool networkOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getItemsByIds(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, itemIds, items, error,
+                        effectiveCancellation
+                            ? effectiveCancellation.get() : nullptr);
+                }, error);
+            if (!networkOk) {
+                result.cancelled = cancelled();
+                result.error = result.cancelled
+                    ? CatalogDbErrorCategory::Superseded
+                    : CatalogDbErrorCategory::None;
+                result.message = error;
+                if (!result.cancelled) result.catchUpRequired = true;
+                return result;
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "live library change application cancelled";
+                return result;
+            }
+
+            result.itemsFetched = items.size();
+            std::set<std::string> returnedIds;
+            for (const auto &item : items) returnedIds.insert(item.id);
+            CatalogDbJobMetadata writeMetadata = metadata;
+            writeMetadata.cancellation = effectiveCancellation;
+            if (!items.empty()) {
+                CatalogDbMediaPageWrite page;
+                page.items = std::move(items);
+                const auto written = db->upsertMediaPage(page, writeMetadata).get();
+                if (!written.success) {
+                    result.cancelled = written.cancelled;
+                    result.superseded = written.superseded;
+                    result.error = written.error;
+                    result.message = written.message;
+                    if (!result.cancelled && !result.superseded)
+                        result.catchUpRequired = true;
+                    return result;
+                }
+                result.itemsUpserted = written.rowsWritten;
+            }
+
+            std::vector<std::string> removals;
+            for (const auto &id : batch.itemsRemoved) {
+                if (seenIds.find(id) == seenIds.end()) continue;
+                if (returnedIds.find(id) == returnedIds.end()
+                    && std::find(removals.begin(), removals.end(), id)
+                    == removals.end()) {
+                    removals.push_back(id);
+                }
+            }
+            if (!removals.empty()) {
+                const auto deleted = db->deleteMediaItemsByIds(
+                    removals, writeMetadata).get();
+                if (!deleted.success) {
+                    result.cancelled = deleted.cancelled;
+                    result.superseded = deleted.superseded;
+                    result.error = deleted.error;
+                    result.message = deleted.message;
+                    if (!result.cancelled && !result.superseded)
+                        result.catchUpRequired = true;
+                    return result;
+                }
+                result.itemsRemoved = removals.size();
+            }
+            result.success = true;
             return result;
         });
 }

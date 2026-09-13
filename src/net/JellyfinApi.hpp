@@ -179,6 +179,17 @@ public:
                                        std::string &error,
                                        const std::atomic<bool> *cancelled = nullptr);
 
+    /// Fetch the current bounded metadata for a set of item IDs. Missing IDs
+    /// are intentionally omitted so callers can validate removals.
+    static bool getItemsByIds(const std::string &baseUrl,
+                              const std::string &accessToken,
+                              const std::string &userId,
+                              const std::string &deviceId,
+                              const std::vector<std::string> &itemIds,
+                              std::vector<MediaItem> &items,
+                              std::string &error,
+                              const std::atomic<bool> *cancelled = nullptr);
+
     /// Fetch "continue watching" / resume items.
     static bool getResumeItems(const std::string &baseUrl,
                                const std::string &accessToken,

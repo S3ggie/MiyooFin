@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace miyoofin {
+struct JellyfinLibraryChangeBatch;
 namespace library {
 
 struct OfflineRebuildResult {
@@ -56,6 +57,18 @@ struct MembershipReconcileResult {
     std::size_t itemsStaged = 0;
 };
 
+struct LiveLibraryChangeResult {
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    bool catchUpRequired = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t itemsFetched = 0;
+    std::size_t itemsUpserted = 0;
+    std::size_t itemsRemoved = 0;
+};
+
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
 // CatalogDb remains the sole SQLite executor; this class owns only the
 // synchronization boundary and its cancellation/status state.
@@ -86,6 +99,9 @@ public:
         std::int64_t sinceMs,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<MembershipReconcileResult> reconcileAuthoritativeMembership(
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<LiveLibraryChangeResult> applyLibraryChanges(
+        const JellyfinLibraryChangeBatch &batch,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<CatalogDbReconcileResult> reconcileSeries(
         const std::vector<MediaItem> &series, bool authoritative,

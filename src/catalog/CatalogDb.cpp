@@ -125,6 +125,7 @@ constexpr unsigned char kSeedHierarchyQueryOperation = 13;
 constexpr unsigned char kClearHierarchyQueryOperation = 14;
 constexpr unsigned char kMediaPageQueryPlanOperation = 15;
 constexpr std::size_t kMaxHierarchyQueryRows = 128;
+constexpr std::size_t kMaxMetadataByIdRows = 64;
 constexpr std::size_t kMaxReconcileSeries = 4096;
 
 bool validScopeIdentity(const std::string &serverUrl, const std::string &userId)
@@ -677,10 +678,13 @@ struct CatalogDb::QueryCommand {
     enum class Kind : unsigned char {
         Seasons,
         Episodes,
+        MediaItemsByIds,
+        DeleteMediaItemsByIds,
     };
 
     Kind kind;
     std::string parentId;
+    std::vector<std::string> itemIds;
     CatalogDbJobMetadata metadata;
     std::uint64_t enqueuedMonotonicUs = 0;
     std::promise<CatalogDbHierarchyResult> result;
@@ -1118,6 +1122,125 @@ std::future<CatalogDbHierarchyResult> CatalogDb::getEpisodes(
         if (command->metadata.scopeEpoch == 0) {
             command->metadata.scopeEpoch = m_requestedEpoch;
         }
+        m_queryCommands.push_back(command);
+        ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
+    }
+    m_wake.notify_one();
+    return result;
+}
+
+std::future<CatalogDbHierarchyResult> CatalogDb::readMediaItemsByIds(
+    const std::vector<std::string> &itemIds,
+    const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<QueryCommand>();
+    command->kind = QueryCommand::Kind::MediaItemsByIds;
+    command->itemIds = itemIds;
+    std::future<CatalogDbHierarchyResult> result = command->result.get_future();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        CatalogDbHierarchyResult rejected;
+        if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::ScopeNotReady;
+            rejected.message = "CatalogDb is stopping";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        if (itemIds.empty() || itemIds.size() > kMaxMetadataByIdRows) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::ConfigurationFailed;
+            rejected.message = "metadata-by-ID query exceeds bounded limit";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.cancelled = true;
+            rejected.error = CatalogDbErrorCategory::Superseded;
+            rejected.message = "CatalogDb query cancelled";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::OpenFailed;
+            rejected.message = "CatalogDb query queue is full";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        command->metadata = metadata;
+        command->enqueuedMonotonicUs = telemetryNowIfEnabled();
+        if (command->metadata.generation == 0)
+            command->metadata.generation = m_generation;
+        if (command->metadata.scopeEpoch == 0)
+            command->metadata.scopeEpoch = m_requestedEpoch;
+        m_queryCommands.push_back(command);
+        ++m_pendingJobs;
+        performanceTelemetry().setCatalogDbQueueDepth(
+            static_cast<uint32_t>(m_pendingJobs));
+    }
+    m_wake.notify_one();
+    return result;
+}
+
+std::future<CatalogDbHierarchyResult> CatalogDb::deleteMediaItemsByIds(
+    const std::vector<std::string> &itemIds,
+    const CatalogDbJobMetadata &metadata)
+{
+    auto command = std::make_shared<QueryCommand>();
+    command->kind = QueryCommand::Kind::DeleteMediaItemsByIds;
+    command->itemIds = itemIds;
+    std::future<CatalogDbHierarchyResult> result = command->result.get_future();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        CatalogDbHierarchyResult rejected;
+        if (m_stopping) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::ScopeNotReady;
+            rejected.message = "CatalogDb is stopping";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        if (itemIds.empty() || itemIds.size() > kMaxMetadataByIdRows) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::ConfigurationFailed;
+            rejected.message = "metadata-by-ID delete exceeds bounded limit";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        for (const auto &id : itemIds) {
+            if (id.empty()) {
+                performanceTelemetry().addCatalogDbEnqueueRejected();
+                rejected.error = CatalogDbErrorCategory::ConfigurationFailed;
+                rejected.message = "metadata-by-ID delete contains an empty ID";
+                command->result.set_value(std::move(rejected));
+                return result;
+            }
+        }
+        if (metadata.cancellation && metadata.cancellation->load()) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.cancelled = true;
+            rejected.error = CatalogDbErrorCategory::Superseded;
+            rejected.message = "CatalogDb delete cancelled";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        if (m_pendingJobs >= kMaxPendingJobs) {
+            performanceTelemetry().addCatalogDbEnqueueRejected();
+            rejected.error = CatalogDbErrorCategory::OpenFailed;
+            rejected.message = "CatalogDb query queue is full";
+            command->result.set_value(std::move(rejected));
+            return result;
+        }
+        command->metadata = metadata;
+        command->enqueuedMonotonicUs = telemetryNowIfEnabled();
+        if (command->metadata.generation == 0)
+            command->metadata.generation = m_generation;
+        if (command->metadata.scopeEpoch == 0)
+            command->metadata.scopeEpoch = m_requestedEpoch;
         m_queryCommands.push_back(command);
         ++m_pendingJobs;
         performanceTelemetry().setCatalogDbQueueDepth(
@@ -1940,9 +2063,20 @@ void CatalogDb::processHierarchyQuery(
         finish();
         return;
     }
-    if (command->parentId.empty()) {
+    if (command->kind != QueryCommand::Kind::MediaItemsByIds
+        && command->kind != QueryCommand::Kind::DeleteMediaItemsByIds
+        && command->parentId.empty()) {
         result.error = CatalogDbErrorCategory::ConfigurationFailed;
         result.message = "hierarchy query requires a parent ID";
+        finish();
+        return;
+    }
+    if ((command->kind == QueryCommand::Kind::MediaItemsByIds
+         || command->kind == QueryCommand::Kind::DeleteMediaItemsByIds)
+        && (command->itemIds.empty()
+            || command->itemIds.size() > kMaxMetadataByIdRows)) {
+        result.error = CatalogDbErrorCategory::ConfigurationFailed;
+        result.message = "metadata-by-ID query exceeds bounded limit";
         finish();
         return;
     }
@@ -1981,6 +2115,81 @@ void CatalogDb::processHierarchyQuery(
         return;
     }
 
+    if (command->kind == QueryCommand::Kind::DeleteMediaItemsByIds) {
+        std::string deleteSql = "DELETE FROM media_items WHERE id IN (";
+        for (std::size_t i = 0; i < kMaxMetadataByIdRows; ++i) {
+            if (i) deleteSql += ",";
+            deleteSql += "?" + std::to_string(i + 1);
+        }
+        deleteSql += ")";
+        sqlite3_stmt *deleteItems = nullptr;
+        auto existing = m_statements.find("media_items_delete_by_ids");
+        if (existing != m_statements.end()) {
+            deleteItems = existing->second;
+        } else if (sqlite3_prepare_v2(m_db, deleteSql.c_str(), -1,
+                                      &deleteItems, nullptr) != SQLITE_OK) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            finish();
+            return;
+        } else {
+            m_statements.emplace("media_items_delete_by_ids", deleteItems);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_preparedStatementCount = m_statements.size();
+            }
+        }
+        auto reset = [](sqlite3_stmt *statement) {
+            sqlite3_reset(statement);
+            sqlite3_clear_bindings(statement);
+        };
+        reset(deleteItems);
+        for (std::size_t i = 0; i < kMaxMetadataByIdRows; ++i) {
+            const int rc = i < command->itemIds.size()
+                ? sqlite3_bind_text(deleteItems, static_cast<int>(i + 1),
+                                    command->itemIds[i].c_str(), -1,
+                                    SQLITE_TRANSIENT)
+                : sqlite3_bind_null(deleteItems, static_cast<int>(i + 1));
+            if (rc != SQLITE_OK) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = sqlite3_errmsg(m_db);
+                reset(deleteItems);
+                finish();
+                return;
+            }
+        }
+        auto rollback = [&] {
+            std::string ignored;
+            exec(m_db, "ROLLBACK;", ignored);
+        };
+        if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)
+            || sqlite3_step(deleteItems) != SQLITE_DONE) {
+            if (result.message.empty()) result.message = sqlite3_errmsg(m_db);
+            result.error = CatalogDbErrorCategory::SqliteError;
+            reset(deleteItems);
+            rollback();
+            finish();
+            return;
+        }
+        reset(deleteItems);
+        if (const QueryState queryState = state();
+            queryState != QueryState::Valid) {
+            rollback();
+            rejectState(queryState);
+            finish();
+            return;
+        }
+        if (!exec(m_db, "COMMIT;", result.message)) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            rollback();
+            finish();
+            return;
+        }
+        result.success = true;
+        finish();
+        return;
+    }
+
     auto prepareCached = [&](const char *name, const char *sql,
                              sqlite3_stmt *&statement) {
         auto existing = m_statements.find(name);
@@ -2007,22 +2216,42 @@ void CatalogDb::processHierarchyQuery(
     sqlite3_stmt *insertImageTag = nullptr;
     sqlite3_stmt *selectGenres = nullptr;
     sqlite3_stmt *selectImageTags = nullptr;
-    const char *queryName = command->kind == QueryCommand::Kind::Seasons
-        ? "hierarchy_get_seasons" : "hierarchy_get_episodes";
-    const char *querySql = command->kind == QueryCommand::Kind::Seasons
-        ? "SELECT id, kind, title, overview, production_year, "
-          "community_rating, etag, played, progress, "
-          "playback_position_ticks, index_number, parent_index_number, "
-          "runtime_ticks, series_name, series_id, season_id, art_r, "
-          "art_g, art_b FROM media_items WHERE series_id=?1 AND kind=3 "
-          "ORDER BY index_number, title, id"
-        : "SELECT id, kind, title, overview, production_year, "
-          "community_rating, etag, played, progress, "
-          "playback_position_ticks, index_number, parent_index_number, "
-          "runtime_ticks, series_name, series_id, season_id, art_r, "
-          "art_g, art_b FROM media_items WHERE season_id=?1 AND kind=4 "
-          "ORDER BY index_number, title, id";
-    if (!prepareCached(queryName, querySql, query)
+    const bool metadataByIds =
+        command->kind == QueryCommand::Kind::MediaItemsByIds;
+    const char *queryName = metadataByIds
+        ? "media_items_by_ids" : command->kind == QueryCommand::Kind::Seasons
+            ? "hierarchy_get_seasons" : "hierarchy_get_episodes";
+    std::string querySql;
+    if (metadataByIds) {
+        querySql =
+            "SELECT id, kind, title, overview, production_year, "
+            "community_rating, etag, played, progress, "
+            "playback_position_ticks, index_number, parent_index_number, "
+            "runtime_ticks, series_name, series_id, season_id, art_r, "
+            "art_g, art_b FROM media_items WHERE id IN (";
+        for (std::size_t i = 0; i < kMaxMetadataByIdRows; ++i) {
+            if (i) querySql += ",";
+            querySql += "?" + std::to_string(i + 1);
+        }
+        querySql += ") ORDER BY id";
+    } else if (command->kind == QueryCommand::Kind::Seasons) {
+        querySql =
+            "SELECT id, kind, title, overview, production_year, "
+            "community_rating, etag, played, progress, "
+            "playback_position_ticks, index_number, parent_index_number, "
+            "runtime_ticks, series_name, series_id, season_id, art_r, "
+            "art_g, art_b FROM media_items WHERE series_id=?1 AND kind=3 "
+            "ORDER BY index_number, title, id";
+    } else {
+        querySql =
+            "SELECT id, kind, title, overview, production_year, "
+            "community_rating, etag, played, progress, "
+            "playback_position_ticks, index_number, parent_index_number, "
+            "runtime_ticks, series_name, series_id, season_id, art_r, "
+            "art_g, art_b FROM media_items WHERE season_id=?1 AND kind=4 "
+            "ORDER BY index_number, title, id";
+    }
+    if (!prepareCached(queryName, querySql.c_str(), query)
         || !prepareCached("media_item_genres_delete",
                           "DELETE FROM item_genres WHERE item_id=?1",
                           deleteGenres)
@@ -2058,13 +2287,28 @@ void CatalogDb::processHierarchyQuery(
         sqlite3_clear_bindings(statement);
     };
     reset(query);
-    if (sqlite3_bind_text(query, 1, command->parentId.c_str(), -1,
-                          SQLITE_TRANSIENT) != SQLITE_OK) {
-        result.error = CatalogDbErrorCategory::SqliteError;
-        result.message = sqlite3_errmsg(m_db);
-        reset(query);
-        finish();
-        return;
+    if (metadataByIds) {
+        for (std::size_t i = 0; i < kMaxMetadataByIdRows; ++i) {
+            const int rc = i < command->itemIds.size()
+                ? sqlite3_bind_text(query, static_cast<int>(i + 1),
+                                    command->itemIds[i].c_str(), -1,
+                                    SQLITE_TRANSIENT)
+                : sqlite3_bind_null(query, static_cast<int>(i + 1));
+            if (rc != SQLITE_OK) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = sqlite3_errmsg(m_db);
+                reset(query);
+                finish();
+                return;
+            }
+        }
+    } else if (sqlite3_bind_text(query, 1, command->parentId.c_str(), -1,
+                                 SQLITE_TRANSIENT) != SQLITE_OK) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            reset(query);
+            finish();
+            return;
     }
     const MediaItemCollectionStatements collections{
         deleteGenres, insertGenre, deleteImageTags, insertImageTag,

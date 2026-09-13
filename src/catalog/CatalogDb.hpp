@@ -344,6 +344,17 @@ public:
     std::future<CatalogDbHierarchyResult> getEpisodes(
         const std::string &seasonId,
         const CatalogDbJobMetadata &metadata = {});
+    /// Read a bounded set of canonical media metadata by ID. The existing
+    /// CatalogDb worker/connection performs the query; callers must batch
+    /// requests to the supported maximum.
+    std::future<CatalogDbHierarchyResult> readMediaItemsByIds(
+        const std::vector<std::string> &itemIds,
+        const CatalogDbJobMetadata &metadata = {});
+    /// Delete a bounded set of media rows atomically on the CatalogDb worker.
+    /// Foreign-key cascades remove their current memberships and children.
+    std::future<CatalogDbHierarchyResult> deleteMediaItemsByIds(
+        const std::vector<std::string> &itemIds,
+        const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbHierarchyWriteResult> upsertSeriesHierarchy(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,

@@ -59,7 +59,6 @@ SRCS := \
     src/cache/ImageCache.cpp \
     src/cache/LibraryCache.cpp \
     src/cache/SyncState.cpp \
-    src/cache/OfflineCatalog.cpp \
     src/cache/OfflineLibraryProjection.cpp \
     src/library/OfflineLibraryQuery.cpp \
     src/library/LibrarySync.cpp \

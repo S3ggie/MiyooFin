@@ -76,7 +76,6 @@ SRCS        := \
     $(SRC_DIR)/cache/ImageCache.cpp \
     $(SRC_DIR)/cache/LibraryCache.cpp \
     $(SRC_DIR)/cache/SyncState.cpp \
-    $(SRC_DIR)/cache/OfflineCatalog.cpp \
     $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
     $(SRC_DIR)/library/OfflineLibraryQuery.cpp \
     $(SRC_DIR)/library/LibrarySync.cpp \
@@ -203,7 +202,6 @@ TEST_PROD_SRCS := \
                src/cache/ImageCache.cpp \
                src/cache/LibraryCache.cpp \
                src/cache/SyncState.cpp \
-               src/cache/OfflineCatalog.cpp \
                src/cache/OfflineLibraryProjection.cpp \
                src/library/OfflineLibraryQuery.cpp \
                src/library/LibrarySync.cpp \

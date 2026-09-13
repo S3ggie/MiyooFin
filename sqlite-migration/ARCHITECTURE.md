@@ -272,3 +272,15 @@ cache/offline/<scope>/catalog.v1
 during rollout; it is never read by the SQLite bootstrap path.
 
 The database runs from MiyooFin's SD-card app storage on OnionOS. Treat the storage as removable flash with FAT32 behavior and non-desktop durability characteristics.
+
+## 13. Final Task 34 retirement state
+
+After CP-H, CatalogDb is the sole runtime authority for catalog metadata and
+hierarchy synchronization. `OfflineCatalog` has no runtime serializer or
+reader, `LibraryCache` has no runtime snapshot writer, and `SyncStateStore` is
+read-only compatibility handling for pre-existing checkpoints. New catalog,
+Home, and synchronization state is written through the CatalogDb worker.
+
+Existing legacy files are not automatically deleted. If present, they remain
+untouched rollback/compatibility artifacts and are never recreated by normal
+startup.

@@ -115,6 +115,8 @@ SRCS := \
     src/ui/screens/EpisodeBrowserPlayback.cpp \
     src/ui/screens/EpisodeBrowserDownloads.cpp \
     src/ui/screens/MovieDetailsScreen.cpp \
+    src/ui/screens/MovieDetailsWorker.cpp \
+    src/ui/screens/MovieDetailsRender.cpp \
     src/playback/OfflinePlaybackJournal.cpp \
     src/playback/PlaybackRequest.cpp \
     $(TELEMETRY_SRCS)

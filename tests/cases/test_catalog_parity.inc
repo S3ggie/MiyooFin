@@ -1393,9 +1393,110 @@ static void testCatalogDbMediaPageUpsertAndPopulation()
     std::printf("[test] CatalogDb page upsert atomicity and population states OK\n");
 }
 
+static void testLibrarySyncAuthoritativeMembershipReconcile()
+{
+    std::printf("[test] LibrarySync authoritative membership reconcile\n");
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 3) == 0);
+    const std::string url = "http://127.0.0.1:" +
+        std::to_string(ntohs(address.sin_port));
+    const std::string user = "membership-reconcile-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    auto sync = std::make_shared<library::LibrarySync>(session, db, epoch);
+
+    const MediaItem removedMovie = catalogParityItem(
+        "__task37_removed_movie__", "movie", "Removed Movie");
+    const MediaItem removedSeries = catalogParityItem(
+        "__task37_removed_series__", "show", "Removed Series");
+    const MediaItem movedMovie = catalogParityItem(
+        "__task37_moved_movie__", "movie", "Moved Movie");
+    CatalogDbMediaPageWrite oldMovies;
+    oldMovies.items = {removedMovie, movedMovie};
+    oldMovies.viewId = "old-movies";
+    oldMovies.viewName = "Old Movies";
+    oldMovies.collectionType = "movies";
+    CHECK(sync->stage(oldMovies).get().success);
+    CatalogDbMediaPageWrite oldShows;
+    oldShows.items = {removedSeries};
+    oldShows.viewId = "old-shows";
+    oldShows.viewName = "Old Shows";
+    oldShows.collectionType = "tvshows";
+    oldShows.viewOrdinal = 1;
+    CHECK(sync->stage(oldShows).get().success);
+
+    const std::string viewsBody =
+        R"({"Items":[{"Id":"current-movies","Name":"Current Movies",
+        "CollectionType":"movies"},{"Id":"current-shows","Name":"Current Shows",
+        "CollectionType":"tvshows"}]})";
+    const std::string moviesBody =
+        R"({"StartIndex":0,"TotalRecordCount":1,"Items":[{"Id":"__task37_moved_movie__",
+        "Type":"Movie","Name":"Moved Movie","Overview":"Still here"}]})";
+    const std::string showsBody =
+        R"({"StartIndex":0,"TotalRecordCount":0,"Items":[]})";
+    std::thread server([&] {
+        const std::string bodies[] = {viewsBody, moviesBody, showsBody};
+        for (const std::string &body : bodies) {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client < 0) return;
+            char buffer[4096];
+            std::string request;
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+                if (received <= 0) break;
+                request.append(buffer, static_cast<size_t>(received));
+            }
+            const std::string response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                "Content-Length: " + std::to_string(body.size()) +
+                "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        }
+    });
+
+    const auto result = sync->reconcileAuthoritativeMembership().get();
+    server.join();
+    ::close(listener);
+    CHECK(result.success && result.pagesRead == 2);
+    library::LibraryQuery query(db, epoch);
+    const auto movies = query.movies(-1, 8).get();
+    const auto shows = query.shows(-1, 8).get();
+    CHECK(movies.success && movies.items.size() == 1
+          && movies.items[0].id == movedMovie.id);
+    CHECK(shows.success && shows.items.empty());
+    CHECK(movies.membershipsByItem.at(movedMovie.id).size() == 1);
+    CHECK(movies.membershipsByItem.at(movedMovie.id)[0].viewId
+          == "current-movies");
+    sync.reset();
+    db.reset();
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] LibrarySync authoritative membership reconcile OK\n");
+}
+
 static void testCatalogDbMediaPageTopLevelStaging()
 {
     std::printf("[test] CatalogDb staged media page writes\n");
+    testLibrarySyncAuthoritativeMembershipReconcile();
     CatalogDb db;
     const auto epoch = db.configureScope("https://page-stage.example", "user");
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));

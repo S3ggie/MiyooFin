@@ -205,6 +205,111 @@ library::LibrarySync::refreshEpisodes(
         });
 }
 
+std::future<library::ChangedCatalogResult>
+library::LibrarySync::catchUpChangedCatalog(
+    std::int64_t sinceMs,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    const Session session = m_session;
+    const auto db = m_db;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto serviceCancellation = m_cancel;
+    const auto operationCancellation = cancellation;
+    return std::async(std::launch::async,
+        [session, db, metadata, serviceCancellation, operationCancellation,
+         sinceMs] {
+            ChangedCatalogResult result;
+            const auto effectiveCancellation = operationCancellation
+                ? operationCancellation : serviceCancellation;
+            const auto cancelled = [&] {
+                return effectiveCancellation && effectiveCancellation->load();
+            };
+            if (!db) {
+                result.error = CatalogDbErrorCategory::ScopeNotReady;
+                result.message = "CatalogDb service is unavailable";
+                return result;
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "changed catalog catch-up cancelled";
+                return result;
+            }
+
+            std::vector<MediaItem> changed;
+            std::string error;
+            const bool networkOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getChangedCatalogItems(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, sinceMs, changed, error,
+                        effectiveCancellation
+                            ? effectiveCancellation.get() : nullptr);
+                }, error);
+            if (!networkOk) {
+                result.cancelled = cancelled();
+                result.error = result.cancelled
+                    ? CatalogDbErrorCategory::Superseded
+                    : CatalogDbErrorCategory::None;
+                result.message = error;
+                return result;
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "changed catalog catch-up cancelled";
+                return result;
+            }
+
+            CatalogDbJobMetadata writeMetadata = metadata;
+            writeMetadata.cancellation = effectiveCancellation;
+            if (!changed.empty()) {
+                CatalogDbMediaPageWrite page;
+                page.items = std::move(changed);
+                // An empty view ID deliberately updates only media metadata;
+                // membership remains authoritative to the full sync path.
+                const auto written = db->upsertMediaPage(page, writeMetadata).get();
+                if (!written.success) {
+                    result.cancelled = written.cancelled;
+                    result.superseded = written.superseded;
+                    result.error = written.error;
+                    result.message = written.message;
+                    return result;
+                }
+                result.itemsUpserted = written.rowsWritten;
+            }
+
+            // The metadata transaction is the catch-up linearization point.
+            // Finish the checkpoint with cancellation detached so a cancel
+            // arriving after that commit cannot leave a successful update
+            // paired with an older restart boundary.
+            CatalogDbJobMetadata checkpointMetadata = writeMetadata;
+            checkpointMetadata.cancellation.reset();
+            const auto state = db->readSyncState(
+                false, 0, 0, checkpointMetadata).get();
+            if (!state.success) {
+                result.error = state.error;
+                result.message = state.message;
+                return result;
+            }
+            const std::int64_t nowMs =
+                static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+            const std::int64_t checkpointMs = nowMs > state.lastSuccessfulMs
+                ? nowMs : state.lastSuccessfulMs;
+            const auto checkpoint = db->writeSyncState(
+                checkpointMs, state.lastReconcileMs,
+                state.committedGeneration, checkpointMetadata).get();
+            if (!checkpoint.success) {
+                result.error = checkpoint.error;
+                result.message = checkpoint.message;
+                return result;
+            }
+            result.success = true;
+            result.checkpointMs = checkpoint.lastSuccessfulMs;
+            return result;
+        });
+}
+
 std::future<CatalogDbReconcileResult>
 library::LibrarySync::reconcileSeries(
     const std::vector<MediaItem> &series, bool authoritative,

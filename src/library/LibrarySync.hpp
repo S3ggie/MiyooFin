@@ -35,6 +35,16 @@ struct HierarchyRefreshResult {
     std::vector<MediaItem> items;
 };
 
+struct ChangedCatalogResult {
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::size_t itemsUpserted = 0;
+    std::int64_t checkpointMs = 0;
+};
+
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
 // CatalogDb remains the sole SQLite executor; this class owns only the
 // synchronization boundary and its cancellation/status state.
@@ -60,6 +70,9 @@ public:
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<HierarchyRefreshResult> refreshEpisodes(
         const MediaItem &series, const MediaItem &season,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    std::future<ChangedCatalogResult> catchUpChangedCatalog(
+        std::int64_t sinceMs,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<CatalogDbReconcileResult> reconcileSeries(
         const std::vector<MediaItem> &series, bool authoritative,

@@ -2,6 +2,8 @@
 #include "HttpClient.hpp"
 #include "../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
+#include <ctime>
+#include <limits>
 
 namespace miyoofin {
 
@@ -175,6 +177,97 @@ bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
                 page.startIndex, page.items.size(), page.totalRecordCount,
                 page.hasMore ? 1 : 0);
     return true;
+}
+
+bool JellyfinApi::getChangedCatalogItems(
+    const std::string &baseUrl, const std::string &accessToken,
+    const std::string &userId, const std::string &deviceId,
+    std::int64_t sinceMs, std::vector<MediaItem> &items,
+    std::string &error, const std::atomic<bool> *cancelled)
+{
+    if (sinceMs <= 0) {
+        error = "missing sync checkpoint";
+        return false;
+    }
+
+    // MinDateLastSaved is second-granular.  Include the preceding second so
+    // an item saved at the checkpoint boundary cannot be skipped.
+    std::time_t seconds = static_cast<std::time_t>(sinceMs / 1000);
+    if (seconds > 0) --seconds;
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &seconds);
+#else
+    gmtime_r(&seconds, &utc);
+#endif
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S.0000000Z", &utc);
+
+    HttpClient client;
+    client.setTimeoutSec(15);
+    const auto headers = buildAuthHeaders(accessToken, deviceId);
+    constexpr int limit = 100;
+    constexpr std::size_t maxChangedItems = 4096;
+    int startIndex = 0;
+    std::vector<MediaItem> changed;
+    for (;;) {
+        if (cancelled && cancelled->load()) {
+            error = "Callback aborted";
+            return false;
+        }
+        const std::string url = baseUrl + "/Users/" + userId
+            + "/Items?Recursive=true&IncludeItemTypes=Movie,Series"
+              "&SortBy=DateLastSaved&SortOrder=Ascending"
+              "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+              "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
+              "IndexNumber,Etag&MinDateLastSaved=" + stamp
+            + "&StartIndex=" + std::to_string(startIndex)
+            + "&Limit=" + std::to_string(limit);
+        HttpResponse response;
+        TelemetryRequestScope request(RequestKind::LibraryItems);
+        if (!client.perform("GET", url, headers, {}, response, error,
+                            cancelled)) {
+            if (error.empty()) error = "Could not reach server";
+            return false;
+        }
+        if (!response.ok()) {
+            error = "Changed catalog items failed (HTTP "
+                + std::to_string(response.status) + ")";
+            return false;
+        }
+
+        const std::string rawItems = jsonRawValue(response.body, "Items");
+        if (rawItems.empty() || rawItems.front() != '[') {
+            error = "Malformed changed catalog response";
+            return false;
+        }
+        const auto itemStrings = jsonExtractArray(response.body, "Items");
+        if (itemStrings.empty() && rawItems != "[]") {
+            error = "Malformed changed catalog response";
+            return false;
+        }
+        if (changed.size() + itemStrings.size() > maxChangedItems) {
+            error = "Changed catalog result exceeds bounded limit";
+            return false;
+        }
+        for (const auto &raw : itemStrings) {
+            MediaItem item = jsonToMediaItem(raw);
+            if (item.id.empty() || (item.type != "movie" && item.type != "show")) {
+                error = "Malformed changed catalog item";
+                return false;
+            }
+            changed.push_back(std::move(item));
+        }
+        if (itemStrings.size() < static_cast<std::size_t>(limit)) {
+            items.insert(items.end(), changed.begin(), changed.end());
+            return true;
+        }
+        if (startIndex > std::numeric_limits<int>::max() - limit) {
+            error = "changed catalog pagination overflow";
+            return false;
+        }
+        startIndex += limit;
+    }
 }
 
 

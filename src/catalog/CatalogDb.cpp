@@ -3265,6 +3265,45 @@ void CatalogDb::processSyncState(
             finish();
             return;
         }
+        sqlite3_stmt *current = nullptr;
+        const bool currentPrepared = sqlite3_prepare_v2(
+            m_db,
+            "SELECT last_successful_ms, last_reconcile_ms, "
+            "committed_generation FROM sync_state WHERE singleton_id=1",
+            -1, &current, nullptr) == SQLITE_OK;
+        if (!currentPrepared || sqlite3_step(current) != SQLITE_ROW) {
+            result.error = CatalogDbErrorCategory::SqliteError;
+            result.message = sqlite3_errmsg(m_db);
+            if (current)
+                sqlite3_finalize(current);
+            finish();
+            return;
+        }
+        const auto currentSuccessful = sqlite3_column_int64(current, 0);
+        const auto currentReconcile = sqlite3_column_int64(current, 1);
+        const auto currentGenerationValue = sqlite3_column_int64(current, 2);
+        const auto currentGeneration = static_cast<std::uint64_t>(
+            currentGenerationValue);
+        sqlite3_finalize(current);
+        const bool currentMalformed = currentSuccessful < 0
+            || currentReconcile < 0
+            || currentGenerationValue < 0
+            || (currentSuccessful == 0 && currentReconcile != 0)
+            || (currentSuccessful > 0 && currentReconcile > currentSuccessful);
+        const bool candidateMalformed = command->lastSuccessfulMs == 0
+            ? command->lastReconcileMs != 0
+            : command->lastReconcileMs > command->lastSuccessfulMs;
+        const bool regressed = command->lastSuccessfulMs < currentSuccessful
+            || command->lastReconcileMs < currentReconcile
+            || command->committedGeneration < currentGeneration;
+        if (currentMalformed || candidateMalformed || regressed) {
+            result.error = CatalogDbErrorCategory::ConfigurationFailed;
+            result.message = currentMalformed
+                ? "stored sync-state checkpoint is invalid; full reconcile required"
+                : "sync-state checkpoint regressed; full reconcile required";
+            finish();
+            return;
+        }
         if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr)
                 != SQLITE_OK) {
             result.error = CatalogDbErrorCategory::SqliteError;

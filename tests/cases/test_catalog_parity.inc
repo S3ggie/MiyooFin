@@ -694,6 +694,27 @@ void testLibrarySyncTeardownDuringStagedGeneration()
         CHECK(sync->finalize(300).get().success);
         CHECK(sync->writeSyncState(300, 300, 300).get().success);
 
+        const auto regressed = sync->writeSyncState(299, 299, 299).get();
+        CHECK(!regressed.success
+              && regressed.error == CatalogDbErrorCategory::ConfigurationFailed);
+        const auto afterRegression = db->readSyncState(
+            false, 0, 0, {0, epoch, {}}).get();
+        CHECK(afterRegression.success
+              && afterRegression.lastSuccessfulMs == 300
+              && afterRegression.lastReconcileMs == 300
+              && afterRegression.committedGeneration == 300);
+
+        auto cancelledCheckpoint = std::make_shared<std::atomic_bool>(true);
+        const auto cancelled = sync->writeSyncState(
+            400, 400, 400, cancelledCheckpoint).get();
+        CHECK(!cancelled.success && cancelled.cancelled);
+        const auto afterCancellation = db->readSyncState(
+            false, 0, 0, {0, epoch, {}}).get();
+        CHECK(afterCancellation.success
+              && afterCancellation.lastSuccessfulMs == 300
+              && afterCancellation.lastReconcileMs == 300
+              && afterCancellation.committedGeneration == 300);
+
         db->setWorkerPausedForTest(true);
         auto pendingBegin = sync->begin(301);
         CatalogDbMediaPageWrite stagedPage = committedPage;
@@ -723,9 +744,32 @@ void testLibrarySyncTeardownDuringStagedGeneration()
           && movies.items[0].id == "__task30_committed_movie__");
     const auto syncState = reopened->readSyncState(
         false, 0, 0, {0, reopenedEpoch, {}}).get();
-    CHECK(syncState.success && syncState.committedGeneration == 300);
+    CHECK(syncState.success && syncState.lastSuccessfulMs == 300
+          && syncState.lastReconcileMs == 300
+          && syncState.committedGeneration == 300);
     reopened.reset();
     removeCatalogMigrationTestPaths(paths);
+
+    const std::string otherUrl =
+        "https://sqlite-library-sync-scope-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    const auto otherPaths = catalogMigrationTestPaths(otherUrl, user);
+    removeCatalogMigrationTestPaths(otherPaths);
+    auto otherDb = std::make_shared<CatalogDb>();
+    const auto otherEpoch = otherDb->configureScope(otherUrl, user);
+    CHECK(otherDb->waitForIdleForTest(std::chrono::seconds(2)));
+    Session otherSession = session;
+    otherSession.serverUrl = otherUrl;
+    auto otherSync = std::make_unique<library::LibrarySync>(
+        otherSession, otherDb, otherEpoch);
+    CHECK(otherSync->writeSyncState(900, 900, 1).get().success);
+    const auto otherState = otherDb->readSyncState(
+        false, 0, 0, {0, otherEpoch, {}}).get();
+    CHECK(otherState.success && otherState.lastSuccessfulMs == 900
+          && otherState.committedGeneration == 1);
+    otherSync.reset();
+    otherDb.reset();
+    removeCatalogMigrationTestPaths(otherPaths);
     std::printf("[test] LibrarySync teardown during staged generation OK\n");
 }
 

@@ -327,6 +327,7 @@ void App::configureCatalogScopeForSession()
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
         m_librarySync = std::make_shared<library::LibrarySync>(
             m_session, m_catalogDb, m_catalogScopeEpoch);
+        m_librarySync->startLiveEvents();
         m_libraryQuery = std::make_shared<library::LibraryQuery>(
             m_catalogDb, m_catalogScopeEpoch);
         if (m_downloadManager)

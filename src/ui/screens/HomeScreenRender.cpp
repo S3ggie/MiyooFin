@@ -151,6 +151,8 @@ std::string HomeScreen::syncStatusText() const
 {
     if (!activeTabNamed("Home") && !activeTabNamed("Movies") && !activeTabNamed("Shows"))
         return "";
+    if (m_homeSyncActive)
+        return homeSyncStatus(true);
     return librarySyncStatus(m_activeTab,m_haveCachedSnapshot,
         m_libraryOffline || m_hierarchyOffline.load(),m_syncSchedule.inFlight,
         m_syncSchedule.hasSucceeded,{m_hierarchyCompleted.load(),m_hierarchyTotal.load()},

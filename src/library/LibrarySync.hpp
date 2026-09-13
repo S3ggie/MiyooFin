@@ -2,6 +2,7 @@
 #define MIYOOFIN_LIBRARY_SYNC_HPP
 
 #include "../catalog/CatalogDb.hpp"
+#include "../net/JellyfinLibraryEvents.hpp"
 #include "../net/Session.hpp"
 #include <atomic>
 #include <cstddef>
@@ -13,7 +14,6 @@
 #include <vector>
 
 namespace miyoofin {
-struct JellyfinLibraryChangeBatch;
 namespace library {
 
 struct OfflineRebuildResult {
@@ -67,6 +67,8 @@ struct LiveLibraryChangeResult {
     std::size_t itemsFetched = 0;
     std::size_t itemsUpserted = 0;
     std::size_t itemsRemoved = 0;
+    std::vector<MediaItem> items;
+    std::vector<std::string> removedIds;
 };
 
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
@@ -103,6 +105,10 @@ public:
     std::future<LiveLibraryChangeResult> applyLibraryChanges(
         const JellyfinLibraryChangeBatch &batch,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    /// Start the long-lived Jellyfin event receiver. The receiver only owns
+    /// its bounded queue; all catalog writes remain in LibrarySync methods.
+    void startLiveEvents();
+    bool takeLiveChange(JellyfinLibraryChangeBatch &batch);
     std::future<CatalogDbReconcileResult> reconcileSeries(
         const std::vector<MediaItem> &series, bool authoritative,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
@@ -131,6 +137,10 @@ private:
     mutable std::mutex m_offlineMutex;
     std::atomic<bool> m_inFlight{false};
     std::atomic<bool> m_success{false};
+    std::shared_ptr<JellyfinLibraryEventQueue> m_liveEventQueue;
+    std::shared_ptr<std::atomic_bool> m_liveEventCancellation;
+    std::thread m_liveEventThread;
+    mutable std::mutex m_liveEventMutex;
 };
 
 }

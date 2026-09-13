@@ -14,6 +14,7 @@
 #include "../../catalog/CatalogDb.hpp"
 #include "../../library/LibrarySync.hpp"
 #include "../../library/LibraryQuery.hpp"
+#include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
 #include "../HomeSettingsModel.hpp"
@@ -300,6 +301,45 @@ private:
     Uint32 m_downloadRefreshTimer = 0;
     void startDownloadRefresh();
     void finishDownloadRefresh();
+
+    // Live catalog changes are received by LibrarySync and applied here only
+    // after their worker-owned synchronization has completed.
+    std::thread m_liveChangeThread;
+    std::atomic<bool> m_liveChangeDone{false};
+    bool m_liveChangeInFlight = false;
+    std::mutex m_liveChangeMutex;
+    std::shared_ptr<std::atomic_bool> m_liveChangeCancellation;
+    JellyfinLibraryChangeBatch m_liveChangeBatch;
+    library::LiveLibraryChangeResult m_liveChangeResult;
+    std::int64_t m_lastSafetyReconcileMs = 0;
+    std::thread m_safetyReconcileThread;
+    std::atomic<bool> m_safetyReconcileDone{false};
+    bool m_safetyReconcileInFlight = false;
+    std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
+    bool m_homeSyncActive = false;
+    std::string m_safetyReconcileError;
+    std::thread m_homeRailRefreshThread;
+    std::atomic<bool> m_homeRailRefreshDone{false};
+    bool m_homeRailRefreshInFlight = false;
+    bool m_homeRailRefreshSucceeded = false;
+    bool m_homeRailContinueValid = false;
+    bool m_homeRailRecentValid = false;
+    std::shared_ptr<std::atomic_bool> m_homeRailRefreshCancellation;
+    std::vector<MediaItem> m_homeRailContinueWatching;
+    std::vector<MediaItem> m_homeRailRecentlyAdded;
+    std::string m_homeRailRefreshError;
+
+    void updateLiveLibraryChanges();
+    void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch);
+    void finishLiveChangeApply();
+    bool liveChangeAffectsHome(
+        const JellyfinLibraryChangeBatch &batch,
+        const library::LiveLibraryChangeResult &result) const;
+    void publishLiveCatalogItems(const library::LiveLibraryChangeResult &result);
+    void startHomeRailRefresh();
+    void finishHomeRailRefresh();
+    void startSafetyReconcile();
+    void finishSafetyReconcile();
 
     // Helpers
     const TabData &currentTab() const;

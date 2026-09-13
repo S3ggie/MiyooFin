@@ -2,8 +2,14 @@
 #include "../../net/RouteStatus.hpp"
 #include "../../app/UiDiagnostics.hpp"
 #include <cstdio>
+#include <ctime>
 
 namespace miyoofin {
+
+static std::int64_t homeWallClockMs()
+{
+    return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+}
 
 HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<DownloadManager> downloads,
@@ -48,6 +54,12 @@ HomeScreen::~HomeScreen()
         m_resumeRefreshThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
+    if (m_liveChangeThread.joinable())
+        m_liveChangeThread.join();
+    if (m_safetyReconcileThread.joinable())
+        m_safetyReconcileThread.join();
+    if (m_homeRailRefreshThread.joinable())
+        m_homeRailRefreshThread.join();
     { std::lock_guard<std::mutex> lock(m_hierarchyMutex);
       m_stopHierarchyWorker = true;
       if (m_catalogGenerationCancellation)
@@ -68,6 +80,12 @@ void HomeScreen::cancelAsyncWork() noexcept
     if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
     if (m_fetchCancellation) m_fetchCancellation->store(true);
+    if (m_liveChangeCancellation)
+        m_liveChangeCancellation->store(true);
+    if (m_safetyReconcileCancellation)
+        m_safetyReconcileCancellation->store(true);
+    if (m_homeRailRefreshCancellation)
+        m_homeRailRefreshCancellation->store(true);
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
         if (m_catalogGenerationCancellation)
@@ -179,6 +197,16 @@ void HomeScreen::update(Uint32 dt)
     if (m_loadState == LoadState::Ready && m_resumeRefreshDone) {
         UiDiagnostics::Scope scope("HomeScreen::publishResumeResult");
         finishResumeRefresh();
+    }
+    if (m_loadState == LoadState::Ready) {
+        if (m_liveChangeDone.load()) finishLiveChangeApply();
+        updateLiveLibraryChanges();
+        if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
+        if (m_safetyReconcileDone.load()) finishSafetyReconcile();
+        if (!m_session.manualOfflineMode && m_lastSafetyReconcileMs > 0
+            && homeWallClockMs() - m_lastSafetyReconcileMs
+                >= 24LL * 60 * 60 * 1000)
+            startSafetyReconcile();
     }
     if (m_loadState == LoadState::Ready)
         updateMediaPaging();

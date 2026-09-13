@@ -73,7 +73,16 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
         error = buf;
         return false;
     }
+    const std::string rawItems = jsonRawValue(response.body, "Items");
+    if (rawItems.empty() || rawItems.front() != '[') {
+        error = "Malformed library views response";
+        return false;
+    }
     auto itemStrs = jsonExtractArray(response.body, "Items");
+    if (itemStrs.empty() && rawItems != "[]") {
+        error = "Malformed library views response";
+        return false;
+    }
     for (const auto &s : itemStrs) {
         LibraryView v;
         v.id             = jsonStringField(s, "Id");
@@ -170,7 +179,17 @@ bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
     page.startIndex = jsonIntField(response.body, "StartIndex");
     if (page.startIndex == 0 && startIndex != 0) page.startIndex = startIndex;
     page.totalRecordCount = jsonIntField(response.body, "TotalRecordCount");
-    for (const auto &raw : jsonExtractArray(response.body, "Items"))
+    const std::string rawItems = jsonRawValue(response.body, "Items");
+    if (rawItems.empty() || rawItems.front() != '[') {
+        error = "Malformed library page response";
+        return false;
+    }
+    const auto itemStrings = jsonExtractArray(response.body, "Items");
+    if (itemStrings.empty() && rawItems != "[]") {
+        error = "Malformed library page response";
+        return false;
+    }
+    for (const auto &raw : itemStrings)
         page.items.push_back(jsonToMediaItem(raw));
     page.hasMore = page.startIndex + static_cast<int>(page.items.size()) < page.totalRecordCount;
     std::printf("[JellyfinApi] library_page_success start=%d count=%zu total=%d more=%d\n",

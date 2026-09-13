@@ -3,6 +3,7 @@
 #include "../download/DownloadStore.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
+#include <algorithm>
 #include <cerrno>
 #include <ctime>
 #include <future>
@@ -306,6 +307,161 @@ library::LibrarySync::catchUpChangedCatalog(
             }
             result.success = true;
             result.checkpointMs = checkpoint.lastSuccessfulMs;
+            return result;
+        });
+}
+
+std::future<library::MembershipReconcileResult>
+library::LibrarySync::reconcileAuthoritativeMembership(
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    const Session session = m_session;
+    const auto db = m_db;
+    const CatalogDbJobMetadata metadata = m_metadata;
+    const auto serviceCancellation = m_cancel;
+    const auto operationCancellation = cancellation;
+    const std::uint64_t generation = nextGeneration();
+    return std::async(std::launch::async,
+        [session, db, metadata, serviceCancellation, operationCancellation,
+         generation] {
+            MembershipReconcileResult result;
+            const auto effectiveCancellation = operationCancellation
+                ? operationCancellation : serviceCancellation;
+            const auto cancelled = [&] {
+                return effectiveCancellation && effectiveCancellation->load();
+            };
+            if (!db) {
+                result.error = CatalogDbErrorCategory::ScopeNotReady;
+                result.message = "CatalogDb service is unavailable";
+                return result;
+            }
+            if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "membership reconciliation cancelled";
+                return result;
+            }
+
+            std::vector<LibraryView> views;
+            std::string error;
+            const bool viewsOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getViews(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, views, error,
+                        effectiveCancellation
+                            ? effectiveCancellation.get() : nullptr);
+                }, error);
+            if (!viewsOk) {
+                result.cancelled = cancelled();
+                result.error = result.cancelled
+                    ? CatalogDbErrorCategory::Superseded
+                    : CatalogDbErrorCategory::None;
+                result.message = error;
+                return result;
+            }
+            views.erase(std::remove_if(views.begin(), views.end(),
+                                       [](const LibraryView &view) {
+                                           return view.collectionType != "movies"
+                                               && view.collectionType != "tvshows";
+                                       }), views.end());
+            if (views.empty()) {
+                result.error = CatalogDbErrorCategory::ConfigurationFailed;
+                result.message = "No supported library views returned";
+                return result;
+            }
+
+            const auto begin = db->beginTopLevelSync(generation, metadata).get();
+            if (!begin.success) {
+                result.error = begin.error;
+                result.message = begin.message;
+                result.superseded = begin.error == CatalogDbErrorCategory::Superseded;
+                return result;
+            }
+            auto abort = [&] {
+                const auto ignored = db->abortTopLevelSync(generation, metadata).get();
+                (void)ignored;
+            };
+            const auto fail = [&](bool wasCancelled, const std::string &message,
+                                 CatalogDbErrorCategory category) {
+                abort();
+                result.cancelled = wasCancelled;
+                result.error = category;
+                result.message = message;
+                return result;
+            };
+
+            for (std::size_t viewOrdinal = 0; viewOrdinal < views.size();
+                 ++viewOrdinal) {
+                const auto &view = views[viewOrdinal];
+                const std::string types = view.collectionType == "tvshows"
+                    ? "Series" : "Movie";
+                int start = 0;
+                for (;;) {
+                    if (cancelled())
+                        return fail(true, "membership reconciliation cancelled",
+                                    CatalogDbErrorCategory::Superseded);
+                    LibraryItemsPage page;
+                    error.clear();
+                    const bool pageOk = RouteRequest(session).run(
+                        [&](const std::string &base) {
+                            return JellyfinApi::getLibraryItemsPage(
+                                base, session.accessToken, session.userId,
+                                session.deviceId, view.id, types, start, 100,
+                                page, error,
+                                effectiveCancellation
+                                    ? effectiveCancellation.get() : nullptr);
+                        }, error);
+                    if (!pageOk)
+                        return fail(cancelled(), error,
+                                    cancelled()
+                                        ? CatalogDbErrorCategory::Superseded
+                                        : CatalogDbErrorCategory::None);
+                    if (page.hasMore && page.items.empty())
+                        return fail(false, "authoritative membership page made no progress",
+                                    CatalogDbErrorCategory::ConfigurationFailed);
+
+                    CatalogDbMediaPageWrite write;
+                    write.items = std::move(page.items);
+                    write.viewId = view.id;
+                    write.viewName = view.name;
+                    write.collectionType = view.collectionType;
+                    write.ordinalStart = static_cast<std::size_t>(start);
+                    write.viewOrdinal = static_cast<int>(viewOrdinal);
+                    write.syncGeneration = generation;
+                    write.finalPage = !page.hasMore;
+                    CatalogDbJobMetadata writeMetadata = metadata;
+                    writeMetadata.cancellation = effectiveCancellation;
+                    const auto staged = db->upsertMediaPage(write, writeMetadata).get();
+                    if (!staged.success)
+                        return fail(staged.cancelled || cancelled(), staged.message,
+                                    staged.error);
+                    ++result.pagesRead;
+                    result.itemsStaged += staged.rowsWritten;
+                    if (!page.hasMore)
+                        break;
+                    const int next = page.startIndex
+                        + static_cast<int>(staged.rowsWritten);
+                    if (next <= start)
+                        return fail(false, "authoritative membership page made no progress",
+                                    CatalogDbErrorCategory::ConfigurationFailed);
+                    start = next;
+                }
+            }
+
+            if (cancelled())
+                return fail(true, "membership reconciliation cancelled",
+                            CatalogDbErrorCategory::Superseded);
+            const auto finalized = db->finalizeTopLevelSync(
+                generation, metadata).get();
+            if (!finalized.success) {
+                result.error = finalized.error;
+                result.message = finalized.message;
+                result.superseded = finalized.superseded;
+                return result;
+            }
+            result.success = true;
+            result.generation = generation;
             return result;
         });
 }

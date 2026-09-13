@@ -37,6 +37,18 @@ struct ShowsSyncProgress {
     }
 };
 
+inline bool homeChangeNeedsPublication(bool catchUpRequired,
+                                       bool catalogItemAffectsHome,
+                                       bool cachedHomeItemRemoved)
+{
+    return catchUpRequired || catalogItemAffectsHome || cachedHomeItemRemoved;
+}
+
+inline const char *homeSyncStatus(bool active)
+{
+    return active ? "HOME SYNCING..." : "";
+}
+
 inline std::string librarySyncStatus(int tab, bool haveCache, bool offline,
                                      bool metadataActive, bool syncSucceeded,
                                      const ShowsSyncProgress &shows={}, bool hierarchyActive=false,

@@ -36,7 +36,11 @@ library::LibrarySync::LibrarySync(Session session, std::shared_ptr<CatalogDb> db
     m_metadata.cancellation = m_cancel;
 }
 }
-library::LibrarySync::~LibrarySync() { cancel(); }
+library::LibrarySync::~LibrarySync()
+{
+    cancel();
+    if (m_liveEventThread.joinable()) m_liveEventThread.join();
+}
 std::uint64_t library::LibrarySync::nextGeneration() { return ++m_generation; }
 std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::begin(std::uint64_t generation) {
     m_inFlight = true; m_success = false;
@@ -550,6 +554,7 @@ library::LibrarySync::applyLibraryChanges(
             result.itemsFetched = items.size();
             std::set<std::string> returnedIds;
             for (const auto &item : items) returnedIds.insert(item.id);
+            result.items = items;
             CatalogDbJobMetadata writeMetadata = metadata;
             writeMetadata.cancellation = effectiveCancellation;
             if (!items.empty()) {
@@ -590,6 +595,7 @@ library::LibrarySync::applyLibraryChanges(
                     return result;
                 }
                 result.itemsRemoved = removals.size();
+                result.removedIds = removals;
             }
             result.success = true;
             return result;
@@ -763,6 +769,33 @@ library::LibrarySync::reconstructOfflineDownloads(
             return result;
         });
 }
+void library::LibrarySync::startLiveEvents()
+{
+    std::lock_guard<std::mutex> lock(m_liveEventMutex);
+    if (m_liveEventThread.joinable() || !m_session.valid()
+        || m_session.manualOfflineMode)
+        return;
+    m_liveEventQueue = std::make_shared<JellyfinLibraryEventQueue>();
+    m_liveEventCancellation = std::make_shared<std::atomic_bool>(false);
+    const Session session = m_session;
+    const auto queue = m_liveEventQueue;
+    const auto cancellation = m_liveEventCancellation;
+    m_liveEventThread = std::thread([session, queue, cancellation] {
+        JellyfinLibraryEvents events(session);
+        (void)events.run(*queue, cancellation);
+    });
+}
+
+bool library::LibrarySync::takeLiveChange(JellyfinLibraryChangeBatch &batch)
+{
+    std::shared_ptr<JellyfinLibraryEventQueue> queue;
+    {
+        std::lock_guard<std::mutex> lock(m_liveEventMutex);
+        queue = m_liveEventQueue;
+    }
+    return queue && queue->pop(batch);
+}
+
 library::LibrarySync::Status library::LibrarySync::status() const {
     return {m_inFlight.load(), m_generation.load(), m_success.load()};
 }
@@ -770,6 +803,11 @@ void library::LibrarySync::cancel() noexcept
 {
     if (m_cancel)
         m_cancel->store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_liveEventMutex);
+        if (m_liveEventCancellation)
+            m_liveEventCancellation->store(true);
+    }
     std::lock_guard<std::mutex> lock(m_offlineMutex);
     if (m_offlineCancellation)
         m_offlineCancellation->store(true);

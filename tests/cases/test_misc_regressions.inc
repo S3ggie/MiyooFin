@@ -1,5 +1,25 @@
 #include "../../src/net/JellyfinLibraryEvents.hpp"
 
+static void testHomeIncrementalPublicationPolicy()
+{
+    std::printf("[test] Home incremental publication policy\n");
+    CHECK(homeChangeNeedsPublication(false, true, false));
+    CHECK(homeChangeNeedsPublication(false, false, true));
+    CHECK(homeChangeNeedsPublication(true, false, false));
+    CHECK(!homeChangeNeedsPublication(false, false, false));
+    CHECK_EQ(std::string(homeSyncStatus(true)), "HOME SYNCING...");
+    CHECK_EQ(std::string(homeSyncStatus(false)), "");
+    const std::string render = readTestBytes("src/ui/screens/HomeScreenRender.cpp");
+    CHECK(render.find("homeSyncStatus(true)") != std::string::npos);
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(sync.find("updateLiveLibraryChanges()") != std::string::npos);
+    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
+    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
+    CHECK(sync.find("m_lastSafetyReconcileMs") != std::string::npos);
+    CHECK(sync.find("m_cachedSnapshot.continueWatching") != std::string::npos);
+    std::printf("[test] Home incremental publication policy OK\n");
+}
+
 static void testLibraryChangedEventQueueAndReconnectPolicy()
 {
     std::printf("[test] LibraryChanged queue and reconnect policy\n");
@@ -400,6 +420,7 @@ static void testHomeUsesSharedDownIntentAcrossPageLoads()
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
+    testHomeIncrementalPublicationPolicy();
     testLibraryChangedEventQueueAndReconnectPolicy();
     testBoundedPagePosterPlanning();
     testHomeRailPosterPlanning();

@@ -227,6 +227,277 @@ void HomeScreen::updateMediaPaging()
     }
 }
 
+void HomeScreen::updateLiveLibraryChanges()
+{
+    if (!m_librarySync || presentationOffline()) return;
+    if (m_liveChangeThread.joinable()) {
+        if (m_liveChangeDone.load()) finishLiveChangeApply();
+        return;
+    }
+    JellyfinLibraryChangeBatch batch;
+    if (m_librarySync->takeLiveChange(batch))
+        startLiveChangeApply(batch);
+}
+
+void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
+{
+    if (m_liveChangeThread.joinable()) return;
+    m_liveChangeBatch = batch;
+    m_liveChangeResult = {};
+    m_liveChangeDone.store(false);
+    m_liveChangeInFlight = true;
+    m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
+    const auto sync = m_librarySync;
+    const auto cancellation = m_liveChangeCancellation;
+    const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
+    m_liveChangeThread = std::thread(
+        [this, sync, batch, cancellation, checkpointMs] {
+            library::LiveLibraryChangeResult result;
+            if (batch.catchUpRequired) {
+                if (checkpointMs > 0) {
+                    const auto catchUp = sync->catchUpChangedCatalog(
+                        checkpointMs, cancellation).get();
+                    if (!catchUp.success) {
+                        result.cancelled = catchUp.cancelled;
+                        result.superseded = catchUp.superseded;
+                        result.error = catchUp.error;
+                        result.message = catchUp.message;
+                        result.catchUpRequired = !catchUp.cancelled
+                            && !catchUp.superseded;
+                        m_liveChangeResult = std::move(result);
+                        m_liveChangeDone.store(true);
+                        return;
+                    }
+                }
+                const auto reconciled = sync->reconcileAuthoritativeMembership(
+                    cancellation).get();
+                if (!reconciled.success) {
+                    result.cancelled = reconciled.cancelled;
+                    result.superseded = reconciled.superseded;
+                    result.error = reconciled.error;
+                    result.message = reconciled.message;
+                    result.catchUpRequired = !reconciled.cancelled
+                        && !reconciled.superseded;
+                    m_liveChangeResult = std::move(result);
+                    m_liveChangeDone.store(true);
+                    return;
+                }
+            }
+            result = sync->applyLibraryChanges(batch, cancellation).get();
+            m_liveChangeResult = std::move(result);
+            m_liveChangeDone.store(true);
+        });
+}
+
+bool HomeScreen::liveChangeAffectsHome(
+    const JellyfinLibraryChangeBatch &batch,
+    const library::LiveLibraryChangeResult &result) const
+{
+    bool catalogItemAffectsHome = false;
+    for (const auto &item : result.items)
+        if (item.type == "movie" || item.type == "show") {
+            catalogItemAffectsHome = true;
+            break;
+        }
+
+    const auto contains = [](const std::vector<MediaItem> &items,
+                             const std::string &id) {
+        return std::find_if(items.begin(), items.end(),
+                            [&](const MediaItem &item) {
+                                return item.id == id;
+                            }) != items.end();
+    };
+    const auto cachedHomeItem = [&](const std::string &id) {
+        return contains(m_cachedSnapshot.continueWatching, id)
+            || contains(m_cachedSnapshot.recentlyAdded, id)
+            || contains(m_movieWindow, id)
+            || contains(m_showWindow, id)
+            || contains(m_animeWindow, id);
+    };
+    bool cachedHomeItemRemoved = false;
+    for (const auto &id : result.removedIds)
+        if (cachedHomeItem(id)) {
+            cachedHomeItemRemoved = true;
+            break;
+        }
+    return homeChangeNeedsPublication(batch.catchUpRequired,
+                                      catalogItemAffectsHome,
+                                      cachedHomeItemRemoved);
+}
+
+void HomeScreen::publishLiveCatalogItems(
+    const library::LiveLibraryChangeResult &result)
+{
+    const auto replace = [&](std::vector<MediaItem> &items,
+                             const MediaItem &changed) {
+        for (auto &item : items) {
+            if (item.id == changed.id) {
+                item = changed;
+                return;
+            }
+        }
+    };
+    const auto remove = [](std::vector<MediaItem> &items,
+                           const std::string &id) {
+        items.erase(std::remove_if(items.begin(), items.end(),
+                                   [&](const MediaItem &item) {
+                                       return item.id == id;
+                                   }),
+                    items.end());
+    };
+    for (const auto &item : result.items) {
+        if (item.type == "movie") replace(m_movieWindow, item);
+        if (item.type == "show") {
+            replace(m_showWindow, item);
+            replace(m_animeWindow, item);
+        }
+    }
+    for (const auto &id : result.removedIds) {
+        remove(m_movieWindow, id);
+        remove(m_showWindow, id);
+        remove(m_animeWindow, id);
+    }
+    refreshMovieFilter();
+    rebuildShowsPresentation();
+}
+
+void HomeScreen::finishLiveChangeApply()
+{
+    if (!m_liveChangeThread.joinable()) return;
+    m_liveChangeThread.join();
+    m_liveChangeDone.store(false);
+    m_liveChangeInFlight = false;
+    const auto batch = m_liveChangeBatch;
+    const auto result = m_liveChangeResult;
+    m_liveChangeCancellation.reset();
+    if (result.success && liveChangeAffectsHome(batch, result)) {
+        publishLiveCatalogItems(result);
+        m_homeSyncActive = true;
+        startHomeRailRefresh();
+    }
+}
+
+void HomeScreen::startHomeRailRefresh()
+{
+    if (m_homeRailRefreshInFlight) return;
+    if (m_homeRailRefreshThread.joinable())
+        m_homeRailRefreshThread.join();
+    m_homeRailRefreshDone.store(false);
+    m_homeRailRefreshInFlight = true;
+    m_homeRailRefreshSucceeded = false;
+    m_homeRailContinueValid = false;
+    m_homeRailRecentValid = false;
+    m_homeRailContinueWatching.clear();
+    m_homeRailRecentlyAdded.clear();
+    m_homeRailRefreshError.clear();
+    m_homeRailRefreshCancellation = std::make_shared<std::atomic_bool>(false);
+    const Session session = m_session;
+    const auto cancellation = m_homeRailRefreshCancellation;
+    m_homeRailRefreshThread = std::thread(
+        [this, session, cancellation] {
+            std::vector<MediaItem> continueWatching;
+            std::vector<MediaItem> recentlyAdded;
+            std::string continueError;
+            std::string recentError;
+            const bool continueOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getResumeItems(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, 12, continueWatching, continueError,
+                        cancellation.get());
+                }, continueError);
+            const bool recentOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getLatestItems(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, 16, recentlyAdded, recentError,
+                        cancellation.get());
+                }, recentError);
+            if (continueOk) {
+                m_homeRailContinueWatching = std::move(continueWatching);
+                m_homeRailContinueValid = true;
+            }
+            if (recentOk) {
+                m_homeRailRecentlyAdded = std::move(recentlyAdded);
+                m_homeRailRecentValid = true;
+            }
+            m_homeRailRefreshSucceeded = continueOk || recentOk;
+            if (!continueOk) m_homeRailRefreshError = continueError;
+            else if (!recentOk) m_homeRailRefreshError = recentError;
+            m_homeRailRefreshDone.store(true);
+        });
+}
+
+void HomeScreen::finishHomeRailRefresh()
+{
+    if (!m_homeRailRefreshThread.joinable()) return;
+    m_homeRailRefreshThread.join();
+    m_homeRailRefreshDone.store(false);
+    m_homeRailRefreshInFlight = false;
+    if (m_homeRailRefreshSucceeded) {
+        if (m_homeRailContinueValid) {
+            updateContinueWatchingRow(m_tabs, m_homeRailContinueWatching);
+            m_cachedSnapshot.continueWatching = m_homeRailContinueWatching;
+        }
+        if (m_homeRailRecentValid) {
+            updateRecentlyAddedRow(m_tabs, m_homeRailRecentlyAdded);
+            m_cachedSnapshot.recentlyAdded = m_homeRailRecentlyAdded;
+        }
+        queuePosterJobs(planHomeRailPosterJobs(
+            m_homeRailContinueWatching, m_homeRailRecentlyAdded), true);
+    } else if (!m_homeRailRefreshError.empty()) {
+        std::printf("[HomeScreen] live Home rail refresh failed: %s\n",
+                    m_homeRailRefreshError.c_str());
+    }
+    m_homeRailRefreshCancellation.reset();
+    m_homeSyncActive = false;
+    clampNavigation();
+}
+
+void HomeScreen::startSafetyReconcile()
+{
+    if (m_safetyReconcileInFlight || !m_librarySync || presentationOffline())
+        return;
+    if (m_safetyReconcileThread.joinable())
+        m_safetyReconcileThread.join();
+    m_safetyReconcileDone.store(false);
+    m_safetyReconcileInFlight = true;
+    m_safetyReconcileError.clear();
+    m_safetyReconcileCancellation = std::make_shared<std::atomic_bool>(false);
+    const auto sync = m_librarySync;
+    const auto cancellation = m_safetyReconcileCancellation;
+    const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
+    m_safetyReconcileThread = std::thread(
+        [this, sync, cancellation, checkpointMs] {
+            if (checkpointMs > 0) {
+                const auto catchUp = sync->catchUpChangedCatalog(
+                    checkpointMs, cancellation).get();
+                if (!catchUp.success) {
+                    m_safetyReconcileError = catchUp.message;
+                    m_safetyReconcileDone.store(true);
+                    return;
+                }
+            }
+            const auto result = sync->reconcileAuthoritativeMembership(
+                cancellation).get();
+            if (!result.success) m_safetyReconcileError = result.message;
+            m_safetyReconcileDone.store(true);
+        });
+}
+
+void HomeScreen::finishSafetyReconcile()
+{
+    if (!m_safetyReconcileThread.joinable()) return;
+    m_safetyReconcileThread.join();
+    m_safetyReconcileDone.store(false);
+    m_safetyReconcileInFlight = false;
+    m_lastSafetyReconcileMs = wallClockMs();
+    if (!m_safetyReconcileError.empty())
+        std::printf("[HomeScreen] safety reconciliation failed: %s\n",
+                    m_safetyReconcileError.c_str());
+    m_safetyReconcileCancellation.reset();
+}
+
 static void makeMediaTabsBounded(std::vector<TabData> &tabs)
 {
     for (auto &tab : tabs) {
@@ -509,7 +780,7 @@ void HomeScreen::finishFetch()
                 publishedTabs = std::move(m_fetchResult);
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
-            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);m_lastSafetyReconcileMs=wallClockMs();uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;

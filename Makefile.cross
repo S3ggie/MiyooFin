@@ -36,6 +36,7 @@ SRCS := \
     src/main.cpp \
     src/app/App.cpp \
     src/app/AppSession.cpp \
+    src/app/AppPlayback.cpp \
     src/app/RemoteExitSignal.cpp \
     src/catalog/CatalogDb.cpp \
     src/catalog/CatalogDbWrite.cpp \

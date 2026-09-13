@@ -26,7 +26,7 @@ existing behavior or ownership model.
 
 ```
 src/
-  main.cpp, app/                 Application, ScreenStack, diagnostics
+  main.cpp, app/                 Application, AppSession/AppPlayback lifecycle units, ScreenStack, diagnostics
   input/                         SDL input polling and logical Actions
   ui/                            Shared UI, font, and Home pure-logic models
     HomeSyncState.hpp            Sync-state projection helpers
@@ -42,12 +42,33 @@ src/
     HomeScreenArtwork.cpp        Artwork/decode worker work
     HomeScreenHierarchy.cpp      Series/season hierarchy work
     HomeScreenSync.cpp           Library synchronization worker
+    HomeScreenOffline.cpp        Offline projection preparation/application
+    HomeScreenSyncApply.cpp      UI-thread sync result publication
     HomeScreenRefresh.cpp        Lightweight refresh work
     EpisodeBrowserScreen.cpp     EpisodeBrowserScreen lifecycle/core
     EpisodeBrowserRender.cpp     Episode rendering
     EpisodeBrowserArtwork.cpp    Artwork and bounded prefetch worker
     EpisodeBrowserPlayback.cpp   Playback handoff
     EpisodeBrowserDownloads.cpp  Download actions and planning
+    EpisodeBrowserData.cpp       Episode cache/network data preparation
+    SeriesScreen.cpp             Series lifecycle/update coordinator
+    SeriesScreenWorker.cpp       Series refresh/artwork workers
+    SeriesScreenNavigation.cpp   Series input and selection navigation
+    SeriesScreenRender.cpp       Series layout and rendering
+    MovieDetailsScreen.cpp       Movie lifecycle/input coordinator
+    MovieDetailsWorker.cpp       Movie artwork/data worker
+    MovieDetailsRender.cpp       Movie layout and rendering
+  catalog/
+    CatalogDb.cpp                Catalog worker/queue/lifecycle coordination
+    CatalogDbSchema.cpp          Schema/bootstrap/migration implementation
+    CatalogDbWrite.cpp           Catalog mutations and transactions
+    CatalogDbQuery.cpp           Bounded reads and row decoding
+    CatalogDbSyncState.cpp       Durable sync checkpoint state
+    CatalogDbHierarchy.cpp       Hierarchy persistence and reconciliation
+  library/
+    LibrarySync.cpp              Synchronization owner and orchestration
+    LibrarySyncIncremental.cpp  Incremental and authoritative changes
+    LibrarySyncEvents.cpp        Live event queue plumbing
   net/
     JellyfinApi.cpp              JellyfinApi core/coordinator
     JellyfinApiJson.cpp          JSON parsing and media conversion

@@ -104,6 +104,8 @@ SRCS        := \
     $(SRC_DIR)/ui/screens/HomeScreenNavigation.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenRefresh.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenSync.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenOffline.cpp \
+    $(SRC_DIR)/ui/screens/HomeScreenSyncApply.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenHierarchy.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenArtwork.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenSettings.cpp \
@@ -242,6 +244,8 @@ TEST_PROD_SRCS := \
                src/ui/screens/HomeScreenNavigation.cpp \
                src/ui/screens/HomeScreenRefresh.cpp \
                src/ui/screens/HomeScreenSync.cpp \
+               src/ui/screens/HomeScreenOffline.cpp \
+               src/ui/screens/HomeScreenSyncApply.cpp \
                src/ui/screens/HomeScreenHierarchy.cpp \
                src/ui/screens/HomeScreenArtwork.cpp \
                src/ui/screens/HomeScreenSettings.cpp \

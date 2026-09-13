@@ -1,3 +1,51 @@
+#include "../../src/net/JellyfinLibraryEvents.hpp"
+
+static void testLibraryChangedEventQueueAndReconnectPolicy()
+{
+    std::printf("[test] LibraryChanged queue and reconnect policy\n");
+    JellyfinLibraryEventQueue queue(3);
+    JellyfinLibraryChangeBatch first;
+    first.itemsAdded = {"same", "one"};
+    first.itemsUpdated = {"same"};
+    first.itemsRemoved = {"gone"};
+    CHECK(queue.push(first));
+    JellyfinLibraryChangeBatch overflow;
+    overflow.itemsAdded = {"extra"};
+    CHECK(!queue.push(overflow));
+    CHECK(queue.overflowed());
+
+    JellyfinLibraryChangeBatch result;
+    CHECK(queue.pop(result));
+    CHECK(result.itemsAdded.size() == 2);
+    CHECK(result.itemsUpdated.size() == 1 && result.itemsUpdated[0] == "same");
+    CHECK(result.itemsRemoved.size() == 1 && result.itemsRemoved[0] == "gone");
+    CHECK(!queue.pop(result));
+
+    JellyfinLibraryEvents::Backoff backoff(100, 800);
+    CHECK(backoff.nextDelayMs() == 100);
+    CHECK(JellyfinLibraryEvents::buildSocketUrl(
+        "https://server.example/base/", "a b", "device/id") ==
+        "wss://server.example/base/socket?api_key=a%20b&deviceId=device%2Fid");
+    CHECK(backoff.nextDelayMs() == 200);
+    CHECK(backoff.nextDelayMs() == 400);
+    CHECK(backoff.nextDelayMs() == 800);
+    CHECK(backoff.nextDelayMs() == 800);
+    backoff.reset();
+    CHECK(backoff.nextDelayMs() == 100);
+
+    std::atomic<bool> cancelled{true};
+    CHECK(JellyfinLibraryEvents::waitForRetry(cancelled, 1000) ==
+          JellyfinLibraryEventRun::Cancelled);
+    Session session;
+    session.serverUrl = "https://server.example";
+    session.accessToken = "token";
+    session.deviceId = "device";
+    JellyfinLibraryEvents events(session);
+    CHECK(events.run(queue, std::make_shared<std::atomic_bool>(true)) ==
+          JellyfinLibraryEventRun::Cancelled);
+    std::printf("[test] LibraryChanged queue and reconnect policy OK\n");
+}
+
 static void testRouteRequest()
 {
     std::printf("[test] LAN route selection and fallback\n");
@@ -352,6 +400,7 @@ static void testHomeUsesSharedDownIntentAcrossPageLoads()
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
+    testLibraryChangedEventQueueAndReconnectPolicy();
     testBoundedPagePosterPlanning();
     testHomeRailPosterPlanning();
     testInitialHomeArtworkScheduling();

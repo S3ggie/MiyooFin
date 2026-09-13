@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 namespace miyoofin {
+// Static startup timeline markers retained across the CatalogDb query split: read_media_page_dequeued, read_media_page_ready.
 using namespace catalog_db_internal;
 
 

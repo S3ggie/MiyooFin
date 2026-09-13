@@ -245,15 +245,15 @@ static void testPlaybackRequestStillWorks()
 
 static void testPlaybackRunnerInitializesOnionSdlDrivers()
 {
-    std::printf("[test] playback runner initializes Onion SDL drivers\n");
+    std::printf("[test] playback runner preserves Onion FFplay native SDL drivers\n");
     const std::string source = readTestBytes("distributions/onionos/playback_runner.sh");
-    CHECK(source.find("export SDL_VIDEODRIVER=mmiyoo") != std::string::npos);
-    CHECK(source.find("export SDL_AUDIODRIVER=mmiyoo") != std::string::npos);
+    CHECK(source.find("export SDL_VIDEODRIVER=mmiyoo") == std::string::npos);
+    CHECK(source.find("export SDL_AUDIODRIVER=mmiyoo") == std::string::npos);
     CHECK(source.find("unset SDL_VIDEODRIVER") != std::string::npos);
     CHECK(source.find("unset SDL_AUDIODRIVER") != std::string::npos);
     CHECK(source.find("MIYOOFIN_PLAYBACK_MODE") != std::string::npos);
     CHECK(source.find("MIYOOFIN_FFPLAY_BIN") != std::string::npos);
-    std::printf("[test] playback runner initializes Onion SDL drivers OK\n");
+    std::printf("[test] playback runner preserves Onion FFplay native SDL drivers OK\n");
 }
 
 static void testExternalPlaybackFullyReleasesSdlBeforeExec()

@@ -15,7 +15,10 @@ test_playback
 test_telemetry
 test_telemetry_format
 test_telemetry_service
-test_telemetry_schema'
+test_telemetry_schema
+test_catalog_parity_query
+test_catalog_parity_hierarchy
+test_catalog_parity_sync'
 pids=
 
 for test_binary in $TEST_BINARIES

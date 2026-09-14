@@ -356,6 +356,80 @@ static void testStartupReconcileSkip()
     std::printf("[test] startup reconcile skip predicate OK\n");
 }
 
+static void testReconcileShouldSkip()
+{
+    std::printf("[test] reconcileShouldSkip truth table\n");
+    constexpr std::uint64_t TTL = 24ULL * 60 * 60 * 1000;
+    constexpr std::uint64_t NOW_MS = 1000000ULL * 1000; // arbitrary monotonic anchor
+
+    // --- Non-Complete items never skip ---
+    DownloadItem queued; queued.itemId="q"; queued.state=DownloadState::Queued;
+    CHECK(!reconcileShouldSkip(queued, false, NOW_MS));
+    CHECK(!reconcileShouldSkip(queued, true,  NOW_MS));
+
+    DownloadItem dl; dl.itemId="d"; dl.state=DownloadState::Downloading;
+    CHECK(!reconcileShouldSkip(dl, false, NOW_MS));
+    CHECK(!reconcileShouldSkip(dl, true,  NOW_MS));
+
+    DownloadItem paused; paused.itemId="p"; paused.state=DownloadState::Paused;
+    CHECK(!reconcileShouldSkip(paused, false, NOW_MS));
+
+    DownloadItem failed; failed.itemId="f"; failed.state=DownloadState::Failed;
+    CHECK(!reconcileShouldSkip(failed, false, NOW_MS));
+
+    DownloadItem updateAvail; updateAvail.itemId="u"; updateAvail.state=DownloadState::UpdateAvailable;
+    CHECK(!reconcileShouldSkip(updateAvail, false, NOW_MS));
+
+    DownloadItem localOnly; localOnly.itemId="l"; localOnly.state=DownloadState::LocalOnly;
+    CHECK(!reconcileShouldSkip(localOnly, false, NOW_MS));
+
+    // --- Complete + startup pass → always skip ---
+    DownloadItem completeStartup; completeStartup.itemId="cs";
+    completeStartup.state=DownloadState::Complete;
+    CHECK(reconcileShouldSkip(completeStartup, true, NOW_MS));
+
+    // --- Complete + manual pass + never verified → check ---
+    DownloadItem completeNever; completeNever.itemId="cn";
+    completeNever.state=DownloadState::Complete;
+    completeNever.lastVerifiedMs=0;
+    CHECK(!reconcileShouldSkip(completeNever, false, NOW_MS));
+
+    // --- Complete + manual pass + recently verified → skip ---
+    DownloadItem completeRecent; completeRecent.itemId="cr";
+    completeRecent.state=DownloadState::Complete;
+    completeRecent.lastVerifiedMs=NOW_MS - 1000; // 1 second ago
+    CHECK(reconcileShouldSkip(completeRecent, false, NOW_MS));
+
+    // --- Complete + manual pass + verified exactly TTL-1 ms ago → skip ---
+    DownloadItem completeEdge; completeEdge.itemId="ce";
+    completeEdge.state=DownloadState::Complete;
+    completeEdge.lastVerifiedMs=NOW_MS - (TTL - 1);
+    CHECK(reconcileShouldSkip(completeEdge, false, NOW_MS));
+
+    // --- Complete + manual pass + verified exactly TTL ms ago → check ---
+    DownloadItem completeExpired; completeExpired.itemId="cx";
+    completeExpired.state=DownloadState::Complete;
+    completeExpired.lastVerifiedMs=NOW_MS - TTL;
+    CHECK(!reconcileShouldSkip(completeExpired, false, NOW_MS));
+
+    // --- Complete + manual pass + verified beyond TTL → check ---
+    DownloadItem completeOld; completeOld.itemId="co";
+    completeOld.state=DownloadState::Complete;
+    completeOld.lastVerifiedMs=NOW_MS - TTL - 1;
+    CHECK(!reconcileShouldSkip(completeOld, false, NOW_MS));
+
+    // --- Failed check still records timestamp, next entry skipped ---
+    DownloadItem completeFailed; completeFailed.itemId="cf";
+    completeFailed.state=DownloadState::Complete;
+    completeFailed.lastVerifiedMs=0;
+    CHECK(!reconcileShouldSkip(completeFailed, false, NOW_MS));
+    // Simulate recording the attempt
+    completeFailed.lastVerifiedMs=NOW_MS;
+    CHECK(reconcileShouldSkip(completeFailed, false, NOW_MS));
+
+    std::printf("[test] reconcileShouldSkip truth table OK\n");
+}
+
 static void testCatalogDbHierarchyPlanning()
 {
     std::printf("[test] DownloadManager shared hierarchy policy\n");

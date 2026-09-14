@@ -10,5 +10,6 @@ int main()
     testHomeSyncSchedule(); testShowsSyncProgress(); testHomeSyncStatusStrings();
     testHomeSettingsModel(); testHomeTabsProjection(); testHomeTabRowUpdates();
     testTransitionTabIndex(); testHomeArtworkPlan();
+    testColdStartPopulationProducesNonEmptyTabs();
     return miyoofin_test::finish("ui-models");
 }

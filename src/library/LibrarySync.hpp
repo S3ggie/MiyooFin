@@ -137,6 +137,7 @@ private:
     mutable std::mutex m_offlineMutex;
     std::atomic<bool> m_inFlight{false};
     std::atomic<bool> m_success{false};
+    std::atomic<bool> m_authoritativeSyncInFlight{false};
     std::shared_ptr<JellyfinLibraryEventQueue> m_liveEventQueue;
     std::shared_ptr<std::atomic_bool> m_liveEventCancellation;
     std::thread m_liveEventThread;

@@ -202,7 +202,7 @@ RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
-TEST_GROUPS := catalog api_session ui_foundation cache_offline \
+TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
@@ -313,6 +313,7 @@ output/test/test_api_core: tests/cases/test_api_core.inc
 output/test/test_api_events: tests/cases/test_api_events.inc
 output/test/test_session: tests/cases/test_session.inc
 output/test/test_ui_foundation: tests/cases/test_ui_foundation.inc
+output/test/test_ui_models: tests/cases/test_ui_models.inc
 output/test/test_cache_offline: tests/cases/test_cache_offline.inc
 output/test/test_artwork_episode: tests/cases/test_artwork_episode.inc
 output/test/test_downloads: tests/cases/test_downloads.inc

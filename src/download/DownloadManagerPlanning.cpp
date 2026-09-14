@@ -4,7 +4,7 @@
 #include "../library/LibraryQuery.hpp"
 #include "../library/LibrarySync.hpp"
 #include "DownloadSupport.hpp"
-#include "../app/UiDiagnostics.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
 
 namespace miyoofin {

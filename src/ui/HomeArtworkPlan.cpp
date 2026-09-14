@@ -1,5 +1,5 @@
 #include "HomeArtworkPlan.hpp"
-#include "TitleOrganization.hpp"
+#include "../data/TitleOrganization.hpp"
 #include <set>
 #include <algorithm>
 

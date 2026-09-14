@@ -2,7 +2,7 @@
 #include "../ui/screens/HomeScreen.hpp"
 #include "../ui/screens/LoginScreen.hpp"
 #include "../net/RouteRequest.hpp"
-#include "UiDiagnostics.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
 #include <cstdio>
 #include <cstring>
 #include <thread>

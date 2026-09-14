@@ -1,6 +1,6 @@
 #include "HomeScreen.hpp"
 #include "../../app/ScreenStack.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../../download/DownloadSupport.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"

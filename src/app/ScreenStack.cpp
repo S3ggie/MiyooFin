@@ -1,5 +1,5 @@
 #include "ScreenStack.hpp"
-#include "UiDiagnostics.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #endif

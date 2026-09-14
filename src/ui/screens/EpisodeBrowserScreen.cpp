@@ -1,7 +1,7 @@
 #include "EpisodeBrowserScreen.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include <algorithm>

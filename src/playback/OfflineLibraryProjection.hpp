@@ -1,9 +1,9 @@
 #ifndef MIYOOFIN_OFFLINE_LIBRARY_PROJECTION_HPP
 #define MIYOOFIN_OFFLINE_LIBRARY_PROJECTION_HPP
 
-#include "LibraryCache.hpp"
-#include "OfflineCatalog.hpp"
-#include "../download/DownloadManager.hpp"
+#include "../cache/LibraryCache.hpp"
+#include "../cache/OfflineCatalog.hpp"
+#include "../download/DownloadTypes.hpp"
 #include <map>
 #include <set>
 

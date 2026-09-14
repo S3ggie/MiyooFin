@@ -7,7 +7,7 @@
 #include <limits>
 #include <algorithm>
 #include <cstdio>
-#include "HlsProfile.hpp"
+#include "../net/HlsProfile.hpp"
 
 namespace miyoofin {
 constexpr std::uint64_t DOWNLOAD_CHUNK_SIZE = 512ULL * 1024ULL * 1024ULL;
@@ -82,6 +82,9 @@ struct DownloadItem {
     DownloadState state=DownloadState::Queued;
     bool localOnly=false, updateAvailable=false, externalSubtitles=false;
 };
+// Main-thread-safe view of the reconciled download index.  Consumed by
+// library/playback projections without depending on the DownloadManager facade.
+struct DownloadSnapshot { std::vector<DownloadItem> items; std::uint64_t freeBytes=0, reservedBytes=0, localBytes=0; bool playbackActive=false; };
 struct DownloadPlan { std::vector<DownloadItem> items; std::uint64_t totalSourceBytes=0, alreadyPresentBytes=0, additionalRequiredBytes=0, filesystemFreeBytes=0, alreadyReservedBytes=0, usableFreeBytes=0; bool sizeKnown=false, canFit=false; std::string error; };
 struct DownloadPlanSnapshot { std::uint64_t id=0; DownloadPlanState state=DownloadPlanState::Idle; std::size_t itemCount=0; DownloadPlan plan; };
 inline std::uint64_t remainingBytes(const DownloadItem &i) { return i.downloadedBytes >= i.expectedSize ? 0 : i.expectedSize-i.downloadedBytes; }

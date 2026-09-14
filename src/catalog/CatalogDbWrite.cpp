@@ -131,17 +131,6 @@ CatalogDb::reconcileSeasonHierarchy(
         series, {season}, {{season.id, episodes}}, generation, refreshMs,
         false, true, metadata, -1, -1);
 }
-std::future<CatalogDbHierarchyWriteResult>
-CatalogDb::upsertSeriesHierarchyForTest(
-    const MediaItem &series, const std::vector<MediaItem> &seasons,
-    const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-    std::uint64_t generation, std::int64_t refreshMs, int failAfterRows,
-    int cancelAfterRows)
-{
-    return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, true, false, {}, failAfterRows,
-                                 cancelAfterRows);
-}
 std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
     const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
@@ -207,10 +196,6 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
 std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPage(
     const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata)
 { return enqueueMediaPageUpsert(page, metadata); }
-std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPageForTest(
-    const CatalogDbMediaPageWrite &page, int failAfterRows,
-    const CatalogDbJobMetadata &metadata)
-{ return enqueueMediaPageUpsert(page, metadata, failAfterRows); }
 std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
     const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
     int failAfterRows)

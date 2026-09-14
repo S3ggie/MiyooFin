@@ -40,10 +40,12 @@ public:
     static std::future<CatalogCompatibilitySeedResult> seedLibrarySnapshot(
         CatalogDb &db, const LibrarySnapshot &snapshot,
         const CatalogDbJobMetadata &metadata = {});
+#ifdef MIYOOFIN_TEST_BUILD
     static std::future<CatalogCompatibilitySeedResult>
     seedLibrarySnapshotForTest(CatalogDb &db, const LibrarySnapshot &snapshot,
                                int failAfterWrites,
                                const CatalogDbJobMetadata &metadata = {});
+#endif // MIYOOFIN_TEST_BUILD
     static std::future<CatalogCompatibilityReadResult> readLibrarySnapshot(
         CatalogDb &db, const CatalogDbJobMetadata &metadata = {});
 };

@@ -2,9 +2,9 @@
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
-#include "../MovieTitle.hpp"
+#include "../../data/MovieTitle.hpp"
 #include "../ShowsBrowser.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../BitmapFont.hpp"
 #include <algorithm>

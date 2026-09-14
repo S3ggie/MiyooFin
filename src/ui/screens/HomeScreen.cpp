@@ -1,6 +1,6 @@
 #include "HomeScreen.hpp"
 #include "../../net/RouteStatus.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include <cstdio>
 #include <ctime>
 

@@ -1,6 +1,6 @@
 #include "MovieDetailsScreen.hpp"
 #include "MovieDetailsScreenInternal.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../cache/ImageCache.hpp"

@@ -16,7 +16,6 @@ namespace library {
 class LibraryQuery;
 class LibrarySync;
 }
-struct DownloadSnapshot { std::vector<DownloadItem> items; std::uint64_t freeBytes=0, reservedBytes=0, localBytes=0; bool playbackActive=false; };
 // In-memory-only rolling transfer-rate samples.  Entries are recorded only
 // when bytes arrive, so short HLS gaps do not look like zero-speed transfers.
 struct RecentSpeedSample {

@@ -5,7 +5,7 @@
 #include <unistd.h>
 
 #include "../../vendor/sqlite/sqlite3.h"
-#include "../../src/catalog/CatalogPrimitives.hpp"
+#include "../../src/data/CatalogPrimitives.hpp"
 
 namespace {
 

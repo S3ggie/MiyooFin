@@ -57,6 +57,19 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
                            const std::atomic<bool> *cancelled)
 {
     HttpClient client;
+    return getViews(baseUrl, accessToken, userId, deviceId, views, error,
+                    client, cancelled);
+}
+
+bool JellyfinApi::getViews(const std::string &baseUrl,
+                           const std::string &accessToken,
+                           const std::string &userId,
+                           const std::string &deviceId,
+                           std::vector<LibraryView> &views,
+                           std::string &error,
+                           HttpClient &client,
+                           const std::atomic<bool> *cancelled)
+{
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
     std::string url = baseUrl + "/Users/" + userId + "/Views";
@@ -104,9 +117,26 @@ bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
                                       std::string &error,
                                       const std::atomic<bool> *cancelled)
 {
+    HttpClient client;
+    return getLibraryItemsPage(baseUrl, accessToken, userId, deviceId,
+                               parentId, includeItemTypes, startIndex, limit,
+                               page, error, client, cancelled);
+}
+
+bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
+                                      const std::string &accessToken,
+                                      const std::string &userId,
+                                      const std::string &deviceId,
+                                      const std::string &parentId,
+                                      const std::string &includeItemTypes,
+                                      int startIndex, int limit,
+                                      LibraryItemsPage &page,
+                                      std::string &error,
+                                      HttpClient &client,
+                                      const std::atomic<bool> *cancelled)
+{
     if (startIndex < 0 || limit <= 0) { error = "Invalid library page"; return false; }
     if (cancelled && cancelled->load()) { error = "Callback aborted"; return false; }
-    HttpClient client;
     client.setTimeoutSec(15);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::LibraryItemsPage);
@@ -330,6 +360,20 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
                                  const std::atomic<bool> *cancelled)
 {
     HttpClient client;
+    return getResumeItems(baseUrl, accessToken, userId, deviceId, limit,
+                          items, error, client, cancelled);
+}
+
+bool JellyfinApi::getResumeItems(const std::string &baseUrl,
+                                 const std::string &accessToken,
+                                 const std::string &userId,
+                                 const std::string &deviceId,
+                                 int limit,
+                                 std::vector<MediaItem> &items,
+                                 std::string &error,
+                                 HttpClient &client,
+                                 const std::atomic<bool> *cancelled)
+{
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
     char urlBuf[512];
@@ -379,6 +423,20 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
                                  const std::atomic<bool> *cancelled)
 {
     HttpClient client;
+    return getLatestItems(baseUrl, accessToken, userId, deviceId, limit,
+                          items, error, client, cancelled);
+}
+
+bool JellyfinApi::getLatestItems(const std::string &baseUrl,
+                                 const std::string &accessToken,
+                                 const std::string &userId,
+                                 const std::string &deviceId,
+                                 int limit,
+                                 std::vector<MediaItem> &items,
+                                 std::string &error,
+                                 HttpClient &client,
+                                 const std::atomic<bool> *cancelled)
+{
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
     std::string url = buildLatestUrl(baseUrl, userId, limit);

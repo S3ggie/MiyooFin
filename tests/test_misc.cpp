@@ -7,6 +7,7 @@ int main()
     testMovieAlphabetOrganization(); testMovieOrganizationalSort();
     testMovieAlphabetFocus(); testBoundedPagePosterPlanning();
     testHomeRailPosterPlanning(); testInitialHomeArtworkScheduling();
+    testPersistentHttpClientPatterns();
     testShowsFocusPreservedDuringIncrementalRefresh(); testHomeGridPositionHelpers();
     testRecentlyAddedWarmPublication(); testWarmHomeCatalogWindows();
     testWarmMediaWindowsExtraction(); testAnimeSelectionSurvivesSharedWindowTrim();

@@ -2,6 +2,7 @@
 #include "../../library/OfflineLibraryQuery.hpp"
 #include "../../playback/OfflineLibraryProjection.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../net/RouteStatus.hpp"
 #include "../../cache/ImageCache.hpp"
@@ -207,6 +208,7 @@ void HomeScreen::startHomeRailRefresh()
     const auto cancellation = m_homeRailRefreshCancellation;
     m_homeRailRefreshThread = std::thread(
         [this, session, cancellation] {
+            HttpClient railClient;  // persistent connection for rail refresh
             std::vector<MediaItem> continueWatching;
             std::vector<MediaItem> recentlyAdded;
             std::string continueError;
@@ -216,14 +218,14 @@ void HomeScreen::startHomeRailRefresh()
                     return JellyfinApi::getResumeItems(
                         base, session.accessToken, session.userId,
                         session.deviceId, 12, continueWatching, continueError,
-                        cancellation.get());
+                        railClient, cancellation.get());
                 }, continueError);
             const bool recentOk = RouteRequest(session).run(
                 [&](const std::string &base) {
                     return JellyfinApi::getLatestItems(
                         base, session.accessToken, session.userId,
                         session.deviceId, 16, recentlyAdded, recentError,
-                        cancellation.get());
+                        railClient, cancellation.get());
                 }, recentError);
             if (continueOk) {
                 m_homeRailContinueWatching = std::move(continueWatching);
@@ -296,6 +298,7 @@ void HomeScreen::startFetch()
         PerformanceTelemetry &telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
+        HttpClient fetchClient;  // persistent connection across all home fetch API calls
         const std::string scope=LibraryCache::scopeKey(url,uid);
         CatalogDbJobMetadata metadata=m_catalogMetadata;
         metadata.cancellation=cancellation;
@@ -477,7 +480,7 @@ void HomeScreen::startFetch()
         }
         if (!RouteRequest(session).run([&](const std::string &base){
                 return JellyfinApi::getViews(base, token, uid, devId, views,
-                                             viewsErr, cancellation.get());
+                                             viewsErr, fetchClient, cancellation.get());
         }, viewsErr)) {
             catalogRefreshFailed = true;
             m_fetchError = viewsErr.empty() ? "Failed to fetch libraries" : viewsErr;
@@ -513,7 +516,7 @@ void HomeScreen::startFetch()
                     if (!RouteRequest(session).run([&](const std::string &base){
                             return JellyfinApi::getLibraryItemsPage(
                                 base, token, uid, devId, view.id, types, start, 48,
-                                page, pageErr, cancellation.get());
+                                page, pageErr, fetchClient, cancellation.get());
                         }, pageErr)) {
                         catalogRefreshFailed = true;
                         m_fetchError = pageErr.empty() ? "Failed to fetch library page" : pageErr;
@@ -618,11 +621,11 @@ void HomeScreen::startFetch()
         {
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         }

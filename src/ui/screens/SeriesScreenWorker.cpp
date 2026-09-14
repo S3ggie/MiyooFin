@@ -166,13 +166,15 @@ void SeriesScreen::queueArtwork(const std::string &key, const MediaItem &item, i
 
 void SeriesScreen::artworkWorkerLoop()
 {
+    HttpClient artworkClient;  // persistent connection for series artwork fetches
+    artworkClient.setTimeoutSec(8);
     for (;;) {
         ArtworkJob job;
         { std::unique_lock<std::mutex> l(m_artworkMutex); m_artworkCv.wait(l,[&]{return m_artworkStop || !m_artworkJobs.empty();}); if(m_artworkStop)return; job=std::move(m_artworkJobs.front());m_artworkJobs.erase(m_artworkJobs.begin()); }
         auto tag=job.item.imageTags.find("Primary"); if(tag==job.item.imageTags.end()) continue;
         std::vector<unsigned char> data;
         if(ImageCache::isCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height)) data=ImageCache::readCached(job.item.id,ImageType::Primary,tag->second,job.width,job.height);
-        if(data.empty() && !m_artworkCancelled.load(std::memory_order_acquire)) { HttpClient c;c.setTimeoutSec(8);BinaryHttpResponse r;std::string e;if(RouteRequest(m_session).run([&](const std::string &base){return c.getBinary(buildImageUrl(base,job.item.id,ImageType::Primary,tag->second,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),r,e,512*1024,&m_artworkCancelled)&&r.ok();},e)){data=std::move(r.data);ImageCache::writeToCache(job.item.id,ImageType::Primary,tag->second,job.width,job.height,data.data(),data.size());} }
+        if(data.empty() && !m_artworkCancelled.load(std::memory_order_acquire)) { BinaryHttpResponse r;std::string e;if(RouteRequest(m_session).run([&](const std::string &base){return artworkClient.getBinary(buildImageUrl(base,job.item.id,ImageType::Primary,tag->second,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),r,e,512*1024,&m_artworkCancelled)&&r.ok();},e)){data=std::move(r.data);ImageCache::writeToCache(job.item.id,ImageType::Primary,tag->second,job.width,job.height,data.data(),data.size());} }
         DecodedImage image; if(!data.empty()&&!m_artworkCancelled.load(std::memory_order_acquire)) image=ImageDecoder::decodeJpeg(data.data(),data.size());
         {std::lock_guard<std::mutex>g(m_artworkMutex);if(!m_artworkStop)m_artworkCompleted[job.key]=std::move(image);}
 }

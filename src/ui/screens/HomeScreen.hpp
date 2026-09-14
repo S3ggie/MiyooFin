@@ -121,6 +121,12 @@ public:
                                   int columns, int rows);
     /// Season posters use the exact dimensions of SeriesScreen's grid.
     static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
+    /// Canonical artwork key for deduplication: "itemId:imageType:imageTag:WxH".
+    static std::string posterJobKey(const PosterJob &job);
+    /// Scheduling decision: should the poster worker process this job now?
+    /// High-priority jobs always run; low-priority jobs are deferred while the
+    /// initial population walk is still in progress.
+    static bool shouldProcessPosterJob(bool highPriority, bool populationInProgress);
 
     /// Row artwork state map — public so tests can inspect it.
     std::map<std::string, RowArtworkEntry> m_rowArtwork;
@@ -255,7 +261,8 @@ private:
     std::vector<std::thread> m_posterThreads;
     std::mutex m_posterMutex;
     std::condition_variable m_posterWake;
-    std::deque<PosterJob> m_pendingPosterJobs;
+    std::deque<PosterJob> m_highPriorityPosterJobs;
+    std::deque<PosterJob> m_lowPriorityPosterJobs;
     std::set<std::string> m_artworkProgressKeys;
     bool m_stopPosterWorker = false;
     // Hierarchy discovery is deliberately a single background worker: it keeps

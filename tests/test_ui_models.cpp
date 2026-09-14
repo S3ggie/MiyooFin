@@ -11,5 +11,6 @@ int main()
     testHomeSettingsModel(); testHomeTabsProjection(); testHomeTabRowUpdates();
     testTransitionTabIndex(); testHomeArtworkPlan();
     testColdStartPopulationProducesNonEmptyTabs();
+    testPosterJobScheduling();
     return miyoofin_test::finish("ui-models");
 }

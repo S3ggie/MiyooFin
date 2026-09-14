@@ -42,29 +42,44 @@ void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
     queuePosterJobs(planHomePosterJobs(snapshot));
 }
 
+std::string HomeScreen::posterJobKey(const PosterJob &job)
+{
+    return job.itemId + ":"
+        + std::to_string(static_cast<int>(job.imageType)) + ":"
+        + job.imageTag + ":"
+        + std::to_string(job.width) + "x"
+        + std::to_string(job.height);
+}
+
+bool HomeScreen::shouldProcessPosterJob(bool highPriority, bool populationInProgress)
+{
+    return highPriority || !populationInProgress;
+}
+
 void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority)
 {
     std::lock_guard<std::mutex> lock(m_posterMutex);
     std::vector<PosterJob> newJobs;
     for (auto &job : jobs) {
-        std::string key=job.itemId + ":" + std::to_string(static_cast<int>(job.imageType))
-            + ":" + job.imageTag + ":" + std::to_string(job.width) + "x"
-            + std::to_string(job.height);
+        const std::string key = posterJobKey(job);
         if (m_artworkProgressKeys.insert(key).second) {
             newJobs.push_back(std::move(job));
             m_artworkTotal.fetch_add(1);
             m_artworkActive.store(true);
         }
     }
+    auto &target = highPriority ? m_highPriorityPosterJobs
+                                : m_lowPriorityPosterJobs;
     if (highPriority) {
         for (auto it = newJobs.rbegin(); it != newJobs.rend(); ++it)
-            m_pendingPosterJobs.insert(m_pendingPosterJobs.begin(), std::move(*it));
+            target.insert(target.begin(), std::move(*it));
     } else {
         for (auto &job : newJobs)
-            m_pendingPosterJobs.push_back(std::move(job));
+            target.push_back(std::move(job));
     }
     performanceTelemetry().setWorkerQueueDepth(
-        WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
+        WorkerId::HomePoster, static_cast<uint32_t>(
+            m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
     m_posterWake.notify_all();
 }
 
@@ -236,12 +251,31 @@ void HomeScreen::posterWorker()
         PosterJob job;
         {
             std::unique_lock<std::mutex> lock(m_posterMutex);
-            m_posterWake.wait(lock,[&]{return m_stopPosterWorker||!m_pendingPosterJobs.empty();});
+            m_posterWake.wait(lock,[&]{
+                return m_stopPosterWorker
+                    || !m_highPriorityPosterJobs.empty()
+                    || (!m_initialPopulationInProgress.load()
+                        && !m_lowPriorityPosterJobs.empty());
+            });
             if(m_stopPosterWorker) return;
-            job=std::move(m_pendingPosterJobs.front());
-            m_pendingPosterJobs.erase(m_pendingPosterJobs.begin());
+            // High-priority jobs are always processed first.
+            if (!m_highPriorityPosterJobs.empty()) {
+                job=std::move(m_highPriorityPosterJobs.front());
+                m_highPriorityPosterJobs.erase(m_highPriorityPosterJobs.begin());
+            } else if (shouldProcessPosterJob(
+                       false, m_initialPopulationInProgress.load())) {
+                // Only pop a low-priority job when the defer contract
+                // allows it — i.e. initial population is finished.
+                job=std::move(m_lowPriorityPosterJobs.front());
+                m_lowPriorityPosterJobs.erase(m_lowPriorityPosterJobs.begin());
+            } else {
+                // Low-priority job is present but deferred; re-enter wait
+                // so the CV predicate can re-check on the next notify.
+                continue;
+            }
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
+                WorkerId::HomePoster, static_cast<uint32_t>(
+                    m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
             performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true);
         }
 
@@ -260,17 +294,16 @@ void HomeScreen::posterWorker()
         {
             std::lock_guard<std::mutex> lock(m_posterMutex);
             if (!complete) {
-                const std::string key=job.itemId + ":"
-                    + std::to_string(static_cast<int>(job.imageType)) + ":"
-                    + job.imageTag + ":" + std::to_string(job.width) + "x"
-                    + std::to_string(job.height);
+                const std::string key = posterJobKey(job);
                 m_artworkProgressKeys.erase(key);
             }
             if (m_artworkCompleted.load() >= m_artworkTotal.load()
-                && m_pendingPosterJobs.empty())
+                && m_highPriorityPosterJobs.empty()
+                && m_lowPriorityPosterJobs.empty())
                 m_artworkActive.store(false);
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster, static_cast<uint32_t>(m_pendingPosterJobs.size()));
+                WorkerId::HomePoster, static_cast<uint32_t>(
+                    m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
         }
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
     }

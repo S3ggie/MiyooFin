@@ -106,6 +106,7 @@ void HomeScreen::updateLiveLibraryChanges()
     if (!m_librarySync || presentationOffline()) return;
     if (m_liveChangeThread.joinable()) {
         if (m_liveChangeDone.load()) finishLiveChangeApply();
+        else if (!m_liveChangeInFlight) m_liveChangeThread.join();
         return;
     }
     // Do not begin a competing top-level sync while the initial
@@ -124,7 +125,14 @@ void HomeScreen::updateLiveLibraryChanges()
 
 void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
 {
-    if (m_liveChangeThread.joinable()) return;
+    if (m_liveChangeThread.joinable()) {
+        // Join if the previous live-change completed (Done set) or if
+        // finishLiveChangeApply already ran (inFlight cleared).
+        if (m_liveChangeDone.load() || !m_liveChangeInFlight)
+            m_liveChangeThread.join();
+        else
+            return;  // previous live-change still running
+    }
     m_liveChangeBatch = batch;
     m_liveChangeResult = {};
     m_liveChangeDone.store(false);
@@ -279,13 +287,20 @@ void HomeScreen::startSafetyReconcile()
 
 void HomeScreen::startFetch()
 {
-    if (m_fetchThread.joinable()) return;
+    if (m_fetchThread.joinable()) {
+        // If the previous fetch completed, join its thread to reclaim it.
+        // If it hasn't completed yet, don't start a competing fetch.
+        if (m_fetchComplete.load() || m_fetchDone.load())
+            m_fetchThread.join();
+        else
+            return;
+    }
     m_metadataCompleted.store(0);
     m_metadataTotal.store(0);
     m_metadataActive.store(true);
     m_artworkPlanningComplete.store(false);
     m_fetchDone = false; m_fetchReady.store(false); m_fetchComplete.store(false);
-    m_fetchPublished = false; m_fetchError.clear(); m_fetchResult.clear();
+    m_fetchPublished = false; m_fetchPostFinalizeApplied = false; m_fetchError.clear(); m_fetchResult.clear();
     m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
     {
         std::lock_guard<std::mutex> lock(m_fetchMutex);

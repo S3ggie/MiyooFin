@@ -236,7 +236,8 @@ void HomeScreen::publishLiveCatalogItems(
 void HomeScreen::finishLiveChangeApply()
 {
     if (!m_liveChangeThread.joinable()) return;
-    m_liveChangeThread.join();
+    // Thread join deferred to next startLiveChangeApply() or joinAllWorkers().
+    // The Done atomic guarantees all result writes are visible.
     m_liveChangeDone.store(false);
     m_liveChangeInFlight = false;
     const auto batch = m_liveChangeBatch;
@@ -257,7 +258,7 @@ void HomeScreen::finishLiveChangeApply()
 void HomeScreen::finishHomeRailRefresh()
 {
     if (!m_homeRailRefreshThread.joinable()) return;
-    m_homeRailRefreshThread.join();
+    // Thread join deferred to next startHomeRailRefresh() or joinAllWorkers().
     m_homeRailRefreshDone.store(false);
     m_homeRailRefreshInFlight = false;
     if (m_homeRailRefreshSucceeded) {
@@ -287,7 +288,7 @@ void HomeScreen::finishHomeRailRefresh()
 void HomeScreen::finishSafetyReconcile()
 {
     if (!m_safetyReconcileThread.joinable()) return;
-    m_safetyReconcileThread.join();
+    // Thread join deferred to next startSafetyReconcile() or joinAllWorkers().
     m_safetyReconcileDone.store(false);
     m_safetyReconcileInFlight = false;
     m_lastSafetyReconcileMs = wallClockMs();
@@ -329,8 +330,8 @@ void HomeScreen::finishFetch()
             }
         }
     }
-    if (m_fetchComplete.load() && m_fetchThread.joinable()) {
-        m_fetchThread.join();
+    if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied) {
+        m_fetchPostFinalizeApplied = true;
         // Post-finalize tab rebuild: on a cold start the initial
         // first-bounded-page publish used empty movie/show lists.
         // The worker rebuilt m_fetchResult after finalize; apply it.
@@ -372,9 +373,10 @@ void HomeScreen::finishFetch()
         updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
         updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
         // Mark the sync schedule complete only after the fetch thread has
-        // joined, which means the top-level generation has committed
-        // (finalize) or been safely aborted.  This prevents the live-change
-        // path from starting a competing top-level sync prematurely.
+        // finished (Done atomic set), which means the top-level generation
+        // has committed (finalize) or been safely aborted.  This prevents
+        // the live-change path from starting a competing top-level sync
+        // prematurely.  The thread is joined later in joinAllWorkers().
         m_syncSchedule.complete(SDL_GetTicks(), m_fetchError.empty());
         if (m_fetchError.empty()) {
             m_lastSafetyReconcileMs = wallClockMs();

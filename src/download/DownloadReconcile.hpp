@@ -12,5 +12,25 @@ bool reconcileSource(DownloadItem &item, SourceCheck result, const DownloadMedia
 inline bool startupReconcileShouldSkip(const DownloadItem &item) {
     return item.state == DownloadState::Complete;
 }
+
+// Session-level dedup constant: Complete items verified within this window
+// are skipped during manual reconcile to avoid hammering the server on every
+// Downloads tab entry.
+constexpr std::uint64_t RECONCILE_VERIFY_TTL_MS = 24ULL * 60 * 60 * 1000;
+
+// True when the reconcile loop may skip the PlaybackInfo source check for
+// this item.  Startup pass: all Complete items.  Manual pass: Complete items
+// whose lastVerifiedMs falls inside the TTL window.  Items never verified
+// (lastVerifiedMs==0), non-Complete states, and explicit retries are always
+// checked.
+inline bool reconcileShouldSkip(const DownloadItem &item, bool startup,
+                                std::uint64_t nowMs) {
+    if (item.state != DownloadState::Complete)
+        return false;
+    if (startup)
+        return true;
+    return item.lastVerifiedMs > 0 &&
+           (nowMs - item.lastVerifiedMs) < RECONCILE_VERIFY_TTL_MS;
+}
 }
 #endif

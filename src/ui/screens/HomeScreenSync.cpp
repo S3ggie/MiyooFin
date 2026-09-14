@@ -188,7 +188,10 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
 
 void HomeScreen::startHomeRailRefresh()
 {
-    if (m_homeRailRefreshInFlight) return;
+    if (m_homeRailRefreshInFlight) {
+        m_homeRailRefreshPending = true;
+        return;
+    }
     if (m_homeRailRefreshThread.joinable())
         m_homeRailRefreshThread.join();
     m_homeRailRefreshDone.store(false);
@@ -448,22 +451,15 @@ void HomeScreen::startFetch()
         }
         std::vector<MediaItem> cw; std::string cwErr;
         std::vector<MediaItem> ra; std::string raErr;
-        // Home rails are ephemeral presentation data. They are refreshed from
-        // Jellyfin and are deliberately excluded from CatalogDb persistence.
-        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
+        // Home rails (Continue Watching / Recently Added) are fetched AFTER
+        // the first bounded library page is published so they do not gate
+        // first paint.  The first_bounded_page_ready publish uses empty cw/ra;
+        // the final rebuild after the rails complete populates them.
         m_initialPopulationInProgress = true;
         // FIX 2: guard so that if any exception escapes the population
         // walk the deferral flag is cleared and poster workers are woken,
         // preventing a permanent low-priority artwork stall.
         try {
-        ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
-        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
-        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
-        ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
-        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
-        queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
@@ -616,6 +612,19 @@ void HomeScreen::startFetch()
                 }
                 if (catalogRefreshFailed) break;
             }
+        }
+        // Fetch rails (Continue Watching / Recently Added) AFTER the first
+        // bounded page has been published so they do not gate first paint.
+        {
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
+        ++requestCount;
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
+        ++requestCount;
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
+        queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         }
         if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
             auto finalized = m_librarySync->finalize(syncGeneration).get();

@@ -4,6 +4,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace miyoofin {
@@ -42,6 +43,21 @@ inline bool homeChangeNeedsPublication(bool catchUpRequired,
                                        bool cachedHomeItemRemoved)
 {
     return catchUpRequired || catalogItemAffectsHome || cachedHomeItemRemoved;
+}
+
+/// Minimum interval between successive live-change rail refreshes.
+/// Prevents the ~16-17 ResumeItems+LatestItems pairs per ~100s window
+/// that each trigger a full network round-trip.
+inline constexpr std::int64_t kHomeRailRefreshDebounceMs = 20 * 1000;
+
+/// Returns true when a rail refresh should be skipped because the last
+/// successful refresh completed within the debounce window.
+/// Pure helper — testable without a HomeScreen instance.
+inline bool homeRailRefreshDebounced(std::int64_t nowMs,
+                                     std::int64_t lastSuccessMs,
+                                     std::int64_t debounceMs = kHomeRailRefreshDebounceMs)
+{
+    return lastSuccessMs > 0 && (nowMs - lastSuccessMs) < debounceMs;
 }
 
 inline const char *homeSyncStatus(bool active)

@@ -390,3 +390,37 @@ static void testPosterJobScheduling()
 
     std::printf("[test] Poster job scheduling priority/defer and key consistency OK\n");
 }
+
+static void testHomeRailRefreshDebounce()
+{
+    std::printf("[test] Home rail refresh debounce decision\n");
+
+    // Never refreshed — should not debounce.
+    CHECK(!homeRailRefreshDebounced(10000, 0));
+    CHECK(!homeRailRefreshDebounced(10000, 0, kHomeRailRefreshDebounceMs));
+
+    // Refreshed long ago — should not debounce.
+    CHECK(!homeRailRefreshDebounced(100000, 50000));
+    CHECK(!homeRailRefreshDebounced(100000, 50000, kHomeRailRefreshDebounceMs));
+
+    // Just refreshed (within debounce window) — should debounce.
+    CHECK(homeRailRefreshDebounced(10000, 5000));
+    CHECK(homeRailRefreshDebounced(10000, 5000, kHomeRailRefreshDebounceMs));
+
+    // Exactly at the debounce boundary — should NOT debounce (not < debounce).
+    CHECK(!homeRailRefreshDebounced(25000, 5000, 20000));
+    CHECK(!homeRailRefreshDebounced(10001, 1, 1));
+
+    // One tick before boundary — should debounce.
+    CHECK(homeRailRefreshDebounced(24999, 5000, 20000));
+    CHECK(homeRailRefreshDebounced(10002, 10000, 3));
+
+    // Default debounce interval constant is 20s.
+    CHECK(kHomeRailRefreshDebounceMs == 20000);
+
+    // Negative / zero nowMs edge cases.
+    CHECK(!homeRailRefreshDebounced(0, 0));
+    CHECK(homeRailRefreshDebounced(5000, 4999));
+
+    std::printf("[test] Home rail refresh debounce decision OK\n");
+}

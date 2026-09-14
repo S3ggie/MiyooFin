@@ -244,8 +244,14 @@ void HomeScreen::finishLiveChangeApply()
     m_liveChangeCancellation.reset();
     if (result.success && liveChangeAffectsHome(batch, result)) {
         publishLiveCatalogItems(result);
-        m_homeSyncActive = true;
-        startHomeRailRefresh();
+        // Debounce: skip the rail refresh if the last successful refresh
+        // completed within kHomeRailRefreshDebounceMs to avoid hammering the
+        // server with ResumeItems+LatestItems pairs on rapid live changes.
+        const std::int64_t nowMs = wallClockMs();
+        if (!homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshCompletedMs)) {
+            m_homeSyncActive = true;
+            startHomeRailRefresh();
+        }
     }
 }
 void HomeScreen::finishHomeRailRefresh()
@@ -255,6 +261,7 @@ void HomeScreen::finishHomeRailRefresh()
     m_homeRailRefreshDone.store(false);
     m_homeRailRefreshInFlight = false;
     if (m_homeRailRefreshSucceeded) {
+        m_lastHomeRailRefreshCompletedMs = wallClockMs();
         if (m_homeRailContinueValid) {
             updateContinueWatchingRow(m_tabs, m_homeRailContinueWatching);
             m_cachedSnapshot.continueWatching = m_homeRailContinueWatching;
@@ -272,6 +279,10 @@ void HomeScreen::finishHomeRailRefresh()
     m_homeRailRefreshCancellation.reset();
     m_homeSyncActive = false;
     clampNavigation();
+    if (m_homeRailRefreshPending) {
+        m_homeRailRefreshPending = false;
+        startHomeRailRefresh();
+    }
 }
 void HomeScreen::finishSafetyReconcile()
 {

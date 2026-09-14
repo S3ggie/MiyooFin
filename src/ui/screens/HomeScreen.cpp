@@ -34,7 +34,7 @@ HomeScreen::HomeScreen(const Session &session,
     m_tabs.push_back({"Shows", {{"", {}}}});
     m_tabs.push_back({"Downloads", {{"", {}}}});
     m_tabs.push_back({"Settings", {{"", {}}}});
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < kPosterThreads; ++i)
         m_posterThreads.emplace_back(&HomeScreen::posterWorker, this);
     m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);

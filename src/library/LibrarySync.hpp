@@ -85,6 +85,10 @@ public:
     LibrarySync& operator=(const LibrarySync&) = delete;
 
     std::uint64_t nextGeneration();
+    /// Seed the generation counter so session writes start at or above the
+    /// persisted committed_generation.  Only has an effect when `gen` exceeds
+    /// the current counter.
+    void seedGeneration(std::uint64_t gen);
     std::shared_ptr<std::atomic_bool> cancellation() const { return m_cancel; }
     std::future<CatalogDbTopLevelSyncResult> begin(std::uint64_t generation);
     std::future<CatalogDbMediaPageUpsertResult> stage(

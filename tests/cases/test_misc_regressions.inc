@@ -516,3 +516,47 @@ static void testClockMessageFormat()
     CHECK(msg.find("Date/time") != std::string::npos);
     std::printf("[test] kClockErrorMessage: one-line, short, contains OnionOS path OK\n");
 }
+
+static void testLiveChangeCheckpointPolicy()
+{
+    std::printf("[test] live change checkpoint policy\n");
+
+    // liveChangeIsEmpty truth table
+    {
+        JellyfinLibraryChangeBatch b;
+        CHECK(HomeScreen::liveChangeIsEmpty(b));
+    }
+    {
+        JellyfinLibraryChangeBatch b;
+        b.catchUpRequired = true;
+        CHECK(!HomeScreen::liveChangeIsEmpty(b));
+    }
+    {
+        JellyfinLibraryChangeBatch b;
+        b.itemsAdded.push_back("id1");
+        CHECK(!HomeScreen::liveChangeIsEmpty(b));
+    }
+    {
+        JellyfinLibraryChangeBatch b;
+        b.itemsUpdated.push_back("id1");
+        CHECK(!HomeScreen::liveChangeIsEmpty(b));
+    }
+    {
+        JellyfinLibraryChangeBatch b;
+        b.itemsRemoved.push_back("id1");
+        CHECK(!HomeScreen::liveChangeIsEmpty(b));
+    }
+
+    // liveChangeNeedsFullReconcile truth table
+    CHECK(HomeScreen::liveChangeNeedsFullReconcile(0, true));
+    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(1000, true));
+    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(0, false));
+    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(1000, false));
+
+    // Tripwire: both bounded and full reconcile paths remain in the source.
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
+    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
+
+    std::printf("[test] live change checkpoint policy OK\n");
+}

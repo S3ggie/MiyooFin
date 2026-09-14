@@ -42,6 +42,11 @@ library::LibrarySync::~LibrarySync()
     if (m_liveEventThread.joinable()) m_liveEventThread.join();
 }
 std::uint64_t library::LibrarySync::nextGeneration() { return ++m_generation; }
+void library::LibrarySync::seedGeneration(std::uint64_t gen) {
+    const auto cur = m_generation.load();
+    if (gen > cur)
+        m_generation.store(gen);
+}
 std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::begin(std::uint64_t generation) {
     m_inFlight = true; m_success = false;
     return m_db->beginTopLevelSync(generation, m_metadata);

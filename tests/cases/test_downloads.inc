@@ -326,6 +326,36 @@ static void testHlsFailureClassification()
     CHECK(DownloadManager::hlsSegmentFailureState(404, CURLE_OK) == DownloadState::Failed);
 }
 
+static void testStartupReconcileSkip()
+{
+    std::printf("[test] startup reconcile skip predicate\n");
+    DownloadItem complete; complete.itemId="c"; complete.state=DownloadState::Complete;
+    CHECK(startupReconcileShouldSkip(complete));
+
+    DownloadItem localOnly; localOnly.itemId="l"; localOnly.state=DownloadState::LocalOnly;
+    CHECK(!startupReconcileShouldSkip(localOnly));
+
+    DownloadItem queued; queued.itemId="q"; queued.state=DownloadState::Queued;
+    CHECK(!startupReconcileShouldSkip(queued));
+
+    DownloadItem downloading; downloading.itemId="d"; downloading.state=DownloadState::Downloading;
+    CHECK(!startupReconcileShouldSkip(downloading));
+
+    DownloadItem paused; paused.itemId="p"; paused.state=DownloadState::Paused;
+    CHECK(!startupReconcileShouldSkip(paused));
+
+    DownloadItem failed; failed.itemId="f"; failed.state=DownloadState::Failed;
+    CHECK(!startupReconcileShouldSkip(failed));
+
+    DownloadItem updateAvail; updateAvail.itemId="u"; updateAvail.state=DownloadState::UpdateAvailable;
+    CHECK(!startupReconcileShouldSkip(updateAvail));
+
+    DownloadItem serverMissing; serverMissing.itemId="s"; serverMissing.state=DownloadState::ServerMissing;
+    CHECK(!startupReconcileShouldSkip(serverMissing));
+
+    std::printf("[test] startup reconcile skip predicate OK\n");
+}
+
 static void testCatalogDbHierarchyPlanning()
 {
     std::printf("[test] DownloadManager shared hierarchy policy\n");

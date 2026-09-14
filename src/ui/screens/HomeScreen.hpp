@@ -128,6 +128,17 @@ public:
     /// LRU eviction order: oldest key at front.  Loaded keys occur once.
     std::deque<std::string> m_rowArtworkOrder;
 
+    // --- Live-change policy helpers (public for testing) -----------------
+
+    /// True when a live-change batch has no meaningful work and should be
+    /// silently dropped before spawning a worker thread.
+    static bool liveChangeIsEmpty(
+        const JellyfinLibraryChangeBatch &batch);
+    /// True when a live-change with catchUpRequired needs a full library
+    /// reconcile because no usable sync checkpoint exists.
+    static bool liveChangeNeedsFullReconcile(
+        std::int64_t checkpointMs, bool catchUpRequired);
+
 private:
     enum class LoadState { Loading, Ready, Error };
 

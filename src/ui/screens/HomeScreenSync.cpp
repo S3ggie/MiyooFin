@@ -86,6 +86,20 @@ void HomeScreen::updateMediaPaging()
     }
 }
 
+bool HomeScreen::liveChangeIsEmpty(const JellyfinLibraryChangeBatch &batch)
+{
+    return !batch.catchUpRequired
+        && batch.itemsAdded.empty()
+        && batch.itemsUpdated.empty()
+        && batch.itemsRemoved.empty();
+}
+
+bool HomeScreen::liveChangeNeedsFullReconcile(
+    std::int64_t checkpointMs, bool catchUpRequired)
+{
+    return catchUpRequired && checkpointMs <= 0;
+}
+
 void HomeScreen::updateLiveLibraryChanges()
 {
     if (!m_librarySync || presentationOffline()) return;
@@ -100,8 +114,11 @@ void HomeScreen::updateLiveLibraryChanges()
     if (m_initialPopulationInProgress)
         return;
     JellyfinLibraryChangeBatch batch;
-    if (m_librarySync->takeLiveChange(batch))
+    if (m_librarySync->takeLiveChange(batch)) {
+        if (liveChangeIsEmpty(batch))
+            return;
         startLiveChangeApply(batch);
+    }
 }
 
 void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
@@ -119,7 +136,10 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
         [this, sync, batch, cancellation, checkpointMs] {
             library::LiveLibraryChangeResult result;
             if (batch.catchUpRequired) {
-                if (checkpointMs > 0) {
+                if (!liveChangeNeedsFullReconcile(checkpointMs,
+                                                  batch.catchUpRequired)) {
+                    // Usable checkpoint — bounded catch-up only.
+                    // Skip the full library walk.
                     const auto catchUp = sync->catchUpChangedCatalog(
                         checkpointMs, cancellation).get();
                     if (!catchUp.success) {
@@ -133,19 +153,31 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                         m_liveChangeDone.store(true);
                         return;
                     }
-                }
-                const auto reconciled = sync->reconcileAuthoritativeMembership(
-                    cancellation).get();
-                if (!reconciled.success) {
-                    result.cancelled = reconciled.cancelled;
-                    result.superseded = reconciled.superseded;
-                    result.error = reconciled.error;
-                    result.message = reconciled.message;
-                    result.catchUpRequired = !reconciled.cancelled
-                        && !reconciled.superseded;
-                    m_liveChangeResult = std::move(result);
-                    m_liveChangeDone.store(true);
-                    return;
+                } else {
+                    // No usable checkpoint — full reconcile to establish one.
+                    const auto reconciled = sync->reconcileAuthoritativeMembership(
+                        cancellation).get();
+                    if (!reconciled.success) {
+                        result.cancelled = reconciled.cancelled;
+                        result.superseded = reconciled.superseded;
+                        result.error = reconciled.error;
+                        result.message = reconciled.message;
+                        result.catchUpRequired = !reconciled.cancelled
+                            && !reconciled.superseded;
+                        m_liveChangeResult = std::move(result);
+                        m_liveChangeDone.store(true);
+                        return;
+                    }
+                    // Successful full reconcile — write checkpoint so the next
+                    // cycle is bounded.
+                    const std::int64_t nowMs = wallClockMs();
+                    auto cp = sync->writeSyncState(
+                        nowMs, nowMs, reconciled.generation,
+                        cancellation).get();
+                    if (cp.success) {
+                        m_syncState.lastSuccessfulMs = cp.lastSuccessfulMs;
+                        m_syncState.lastReconcileMs = cp.lastReconcileMs;
+                    }
                 }
             }
             result = sync->applyLibraryChanges(batch, cancellation).get();
@@ -345,6 +377,31 @@ void HomeScreen::startFetch()
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
+        // Seed session generation counters from the persisted sync state so
+        // subsequent writeSyncState calls never appear as "regressed" to the
+        // DB rejection check.  The committed_generation persists across app
+        // runs but the per-process counters start at zero.
+        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
+            auto dbSyncState = m_catalogDb->readSyncState(
+                false, 0, 0, metadata).get();
+            if (dbSyncState.success) {
+                const auto gen = dbSyncState.committedGeneration;
+                if (gen > 0) {
+                    m_librarySync->seedGeneration(gen);
+                    if (gen > m_topLevelSyncGeneration)
+                        m_topLevelSyncGeneration = gen;
+                    const auto hierCur = m_hierarchyGeneration.load();
+                    if (gen > hierCur)
+                        m_hierarchyGeneration.store(gen);
+                }
+                if (dbSyncState.lastSuccessfulMs > 0) {
+                    m_syncState.lastSuccessfulMs =
+                        dbSyncState.lastSuccessfulMs;
+                    m_syncState.lastReconcileMs =
+                        dbSyncState.lastReconcileMs;
+                }
+            }
+        }
         // Probe the committed catalog before starting any network refresh. These
         // are bounded reads on the CatalogDb worker; the SDL thread only sees
         // the publication signal in update(). A genuinely empty catalog must
@@ -560,14 +617,25 @@ void HomeScreen::startFetch()
             auto finalized = m_librarySync->finalize(syncGeneration).get();
             if (!finalized.success) {
                 catalogRefreshFailed = true;
-            } else if (coldFirstPagePublished) {
-                // The initial first-bounded-page publish used empty
-                // movie/show lists.  Rebuild with the actually-fetched
-                // items so Home tabs render populated on cold start.
-                {
-                    std::lock_guard<std::mutex> lock(m_fetchMutex);
-                    m_fetchResult = JellyfinApi::buildTabs(
-                        views, cw, ra, moviesByView, showsByView);
+            } else {
+                // Record sync checkpoint so subsequent live changes take the
+                // bounded catch-up path instead of a full library walk.
+                const std::int64_t nowMs = wallClockMs();
+                auto cp = m_librarySync->writeSyncState(
+                    nowMs, nowMs, syncGeneration).get();
+                if (cp.success) {
+                    m_syncState.lastSuccessfulMs = cp.lastSuccessfulMs;
+                    m_syncState.lastReconcileMs = cp.lastReconcileMs;
+                }
+                if (coldFirstPagePublished) {
+                    // The initial first-bounded-page publish used empty
+                    // movie/show lists.  Rebuild with the actually-fetched
+                    // items so Home tabs render populated on cold start.
+                    {
+                        std::lock_guard<std::mutex> lock(m_fetchMutex);
+                        m_fetchResult = JellyfinApi::buildTabs(
+                            views, cw, ra, moviesByView, showsByView);
+                    }
                 }
             }
         } else if (topLevelSyncStarted) {

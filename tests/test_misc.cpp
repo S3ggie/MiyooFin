@@ -15,5 +15,6 @@ int main()
     testHomeUsesSharedDownIntentAcrossPageLoads(); testShowsPresentation();
     testShouldShowClockErrorTrue(); testShouldShowClockErrorFalseModernEpoch();
     testShouldShowClockErrorFalseUnrelatedFailure(); testClockMessageFormat();
+    testLiveChangeCheckpointPolicy();
     return miyoofin_test::finish("misc-regressions");
 }

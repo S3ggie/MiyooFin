@@ -67,6 +67,7 @@ public:
     int diagnosticActiveTab() const { return m_activeTab; }
     const char *diagnosticTabName() const;
 
+    static constexpr int kPosterThreads = 3;
     static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
     static SettingsRowAction settingsRowAction(int row);
     static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
@@ -355,6 +356,7 @@ private:
     std::thread m_homeRailRefreshThread;
     std::atomic<bool> m_homeRailRefreshDone{false};
     bool m_homeRailRefreshInFlight = false;
+    bool m_homeRailRefreshPending = false;
     bool m_homeRailRefreshSucceeded = false;
     bool m_homeRailContinueValid = false;
     bool m_homeRailRecentValid = false;
@@ -362,6 +364,7 @@ private:
     std::vector<MediaItem> m_homeRailContinueWatching;
     std::vector<MediaItem> m_homeRailRecentlyAdded;
     std::string m_homeRailRefreshError;
+    std::int64_t m_lastHomeRailRefreshCompletedMs = 0;
 
     void updateLiveLibraryChanges();
     void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch);

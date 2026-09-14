@@ -348,3 +348,45 @@ static void testColdStartPopulationProducesNonEmptyTabs()
     CHECK(idx == 2);
     std::printf("[test] Cold-start population produces non-empty Movies/Shows tabs OK\n");
 }
+
+// Poster-job scheduling: verify shouldProcessPosterJob and posterJobKey
+// cover the priority-defer contract used by the split-queue poster workers.
+static void testPosterJobScheduling()
+{
+    std::printf("[test] Poster job scheduling priority/defer and key consistency\n");
+
+    // High-priority jobs are always eligible, even during population.
+    CHECK(HomeScreen::shouldProcessPosterJob(true, true));
+    CHECK(HomeScreen::shouldProcessPosterJob(true, false));
+
+    // Low-priority jobs are deferred during population, allowed after.
+    CHECK(!HomeScreen::shouldProcessPosterJob(false, true));
+    CHECK(HomeScreen::shouldProcessPosterJob(false, false));
+
+    // posterJobKey produces the canonical dedup key.
+    HomeScreen::PosterJob job;
+    job.itemId = "item-42";
+    job.imageType = ImageType::Primary;
+    job.imageTag = "abc123";
+    job.width = 64;
+    job.height = 96;
+    const std::string key = HomeScreen::posterJobKey(job);
+    CHECK_EQ(key, "item-42:0:abc123:64x96");
+
+    // Same logical artwork produces the same key regardless of call site.
+    const std::string key2 = HomeScreen::posterJobKey(job);
+    CHECK_EQ(key, key2);
+
+    // Different dimensions produce different keys.
+    HomeScreen::PosterJob job2 = job;
+    job2.width = 128;
+    job2.height = 192;
+    CHECK(HomeScreen::posterJobKey(job) != HomeScreen::posterJobKey(job2));
+
+    // Different image type produces different keys.
+    HomeScreen::PosterJob job3 = job;
+    job3.imageType = ImageType::Thumb;
+    CHECK(HomeScreen::posterJobKey(job) != HomeScreen::posterJobKey(job3));
+
+    std::printf("[test] Poster job scheduling priority/defer and key consistency OK\n");
+}

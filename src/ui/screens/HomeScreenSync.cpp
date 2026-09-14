@@ -447,14 +447,18 @@ void HomeScreen::startFetch()
             }
         }
         std::vector<MediaItem> cw; std::string cwErr;
+        std::vector<MediaItem> ra; std::string raErr;
         // Home rails are ephemeral presentation data. They are refreshed from
         // Jellyfin and are deliberately excluded from CatalogDb persistence.
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         m_initialPopulationInProgress = true;
+        // FIX 2: guard so that if any exception escapes the population
+        // walk the deferral flag is cleared and poster workers are woken,
+        // preventing a permanent low-priority artwork stall.
+        try {
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
-        std::vector<MediaItem> ra; std::string raErr;
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
@@ -641,7 +645,27 @@ void HomeScreen::startFetch()
         } else if (topLevelSyncStarted) {
             m_librarySync->abort(syncGeneration).get();
         }
-        m_initialPopulationInProgress = false;
+        } catch (...) {
+            // FIX 2: On exception, guarantee the deferral flag is
+            // cleared and poster workers are woken so the low-priority
+            // artwork backlog can drain.
+            m_initialPopulationInProgress = false;
+            { std::lock_guard<std::mutex> lock(m_posterMutex); }
+            m_posterWake.notify_all();
+            throw;
+        }
+        // FIX 3: Store the deferral flag under m_posterMutex so the
+        // ordering between clearing the flag and waking poster workers
+        // is self-evident — the mutex pairs this store with the wait
+        // predicate that reads it.
+        {
+            std::lock_guard<std::mutex> lock(m_posterMutex);
+            m_initialPopulationInProgress = false;
+        }
+        // Wake poster workers so they begin draining any deferred
+        // low-priority artwork jobs that were held back during the
+        // population walk.
+        m_posterWake.notify_all();
         if (catalogRefreshFailed && m_fetchError.empty())
             m_fetchError = "Library refresh failed";
         const bool artworkPlanningComplete =

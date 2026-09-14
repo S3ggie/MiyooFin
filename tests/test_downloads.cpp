@@ -22,6 +22,7 @@ int main()
     testDownloadRestartPersistence(); testDownloadsUiHelpers();
     testDownloadHierarchy(); testDownloadSourceReconciliation();
     testDownloadPlanBatchAccounting(); testHlsSizeEstimates();
-    testHlsFailureClassification(); testCatalogDbHierarchyPlanning();
+    testHlsFailureClassification(); testStartupReconcileSkip();
+    testCatalogDbHierarchyPlanning();
     return miyoofin_test::finish("downloads");
 }

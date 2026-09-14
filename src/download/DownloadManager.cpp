@@ -34,7 +34,7 @@ void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_
     std::set<std::string> seen;
     loaded.erase(std::remove_if(loaded.begin(),loaded.end(),[&](const DownloadItem&i){return !seen.insert(i.itemId).second;}),loaded.end());
     for(auto&i:loaded)m_store.reconcile(m_scope,i,nullptr);
-    m_items.swap(loaded); persistLocked();if(s.valid())m_reconcileRequested=true;publishDownloadGauges(m_items,m_planJobs.size());if(s.valid())performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile,1);m_wake.notify_all();m_reconcileWake.notify_one();}
+    m_items.swap(loaded); persistLocked();if(s.valid()){m_reconcileRequested=true;m_startupReconcile=true;}publishDownloadGauges(m_items,m_planJobs.size());if(s.valid())performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile,1);m_wake.notify_all();m_reconcileWake.notify_one();}
 void DownloadManager::persistLocked(){for(const auto&i:m_items)m_store.saveManifest(m_scope,i,nullptr);m_store.saveIndex(m_scope,m_items,nullptr);}
 void DownloadManager::setPlaybackActive(bool v){{std::lock_guard<std::mutex>l(m_mutex);m_playback=v;for(auto&i:m_items)if(v&&i.state==DownloadState::Downloading){i.state=stateAfterInterrupt(DownloadInterrupt::Playback);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);}else if(!v&&i.state==DownloadState::PausedForPlayback)i.state=DownloadState::Queued;persistLocked();publishDownloadGauges(m_items,m_planJobs.size());}m_wake.notify_all();}
 void DownloadManager::enqueue(const DownloadItem&item){enqueue(std::vector<DownloadItem>{item});}

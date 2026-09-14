@@ -43,7 +43,7 @@ void HomeScreen::startDownloadRefresh()
 void HomeScreen::finishDownloadRefresh()
 {
     UiDiagnostics::Scope scope("HomeScreen::publishDownloadSnapshot");
-    if(m_downloadRefreshThread.joinable())m_downloadRefreshThread.join();
+    // Thread join deferred to next startDownloadRefresh() or joinAllWorkers().
     m_downloadRefreshDone=false;m_downloadRefreshInFlight=false;
     m_downloadSnapshot=std::move(m_downloadRefreshResult);
     m_missingJournalEntries=std::move(m_downloadJournalResult);
@@ -113,8 +113,7 @@ void HomeScreen::startResumeRefresh()
 
 void HomeScreen::finishResumeRefresh()
 {
-    if (m_resumeRefreshThread.joinable())
-        m_resumeRefreshThread.join();
+    // Thread join deferred to next startResumeRefresh() or joinAllWorkers().
     m_resumeRefreshDone = false;
     m_resumeRefreshInFlight = false;
 

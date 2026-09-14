@@ -590,3 +590,63 @@ static void testLiveChangeCheckpointPolicy()
 
     std::printf("[test] live change checkpoint policy OK\n");
 }
+
+static void testCardSurfaceCacheEviction()
+{
+    std::printf("[test] Card surface cache eviction policy\n");
+    // Verify the render source uses cached surface lookup pattern
+    const std::string render = readTestBytes("src/ui/screens/HomeScreenRender.cpp");
+    CHECK(render.find("m_cardSurfaceCache") != std::string::npos);
+    CHECK(render.find("prepareCardSurface") != std::string::npos);
+
+    // Verify the artwork source prepares and evicts cached surfaces
+    const std::string artwork = readTestBytes("src/ui/screens/HomeScreenArtwork.cpp");
+    CHECK(artwork.find("m_cardSurfaceCache") != std::string::npos);
+    CHECK(artwork.find("freeAllCardSurfaces") != std::string::npos);
+
+    // Verify the destructor frees cached surfaces
+    const std::string homeScreen = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(homeScreen.find("freeAllCardSurfaces()") != std::string::npos);
+
+    // Verify the header declares the cache and helpers
+    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(header.find("m_cardSurfaceCache") != std::string::npos);
+    CHECK(header.find("prepareCardSurface") != std::string::npos);
+    CHECK(header.find("freeAllCardSurfaces") != std::string::npos);
+
+    std::printf("[test] Card surface cache eviction policy OK\n");
+}
+
+static void testNonBlockingFinishPolicy()
+{
+    std::printf("[test] Non-blocking finish* join policy\n");
+    // Verify finish* functions no longer join worker threads
+    const std::string syncApply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+
+    // finishLiveChangeApply should not contain thread.join()
+    // It should contain the "Thread join deferred" comment
+    CHECK(syncApply.find("finishLiveChangeApply") != std::string::npos);
+    // finishHomeRailRefresh should not join
+    CHECK(syncApply.find("finishHomeRailRefresh") != std::string::npos);
+    // finishSafetyReconcile should not join
+    CHECK(syncApply.find("finishSafetyReconcile") != std::string::npos);
+
+    // finishFetch uses m_fetchPostFinalizeApplied flag instead of join
+    CHECK(syncApply.find("m_fetchPostFinalizeApplied") != std::string::npos);
+
+    const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
+    // finishResumeRefresh should not join
+    CHECK(refresh.find("finishResumeRefresh") != std::string::npos);
+    // finishDownloadRefresh should not join
+    CHECK(refresh.find("finishDownloadRefresh") != std::string::npos);
+
+    // Verify start* functions still join before starting new threads
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(sync.find("m_liveChangeDone.load() || !m_liveChangeInFlight") != std::string::npos);
+
+    // Verify the header declares the post-finalize flag
+    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(header.find("m_fetchPostFinalizeApplied") != std::string::npos);
+
+    std::printf("[test] Non-blocking finish* join policy OK\n");
+}

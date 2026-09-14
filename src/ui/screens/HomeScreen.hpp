@@ -135,6 +135,9 @@ public:
     /// LRU eviction order: oldest key at front.  Loaded keys occur once.
     std::deque<std::string> m_rowArtworkOrder;
 
+    // Pre-scaled card surface cache (performance: avoid per-frame create/scale/free)
+    std::map<std::string, SDL_Surface*> m_cardSurfaceCache;
+
     // --- Live-change policy helpers (public for testing) -----------------
 
     /// True when a live-change batch has no meaningful work and should be
@@ -231,6 +234,7 @@ private:
     std::atomic<bool> m_fetchReady{false};
     std::atomic<bool> m_fetchComplete{false};
     bool m_fetchPublished = false;
+    bool m_fetchPostFinalizeApplied = false;
     std::mutex m_fetchMutex;
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;
@@ -414,6 +418,8 @@ private:
     std::set<std::string> protectedRowArtworkKeys() const;
     void touchRowArtwork(const std::string &key);
     void storeDecodedRowArtwork(const std::string &key, DecodedImage image);
+    void prepareCardSurface(const std::string &cacheKey, const DecodedImage &img, int boxW, int boxH);
+    void freeAllCardSurfaces();
     void updateShowsDecodeWorkingSet();
     void drawMovieGrid(SDL_Surface *fb);
     void drawMoviePreview(SDL_Surface *fb);

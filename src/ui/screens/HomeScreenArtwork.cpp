@@ -11,6 +11,10 @@ static constexpr int CARD_GAP = 6;
 static constexpr int VISIBLE_ROWS = 3;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
+// Upper bound on cached card surfaces.  Each row artwork entry can produce
+// surfaces at several box sizes; this cap prevents unbounded growth when
+// distinct keys accumulate faster than row-eviction cleans them up.
+static constexpr int MAX_CARD_SURFACES = 128;
 
 void HomeScreen::tryLoadSelectedArtwork()
 {
@@ -80,6 +84,15 @@ void HomeScreen::evictRowArtworkIfNeeded()
         // A temporary overflow is preferable to evicting an image being
         // rendered.  This is only possible when every cached key is visible.
         if (victim == m_rowArtworkOrder.end()) break;
+        // Also evict any cached card surfaces for this key
+        for (auto it = m_cardSurfaceCache.begin(); it != m_cardSurfaceCache.end(); ) {
+            if (it->first.compare(0, victim->size(), *victim) == 0
+                && (it->first.size() == victim->size()
+                    || it->first[victim->size()] == ':')) {
+                if (it->second) SDL_FreeSurface(it->second);
+                it = m_cardSurfaceCache.erase(it);
+            } else ++it;
+        }
         m_rowArtwork.erase(*victim);
         m_rowArtworkOrder.erase(victim);
     }
@@ -99,6 +112,66 @@ void HomeScreen::storeDecodedRowArtwork(const std::string &key, DecodedImage ima
     entry.image = std::make_shared<DecodedImage>(std::move(image));
     touchRowArtwork(key);
     evictRowArtworkIfNeeded();
+}
+
+void HomeScreen::prepareCardSurface(const std::string &cacheKey,
+                                     const DecodedImage &img, int boxW, int boxH)
+{
+    if (img.empty() || boxW <= 0 || boxH <= 0) return;
+    // Prevent unbounded card-surface cache growth.  When the cache exceeds
+    // the limit, flush it entirely — it will be rebuilt on the next frame
+    // for whatever is currently visible.
+    if ((int)m_cardSurfaceCache.size() > MAX_CARD_SURFACES)
+        freeAllCardSurfaces();
+    // Free old cached surface for this key
+    auto it = m_cardSurfaceCache.find(cacheKey);
+    if (it != m_cardSurfaceCache.end()) {
+        if (it->second) SDL_FreeSurface(it->second);
+        m_cardSurfaceCache.erase(it);
+    }
+    // Compute aspect-fit destination dimensions
+    const float imgAspect = (float)img.width / (float)img.height;
+    const float boxAspect = (float)boxW / (float)boxH;
+    int dw, dh;
+    if (imgAspect > boxAspect) {
+        dw = boxW;
+        dh = (int)(boxW / imgAspect + 0.5f);
+        if (dh > boxH) dh = boxH;
+    } else {
+        dh = boxH;
+        dw = (int)(boxH * imgAspect + 0.5f);
+        if (dw > boxW) dw = boxW;
+    }
+    // Create a source surface wrapping the decoded pixels
+    SDL_Surface *src = SDL_CreateRGBSurfaceFrom(
+        (void *)img.pixels.data(), img.width, img.height, 32,
+        img.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (!src) return;
+    if (dw == img.width && dh == img.height) {
+        // 1:1 — wrap the pixels directly (no extra allocation)
+        m_cardSurfaceCache[cacheKey] = src;
+    } else {
+        // Pre-scale to a new surface
+        SDL_Surface *scaled = SDL_CreateRGBSurface(0, dw, dh, 32,
+            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+        if (scaled) {
+            SDL_Rect srcR = {0, 0, img.width, img.height};
+            SDL_Rect dstR = {0, 0, dw, dh};
+            SDL_BlitScaled(src, &srcR, scaled, &dstR);
+            m_cardSurfaceCache[cacheKey] = scaled;
+        } else {
+            m_cardSurfaceCache[cacheKey] = src;
+            return; // src is kept in cache, don't free
+        }
+        SDL_FreeSurface(src);
+    }
+}
+
+void HomeScreen::freeAllCardSurfaces()
+{
+    for (auto &kv : m_cardSurfaceCache)
+        if (kv.second) SDL_FreeSurface(kv.second);
+    m_cardSurfaceCache.clear();
 }
 
 void HomeScreen::submitDecode(const MediaItem &item, bool highPriority, bool shows)

@@ -44,6 +44,7 @@ HomeScreen::~HomeScreen()
 {
     requestStopAllWorkers();
     joinAllWorkers();
+    freeAllCardSurfaces();
 }
 
 void HomeScreen::requestStopAllWorkers() noexcept

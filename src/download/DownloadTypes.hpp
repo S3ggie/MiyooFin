@@ -76,8 +76,9 @@ struct DownloadItem {
     std::uint64_t hlsCompletedSegments=0, hlsCurrentSegmentBytes=0,
                   hlsCurrentSegmentSize=0;
     unsigned hlsActivePercent=0;
-    // Runtime-only; DownloadStore deliberately never serializes this value.
+    // Runtime-only; DownloadStore deliberately never serializes these values.
     std::uint64_t recentBytesPerSec=0;
+    std::uint64_t lastVerifiedMs=0;
     std::uint64_t createdAt=0, updatedAt=0;
     DownloadState state=DownloadState::Queued;
     bool localOnly=false, updateAvailable=false, externalSubtitles=false;

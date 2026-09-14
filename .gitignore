@@ -52,3 +52,6 @@ vendor/miyoo/lib/*.so.*
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Opencode agent tooling state (local only)
+.opencode/

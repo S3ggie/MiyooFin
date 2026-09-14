@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Host build, tests, and boundary checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libsdl2-dev libsdl2-ttf-dev \
+            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+
+      - name: Build host application
+        run: make -j2
+
+      - name: Tests and refactor boundary checks
+        # tools/refactor-check.sh runs `make test` and `git diff --check` and
+        # enforces the module boundaries and test-only source registration.
+        # xvfb provides a display for the SDL-backed host tests on the runner.
+        run: xvfb-run -a sh tools/refactor-check.sh
+
+  # The OnionOS/ARM build needs shared libraries imported from a physical
+  # Miyoo device (vendor/miyoo/lib, gitignored) and is intentionally not run
+  # here. Validate it locally with `make import-miyoo-libs`, then
+  # `make onionos && make verify-arm`.

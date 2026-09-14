@@ -1,5 +1,4 @@
 #include "HomeScreen.hpp"
-#include "../../net/ServerAddress.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
@@ -8,25 +7,12 @@
 #include "../ArtworkLayout.hpp"
 #include "../../data/MovieTitle.hpp"
 #include "../ShowsBrowser.hpp"
-#include "../../net/JellyfinApi.hpp"
-#include "../../net/ArtworkUrl.hpp"
-#include "../../net/HttpClient.hpp"
-#include "../../net/RouteRequest.hpp"
-#include "../../net/RouteStatus.hpp"
-#include "../../cache/ImageCache.hpp"
-#include "../../app/ScreenStack.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
 #include "../../download/DownloadSupport.hpp"
-#include "miyoofin/version.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <map>
-#include <atomic>
-#include <chrono>
-#include <ctime>
-#include <cctype>
-#include <curl/curl.h>
 
 namespace miyoofin {
 

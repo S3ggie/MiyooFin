@@ -8,9 +8,9 @@
 #include <set>
 
 namespace miyoofin {
-// A main-thread-safe view over the already reconciled DownloadManager snapshot.
-// It intentionally never touches DownloadStore: filesystem validation happens
-// while the manager loads/reconciles its index, not during UI updates/renders.
+// UI projection: turns a LibrarySnapshot + offline catalog + DownloadManager
+// snapshot into a playable main-thread view. This is the read-side consumer;
+// OfflineLibraryQuery is the write-side builder that produces the snapshot.
 class OfflineLibraryProjection {
 public:
     OfflineLibraryProjection(const LibrarySnapshot &library, const OfflineCatalogSnapshot &catalog,

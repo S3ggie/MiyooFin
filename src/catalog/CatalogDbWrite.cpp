@@ -110,7 +110,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::upsertSeriesHierarchy(
     const CatalogDbJobMetadata &metadata)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, true, false, metadata, -1, -1);
+                                 refreshMs, true, false, metadata);
 }
 std::future<CatalogDbHierarchyWriteResult> CatalogDb::stageSeriesHierarchy(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
@@ -119,7 +119,7 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::stageSeriesHierarchy(
     const CatalogDbJobMetadata &metadata)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, complete, false, metadata, -1, -1);
+                                 refreshMs, complete, false, metadata);
 }
 std::future<CatalogDbHierarchyWriteResult>
 CatalogDb::reconcileSeasonHierarchy(
@@ -129,14 +129,14 @@ CatalogDb::reconcileSeasonHierarchy(
 {
     return enqueueHierarchyWrite(
         series, {season}, {{season.id, episodes}}, generation, refreshMs,
-        false, true, metadata, -1, -1);
+        false, true, metadata);
 }
 std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     const MediaItem &series, const std::vector<MediaItem> &seasons,
     const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
     std::uint64_t generation, std::int64_t refreshMs,
     bool complete, bool seasonScoped, const CatalogDbJobMetadata &metadata,
-    int failAfterRows, int cancelAfterRows)
+    CatalogDbFailureSpec injection)
 {
     auto command = std::make_shared<HierarchyWriteCommand>();
     command->series = series;
@@ -148,8 +148,11 @@ std::future<CatalogDbHierarchyWriteResult> CatalogDb::enqueueHierarchyWrite(
     command->seasonScoped = seasonScoped;
     command->metadata = metadata;
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
-    command->failAfterRows = failAfterRows;
-    command->cancelAfterRows = cancelAfterRows;
+#ifdef MIYOOFIN_TEST_BUILD
+    command->injection = injection;
+#else
+    (void)injection;
+#endif // MIYOOFIN_TEST_BUILD
     std::future<CatalogDbHierarchyWriteResult> result =
         command->result.get_future();
     {
@@ -198,9 +201,14 @@ std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPage(
 { return enqueueMediaPageUpsert(page, metadata); }
 std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
     const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
-    int failAfterRows)
+    CatalogDbFailureSpec injection)
 {
-    auto command=std::make_shared<MediaPageUpsertCommand>(); command->page=page; command->metadata=metadata; command->failAfterRows=failAfterRows;
+    auto command=std::make_shared<MediaPageUpsertCommand>(); command->page=page; command->metadata=metadata;
+#ifdef MIYOOFIN_TEST_BUILD
+    command->injection = injection;
+#else
+    (void)injection;
+#endif // MIYOOFIN_TEST_BUILD
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
     if (m_stopping || m_pendingJobs >= kMaxPendingJobs) { CatalogDbMediaPageUpsertResult r; r.error=CatalogDbErrorCategory::ScopeNotReady; r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full"; command->result.set_value(std::move(r)); return future; }
     command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
@@ -259,9 +267,9 @@ void CatalogDb::processHierarchyWrite(
         Superseded,
     };
     auto state = [&] {
-        if (command->cancelAfterRows >= 0
+        if (command->failureSpec().cancelAfterRows >= 0
             && result.rowsWritten >= static_cast<std::size_t>(
-                                         command->cancelAfterRows)) {
+                                         command->failureSpec().cancelAfterRows)) {
             return WriteState::Cancelled;
         }
         if (command->metadata.cancellation
@@ -458,9 +466,9 @@ void CatalogDb::processHierarchyWrite(
             return false;
         }
         ++result.rowsWritten;
-        if (command->failAfterRows >= 0
+        if (command->failureSpec().failAfterRows >= 0
             && result.rowsWritten >= static_cast<std::size_t>(
-                                         command->failAfterRows)) {
+                                         command->failureSpec().failAfterRows)) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = "injected hierarchy write failure";
             return false;
@@ -604,8 +612,9 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
     for (std::size_t n = 0; viewReady && n < command->page.items.size(); ++n) {
         const auto &item = command->page.items[n];
         MediaItemSqlError e = MediaItemSqlError::None;
-        if (command->failAfterRows >= 0
-            && static_cast<int>(result.rowsWritten) >= command->failAfterRows) {
+        if (command->failureSpec().failAfterRows >= 0
+            && static_cast<int>(result.rowsWritten)
+                   >= command->failureSpec().failAfterRows) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = "injected page failure";
             pageRollbackDiagnostic("injected_test_failure", n, &item);

@@ -12,11 +12,12 @@ static void testHomeIncrementalPublicationPolicy()
     const std::string render = readTestBytes("src/ui/screens/HomeScreenRender.cpp");
     CHECK(render.find("homeSyncStatus(true)") != std::string::npos);
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(sync.find("updateLiveLibraryChanges()") != std::string::npos);
     CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
     CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
-    CHECK(sync.find("m_lastSafetyReconcileMs") != std::string::npos);
-    CHECK(sync.find("m_cachedSnapshot.continueWatching") != std::string::npos);
+    CHECK(apply.find("m_lastSafetyReconcileMs") != std::string::npos);
+    CHECK(apply.find("m_cachedSnapshot.continueWatching") != std::string::npos);
     std::printf("[test] Home incremental publication policy OK\n");
 }
 
@@ -252,7 +253,8 @@ static void testInitialHomeArtworkScheduling()
           != std::string::npos);
     const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
     CHECK(coordinator.find("m_posterThreads.emplace_back") != std::string::npos);
-    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(result.items), true)")
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(apply.find("queuePosterJobs(planMediaPagePosterJobs(result.items), true)")
           != std::string::npos);
     CHECK(source.find("m_artworkPlanningComplete.store(false)")
           != std::string::npos);
@@ -322,8 +324,8 @@ static void testRecentlyAddedWarmPublication()
     CHECK(tabs[0].rows.size()==2
           && tabs[0].rows[1].label=="Recently Added"
           && tabs[0].rows[1].items[0].id==replacement.id);
-    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(source.find("updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)")
+    const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(apply.find("updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)")
           != std::string::npos);
     std::printf("[test] Recently Added warm publication OK\n");
 }
@@ -332,13 +334,14 @@ static void testWarmHomeCatalogWindows()
 {
     std::printf("[test] warm Home catalog windows\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(source.find("initialPagePublished = true") != std::string::npos);
-    CHECK(source.find("mediaWindowsFromTabs") != std::string::npos);
-    CHECK(source.find("m_moviePage.items = warmWindows.movies")
+    CHECK(apply.find("mediaWindowsFromTabs") != std::string::npos);
+    CHECK(apply.find("m_moviePage.items = warmWindows.movies")
           != std::string::npos);
-    CHECK(source.find("m_showPage.items = warmWindows.shows")
+    CHECK(apply.find("m_showPage.items = warmWindows.shows")
           != std::string::npos);
-    CHECK(source.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
+    CHECK(apply.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
           != std::string::npos);
     std::printf("[test] warm Home catalog windows OK\n");
 }
@@ -364,11 +367,12 @@ static void testAnimeSelectionSurvivesSharedWindowTrim()
 {
     std::printf("[test] Anime selection survives shared window trim\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(source.find("m_showSelected = std::max(0, m_showSelected -")
           == std::string::npos);
     CHECK(source.find("m_animeSelected = std::max(0, m_animeSelected -")
           == std::string::npos);
-    CHECK(source.find("rebuildShowsPresentation();") != std::string::npos);
+    CHECK(apply.find("rebuildShowsPresentation();") != std::string::npos);
     CHECK(HomeScreen::restoreSelectionIndex(
               {titledShow("show-a", "Show A"), titledShow("anime-b", "Anime B")},
               "anime-b", 0) == 1);
@@ -411,11 +415,12 @@ static void testHomeBoundedPagesCanRewind()
     const std::string header=readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(header.find("hasEarlier") != std::string::npos);
     CHECK(header.find("replaceWindowOnNextPage") != std::string::npos);
     CHECK(navigation.find("requestEarlierMediaPage") != std::string::npos);
     CHECK(sync.find("replaceWindowOnNextPage") != std::string::npos);
-    CHECK(sync.find("hasEarlier = true") != std::string::npos);
+    CHECK(apply.find("hasEarlier = true") != std::string::npos);
     std::printf("[test] Home bounded pages rewind without cursor jumps OK\n");
 }
 
@@ -435,11 +440,11 @@ static void testHomeUsesSharedDownIntentAcrossPageLoads()
     std::printf("[test] Home preserves Down intent across page loads\n");
     const std::string header=readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(header.find("pendingDown") != std::string::npos);
     CHECK(navigation.find("gridAtBottomRow") != std::string::npos);
     CHECK(navigation.find("pendingDown") != std::string::npos);
-    CHECK(sync.find("applyPendingDown") != std::string::npos);
+    CHECK(apply.find("applyPendingDown") != std::string::npos);
     std::printf("[test] Home preserves Down intent across page loads OK\n");
 }
 

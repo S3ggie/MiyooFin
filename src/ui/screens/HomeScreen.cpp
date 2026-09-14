@@ -42,13 +42,37 @@ HomeScreen::HomeScreen(const Session &session,
 
 HomeScreen::~HomeScreen()
 {
-    cancelAsyncWork();
-    if (m_fetchThread.joinable())
-        m_fetchThread.join();
+    requestStopAllWorkers();
+    joinAllWorkers();
+}
+
+void HomeScreen::requestStopAllWorkers() noexcept
+{
     if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
     if (m_animePage.cancellation) m_animePage.cancellation->store(true);
     if (m_fetchCancellation) m_fetchCancellation->store(true);
+    if (m_liveChangeCancellation)
+        m_liveChangeCancellation->store(true);
+    if (m_safetyReconcileCancellation)
+        m_safetyReconcileCancellation->store(true);
+    if (m_homeRailRefreshCancellation)
+        m_homeRailRefreshCancellation->store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        m_stopHierarchyWorker = true;
+        if (m_catalogGenerationCancellation)
+            m_catalogGenerationCancellation->store(true);
+    }
+    m_hierarchyWake.notify_one();
+    { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
+    m_posterWake.notify_all();
+    { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
+    m_decodeWake.notify_one();
+}
+
+void HomeScreen::joinAllWorkers()
+{
     if (m_fetchThread.joinable())
         m_fetchThread.join();
     if (m_resumeRefreshThread.joinable())
@@ -61,38 +85,18 @@ HomeScreen::~HomeScreen()
         m_safetyReconcileThread.join();
     if (m_homeRailRefreshThread.joinable())
         m_homeRailRefreshThread.join();
-    { std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-      m_stopHierarchyWorker = true;
-      if (m_catalogGenerationCancellation)
-          m_catalogGenerationCancellation->store(true);
-    }
-    m_hierarchyWake.notify_one();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
-    { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
-    m_posterWake.notify_all();
     for (auto &thread : m_posterThreads)
         if (thread.joinable()) thread.join();
-    { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
-    m_decodeWake.notify_one();
     if (m_decodeThread.joinable()) m_decodeThread.join();
 }
 
+// EXIT-ONLY: permanently requests all background workers stop (flags are
+// never-reset).  Only safe on the screen-teardown / app-exit path where the
+// screen is destroyed immediately afterwards.  Do NOT call mid-session.
 void HomeScreen::cancelAsyncWork() noexcept
 {
-    if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
-    if (m_showPage.cancellation) m_showPage.cancellation->store(true);
-    if (m_fetchCancellation) m_fetchCancellation->store(true);
-    if (m_liveChangeCancellation)
-        m_liveChangeCancellation->store(true);
-    if (m_safetyReconcileCancellation)
-        m_safetyReconcileCancellation->store(true);
-    if (m_homeRailRefreshCancellation)
-        m_homeRailRefreshCancellation->store(true);
-    {
-        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-        if (m_catalogGenerationCancellation)
-            m_catalogGenerationCancellation->store(true);
-    }
+    requestStopAllWorkers();
 }
 
 void HomeScreen::updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items) { miyoofin::updateContinueWatchingRow(tabs, items); }

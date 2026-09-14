@@ -20,7 +20,8 @@ CatalogCompatibility::seedLibrarySnapshotForTest(
 {
     CatalogCompatibilitySeedRequest request;
     request.snapshot = snapshot;
-    return db.enqueueLibrarySeed(request, metadata, failAfterWrites);
+    return db.enqueueLibrarySeed(request, metadata,
+                                 CatalogDbFailureSpec{-1, -1, failAfterWrites});
 }
 #endif // MIYOOFIN_TEST_BUILD
 

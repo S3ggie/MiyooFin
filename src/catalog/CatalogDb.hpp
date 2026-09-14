@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../data/MediaItem.hpp"
+#include "CatalogDbFailureInjector.hpp"
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -498,10 +499,11 @@ private:
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         bool complete, bool seasonScoped, const CatalogDbJobMetadata &metadata,
-        int failAfterRows, int cancelAfterRows);
+        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
     std::future<CatalogDbReconcileResult> enqueueReconcile(
         const std::vector<MediaItem> &series, bool authoritative,
-        const CatalogDbJobMetadata &metadata, int failAfterRows);
+        const CatalogDbJobMetadata &metadata,
+        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
     std::future<CatalogDbSyncState> enqueueSyncStateRead(
         bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
         std::int64_t legacyLastReconcileMs,
@@ -513,7 +515,7 @@ private:
     std::future<CatalogCompatibilitySeedResult> enqueueLibrarySeed(
         const CatalogCompatibilitySeedRequest &request,
         const CatalogDbJobMetadata &metadata,
-        int failAfterWrites = -1);
+        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
     std::future<CatalogCompatibilityReadResult> enqueueLibraryRead(
         const CatalogDbJobMetadata &metadata);
     std::future<CatalogDbMediaPageResult> enqueueMediaPage(
@@ -522,7 +524,7 @@ private:
         CatalogDbMediaPageFilter filter);
     std::future<CatalogDbMediaPageUpsertResult> enqueueMediaPageUpsert(
         const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
-        int failAfterRows = -1);
+        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
     void finalizeStatements();
     void closeConnection();
     bool openConnection(const ScopeCommand &command);
@@ -538,7 +540,9 @@ private:
     std::condition_variable m_idle;
     std::array<std::deque<Job>, 4> m_queues;
     std::deque<ScopeCommand> m_scopeCommands;
+#ifdef MIYOOFIN_TEST_BUILD
     std::deque<std::shared_ptr<TestCommand>> m_testCommands;
+#endif // MIYOOFIN_TEST_BUILD
     std::deque<std::shared_ptr<QueryCommand>> m_queryCommands;
     std::deque<std::shared_ptr<HierarchyWriteCommand>> m_writeCommands;
     std::deque<std::shared_ptr<ReconcileCommand>> m_reconcileCommands;
@@ -557,7 +561,9 @@ private:
     std::string m_activeScopeKey;
     std::size_t m_pendingJobs = 0;
     bool m_runningJob = false;
+#ifdef MIYOOFIN_TEST_BUILD
     bool m_pausedForTest = false;
+#endif // MIYOOFIN_TEST_BUILD
     bool m_scopeConfigured = false;
     bool m_scopeReady = false;
     CatalogDbScopeStatus m_scopeStatus = CatalogDbScopeStatus::Unconfigured;

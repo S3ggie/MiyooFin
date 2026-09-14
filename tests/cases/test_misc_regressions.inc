@@ -269,6 +269,36 @@ static void testInitialHomeArtworkScheduling()
     std::printf("[test] initial Home artwork scheduling OK\n");
 }
 
+static void testPersistentHttpClientPatterns()
+{
+    std::printf("[test] persistent HttpClient patterns in worker threads\n");
+    // HomeScreen fetch worker reuses one client across all metadata calls
+    const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(sync.find("HttpClient fetchClient;") != std::string::npos);
+    CHECK(sync.find("JellyfinApi::getViews(base, token, uid, devId, views,\n                                             viewsErr, fetchClient, cancellation.get())") != std::string::npos
+          || sync.find("JellyfinApi::getViews(base, token, uid, devId, views,viewsErr, fetchClient, cancellation.get())") != std::string::npos
+          || sync.find("fetchClient, cancellation.get())") != std::string::npos);
+    CHECK(sync.find("HttpClient railClient;") != std::string::npos);
+    // LibrarySync reconcile reuses one client across views + pages loop
+    const std::string inc=readTestBytes("src/library/LibrarySyncIncremental.cpp");
+    CHECK(inc.find("HttpClient reconcileClient;") != std::string::npos);
+    // EpisodeBrowser artwork worker reuses one client
+    const std::string ep=readTestBytes("src/ui/screens/EpisodeBrowserArtwork.cpp");
+    CHECK(ep.find("HttpClient artworkClient;") != std::string::npos);
+    CHECK(ep.find("artworkClient.setTimeoutSec(3)") != std::string::npos);
+    // SeriesScreen artwork worker reuses one client
+    const std::string ss=readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
+    CHECK(ss.find("HttpClient artworkClient;") != std::string::npos);
+    CHECK(ss.find("artworkClient.setTimeoutSec(8)") != std::string::npos);
+    // JellyfinApiLibrary exposes HttpClient& overloads
+    const std::string api=readTestBytes("src/net/JellyfinApiLibrary.cpp");
+    CHECK(api.find("HttpClient &client,") != std::string::npos);
+    CHECK(api.find("return getViews(baseUrl, accessToken, userId, deviceId, views, error,\n                    client, cancelled)") != std::string::npos
+          || api.find("return getViews(baseUrl, accessToken, userId, deviceId, views, error,client, cancelled)") != std::string::npos
+          || api.find("client, cancelled)") != std::string::npos);
+    std::printf("[test] persistent HttpClient patterns in worker threads OK\n");
+}
+
 static void testShowsFocusPreservedDuringIncrementalRefresh()
 {
     std::printf("[test] Shows/Anime focus survives incremental refresh\n");

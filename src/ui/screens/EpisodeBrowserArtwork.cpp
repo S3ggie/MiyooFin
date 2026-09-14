@@ -168,6 +168,8 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
     PerformanceTelemetry &telemetry=performanceTelemetry();
     telemetry.setWorkerActive(WorkerId::EpisodeArtwork, false);
     telemetry.setWorkerQueueDepth(WorkerId::EpisodeArtwork, 0);
+    HttpClient artworkClient;  // persistent connection for all artwork fetches
+    artworkClient.setTimeoutSec(3);
     std::uint64_t observedGeneration = 0;
     while (true) {
         ArtworkJob job;
@@ -271,15 +273,13 @@ void EpisodeBrowserScreen::artworkWorkerLoop()
             if (cacheHit) {
                 success = true;
             } else {
-                HttpClient client;
-                client.setTimeoutSec(3);
                 auto headers = JellyfinApi::buildAuthHeaders(
                     m_session.accessToken, m_session.deviceId);
 
                 BinaryHttpResponse response;
                 std::string error;
                 TelemetryRequestScope request(RequestKind::Artwork);
-                const bool fetched = RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,ImageType::Primary,job.imageTag,job.width,job.height),headers,response,error,512*1024,&m_workerCancelled)&&response.ok();},error);
+                const bool fetched = RouteRequest(m_session).run([&](const std::string &base){return artworkClient.getBinary(buildImageUrl(base,job.itemId,ImageType::Primary,job.imageTag,job.width,job.height),headers,response,error,512*1024,&m_workerCancelled)&&response.ok();},error);
                 if (fetched)
                 {
                     if (response.ok()) {

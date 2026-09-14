@@ -1,6 +1,7 @@
 #include "LibrarySync.hpp"
 #include "../net/JellyfinLibraryEvents.hpp"
 #include "../net/JellyfinApi.hpp"
+#include "../net/HttpClient.hpp"
 #include "../net/RouteRequest.hpp"
 #include <algorithm>
 #include <cerrno>
@@ -171,6 +172,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
                 return result;
             }
 
+            HttpClient reconcileClient;  // persistent connection for reconcile walk
             std::vector<LibraryView> views;
             std::string error;
             const bool viewsOk = RouteRequest(session).run(
@@ -178,6 +180,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
                     return JellyfinApi::getViews(
                         base, session.accessToken, session.userId,
                         session.deviceId, views, error,
+                        reconcileClient,
                         effectiveCancellation
                             ? effectiveCancellation.get() : nullptr);
                 }, error);
@@ -238,6 +241,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
                                 base, session.accessToken, session.userId,
                                 session.deviceId, view.id, types, start, 100,
                                 page, error,
+                                reconcileClient,
                                 effectiveCancellation
                                     ? effectiveCancellation.get() : nullptr);
                         }, error);

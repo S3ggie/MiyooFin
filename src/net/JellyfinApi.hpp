@@ -8,6 +8,8 @@
 #include <cstdint>
 #include "../data/MediaItem.hpp"
 
+namespace miyoofin { class HttpClient; }
+
 namespace miyoofin {
 
 /// Server info returned by the /System/Info endpoint.
@@ -136,6 +138,17 @@ public:
                          std::string &error,
                          const std::atomic<bool> *cancelled = nullptr);
 
+    /// Overload that reuses an existing HttpClient for connection pooling.
+    /// The timeout is set internally to match the original per-call value.
+    static bool getViews(const std::string &baseUrl,
+                         const std::string &accessToken,
+                         const std::string &userId,
+                         const std::string &deviceId,
+                         std::vector<LibraryView> &views,
+                         std::string &error,
+                         HttpClient &client,
+                         const std::atomic<bool> *cancelled = nullptr);
+
     /// Fetch exactly one bounded page. This never follows a subsequent page.
     static bool getLibraryItemsPage(const std::string &baseUrl,
                                     const std::string &accessToken,
@@ -146,6 +159,19 @@ public:
                                     int startIndex, int limit,
                                     LibraryItemsPage &page,
                                     std::string &error,
+                                    const std::atomic<bool> *cancelled = nullptr);
+
+    /// Overload that reuses an existing HttpClient for connection pooling.
+    static bool getLibraryItemsPage(const std::string &baseUrl,
+                                    const std::string &accessToken,
+                                    const std::string &userId,
+                                    const std::string &deviceId,
+                                    const std::string &parentId,
+                                    const std::string &includeItemTypes,
+                                    int startIndex, int limit,
+                                    LibraryItemsPage &page,
+                                    std::string &error,
+                                    HttpClient &client,
                                     const std::atomic<bool> *cancelled = nullptr);
     /// Changed hierarchy relationships since a durable UTC checkpoint.  The
     /// result retains only ID, normalized type, and SeriesId; DateLastSaved
@@ -188,6 +214,17 @@ public:
                                std::string &error,
                                const std::atomic<bool> *cancelled = nullptr);
 
+    /// Overload that reuses an existing HttpClient for connection pooling.
+    static bool getResumeItems(const std::string &baseUrl,
+                               const std::string &accessToken,
+                               const std::string &userId,
+                               const std::string &deviceId,
+                               int limit,
+                               std::vector<MediaItem> &items,
+                               std::string &error,
+                               HttpClient &client,
+                               const std::atomic<bool> *cancelled = nullptr);
+
     /// Fetch "recently added" items across all libraries.
     static bool getLatestItems(const std::string &baseUrl,
                                const std::string &accessToken,
@@ -196,6 +233,17 @@ public:
                                int limit,
                                std::vector<MediaItem> &items,
                                std::string &error,
+                               const std::atomic<bool> *cancelled = nullptr);
+
+    /// Overload that reuses an existing HttpClient for connection pooling.
+    static bool getLatestItems(const std::string &baseUrl,
+                               const std::string &accessToken,
+                               const std::string &userId,
+                               const std::string &deviceId,
+                               int limit,
+                               std::vector<MediaItem> &items,
+                               std::string &error,
+                               HttpClient &client,
                                const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch seasons for a given series.

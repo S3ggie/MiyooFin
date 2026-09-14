@@ -1,6 +1,6 @@
 #include "App.hpp"
 #include "DisplaySizing.hpp"
-#include "UiDiagnostics.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
 #include "../playback/OfflinePlaybackJournal.hpp"
 #include "../cache/LibraryCache.hpp"

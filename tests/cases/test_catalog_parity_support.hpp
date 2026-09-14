@@ -5,7 +5,7 @@
 #include <tuple>
 #include <vector>
 
-#include "../../src/catalog/CatalogPrimitives.hpp"
+#include "../../src/data/CatalogPrimitives.hpp"
 #include "../../src/catalog/CatalogCompatibility.hpp"
 #include "../../src/net/JellyfinLibraryEvents.hpp"
 

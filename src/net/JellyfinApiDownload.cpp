@@ -1,8 +1,8 @@
 #include "JellyfinApi.hpp"
 #include <curl/curl.h>
 #include "HttpClient.hpp"
-#include "../download/HlsPlaylist.hpp"
-#include "../download/HlsProfile.hpp"
+#include "HlsPlaylist.hpp"
+#include "HlsProfile.hpp"
 #include "../diagnostics/TelemetryGuards.hpp"
 #include <cstdio>
 

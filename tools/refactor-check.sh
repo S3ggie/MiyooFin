@@ -6,7 +6,7 @@ repo_root=$(CDPATH= cd "$script_dir/.." && pwd)
 cd "$repo_root"
 
 catalogdb_sources="src/catalog/CatalogDb.cpp src/catalog/CatalogDbSchema.cpp src/catalog/CatalogDbWrite.cpp src/catalog/CatalogDbQuery.cpp src/catalog/CatalogDbSyncState.cpp src/catalog/CatalogDbHierarchy.cpp src/catalog/CatalogDbInternal.hpp src/catalog/CatalogDb.hpp"
-catalogdb_prohibited='JellyfinApi|DownloadStore|LibraryCache|TitleOrganization|MovieTitle|movieOrganizationalLess|organizationalLess|LibrarySnapshot|seedLibrarySnapshot|readLibrarySnapshot|\.\./net/|\.\./download/|\.\./ui/'
+catalogdb_prohibited='JellyfinApi|DownloadStore|LibraryCache|TitleOrganization|MovieTitle|movieOrganizationalLess|organizationalLess|LibrarySnapshot|seedLibrarySnapshot|readLibrarySnapshot|\.\./net/|\.\./download/|\.\./ui/|\.\./app/|\.\./cache/|\.\./library/'
 
 for source in $catalogdb_sources; do
     if matches=$(grep -nE "$catalogdb_prohibited" "$source"); then
@@ -15,6 +15,29 @@ for source in $catalogdb_sources; do
         exit 1
     fi
 done
+
+# Test-only translation units must be registered in the test build and must
+# never leak into the cross (device) build or the production source list.
+test_only_sources="src/catalog/CatalogDbTestCommands.cpp"
+for source in $test_only_sources; do
+    grep -q "$source" Makefile || { echo "missing test registration: $source"; exit 1; }
+    if grep -q "$source" Makefile.cross; then
+        echo "test-only source leaked into cross build: $source"
+        exit 1
+    fi
+    if grep -q "\$(SRC_DIR)/$source" Makefile; then
+        echo "test-only source leaked into production sources: $source"
+        exit 1
+    fi
+done
+
+# Moved modules must not be referenced from their old locations.
+stale_paths='\.\./app/UiDiagnostics\.hpp|\.\./ui/MovieTitle\.hpp|\.\./ui/TitleOrganization\.hpp|\.\./download/HlsPlaylist\.hpp|\.\./download/HlsProfile\.hpp|\.\./catalog/CatalogPrimitives\.hpp'
+if matches=$(grep -rnE "$stale_paths" src/ tests/ Makefile Makefile.cross); then
+    printf '%s\n' "stale module include path(s) found:"
+    printf '%s\n' "$matches"
+    exit 1
+fi
 
 required_sources="CatalogDbSchema.cpp CatalogDbWrite.cpp CatalogDbQuery.cpp CatalogDbSyncState.cpp CatalogDbHierarchy.cpp LibrarySyncIncremental.cpp LibrarySyncEvents.cpp AppSession.cpp AppPlayback.cpp PerformanceTelemetryRecord.cpp PerformanceTelemetryService.cpp PerformanceTelemetrySnapshot.cpp SeriesScreenWorker.cpp SeriesScreenNavigation.cpp SeriesScreenRender.cpp MovieDetailsWorker.cpp MovieDetailsRender.cpp EpisodeBrowserData.cpp HomeScreenOffline.cpp HomeScreenSyncApply.cpp"
 for source in $required_sources; do

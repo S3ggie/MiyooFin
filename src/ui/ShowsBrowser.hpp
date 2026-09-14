@@ -1,6 +1,6 @@
 #ifndef MIYOOFIN_SHOWS_BROWSER_HPP
 #define MIYOOFIN_SHOWS_BROWSER_HPP
-#include "TitleOrganization.hpp"
+#include "../data/TitleOrganization.hpp"
 #include "../cache/LibraryCache.hpp"
 #include <algorithm>
 #include <map>

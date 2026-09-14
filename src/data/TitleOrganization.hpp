@@ -1,8 +1,8 @@
 #ifndef MIYOOFIN_TITLE_ORGANIZATION_HPP
 #define MIYOOFIN_TITLE_ORGANIZATION_HPP
 
-#include "../data/MediaItem.hpp"
-#include "../catalog/CatalogPrimitives.hpp"
+#include "MediaItem.hpp"
+#include "CatalogPrimitives.hpp"
 #include <string>
 #include <string_view>
 #include <string>

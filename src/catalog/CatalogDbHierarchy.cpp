@@ -10,12 +10,6 @@ std::future<CatalogDbReconcileResult> CatalogDb::reconcileSeries(
 {
     return enqueueReconcile(series, authoritative, metadata, -1);
 }
-std::future<CatalogDbReconcileResult> CatalogDb::reconcileSeriesForTest(
-    const std::vector<MediaItem> &series, bool authoritative,
-    int failAfterRows)
-{
-    return enqueueReconcile(series, authoritative, {}, failAfterRows);
-}
 std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
     const std::vector<MediaItem> &series, bool authoritative,
     const CatalogDbJobMetadata &metadata, int failAfterRows)

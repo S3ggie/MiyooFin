@@ -1,5 +1,5 @@
 #include "OfflineLibraryQuery.hpp"
-#include "../ui/MovieTitle.hpp"
+#include "../data/MovieTitle.hpp"
 #include <algorithm>
 #include <map>
 #include <set>

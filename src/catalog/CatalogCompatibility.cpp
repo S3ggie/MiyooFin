@@ -12,6 +12,7 @@ CatalogCompatibility::seedLibrarySnapshot(
     return db.enqueueLibrarySeed(request, metadata);
 }
 
+#ifdef MIYOOFIN_TEST_BUILD
 std::future<CatalogCompatibilitySeedResult>
 CatalogCompatibility::seedLibrarySnapshotForTest(
     CatalogDb &db, const LibrarySnapshot &snapshot, int failAfterWrites,
@@ -21,6 +22,7 @@ CatalogCompatibility::seedLibrarySnapshotForTest(
     request.snapshot = snapshot;
     return db.enqueueLibrarySeed(request, metadata, failAfterWrites);
 }
+#endif // MIYOOFIN_TEST_BUILD
 
 std::future<CatalogCompatibilityReadResult>
 CatalogCompatibility::readLibrarySnapshot(

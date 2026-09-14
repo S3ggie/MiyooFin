@@ -4,7 +4,7 @@
 #include "../../library/LibrarySync.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/RouteRequest.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <thread>

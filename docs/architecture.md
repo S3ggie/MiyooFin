@@ -26,8 +26,15 @@ existing behavior or ownership model.
 
 ```
 src/
-  main.cpp, app/                 Application, AppSession/AppPlayback lifecycle units, ScreenStack, diagnostics
+  main.cpp, app/                 Application, AppSession/AppPlayback lifecycle units, ScreenStack
   input/                         SDL input polling and logical Actions
+  data/                          MediaItem and title/catalog ordering value helpers
+    MediaItem.hpp                Canonical media item value type
+    CatalogPrimitives.*          Organization/sort/alphabet primitives
+    TitleOrganization.hpp        Value-level title ordering facade
+    MovieTitle.hpp               Movie organization rules
+  diagnostics/                   Performance telemetry and UI stall diagnostics
+    UiDiagnostics.*              Watchdog heartbeat, stall edges, slow scopes
   ui/                            Shared UI, font, and Home pure-logic models
     HomeSyncState.hpp            Sync-state projection helpers
     HomeSettingsModel.*          Settings presentation model
@@ -65,6 +72,7 @@ src/
     CatalogDbQuery.cpp           Bounded reads and row decoding
     CatalogDbSyncState.cpp       Durable sync checkpoint state
     CatalogDbHierarchy.cpp       Hierarchy persistence and reconciliation
+    CatalogDbTestCommands.cpp    Test-only command queue/dispatch (MIYOOFIN_TEST_BUILD)
   library/
     LibrarySync.cpp              Synchronization owner and orchestration
     LibrarySyncIncremental.cpp  Incremental and authoritative changes
@@ -77,14 +85,16 @@ src/
     JellyfinApiHierarchy.cpp     Series/season/episode endpoints
     JellyfinApiPlayback.cpp      Playback and reporting endpoints
     JellyfinApiDownload.cpp      Download/HLS endpoints
-  cache/                         Image, library, sync, and offline caches
+    HlsPlaylist.*                HLS playlist parsing and URL resolution
+    HlsProfile.hpp               Constrained device transcode profile/estimates
+  cache/                         Image, library, and sync caches
   download/
     DownloadManager.cpp          DownloadManager lifecycle/core state
     DownloadManagerPlanning.cpp  Planning worker and plan snapshots
     DownloadManagerReconcileWorker.cpp  Reconcile request/worker
     DownloadManagerTransfer.cpp  HLS transfer worker and segment progress
     DownloadReconcile.*          Reconcile policy
-  playback/                      Playback request and offline journal
+  playback/                      Playback request, offline journal, offline library projection
 include/miyoofin/                 Public identity/version headers
 tests/test_*.cpp                  Focused test-binary wrappers and aggregate runner
 tests/cases/*.inc                 Test cases shared by focused wrappers
@@ -117,6 +127,19 @@ assertion support, while `output/test/test_runner` runs every group for the aggr
 Production sources are compiled once into reusable test objects and archived for selective linker
 extraction, so changing one case only rebuilds and relinks its focused binary. Desktop-only runtime
 checks are exposed through the separate `Makefile.desktop` targets rather than `make test`.
+
+Test-only production seams are separated from the device build. `CatalogDb`'s test command queue,
+dispatch, and `*ForTest` definitions live in `catalog/CatalogDbTestCommands.cpp`, which is compiled
+only when `MIYOOFIN_TEST_BUILD` is defined and is registered only in the test source list. The
+remaining `*ForTest` helpers are small guarded definitions inside their owning modules.
+
+Module includes flow low-to-high: `data/` and `diagnostics/` are leaves; `net/`, `catalog/`,
+`cache/`, `download/`, `library/`, and `playback/` build on them; `app/` and `ui/` consume the rest.
+`tools/refactor-check.sh` enforces the CatalogDb boundary, the render-only MovieDetails boundary,
+test-only source registration, and the absence of stale include paths. One peer edge is intentional:
+download planning reads library contents through `LibraryQuery`/`LibrarySync`, while library
+synchronization reads the durable `DownloadStore` for offline-catalog reconciliation. That
+download/library crossing is deliberate; no other upward crossing is.
 
 ## Performance telemetry architecture
 
@@ -197,6 +220,7 @@ main.cpp
        └─ screen classes and their concern-specific implementation units
             ├─ HomeScreen + Home models and HomeScreen units
             ├─ EpisodeBrowserScreen + rendering/artwork/playback/download units
-            ├─ JellyfinApi + JSON/auth/library/hierarchy/playback/download units
+            ├─ JellyfinApi + JSON/auth/library/hierarchy/playback/download + HLS units
             └─ DownloadManager + planning/reconcile/transfer units
+  data / diagnostics (leaves; no upward includes)
 ```

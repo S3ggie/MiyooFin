@@ -302,11 +302,13 @@ public:
     CatalogDb(const CatalogDb&) = delete;
     CatalogDb& operator=(const CatalogDb&) = delete;
 
+#ifdef MIYOOFIN_TEST_BUILD
     /// Queue a lifecycle-only job for focused host tests.
     CatalogDbEnqueueResult enqueueNoopForTest(
         CatalogDbPriority priority,
         const CatalogDbJobMetadata &metadata = {});
 
+#endif // MIYOOFIN_TEST_BUILD
     /// Request a scope transition without doing the transition on the caller
     /// thread. Every request deliberately refreshes the epoch, including an
     /// exact repeat of the current server/user identity.
@@ -315,6 +317,7 @@ public:
     std::uint64_t deconfigureScope();
     CatalogDbScopeState scopeState() const;
 
+#ifdef MIYOOFIN_TEST_BUILD
     /// Queue a scope-bound lifecycle job using the currently requested epoch.
     CatalogDbEnqueueResult enqueueScopedNoopForTest(
         CatalogDbPriority priority);
@@ -337,6 +340,7 @@ public:
         const std::string &type, int alphabetLetter = -1);
     CatalogDbTestResult writeSentinelForTest(const std::string &value);
     CatalogDbTestResult readSentinelForTest();
+#endif // MIYOOFIN_TEST_BUILD
 
     std::future<CatalogDbHierarchyResult> getSeasons(
         const std::string &seriesId,
@@ -373,18 +377,22 @@ public:
         const MediaItem &series, const MediaItem &season,
         const std::vector<MediaItem> &episodes, std::uint64_t generation,
         std::int64_t refreshMs, const CatalogDbJobMetadata &metadata = {});
+#ifdef MIYOOFIN_TEST_BUILD
     std::future<CatalogDbHierarchyWriteResult>
     upsertSeriesHierarchyForTest(
         const MediaItem &series, const std::vector<MediaItem> &seasons,
         const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
         std::uint64_t generation, std::int64_t refreshMs,
         int failAfterRows, int cancelAfterRows);
+#endif // MIYOOFIN_TEST_BUILD
     std::future<CatalogDbReconcileResult> reconcileSeries(
         const std::vector<MediaItem> &series, bool authoritative,
         const CatalogDbJobMetadata &metadata = {});
+#ifdef MIYOOFIN_TEST_BUILD
     std::future<CatalogDbReconcileResult> reconcileSeriesForTest(
         const std::vector<MediaItem> &series, bool authoritative,
         int failAfterRows);
+#endif // MIYOOFIN_TEST_BUILD
     /// Read the SQLite hierarchy checkpoint on the CatalogDb worker.  A
     /// non-empty legacy seed is imported only while the SQLite row is still
     /// at its initial zero value; the legacy file is never written.
@@ -400,9 +408,11 @@ public:
     std::future<CatalogDbMediaPageUpsertResult> upsertMediaPage(
         const CatalogDbMediaPageWrite &page,
         const CatalogDbJobMetadata &metadata = {});
+#ifdef MIYOOFIN_TEST_BUILD
     std::future<CatalogDbMediaPageUpsertResult> upsertMediaPageForTest(
         const CatalogDbMediaPageWrite &page, int failAfterRows,
         const CatalogDbJobMetadata &metadata = {});
+#endif // MIYOOFIN_TEST_BUILD
     std::future<CatalogDbTopLevelSyncResult> beginTopLevelSync(
         std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
     std::future<CatalogDbTopLevelSyncResult> abortTopLevelSync(
@@ -419,6 +429,7 @@ public:
         const CatalogDbJobMetadata &metadata = {},
         CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported);
 
+#ifdef MIYOOFIN_TEST_BUILD
     /// Set the generation accepted by the worker. Later scope work will use
     /// the same mechanism to suppress stale queued results.
     void setGenerationForTest(std::uint64_t generation);
@@ -428,6 +439,7 @@ public:
     void setWorkerPausedForTest(bool paused);
     bool waitForIdleForTest(std::chrono::milliseconds timeout);
     std::vector<CatalogDbJobReport> jobReportsForTest() const;
+#endif // MIYOOFIN_TEST_BUILD
 
 private:
     friend class CatalogCompatibility;
@@ -465,7 +477,9 @@ private:
     Job takeNextJobLocked();
     static std::size_t priorityIndex(CatalogDbPriority priority);
     void processScopeCommand(ScopeCommand command);
+#ifdef MIYOOFIN_TEST_BUILD
     void processTestCommand(const std::shared_ptr<TestCommand> &command);
+#endif // MIYOOFIN_TEST_BUILD
     void processHierarchyQuery(const std::shared_ptr<QueryCommand> &command);
     void processHierarchyWrite(
         const std::shared_ptr<HierarchyWriteCommand> &command);
@@ -514,8 +528,10 @@ private:
     bool openConnection(const ScopeCommand &command);
     bool bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
                                          std::string &error);
+#ifdef MIYOOFIN_TEST_BUILD
     CatalogDbTestResult runTestCommand(unsigned char operation,
                                        const std::string &value = {});
+#endif // MIYOOFIN_TEST_BUILD
 
     mutable std::mutex m_mutex;
     std::condition_variable m_wake;

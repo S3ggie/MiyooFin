@@ -6,7 +6,7 @@
 #include <cstring>
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-#include "../diagnostics/PerformanceTelemetry.hpp"
+#include "PerformanceTelemetry.hpp"
 #endif
 
 namespace miyoofin {

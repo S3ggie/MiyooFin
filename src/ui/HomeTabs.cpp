@@ -1,5 +1,5 @@
 #include "HomeTabs.hpp"
-#include "MovieTitle.hpp"
+#include "../data/MovieTitle.hpp"
 #include <algorithm>
 #include <map>
 

@@ -3,7 +3,7 @@
 #include "../../net/RouteRequest.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 

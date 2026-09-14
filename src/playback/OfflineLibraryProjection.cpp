@@ -1,5 +1,5 @@
 #include "OfflineLibraryProjection.hpp"
-#include "../ui/MovieTitle.hpp"
+#include "../data/MovieTitle.hpp"
 #include <algorithm>
 
 namespace miyoofin {

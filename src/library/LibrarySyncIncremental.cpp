@@ -1,6 +1,5 @@
 #include "LibrarySync.hpp"
 #include "../net/JellyfinLibraryEvents.hpp"
-#include "../download/DownloadStore.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include <algorithm>

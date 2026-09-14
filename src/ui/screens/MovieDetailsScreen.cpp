@@ -8,7 +8,7 @@
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../cache/ImageCache.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../playback/PlaybackRequest.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"

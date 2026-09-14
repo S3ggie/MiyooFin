@@ -2,7 +2,7 @@
 #include "RemoteExitSignal.hpp"
 #include "DisplaySizing.hpp"
 #include "../net/RouteRequest.hpp"
-#include "UiDiagnostics.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
 #include "../playback/OfflinePlaybackJournal.hpp"
 #include "../cache/LibraryCache.hpp"

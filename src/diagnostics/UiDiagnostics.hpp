@@ -8,7 +8,7 @@
 #include <mutex>
 #include <vector>
 
-#include "../diagnostics/TelemetryIds.hpp"
+#include "TelemetryIds.hpp"
 
 namespace miyoofin {
 

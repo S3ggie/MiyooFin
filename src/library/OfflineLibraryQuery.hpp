@@ -3,7 +3,7 @@
 
 #include "../data/MediaItem.hpp"
 #include "../cache/LibraryCache.hpp"
-#include "../download/DownloadManager.hpp"
+#include "../download/DownloadTypes.hpp"
 #include <map>
 #include <string>
 #include <vector>

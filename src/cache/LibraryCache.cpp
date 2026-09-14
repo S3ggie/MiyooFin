@@ -1,5 +1,5 @@
 #include "LibraryCache.hpp"
-#include "../catalog/CatalogPrimitives.hpp"
+#include "../data/CatalogPrimitives.hpp"
 #include <cstdio>
 #include <cstdint>
 #include <cerrno>

@@ -6,7 +6,7 @@
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../image/ImageDecoder.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include "../Theme.hpp"

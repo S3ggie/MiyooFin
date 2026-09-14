@@ -49,7 +49,7 @@ SRCS := \
     src/catalog/CatalogDbHierarchy.cpp \
     src/catalog/MediaItemSql.cpp \
     src/catalog/CatalogCompatibility.cpp \
-    src/app/UiDiagnostics.cpp \
+    src/diagnostics/UiDiagnostics.cpp \
     src/app/ScreenStack.cpp \
     src/data/MockData.cpp \
     src/input/InputManager.cpp \
@@ -69,7 +69,7 @@ SRCS := \
     src/cache/ImageCache.cpp \
     src/cache/LibraryCache.cpp \
     src/cache/SyncState.cpp \
-    src/cache/OfflineLibraryProjection.cpp \
+    src/playback/OfflineLibraryProjection.cpp \
     src/library/OfflineLibraryQuery.cpp \
     src/library/LibrarySync.cpp \
     src/library/LibrarySyncIncremental.cpp \
@@ -82,7 +82,7 @@ SRCS := \
     src/download/DownloadManagerTransfer.cpp \
     src/download/DownloadReconcile.cpp \
     src/download/DownloadSupport.cpp \
-    src/download/HlsPlaylist.cpp \
+    src/net/HlsPlaylist.cpp \
     src/ui/BitmapFont.cpp \
     src/ui/OnScreenKeyboard.cpp \
     src/ui/HomeSettingsModel.cpp \

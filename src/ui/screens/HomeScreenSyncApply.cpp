@@ -1,6 +1,6 @@
 #include "HomeScreen.hpp"
-#include "../../cache/OfflineLibraryProjection.hpp"
-#include "../../app/UiDiagnostics.hpp"
+#include "../../playback/OfflineLibraryProjection.hpp"
+#include "../../diagnostics/UiDiagnostics.hpp"
 #include <ctime>
 
 namespace miyoofin {

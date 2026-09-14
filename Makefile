@@ -69,7 +69,7 @@ SRCS        := \
     $(SRC_DIR)/catalog/CatalogDbHierarchy.cpp \
     $(SRC_DIR)/catalog/MediaItemSql.cpp \
     $(SRC_DIR)/catalog/CatalogCompatibility.cpp \
-    $(SRC_DIR)/app/UiDiagnostics.cpp \
+    $(SRC_DIR)/diagnostics/UiDiagnostics.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
     $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/input/InputManager.cpp \
@@ -89,7 +89,7 @@ SRCS        := \
     $(SRC_DIR)/cache/ImageCache.cpp \
     $(SRC_DIR)/cache/LibraryCache.cpp \
     $(SRC_DIR)/cache/SyncState.cpp \
-    $(SRC_DIR)/cache/OfflineLibraryProjection.cpp \
+    $(SRC_DIR)/playback/OfflineLibraryProjection.cpp \
     $(SRC_DIR)/library/OfflineLibraryQuery.cpp \
     $(SRC_DIR)/library/LibrarySync.cpp \
     $(SRC_DIR)/library/LibrarySyncIncremental.cpp \
@@ -102,7 +102,7 @@ SRCS        := \
     $(SRC_DIR)/download/DownloadManagerTransfer.cpp \
     $(SRC_DIR)/download/DownloadReconcile.cpp \
     $(SRC_DIR)/download/DownloadSupport.cpp \
-    $(SRC_DIR)/download/HlsPlaylist.cpp \
+    $(SRC_DIR)/net/HlsPlaylist.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/OnScreenKeyboard.cpp \
     $(SRC_DIR)/ui/HomeSettingsModel.cpp \
@@ -197,7 +197,7 @@ CATALOG_BENCHMARK_TEST_SRC := tests/test_catalog_journal_benchmark.cpp
 CATALOG_BENCHMARK_SRC := tools/catalog_journal_benchmark.cpp
 CATALOG_BENCHMARK_MAIN := tools/catalog_journal_benchmark_main.cpp
 CATALOG_BENCHMARK_RUNNER := output/build/catalog-journal-benchmark
-TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1
+TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1 -DMIYOOFIN_TEST_BUILD=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
@@ -224,6 +224,7 @@ TEST_PROD_SRCS := \
                src/catalog/CatalogDbQuery.cpp \
                src/catalog/CatalogDbSyncState.cpp \
                src/catalog/CatalogDbHierarchy.cpp \
+               src/catalog/CatalogDbTestCommands.cpp \
                src/catalog/MediaItemSql.cpp \
                src/catalog/CatalogCompatibility.cpp \
                src/image/stb_image_impl.cpp \
@@ -231,7 +232,7 @@ TEST_PROD_SRCS := \
                src/cache/ImageCache.cpp \
                src/cache/LibraryCache.cpp \
                src/cache/SyncState.cpp \
-               src/cache/OfflineLibraryProjection.cpp \
+               src/playback/OfflineLibraryProjection.cpp \
                src/library/OfflineLibraryQuery.cpp \
                src/library/LibrarySync.cpp \
                src/library/LibrarySyncIncremental.cpp \
@@ -244,7 +245,7 @@ TEST_PROD_SRCS := \
                src/download/DownloadManagerTransfer.cpp \
                src/download/DownloadReconcile.cpp \
                src/download/DownloadSupport.cpp \
-               src/download/HlsPlaylist.cpp \
+               src/net/HlsPlaylist.cpp \
                src/ui/BitmapFont.cpp \
                src/ui/OnScreenKeyboard.cpp \
                src/ui/HomeSettingsModel.cpp \
@@ -253,7 +254,7 @@ TEST_PROD_SRCS := \
                src/input/InputManager.cpp \
                src/app/ScreenStack.cpp \
                src/app/RemoteExitSignal.cpp \
-               src/app/UiDiagnostics.cpp \
+               src/diagnostics/UiDiagnostics.cpp \
                src/ui/screens/HomeScreen.cpp \
                src/ui/screens/HomeScreenNavigation.cpp \
                src/ui/screens/HomeScreenRefresh.cpp \

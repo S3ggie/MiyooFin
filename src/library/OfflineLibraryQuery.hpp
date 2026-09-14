@@ -10,9 +10,9 @@
 
 namespace miyoofin {
 
-// Builds the bounded offline root from the DownloadStore-derived snapshot.
-// Catalog metadata can be supplied in batches by the caller; missing metadata
-// is deliberately synthesized from DownloadItem and never affects availability.
+// Snapshot builder: constructs a LibrarySnapshot from the DownloadStore-derived
+// snapshot plus any caller-supplied canonical metadata. The resulting snapshot
+// is later consumed by playback/OfflineLibraryProjection for UI rendering.
 class OfflineLibraryQuery {
 public:
     static constexpr std::size_t kMetadataBatchSize = 64;

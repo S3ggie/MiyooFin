@@ -82,6 +82,8 @@ public:
     bool takePublicAddressRequest() { const bool requested = m_publicAddressRequested; m_publicAddressRequested = false; return requested; }
     void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
     void cancelAsyncWork() noexcept;
+    void requestStopAllWorkers() noexcept;
+    void joinAllWorkers();
     void setPublicServerUrl(const std::string &url) { m_session.publicServerUrl = url; }
     bool presentationOffline() const { return m_libraryOffline || m_session.manualOfflineMode; }
 

@@ -43,7 +43,9 @@ CatalogDb::~CatalogDb()
             queue.clear();
         }
         m_scopeCommands.clear();
+#ifdef MIYOOFIN_TEST_BUILD
         m_testCommands.clear();
+#endif // MIYOOFIN_TEST_BUILD
         m_queryCommands.clear();
         m_writeCommands.clear();
         m_reconcileCommands.clear();
@@ -144,12 +146,16 @@ CatalogDbPopulationStatus CatalogDb::populationStatus() const
 std::future<CatalogCompatibilitySeedResult> CatalogDb::enqueueLibrarySeed(
     const CatalogCompatibilitySeedRequest &request,
     const CatalogDbJobMetadata &metadata,
-    int failAfterWrites)
+    CatalogDbFailureSpec injection)
 {
     auto command = std::make_shared<LibrarySeedCommand>();
     command->request = request;
     command->metadata = metadata;
-    command->failAfterWrites = failAfterWrites;
+#ifdef MIYOOFIN_TEST_BUILD
+    command->injection = injection;
+#else
+    (void)injection;
+#endif // MIYOOFIN_TEST_BUILD
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     auto future = command->result.get_future();
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -168,8 +174,15 @@ void CatalogDb::workerLoop()
     for (;;) {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_wake.wait(lock, [this] {
-            return m_stopping || (!m_pausedForTest
-                && (!m_scopeCommands.empty() || !m_testCommands.empty()
+#ifdef MIYOOFIN_TEST_BUILD
+            const bool pausedForTest = m_pausedForTest;
+            const bool hasTestCommands = !m_testCommands.empty();
+#else
+            const bool pausedForTest = false;
+            const bool hasTestCommands = false;
+#endif // MIYOOFIN_TEST_BUILD
+            return m_stopping || (!pausedForTest
+                && (!m_scopeCommands.empty() || hasTestCommands
                     || !m_syncStateCommands.empty()
                     || !m_librarySeedCommands.empty()
                     || !m_libraryReadCommands.empty()

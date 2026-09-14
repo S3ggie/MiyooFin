@@ -1129,21 +1129,26 @@ CatalogDb::upsertSeriesHierarchyForTest(
     int cancelAfterRows)
 {
     return enqueueHierarchyWrite(series, seasons, episodesBySeason, generation,
-                                 refreshMs, true, false, {}, failAfterRows,
-                                 cancelAfterRows);
+                                 refreshMs, true, false, {},
+                                 CatalogDbFailureSpec{failAfterRows,
+                                                      cancelAfterRows, -1});
 }
 
 std::future<CatalogDbReconcileResult> CatalogDb::reconcileSeriesForTest(
     const std::vector<MediaItem> &series, bool authoritative,
     int failAfterRows)
 {
-    return enqueueReconcile(series, authoritative, {}, failAfterRows);
+    return enqueueReconcile(series, authoritative, {},
+                            CatalogDbFailureSpec{failAfterRows, -1, -1});
 }
 
 std::future<CatalogDbMediaPageUpsertResult> CatalogDb::upsertMediaPageForTest(
     const CatalogDbMediaPageWrite &page, int failAfterRows,
     const CatalogDbJobMetadata &metadata)
-{ return enqueueMediaPageUpsert(page, metadata, failAfterRows); }
+{
+    return enqueueMediaPageUpsert(page, metadata,
+                                  CatalogDbFailureSpec{failAfterRows, -1, -1});
+}
 
 } // namespace miyoofin
 

@@ -8,18 +8,22 @@ std::future<CatalogDbReconcileResult> CatalogDb::reconcileSeries(
     const std::vector<MediaItem> &series, bool authoritative,
     const CatalogDbJobMetadata &metadata)
 {
-    return enqueueReconcile(series, authoritative, metadata, -1);
+    return enqueueReconcile(series, authoritative, metadata);
 }
 std::future<CatalogDbReconcileResult> CatalogDb::enqueueReconcile(
     const std::vector<MediaItem> &series, bool authoritative,
-    const CatalogDbJobMetadata &metadata, int failAfterRows)
+    const CatalogDbJobMetadata &metadata, CatalogDbFailureSpec injection)
 {
     auto command = std::make_shared<ReconcileCommand>();
     command->series = series;
     command->authoritative = authoritative;
     command->metadata = metadata;
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
-    command->failAfterRows = failAfterRows;
+#ifdef MIYOOFIN_TEST_BUILD
+    command->injection = injection;
+#else
+    (void)injection;
+#endif // MIYOOFIN_TEST_BUILD
     std::future<CatalogDbReconcileResult> result = command->result.get_future();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -271,9 +275,9 @@ void CatalogDb::processReconcile(
             return false;
         }
         ++result.seriesUpserted;
-        if (command->failAfterRows >= 0
+        if (command->failureSpec().failAfterRows >= 0
             && result.seriesUpserted >= static_cast<std::size_t>(
-                                            command->failAfterRows)) {
+                                            command->failureSpec().failAfterRows)) {
             result.error = CatalogDbErrorCategory::SqliteError;
             result.message = "injected reconciliation failure";
             return false;
@@ -470,7 +474,7 @@ void CatalogDb::processLibrarySeed(
         || sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&insertTag,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); rollback(); command->result.set_value(std::move(result)); return; }
     const MediaItemCollectionStatements collections{deleteGenres,insertGenre,deleteTags,insertTag};
     int writes=0;
-    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failAfterWrites>=0&&++writes>=command->failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
+    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failureSpec().failAfterWrites>=0&&++writes>=command->failureSpec().failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
     sqlite3_finalize(upsert); sqlite3_finalize(deleteGenres); sqlite3_finalize(insertGenre); sqlite3_finalize(deleteTags); sqlite3_finalize(insertTag);
     // This is the compatibility-only writer for legacy home_items.
     // Normal top-level synchronization never enters this path.

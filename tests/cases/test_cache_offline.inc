@@ -95,10 +95,10 @@ static void testSettingsRowActions(){
 static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    const auto snapshotReady=source.find("m_haveCachedSnapshot=true;");
-    CHECK(snapshotReady!=std::string::npos);
-    CHECK(source.find("if (m_session.manualOfflineMode)",
-                      snapshotReady)!=std::string::npos);
+    const auto manualOffline=source.find("if (session.manualOfflineMode)");
+    CHECK(manualOffline!=std::string::npos);
+    CHECK(source.find("m_haveCachedSnapshot = true;",
+                      manualOffline)!=std::string::npos);
     CHECK(navigation.find("manual_offline_mode=")!=std::string::npos);
 }
 

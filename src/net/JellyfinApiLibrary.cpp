@@ -93,63 +93,6 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
     return true;
 }
 
-bool JellyfinApi::getLibraryItems(const std::string &baseUrl,
-                                  const std::string &accessToken,
-                                  const std::string &userId,
-                                  const std::string &deviceId,
-                                  const std::string &parentId,
-                                  const std::string &includeItemTypes,
-                                  int limit,
-                                  std::vector<MediaItem> &items,
-                                  std::string &error,
-                                  const std::atomic<bool> *cancelled)
-{
-    if (limit <= 0) {
-        error = "Library item page size must be positive";
-        return false;
-    }
-
-    HttpClient client;
-    client.setTimeoutSec(15);
-    auto headers = buildAuthHeaders(accessToken, deviceId);
-    int startIndex = 0;
-
-    while (true) {
-        if (cancelled && cancelled->load()) {
-            error = "Callback aborted";
-            return false;
-        }
-        std::string url = buildLibraryItemsUrl(baseUrl, userId, parentId,
-                                               includeItemTypes, startIndex, limit);
-        HttpResponse response;
-        TelemetryRequestScope request(RequestKind::LibraryItems);
-        if (!client.perform("GET", url.c_str(), headers, {}, response, error, cancelled)) {
-            if (error.empty()) error = "Could not reach server";
-            return false;
-        }
-        if (!response.ok()) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "Failed to fetch items (HTTP %ld)",
-                          response.status);
-            error = buf;
-            return false;
-        }
-
-        auto itemStrs = jsonExtractArray(response.body, "Items");
-        for (const auto &s : itemStrs)
-            items.push_back(jsonToMediaItem(s));
-
-        if (itemStrs.size() < static_cast<size_t>(limit))
-            return true;
-
-        if (startIndex > std::numeric_limits<int>::max() - limit) {
-            error = "Library item pagination offset overflow";
-            return false;
-        }
-        startIndex += limit;
-    }
-}
-
 bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
                                       const std::string &accessToken,
                                       const std::string &userId,
@@ -166,7 +109,7 @@ bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
     HttpClient client;
     client.setTimeoutSec(15);
     HttpResponse response;
-    TelemetryRequestScope request(RequestKind::LibraryItems);
+    TelemetryRequestScope request(RequestKind::LibraryItemsPage);
     if (!client.perform("GET", buildLibraryItemsUrl(baseUrl, userId, parentId,
                                                      includeItemTypes, startIndex, limit).c_str(),
                        buildAuthHeaders(accessToken, deviceId), {}, response,
@@ -243,7 +186,7 @@ bool JellyfinApi::getChangedCatalogItems(
             + "&StartIndex=" + std::to_string(startIndex)
             + "&Limit=" + std::to_string(limit);
         HttpResponse response;
-        TelemetryRequestScope request(RequestKind::LibraryItems);
+        TelemetryRequestScope request(RequestKind::ChangedCatalogItems);
         if (!client.perform("GET", url, headers, {}, response, error,
                             cancelled)) {
             if (error.empty()) error = "Could not reach server";
@@ -326,7 +269,7 @@ bool JellyfinApi::getItemsByIds(
     HttpClient client;
     client.setTimeoutSec(15);
     HttpResponse response;
-    TelemetryRequestScope request(RequestKind::LibraryItems);
+    TelemetryRequestScope request(RequestKind::ItemsByIds);
     if (!client.perform("GET", url.c_str(), buildAuthHeaders(accessToken, deviceId),
                        {}, response, error, cancelled)) {
         if (error.empty()) error = "Could not reach server";

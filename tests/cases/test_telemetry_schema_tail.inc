@@ -158,6 +158,9 @@
     CHECK(static_cast<uint16_t>(RequestKind::HlsMaster) == 14);
     CHECK(static_cast<uint16_t>(RequestKind::HlsVariant) == 15);
     CHECK(static_cast<uint16_t>(RequestKind::Artwork) == 16);
+    CHECK(static_cast<uint16_t>(RequestKind::LibraryItemsPage) == 17);
+    CHECK(static_cast<uint16_t>(RequestKind::ChangedCatalogItems) == 18);
+    CHECK(static_cast<uint16_t>(RequestKind::ItemsByIds) == 19);
     CHECK(static_cast<uint8_t>(ArtworkContext::Unknown) == 0);
     CHECK(static_cast<uint8_t>(ArtworkContext::HomeSelected) == 1);
     CHECK(static_cast<uint8_t>(ArtworkContext::HomeGrid) == 2);

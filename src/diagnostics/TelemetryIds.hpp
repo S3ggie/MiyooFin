@@ -205,6 +205,9 @@ enum class RequestKind : uint16_t {
     HlsMaster = 14,
     HlsVariant = 15,
     Artwork = 16,
+    LibraryItemsPage = 17,
+    ChangedCatalogItems = 18,
+    ItemsByIds = 19,
 };
 
 enum class ArtworkContext : uint8_t {

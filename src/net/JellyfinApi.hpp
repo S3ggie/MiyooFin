@@ -136,18 +136,6 @@ public:
                          std::string &error,
                          const std::atomic<bool> *cancelled = nullptr);
 
-    /// Fetch items from a specific library.
-    /// @param includeItemTypes  e.g. "Movie" or "Series"
-    static bool getLibraryItems(const std::string &baseUrl,
-                                const std::string &accessToken,
-                                const std::string &userId,
-                                const std::string &deviceId,
-                                const std::string &parentId,
-                                const std::string &includeItemTypes,
-                                int limit,
-                                std::vector<MediaItem> &items,
-                                std::string &error,
-                                const std::atomic<bool> *cancelled = nullptr);
     /// Fetch exactly one bounded page. This never follows a subsequent page.
     static bool getLibraryItemsPage(const std::string &baseUrl,
                                     const std::string &accessToken,

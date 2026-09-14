@@ -146,6 +146,9 @@ REQUEST_KINDS = {
     14: "HlsMaster",
     15: "HlsVariant",
     16: "Artwork",
+    17: "LibraryItemsPage",
+    18: "ChangedCatalogItems",
+    19: "ItemsByIds",
 }
 ARTWORK_CONTEXTS = {
     0: "Unknown",

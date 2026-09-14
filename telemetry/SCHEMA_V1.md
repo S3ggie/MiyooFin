@@ -80,7 +80,7 @@ Only allowlisted strings serialize; all others map 0.
 bit0 HomeLibraryFetch; bit1 HomeHierarchy; bit2 HomePoster; bit3 HomeDecode; bit4 HomeResumeRefresh; bit5 HomeDownloadRefresh; bit6 EpisodeFetch; bit7 EpisodeArtwork; bit8 DownloadTransfer; bit9 DownloadPlanner; bit10 DownloadReconcile; bit11 ScreenRetirement; bit12 SavedSessionValidation; bit13 PlaybackJournalSync; bits14–15 zero. Bit=1 iff facade active gauge is true at stall snapshot.
 
 ### RequestKind u16
-0 Unknown; 1 SystemInfo; 2 Authentication; 3 TokenValidation; 4 Views; 5 LibraryItems; 6 ResumeItems; 7 LatestItems; 8 ChangedHierarchy; 9 Seasons; 10 Episodes; 11 PlaybackPosition; 12 PlaybackStopped; 13 DownloadPlaybackInfo; 14 HlsMaster; 15 HlsVariant; 16 Artwork.
+0 Unknown; 1 SystemInfo; 2 Authentication; 3 TokenValidation; 4 Views; 5 LibraryItems; 6 ResumeItems; 7 LatestItems; 8 ChangedHierarchy; 9 Seasons; 10 Episodes; 11 PlaybackPosition; 12 PlaybackStopped; 13 DownloadPlaybackInfo; 14 HlsMaster; 15 HlsVariant; 16 Artwork; 17 LibraryItemsPage; 18 ChangedCatalogItems; 19 ItemsByIds.
 
 ### ArtworkContext u8
 0 Unknown; 1 HomeSelected; 2 HomeGrid; 3 HomeShows; 4 HomePoster; 5 EpisodeSelected; 6 EpisodePrefetch; 7 MovieDetails; 8 CacheGeneric.

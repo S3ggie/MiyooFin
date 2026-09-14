@@ -291,3 +291,60 @@ static void testHomeArtworkPlan()
     CHECK_EQ(snapshotJobs[0].itemId, "movie-1");
     std::printf("[test] Home artwork key and poster planning OK\n");
 }
+
+// Regression: cold-start population must produce non-empty Movies/Shows
+// tabs.  On a fresh DB the first-bounded-page publish uses empty
+// moviesByView/showsByView; after finalize the worker rebuilds tabs
+// with accumulated items.  Verify buildTabs + mediaWindowsFromTabs
+// round-trips correctly for that path.
+static void testColdStartPopulationProducesNonEmptyTabs()
+{
+    std::printf("[test] Cold-start population produces non-empty Movies/Shows tabs\n");
+    std::vector<LibraryView> views;
+    views.push_back({"vm", "Movies", "movies"});
+    views.push_back({"vs", "Shows", "tvshows"});
+    const std::vector<MediaItem> cw = {makeHomeItem("cw1", "Continue", "movie")};
+    const std::vector<MediaItem> ra = {makeHomeItem("ra1", "Recent", "movie")};
+
+    // Empty byView => the first-bounded-page shape.
+    const auto emptyTabs = JellyfinApi::buildTabs(views, cw, ra, {}, {});
+    CHECK(emptyTabs.size() == 5);
+    const auto emptyWin = mediaWindowsFromTabs(emptyTabs);
+    CHECK(emptyWin.movies.empty());
+    CHECK(emptyWin.shows.empty());
+
+    // Populated byView => post-finalize rebuild shape.
+    std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+    moviesByView.push_back({"Movies", {makeHomeItem("m1", "Alpha", "movie"),
+                                       makeHomeItem("m2", "Beta", "movie")}});
+    std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
+    showsByView.push_back({"Shows", {makeHomeItem("s1", "ShowOne", "show")}});
+    const auto populatedTabs = JellyfinApi::buildTabs(views, cw, ra,
+                                                      moviesByView, showsByView);
+    CHECK(populatedTabs.size() == 5);
+    CHECK_EQ(populatedTabs[0].name, "Home");
+    CHECK_EQ(populatedTabs[1].name, "Movies");
+    CHECK_EQ(populatedTabs[2].name, "Shows");
+    // Home tab carries CW/RA.
+    CHECK(populatedTabs[0].rows.size() == 2);
+    CHECK_EQ(populatedTabs[0].rows[0].label, "Continue Watching");
+    CHECK_EQ(populatedTabs[0].rows[1].label, "Recently Added");
+    // Movies tab row is non-empty.
+    CHECK(!populatedTabs[1].rows.empty());
+    CHECK(populatedTabs[1].rows[0].items.size() == 2);
+    // Shows tab row is non-empty.
+    CHECK(!populatedTabs[2].rows.empty());
+    CHECK(populatedTabs[2].rows[0].items.size() == 1);
+
+    // mediaWindowsFromTabs extracts items from the first row.
+    const auto populatedWin = mediaWindowsFromTabs(populatedTabs);
+    CHECK(populatedWin.movies.size() == 2);
+    CHECK(populatedWin.shows.size() == 1);
+    CHECK_EQ(populatedWin.movies[0].id, "m1");
+    CHECK_EQ(populatedWin.shows[0].id, "s1");
+
+    // Transition preserves selected tab index.
+    const int idx = transitionTabIndex(emptyTabs, 2, populatedTabs);
+    CHECK(idx == 2);
+    std::printf("[test] Cold-start population produces non-empty Movies/Shows tabs OK\n");
+}

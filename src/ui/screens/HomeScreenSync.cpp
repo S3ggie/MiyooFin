@@ -93,6 +93,12 @@ void HomeScreen::updateLiveLibraryChanges()
         if (m_liveChangeDone.load()) finishLiveChangeApply();
         return;
     }
+    // Do not begin a competing top-level sync while the initial
+    // population's top-level generation is still in flight.  Events
+    // remain queued and will be processed once the initial population
+    // commits.
+    if (m_initialPopulationInProgress)
+        return;
     JellyfinLibraryChangeBatch batch;
     if (m_librarySync->takeLiveChange(batch))
         startLiveChangeApply(batch);
@@ -202,6 +208,10 @@ void HomeScreen::startHomeRailRefresh()
 void HomeScreen::startSafetyReconcile()
 {
     if (m_safetyReconcileInFlight || !m_librarySync || presentationOffline())
+        return;
+    // Do not begin a competing top-level sync while the initial
+    // population's top-level generation is still in flight.
+    if (m_initialPopulationInProgress)
         return;
     if (m_safetyReconcileThread.joinable())
         m_safetyReconcileThread.join();
@@ -331,6 +341,7 @@ void HomeScreen::startFetch()
         bool optionalRailFailed = false;
         bool catalogRefreshFailed = false;
         bool initialPagePublished = false;
+        bool coldFirstPagePublished = false;
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
@@ -382,6 +393,7 @@ void HomeScreen::startFetch()
         // Home rails are ephemeral presentation data. They are refreshed from
         // Jellyfin and are deliberately excluded from CatalogDb persistence.
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
+        m_initialPopulationInProgress = true;
         ++requestCount;
         if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
@@ -395,6 +407,10 @@ void HomeScreen::startFetch()
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
         bool topLevelSyncStarted = false;
+        // Accumulate fetched items per collection type so the
+        // post-finalize rebuild can populate Home tab items.
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
         if (m_librarySync) {
             auto begin = m_librarySync->begin(syncGeneration).get();
             topLevelSyncStarted = begin.success;
@@ -492,6 +508,28 @@ void HomeScreen::startFetch()
                         std::printf("[HomeScreen] page_write_failed error=db_unavailable\n");
                         break;
                     }
+                    // Accumulate fetched items for post-finalize tab rebuild.
+                    // Bound to 24 items per view to match the warm path's
+                    // readMediaPage(-1, 24) and prevent unbounded memory use.
+                    {
+                        static constexpr std::size_t kColdViewLimit = 24;
+                        auto &targetList = (view.collectionType == "tvshows")
+                            ? showsByView : moviesByView;
+                        if (targetList.empty()
+                            || targetList.back().first != view.name)
+                            targetList.emplace_back(view.name,
+                                std::vector<MediaItem>());
+                        auto &items = targetList.back().second;
+                        if (items.size() < kColdViewLimit) {
+                            const std::size_t space =
+                                kColdViewLimit - items.size();
+                            const std::size_t toAdd =
+                                std::min(space, page.items.size());
+                            items.insert(items.end(), page.items.begin(),
+                                page.items.begin()
+                                + static_cast<std::ptrdiff_t>(toAdd));
+                        }
+                    }
                     if (!firstPagePersistedLogged) {
                         firstPagePersistedLogged = true;
                         uiDiagnostics().log(
@@ -508,6 +546,7 @@ void HomeScreen::startFetch()
                         std::printf("[HomeScreen] first bounded page ready views=%zu\n",
                                     views.size());
                         initialPagePublished = true;
+                        coldFirstPagePublished = true;
                         uiDiagnostics().log("[HomeScreen] startup stage=first_bounded_page_ready");
                         m_fetchReady.store(true);
                     }
@@ -519,10 +558,22 @@ void HomeScreen::startFetch()
         }
         if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
             auto finalized = m_librarySync->finalize(syncGeneration).get();
-            if (!finalized.success) catalogRefreshFailed = true;
+            if (!finalized.success) {
+                catalogRefreshFailed = true;
+            } else if (coldFirstPagePublished) {
+                // The initial first-bounded-page publish used empty
+                // movie/show lists.  Rebuild with the actually-fetched
+                // items so Home tabs render populated on cold start.
+                {
+                    std::lock_guard<std::mutex> lock(m_fetchMutex);
+                    m_fetchResult = JellyfinApi::buildTabs(
+                        views, cw, ra, moviesByView, showsByView);
+                }
+            }
         } else if (topLevelSyncStarted) {
             m_librarySync->abort(syncGeneration).get();
         }
+        m_initialPopulationInProgress = false;
         if (catalogRefreshFailed && m_fetchError.empty())
             m_fetchError = "Library refresh failed";
         const bool artworkPlanningComplete =

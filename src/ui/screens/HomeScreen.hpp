@@ -235,6 +235,7 @@ private:
     std::atomic<bool> m_artworkActive{false};
     std::atomic<bool> m_artworkPlanningComplete{false};
     bool m_libraryOffline = false;
+    std::atomic<bool> m_initialPopulationInProgress{false};
     bool m_catalogScopeReadyLogged = false;
     bool m_firstMediaPageReadLogged = false;
     bool m_firstMediaPageReadCompletedLogged = false;

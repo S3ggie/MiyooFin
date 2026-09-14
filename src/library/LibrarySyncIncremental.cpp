@@ -121,15 +121,38 @@ std::future<library::MembershipReconcileResult>
 library::LibrarySync::reconcileAuthoritativeMembership(
     const std::shared_ptr<std::atomic_bool> &cancellation)
 {
+    // Coalesce: at most one authoritative reconcile may be in flight.
+    // Concurrent callers receive a superseded result immediately.
+    bool expected = false;
+    if (!m_authoritativeSyncInFlight.compare_exchange_strong(expected, true)) {
+        std::promise<MembershipReconcileResult> p;
+        MembershipReconcileResult result;
+        result.superseded = true;
+        result.error = CatalogDbErrorCategory::Superseded;
+        result.message = "authoritative membership reconcile already in flight";
+        p.set_value(std::move(result));
+        return p.get_future();
+    }
     const Session session = m_session;
     const auto db = m_db;
     const CatalogDbJobMetadata metadata = m_metadata;
     const auto serviceCancellation = m_cancel;
     const auto operationCancellation = cancellation;
     const std::uint64_t generation = nextGeneration();
-    return std::async(std::launch::async,
-        [session, db, metadata, serviceCancellation, operationCancellation,
-         generation] {
+    // The m_authoritativeSyncInFlight flag was set by compare_exchange_strong
+    // above and will be cleared by FlagGuard when the async worker exits.
+    // If the launch itself fails (thread/resource exhaustion), clear the flag
+    // before propagating so future reconcile calls are not permanently blocked.
+    try {
+        return std::async(std::launch::async,
+            [session, db, metadata, serviceCancellation, operationCancellation,
+             generation, this] {
+            // Scope guard: clear the authoritative-sync in-flight flag
+            // when this async worker exits, regardless of outcome.
+            struct FlagGuard {
+                std::atomic<bool> &flag;
+                ~FlagGuard() { flag.store(false); }
+            } flagGuard{m_authoritativeSyncInFlight};
             MembershipReconcileResult result;
             const auto effectiveCancellation = operationCancellation
                 ? operationCancellation : serviceCancellation;
@@ -270,6 +293,10 @@ library::LibrarySync::reconcileAuthoritativeMembership(
             result.generation = generation;
             return result;
         });
+    } catch (...) {
+        m_authoritativeSyncInFlight.store(false);
+        throw;
+    }
 }
 
 std::future<library::LiveLibraryChangeResult>

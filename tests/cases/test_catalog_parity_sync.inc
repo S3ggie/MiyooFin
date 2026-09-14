@@ -844,4 +844,187 @@ static void testCatalogDbMediaPageTopLevelStaging()
     std::printf("[test] CatalogDb staged media page writes OK\n");
 }
 
+// Regression: verify that concurrent authoritative reconcile calls are
+// coalesced so that only one is in flight at a time.  The second call
+// must return superseded immediately without starting a top-level sync
+// that would steal the slot from the first.
+static void testLibrarySyncAuthoritativeReconcileCoalescing()
+{
+    std::printf("[test] LibrarySync authoritative reconcile coalescing\n");
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    if (listener < 0) return;
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                 sizeof(address)) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                        &addressSize) == 0);
+    CHECK(::listen(listener, 2) == 0);
+
+    const std::string url = "http://127.0.0.1:" +
+        std::to_string(ntohs(address.sin_port));
+    const std::string scopeUrl = "http://coalesce-" +
+        std::to_string(static_cast<long long>(getpid())) + ".example";
+    CatalogDb db;
+    CHECK(configureCatalogParityDb(db, scopeUrl, "coalesce-user"));
+    const auto epoch = db.scopeState().requestedEpoch;
+    const auto metadata = CatalogDbJobMetadata{0, epoch, {}};
+
+    // Seed an initial movie so the DB is not empty.
+    CatalogDbMediaPageWrite seed;
+    seed.items = {catalogParityItem("coalesce-seed", "movie", "Seed")};
+    seed.viewId = "movies"; seed.viewName = "Movies";
+    seed.collectionType = "movies";
+    CHECK(db.upsertMediaPage(seed, metadata).get().success);
+
+    // Server handles views request (1st connection), then keeps the
+    // page-request connection open until released so the first reconcile
+    // stays in-flight while the second call is attempted.
+    const std::string viewsBody =
+        R"({"Items":[{"Id":"movies","Name":"Movies","CollectionType":"movies"}]})";
+    const std::string pageBody =
+        R"({"Items":[{"Id":"coalesce-seed","Type":"Movie","Name":"Seed"}],"TotalRecordCount":1})";
+    std::atomic<bool> pageClientReady{false};
+    std::atomic<bool> releasePageServer{false};
+    std::thread server([&]() {
+        // 1st connection: views
+        const int viewsClient = ::accept(listener, nullptr, nullptr);
+        if (viewsClient < 0) return;
+        char buffer[4096];
+        std::string req;
+        while (req.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t rcvd = ::recv(viewsClient, buffer, sizeof(buffer), 0);
+            if (rcvd <= 0) break;
+            req.append(buffer, static_cast<size_t>(rcvd));
+        }
+        const std::string viewsResp =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(viewsBody.size()) +
+            "\r\nConnection: close\r\n\r\n" + viewsBody;
+        (void)::send(viewsClient, viewsResp.data(), viewsResp.size(), 0);
+        ::close(viewsClient);
+
+        // 2nd connection: page — hold it open until the test signals.
+        const int pageClient = ::accept(listener, nullptr, nullptr);
+        if (pageClient < 0) return;
+        pageClientReady.store(true);
+        while (!releasePageServer.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ::close(pageClient);
+    });
+
+    Session session;
+    session.serverUrl = url;
+    session.accessToken = "coalesce-token";
+    session.userId = "coalesce-user";
+    session.deviceId = "coalesce-device";
+    auto sync = std::make_shared<library::LibrarySync>(
+        session, std::shared_ptr<CatalogDb>(&db, [](CatalogDb *) {}), epoch);
+
+    // Start the first reconcile on a background thread.
+    auto firstCancel = std::make_shared<std::atomic_bool>(false);
+    auto firstFuture = std::async(std::launch::async, [&] {
+        return sync->reconcileAuthoritativeMembership(firstCancel).get();
+    });
+
+    // Wait until the first reconcile is connected and blocked on the
+    // page request (server holds the connection open).
+    while (!pageClientReady.load())
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    // A concurrent reconcile must be coalesced immediately.
+    auto secondResult = sync->reconcileAuthoritativeMembership().get();
+    CHECK(secondResult.superseded);
+    CHECK(secondResult.error == CatalogDbErrorCategory::Superseded);
+
+    // Release the server and first reconcile.
+    releasePageServer.store(true);
+    firstCancel->store(true);
+    (void)firstFuture.get();
+
+    server.join();
+    ::close(listener);
+
+    // FIX 2: verify the flag is released — a third reconcile must NOT be
+    // superseded once the first has completed.
+    const int listener2 = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener2 >= 0);
+    if (listener2 < 0) {
+        sync.reset();
+        std::printf("[test] LibrarySync authoritative reconcile coalescing OK (flag-release skipped)\n");
+        return;
+    }
+    int reuse2 = 1;
+    ::setsockopt(listener2, SOL_SOCKET, SO_REUSEADDR, &reuse2, sizeof(reuse2));
+    sockaddr_in addr2{};
+    addr2.sin_family = AF_INET;
+    addr2.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr2.sin_port = htons(0);
+    CHECK(::bind(listener2, reinterpret_cast<sockaddr *>(&addr2),
+                 sizeof(addr2)) == 0);
+    socklen_t addr2Size = sizeof(addr2);
+    CHECK(::getsockname(listener2, reinterpret_cast<sockaddr *>(&addr2),
+                        &addr2Size) == 0);
+    CHECK(::listen(listener2, 2) == 0);
+
+    const std::string url2 = "http://127.0.0.1:" +
+        std::to_string(ntohs(addr2.sin_port));
+
+    // Update the session URL so the third reconcile connects to the new server.
+    session.serverUrl = url2;
+    sync = std::make_shared<library::LibrarySync>(
+        session, std::shared_ptr<CatalogDb>(&db, [](CatalogDb *) {}), epoch);
+
+    std::thread server2([&]() {
+        // 1st connection: views
+        const int viewsClient = ::accept(listener2, nullptr, nullptr);
+        if (viewsClient < 0) return;
+        char buffer[4096];
+        std::string req;
+        while (req.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t rcvd = ::recv(viewsClient, buffer, sizeof(buffer), 0);
+            if (rcvd <= 0) break;
+            req.append(buffer, static_cast<size_t>(rcvd));
+        }
+        const std::string viewsResp =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(viewsBody.size()) +
+            "\r\nConnection: close\r\n\r\n" + viewsBody;
+        (void)::send(viewsClient, viewsResp.data(), viewsResp.size(), 0);
+        ::close(viewsClient);
+
+        // 2nd connection: page
+        const int pageClient = ::accept(listener2, nullptr, nullptr);
+        if (pageClient < 0) return;
+        std::string req2;
+        while (req2.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t rcvd = ::recv(pageClient, buffer, sizeof(buffer), 0);
+            if (rcvd <= 0) break;
+            req2.append(buffer, static_cast<size_t>(rcvd));
+        }
+        const std::string pageResp =
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(pageBody.size()) +
+            "\r\nConnection: close\r\n\r\n" + pageBody;
+        (void)::send(pageClient, pageResp.data(), pageResp.size(), 0);
+        ::close(pageClient);
+    });
+
+    // Third reconcile: the in-flight flag should have been released by the
+    // first worker's FlagGuard, so this must NOT be superseded.
+    auto thirdResult = sync->reconcileAuthoritativeMembership().get();
+    CHECK(!thirdResult.superseded);
+
+    server2.join();
+    ::close(listener2);
+    sync.reset();
+    std::printf("[test] LibrarySync authoritative reconcile coalescing OK\n");
+}
+
 

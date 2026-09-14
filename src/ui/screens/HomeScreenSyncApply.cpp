@@ -298,7 +298,7 @@ void HomeScreen::finishFetch()
     if (!m_fetchReady.load())
         return;
     if (!m_fetchPublished) {
-        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_syncSchedule.complete(SDL_GetTicks(),false);m_fetchPublished=true;}
+        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
         else {
             std::vector<TabData> publishedTabs;
             {
@@ -306,7 +306,7 @@ void HomeScreen::finishFetch()
                 publishedTabs = std::move(m_fetchResult);
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
-            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);m_syncSchedule.complete(SDL_GetTicks(),true);m_lastSafetyReconcileMs=wallClockMs();uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;
@@ -320,6 +320,35 @@ void HomeScreen::finishFetch()
     }
     if (m_fetchComplete.load() && m_fetchThread.joinable()) {
         m_fetchThread.join();
+        // Post-finalize tab rebuild: on a cold start the initial
+        // first-bounded-page publish used empty movie/show lists.
+        // The worker rebuilt m_fetchResult after finalize; apply it.
+        // Mirror the first-publish pattern: copy data out under a
+        // scoped lock, release the lock, THEN mutate windows and
+        // call presentation functions that themselves lock m_fetchMutex.
+        std::vector<TabData> rebuiltTabs;
+        {
+            std::lock_guard<std::mutex> lock(m_fetchMutex);
+            rebuiltTabs = std::move(m_fetchResult);
+        }
+        if (m_fetchError.empty() && !rebuiltTabs.empty()) {
+            const HomeMediaWindows warmWindows =
+                mediaWindowsFromTabs(rebuiltTabs);
+            const std::vector<TabData> previous = m_tabs;
+            const int selected = m_activeTab;
+            m_tabs = std::move(rebuiltTabs);
+            makeMediaTabsBounded(m_tabs);
+            m_activeTab = transitionTabIndex(previous, selected, m_tabs);
+            if (!warmWindows.movies.empty()) {
+                m_moviePage.items = warmWindows.movies;
+                m_movieWindow = warmWindows.movies;
+                refreshMovieFilter();
+            }
+            if (!warmWindows.shows.empty()) {
+                m_showPage.items = warmWindows.shows;
+                rebuildShowsPresentation();
+            }
+        }
         if (m_fetchCacheSaved) {
             m_cachedSnapshot=m_remoteSnapshot;
             m_haveCachedSnapshot=true;
@@ -331,6 +360,16 @@ void HomeScreen::finishFetch()
         }
         updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
         updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
+        // Mark the sync schedule complete only after the fetch thread has
+        // joined, which means the top-level generation has committed
+        // (finalize) or been safely aborted.  This prevents the live-change
+        // path from starting a competing top-level sync prematurely.
+        m_syncSchedule.complete(SDL_GetTicks(), m_fetchError.empty());
+        if (m_fetchError.empty()) {
+            m_lastSafetyReconcileMs = wallClockMs();
+        } else {
+            m_lastSafetyReconcileMs = 0;
+        }
         m_fetchDone.store(false);
     }
 }

@@ -87,6 +87,13 @@ std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot)
 std::vector<std::string> tabNames(const std::vector<TabData> &tabs)
 { std::vector<std::string> names; for (const auto &tab : tabs) names.push_back(tab.name); return names; }
 
+int homeRowIndexByLabel(const std::vector<MediaRow> &rows, const std::string &label)
+{
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+        if (rows[i].label == label) return i;
+    return -1;
+}
+
 int transitionTabIndex(const std::vector<TabData> &from, int selected, const std::vector<TabData> &to)
 {
     const std::string name = (selected >= 0 && selected < (int)from.size()) ? from[selected].name : "";

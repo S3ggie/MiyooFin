@@ -391,7 +391,13 @@ bool JellyfinApi::getResumeItems(const std::string &baseUrl,
     }
     if (!response.ok()) {
         if (response.status == 401) { error = "Unauthorized"; return false; }
-        return true;  // treat other errors as empty (endpoint may not exist)
+        // Only a genuinely missing endpoint is treated as an empty rail.
+        // Any other non-2xx must be a failure so callers never overwrite a
+        // valid cached Continue Watching row with an empty transient error.
+        if (response.status == 404) return true;
+        error = "Resume request failed (HTTP "
+            + std::to_string(response.status) + ")";
+        return false;
     }
     auto itemStrs = jsonExtractArray(response.body, "Items");
     for (const auto &s : itemStrs)
@@ -448,7 +454,13 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     }
     if (!response.ok()) {
         if (response.status == 401) { error = "Unauthorized"; return false; }
-        return true;
+        // Only a genuinely missing endpoint is treated as an empty rail.
+        // Any other non-2xx must be a failure so callers never overwrite a
+        // valid cached Recently Added row with an empty transient error.
+        if (response.status == 404) return true;
+        error = "Latest request failed (HTTP "
+            + std::to_string(response.status) + ")";
+        return false;
     }
     // /Items/Latest may return a direct array or {Items:[...]}
     auto itemStrs = jsonExtractArray(response.body, "Items");

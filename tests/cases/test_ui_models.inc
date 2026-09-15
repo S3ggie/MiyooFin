@@ -227,6 +227,42 @@ static void testHomeTabRowUpdates()
     std::printf("[test] Home rail insertion and removal order OK\n");
 }
 
+static void testHomeRowIndexByLabel()
+{
+    std::printf("[test] homeRowIndexByLabel identity search\n");
+    std::vector<MediaRow> rows = {
+        {"Continue Watching", {}},
+        {"Recently Added", {}},
+        {"Special Row", {}}
+    };
+
+    // Found at index 0
+    CHECK(homeRowIndexByLabel(rows, "Continue Watching") == 0);
+    // Found at index 1
+    CHECK(homeRowIndexByLabel(rows, "Recently Added") == 1);
+    // Found at index 2
+    CHECK(homeRowIndexByLabel(rows, "Special Row") == 2);
+    // Absent → -1
+    CHECK(homeRowIndexByLabel(rows, "Nonexistent") == -1);
+    // Empty rows → -1
+    CHECK(homeRowIndexByLabel({}, "Continue Watching") == -1);
+    // Duplicate labels → first index
+    std::vector<MediaRow> dups = {
+        {"Row", {}},
+        {"Other", {}},
+        {"Row", {}}
+    };
+    CHECK(homeRowIndexByLabel(dups, "Row") == 0);
+    // Empty label matches
+    std::vector<MediaRow> emptyLabel = {
+        {"", {}},
+        {"Something", {}}
+    };
+    CHECK(homeRowIndexByLabel(emptyLabel, "") == 0);
+    CHECK(homeRowIndexByLabel(emptyLabel, "Something") == 1);
+    std::printf("[test] homeRowIndexByLabel identity search OK\n");
+}
+
 static void testTransitionTabIndex()
 {
     std::printf("[test] Home tab transition index selection\n");

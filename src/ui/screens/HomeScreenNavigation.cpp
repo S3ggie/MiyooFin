@@ -230,6 +230,32 @@ const MediaItem *HomeScreen::currentItem() const
     return nullptr;
 }
 
+std::string HomeScreen::focusedHomeRowLabel() const
+{
+    const MediaRow *r = currentRow();
+    return r ? r->label : "";
+}
+
+void HomeScreen::restoreHomeRowFocus(const std::string &label)
+{
+    if (!activeTabNamed("Home")) return;
+    const auto &rows = currentTab().rows;
+    if (rows.empty()) {
+        m_activeRow = 0;
+        return;
+    }
+    const int idx = homeRowIndexByLabel(rows, label);
+    if (idx >= 0) {
+        m_activeRow = idx;
+    } else {
+        if (m_activeRow < 0) m_activeRow = 0;
+        if (m_activeRow >= static_cast<int>(rows.size()))
+            m_activeRow = static_cast<int>(rows.size()) - 1;
+        m_activeCard = 0;
+        m_cardScroll = 0;
+    }
+}
+
 void HomeScreen::clampNavigation()
 {
     const auto &rows = currentTab().rows;
@@ -395,12 +421,28 @@ bool HomeScreen::handleAction(Action action)
     case Action::Up:
         if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus>0)--m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid){if(gridAtTopRow(m_showSelected,SHOWS_GRID_COLUMNS))requestEarlierMediaPage(m_showPage);else m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),-1,0);}else{if(gridAtTopRow(m_animeSelected,SHOWS_GRID_COLUMNS))requestEarlierMediaPage(m_animePage);else m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),-1,0);}clampShowsNavigation();return true;}
         if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus > 0) --m_movieAlphabetFocus; } else if (currentRow()) { if (gridAtTopRow(m_activeCard,MOVIE_GRID_COLUMNS)) requestEarlierMediaPage(m_moviePage); else m_activeCard=moveMovieGridCompact(m_activeCard,(int)currentRow()->items.size(),-1,0); } }
-        else m_activeRow--;
+        else {
+            int prevRow = m_activeRow;
+            m_activeRow--;
+            clampNavigation();
+            if (m_activeRow != prevRow) {
+                m_cardScroll = 0;
+                clampNavigation();
+            }
+        }
         clampNavigation(); return true;
     case Action::Down:
         if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail){if(m_showsAlphabetFocus<25)++m_showsAlphabetFocus;}else if(m_showsFocus==ShowsFocus::ShowsGrid){const bool heldForPage=queueDownAtPageEdge(m_showPage,m_showSelected,m_filteredShows.size(),SHOWS_GRID_COLUMNS);if(!heldForPage)m_showSelected=moveShowsGrid(m_showSelected,m_filteredShows.size(),1,0);}else{const bool heldForPage=queueDownAtPageEdge(m_animePage,m_animeSelected,m_filteredAnime.size(),SHOWS_GRID_COLUMNS);if(!heldForPage)m_animeSelected=moveShowsGrid(m_animeSelected,m_filteredAnime.size(),1,0);}clampShowsNavigation();return true;}
         if (activeTabNamed("Movies")) { if (m_movieRailFocused) { if (m_movieAlphabetFocus < 25) ++m_movieAlphabetFocus; } else if (currentRow()) { const int count=static_cast<int>(currentRow()->items.size()); const bool heldForPage=queueDownAtPageEdge(m_moviePage,m_activeCard,count,MOVIE_GRID_COLUMNS); if(!heldForPage)m_activeCard=moveMovieGridCompact(m_activeCard,count,1,0); } }
-        else m_activeRow++;
+        else {
+            int prevRow = m_activeRow;
+            m_activeRow++;
+            clampNavigation();
+            if (m_activeRow != prevRow) {
+                m_cardScroll = 0;
+                clampNavigation();
+            }
+        }
         clampNavigation(); return true;
     case Action::Left:
         if(activeTabNamed("Shows")){if(m_showsFocus==ShowsFocus::AlphabetRail)return true;if(m_showsFocus==ShowsFocus::ShowsGrid){if(m_showSelected%4)m_showSelected--;else{m_showsFocus=ShowsFocus::AlphabetRail;m_showsAlphabetFocus=m_showsActiveLetter>=0?m_showsActiveLetter:alphabetFocus(m_filteredShows[m_showSelected].title);}}else{if(m_animeSelected%4)m_animeSelected--;else if(!m_filteredShows.empty()){m_showsFocus=ShowsFocus::ShowsGrid;m_showSelected=crossShowsGridIndex(m_animeSelected,m_filteredShows.size(),false);}else m_showsFocus=ShowsFocus::AlphabetRail;}clampShowsNavigation();return true;}

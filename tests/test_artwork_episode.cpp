@@ -20,5 +20,8 @@ int main()
     testFindEpisodeIndexEmpty(); testFindEpisodeIndexEmptyList();
     testEpisodePrefetchScheduler(); testEpisodeArtworkPreemption();
     testEpisodePrefetchPlaybackResume();
+    testRowCardScrollOffsetFocused(); testRowCardScrollOffsetUnfocused();
+    testRowCardScrollOffsetReportedScenario();
+    testRowCardScrollOffsetEqualityContract();
     return miyoofin_test::finish("artwork-episode");
 }

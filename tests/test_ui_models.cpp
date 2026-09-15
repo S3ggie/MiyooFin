@@ -9,6 +9,7 @@ int main()
 {
     testHomeSyncSchedule(); testShowsSyncProgress(); testHomeSyncStatusStrings();
     testHomeSettingsModel(); testHomeTabsProjection(); testHomeTabRowUpdates();
+    testHomeRowIndexByLabel();
     testTransitionTabIndex(); testHomeArtworkPlan();
     testColdStartPopulationProducesNonEmptyTabs();
     testPosterJobScheduling(); testHomeRailRefreshDebounce();

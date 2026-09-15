@@ -277,7 +277,7 @@ std::set<std::string> HomeScreen::protectedRowArtworkKeys() const
         int cardX = 4;
         for (const auto &item : rows[rowIdx].items) {
             const ArtworkBox box = artworkBoxSize(item);
-            const int screenX = cardX - m_cardScroll;
+            const int screenX = cardX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + box.w >= 4 && screenX <= 636) add(item);
             if (screenX > 636) break;
             cardX += box.w + CARD_GAP;
@@ -372,7 +372,7 @@ void HomeScreen::tryLoadOneRowArtwork()
         int cardAccumX = HMARGIN;
         for (int ci = 0; ci < (int)row.items.size(); ++ci) {
             ArtworkBox sz = artworkBoxSize(row.items[ci]);
-            int screenX = cardAccumX - m_cardScroll;
+            int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + sz.w < HMARGIN) {
                 cardAccumX += sz.w + CARD_GAP;
                 continue;

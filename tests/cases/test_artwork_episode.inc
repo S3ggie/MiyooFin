@@ -799,5 +799,53 @@ static void testEpisodePrefetchPlaybackResume()
     std::printf("[test] B5g1b: playback resume countdown OK\n");
 }
 
+// rowCardScrollOffset: focused row returns activeScroll
+static void testRowCardScrollOffsetFocused()
+{
+    std::printf("[test] rowCardScrollOffset: focused row returns activeScroll\n");
+    CHECK(rowCardScrollOffset(0, 0, 100) == 100);
+    CHECK(rowCardScrollOffset(2, 2, 408) == 408);
+    CHECK(rowCardScrollOffset(0, 0, 0) == 0);
+    std::printf("[test] rowCardScrollOffset: focused row OK\n");
+}
+
+// rowCardScrollOffset: non-focused rows always return 0
+static void testRowCardScrollOffsetUnfocused()
+{
+    std::printf("[test] rowCardScrollOffset: non-focused rows return 0\n");
+    CHECK(rowCardScrollOffset(0, 1, 100) == 0);
+    CHECK(rowCardScrollOffset(1, 0, 408) == 0);
+    CHECK(rowCardScrollOffset(2, 0, 50) == 0);
+    CHECK(rowCardScrollOffset(0, 2, 999) == 0);
+    std::printf("[test] rowCardScrollOffset: non-focused rows OK\n");
+}
+
+// Reported scenario: large scroll on lower active row leaves upper row offset at 0
+static void testRowCardScrollOffsetReportedScenario()
+{
+    std::printf("[test] rowCardScrollOffset: reported scenario — long lower rail scroll leaves upper row at 0\n");
+    // Simulate: lower rail (rowIdx=1) is active with large scroll.
+    // Upper rail (rowIdx=0) must stay pinned at 0.
+    const int lowerScroll = 408;
+    CHECK(rowCardScrollOffset(0, 1, lowerScroll) == 0);  // upper row: unfocused
+    CHECK(rowCardScrollOffset(1, 1, lowerScroll) == 408); // lower row: focused
+    // Also verify the reverse direction (active on upper, scroll doesn't leak down)
+    const int upperScroll = 50;
+    CHECK(rowCardScrollOffset(0, 0, upperScroll) == 50);  // upper row: focused
+    CHECK(rowCardScrollOffset(1, 0, upperScroll) == 0);   // lower row: unfocused
+    std::printf("[test] rowCardScrollOffset: reported scenario OK\n");
+}
+
+// rowCardScrollOffset: plain-equality contract (no range-check)
+static void testRowCardScrollOffsetEqualityContract()
+{
+    std::printf("[test] rowCardScrollOffset: equality contract\n");
+    // Negative equal rows → plain equality, returns activeScroll
+    CHECK(rowCardScrollOffset(-1, -1, 7) == 7);
+    // Out-of-range activeRow that doesn't match → returns 0
+    CHECK(rowCardScrollOffset(0, 99, 5) == 0);
+    std::printf("[test] rowCardScrollOffset: equality contract OK\n");
+}
+
 // B5f2: PlaybackRequest — valid movie writes expected fields
 

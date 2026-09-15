@@ -678,6 +678,35 @@ static void testLiveChangeCheckpointPolicy()
     std::printf("[test] live change checkpoint policy OK\n");
 }
 
+static void testHomeRowFocusReconciliation()
+{
+    std::printf("[test] Home row focus reconciliation sites\n");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
+    const std::string navigation = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    const std::string tabsHeader = readTestBytes("src/ui/HomeTabs.hpp");
+    const std::string tabsImpl = readTestBytes("src/ui/HomeTabs.cpp");
+    // homeRowIndexByLabel must exist and be usable by restoreHomeRowFocus
+    CHECK(tabsHeader.find("homeRowIndexByLabel") != std::string::npos);
+    CHECK(tabsImpl.find("homeRowIndexByLabel") != std::string::npos);
+    CHECK(navigation.find("homeRowIndexByLabel") != std::string::npos);
+    // restoreHomeRowFocus must be declared and implemented
+    CHECK(header.find("restoreHomeRowFocus") != std::string::npos);
+    CHECK(navigation.find("restoreHomeRowFocus") != std::string::npos);
+    // focusedHomeRowLabel must be declared and implemented
+    CHECK(header.find("focusedHomeRowLabel") != std::string::npos);
+    CHECK(navigation.find("focusedHomeRowLabel") != std::string::npos);
+    // Reconciliation must be wired at every Home-row mutation site
+    CHECK(apply.find("restoreHomeRowFocus") != std::string::npos);
+    CHECK(refresh.find("restoreHomeRowFocus") != std::string::npos);
+    // Source files must not mutate m_tabs without focus reconciliation
+    // (the tab-move sites in SyncApply must call focusedHomeRowLabel)
+    CHECK(apply.find("focusedHomeRowLabel") != std::string::npos);
+    CHECK(refresh.find("focusedHomeRowLabel") != std::string::npos);
+    std::printf("[test] Home row focus reconciliation sites OK\n");
+}
+
 static void testCardSurfaceCacheEviction()
 {
     std::printf("[test] Card surface cache eviction policy\n");

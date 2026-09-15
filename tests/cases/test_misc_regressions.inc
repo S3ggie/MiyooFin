@@ -766,3 +766,51 @@ static void testNonBlockingFinishPolicy()
 
     std::printf("[test] Non-blocking finish* join policy OK\n");
 }
+
+static void testRefreshMovieFilterHomeNavPreserved()
+{
+    std::printf("[test] refreshMovieFilter preserves Home nav state\n");
+    const std::string navigation = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    // refreshMovieFilter must capture moviesActive BEFORE mutations
+    CHECK(navigation.find("activeTabNamed(\"Movies\")") != std::string::npos);
+    // The nav-state mutation block (m_activeRow=0, m_activeCard, etc.)
+    // must be guarded so it is skipped when Movies tab is not active.
+    // The guard "if (!moviesActive) return;" must appear between the
+    // row rebuild and the nav-state writes.
+    const std::string marker = "if (!moviesActive) return;";
+    CHECK(navigation.find(marker) != std::string::npos);
+
+    // Verify the guard appears AFTER the rows assignment but BEFORE m_activeRow=0
+    const auto rowsAssign = navigation.find("m_tabs[movies].rows");
+    const auto guard = navigation.find(marker);
+    const auto activeRow = navigation.find("m_activeRow = 0");
+    CHECK(rowsAssign != std::string::npos);
+    CHECK(guard != std::string::npos);
+    CHECK(activeRow != std::string::npos);
+    CHECK(rowsAssign < guard);
+    CHECK(guard < activeRow);
+
+    // Verify the pure helper exists in the header
+    const std::string stateHeader = readTestBytes("src/ui/HomeSyncState.hpp");
+    CHECK(stateHeader.find("livePublicationIsNoop") != std::string::npos);
+
+    std::printf("[test] refreshMovieFilter preserves Home nav state OK\n");
+}
+
+static void testLivePublicationNoopEmptyResult()
+{
+    std::printf("[test] livePublicationIsNoop truth table\n");
+    // Pure predicate: true only when BOTH containers are empty
+    CHECK(livePublicationIsNoop(true, true));
+    CHECK(!livePublicationIsNoop(true, false));
+    CHECK(!livePublicationIsNoop(false, true));
+    CHECK(!livePublicationIsNoop(false, false));
+
+    // Source-reading: publishLiveCatalogItems must call livePublicationIsNoop
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(apply.find("livePublicationIsNoop") != std::string::npos);
+    CHECK(apply.find("result.items.empty()") != std::string::npos);
+    CHECK(apply.find("result.removedIds.empty()") != std::string::npos);
+
+    std::printf("[test] livePublicationIsNoop truth table OK\n");
+}

@@ -51,6 +51,7 @@ static int clampMovieGridScrollCompact(int selected, int count, int currentScrol
 void HomeScreen::refreshMovieFilter()
 {
     const int movies=tabIndex("Movies"); if (movies < 0) return;
+    const bool moviesActive=activeTabNamed("Movies");
     const MediaItem *previousItem=currentItem();
     const std::string selectedId=previousItem ? previousItem->id : m_moviePreviewId;
     const int previousSelected=m_activeCard;
@@ -61,6 +62,7 @@ void HomeScreen::refreshMovieFilter()
             displayed.push_back(item);
     }
     m_tabs[movies].rows = {{"Movies", std::move(displayed)}};
+    if (!moviesActive) return;
     m_activeRow = 0;
     m_activeCard = restoreSelectionIndex(m_tabs[movies].rows[0].items,
                                          selectedId, previousSelected);

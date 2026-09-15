@@ -474,6 +474,10 @@ void HomeScreen::startFetch()
         // first paint.  The first_bounded_page_ready publish uses empty cw/ra;
         // the final rebuild after the rails complete populates them.
         m_initialPopulationInProgress = true;
+        // Accumulate fetched items per collection type so the
+        // post-finalize rebuild can populate Home tab items.
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+        std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
         // FIX 2: guard so that if any exception escapes the population
         // walk the deferral flag is cleared and poster workers are woken,
         // preventing a permanent low-priority artwork stall.
@@ -482,10 +486,6 @@ void HomeScreen::startFetch()
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
         bool topLevelSyncStarted = false;
-        // Accumulate fetched items per collection type so the
-        // post-finalize rebuild can populate Home tab items.
-        std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
-        std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
         if (m_librarySync) {
             auto begin = m_librarySync->begin(syncGeneration).get();
             topLevelSyncStarted = begin.success;
@@ -693,6 +693,73 @@ void HomeScreen::startFetch()
         // low-priority artwork jobs that were held back during the
         // population walk.
         m_posterWake.notify_all();
+        // Bounded season-poster prefetch: after the initial population
+        // commits, fetch seasons for the highest-value series (from the
+        // already-fetched CW/RA rails, deduplicated and capped) and
+        // queue low-priority poster jobs so series screens have artwork
+        // ready.  Uses librarySync::refreshSeasons (the same API the
+        // hierarchy worker uses) and collectSeasonPosterJobs which
+        // applies the isCached filter for idempotency across restarts.
+        //
+        // Each series must be resolved to a FULL MediaItem (type=="show")
+        // from the catalog DB (all series rows after the population walk)
+        // via the same itemsByIds path the offline metadata path uses;
+        // a stub would fail validateHierarchyInput and corrupt catalog
+        // rows via writeItem upsert.  A session-level guard records each
+        // series after a successful prefetch, so repeat home fetches are
+        // free and transient failures retry.
+        if (!catalogRefreshFailed) {
+            try {
+                const auto seriesIds = collectBoundedSeriesIds(cw, ra);
+                std::map<std::string, const MediaItem *> showMap;
+                std::vector<MediaItem> resolvedItems;
+                std::size_t resolvedCount = 0;
+                if (!seriesIds.empty() && m_libraryQuery) {
+                    auto resolved = m_libraryQuery->itemsByIds(
+                        seriesIds, cancellation).get();
+                    if (resolved.success && !resolved.cancelled
+                        && !resolved.superseded) {
+                        resolvedItems = std::move(resolved.items);
+                    }
+                    for (const auto &item : resolvedItems)
+                        if (!item.id.empty() && item.type == "show") {
+                            showMap[item.id] = &item;
+                            ++resolvedCount;
+                        }
+                }
+                std::printf("[HomeScreen] season prefetch: %zu candidates, %zu resolved\n",
+                            seriesIds.size(), resolvedCount);
+                for (const auto &seriesId : seriesIds) {
+                    if (cancellation->load()) break;
+                    if (!m_librarySync) break;
+                    // Resolve the full series item; skip if not in catalog.
+                    const auto it = showMap.find(seriesId);
+                    if (it == showMap.end())
+                        continue;
+                    // Record only on success so transient failures retry on
+                    // a later fetch.
+                    if (m_seasonPrefetchedIds.count(seriesId))
+                        continue;
+                    const auto &series = *it->second;
+                    const auto result = m_librarySync->refreshSeasons(
+                        series, cancellation).get();
+                    if (result.success) {
+                        m_seasonPrefetchedIds.insert(seriesId);
+                        queuePosterJobs(collectSeasonPosterJobs(result.items));
+                    }
+                }
+            } catch (...) {
+                std::printf("[HomeScreen] season prefetch skipped: exception\n");
+            }
+        }
+        // Image-cache janitor: prune oldest files if over disk cap.
+        // Runs on the fetch thread (background worker), never on the
+        // UI/SDL thread.
+        try {
+            ImageCache::runJanitor();
+        } catch (...) {
+            std::printf("[HomeScreen] janitor skipped: exception\n");
+        }
         if (catalogRefreshFailed && m_fetchError.empty())
             m_fetchError = "Library refresh failed";
         const bool artworkPlanningComplete =

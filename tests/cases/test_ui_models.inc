@@ -424,3 +424,40 @@ static void testHomeRailRefreshDebounce()
 
     std::printf("[test] Home rail refresh debounce decision OK\n");
 }
+
+static void testCollectBoundedSeriesIds()
+{
+    std::printf("[test] Bounded series ID collection from rails\n");
+    // Episodes carry seriesId; movies do not.
+    MediaItem ep1; ep1.id="ep-1"; ep1.type="episode"; ep1.seriesId="show-A";
+    MediaItem ep2; ep2.id="ep-2"; ep2.type="episode"; ep2.seriesId="show-B";
+    MediaItem ep3; ep3.id="ep-3"; ep3.type="episode"; ep3.seriesId="show-A"; // dup
+    MediaItem mov; mov.id="mov-1"; mov.type="movie"; // no seriesId
+    MediaItem sh;  sh.id="sh-1";  sh.type="show";   // no seriesId
+
+    // CW and RA both contribute; duplicates across lists are removed.
+    const auto ids = collectBoundedSeriesIds({ep1, ep3}, {mov, ep2, sh});
+    CHECK(ids.size() == 2);
+    CHECK(ids[0] == "show-A");
+    CHECK(ids[1] == "show-B");
+
+    // Empty inputs produce empty output.
+    const auto empty = collectBoundedSeriesIds({}, {});
+    CHECK(empty.empty());
+
+    // Cap at 25: 30 unique series IDs → only 25 returned.
+    std::vector<MediaItem> many;
+    for (int i = 0; i < 30; ++i) {
+        MediaItem m;
+        m.id = "ep-" + std::to_string(i);
+        m.type = "episode";
+        m.seriesId = "show-" + std::to_string(i);
+        many.push_back(m);
+    }
+    const auto capped = collectBoundedSeriesIds({}, many);
+    CHECK(capped.size() == 25);
+    CHECK(capped[0] == "show-0");
+    CHECK(capped[24] == "show-24");
+
+    std::printf("[test] Bounded series ID collection from rails OK\n");
+}

@@ -74,10 +74,11 @@ rm -f "$RELEASE_ZIP"
 
 # --- Create gzipped tarball ---
 rm -f "$RELEASE_TAR"
-# Dereference symlinks so the OTA archive contains no symlink entries.
-# The bundled lib/*.so are symlinks; the installer rejects symlink/hardlink
-# entries (tar-slip defence), so store the real files instead.
-tar -czhpf "$RELEASE_TAR" -C output/package MiyooFin
+# Store real files: the bundled lib/*.so are symlinks to a shared inode, so
+# tar would otherwise emit symlink/hardlink entries, which the installer
+# rejects and which FAT32 cannot recreate.  -h dereferences symlinks and
+# --hard-dereference splits shared inodes into real files.
+tar -czhpf "$RELEASE_TAR" --hard-dereference -C output/package MiyooFin
 
 [ -s "$RELEASE_TAR" ] || {
     echo "ERROR: release tarball was not created" >&2

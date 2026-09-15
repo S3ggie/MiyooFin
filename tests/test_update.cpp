@@ -39,6 +39,12 @@ int main()
     // AppDir
     testAppDir();
 
+    // parseUpdateManifest — allowNonHttpsAssets
+    testParseManifestRejectFileAsset();
+    testParseManifestAcceptFileAssetDev();
+    testParseManifestAcceptAbsolutePathAssetDev();
+    testParseManifestRejectsFileAssetStrict();
+
     // ELF/ARM helpers
     testIsElfMagic();
     testIsElfArm();
@@ -82,6 +88,10 @@ int main()
     testUpdateManagerEnabled();
     testUpdateVersionDecision();
     testUpdateCheckErrorMessage();
+    testResolveManifestSource();
+    testIsLocalAsset();
+    testLocalAssetPath();
+    testDevOverrideActive();
 
     return miyoofin_test::finish("update");
 }

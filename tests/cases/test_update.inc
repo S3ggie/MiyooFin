@@ -470,3 +470,64 @@ static void testAppDir()
     CHECK(!dir.empty());
     std::printf("[test] appDir OK (%s)\n", dir.c_str());
 }
+
+// ===================================================================
+// parseUpdateManifest — allowNonHttpsAssets tests
+// ===================================================================
+
+static void testParseManifestRejectFileAsset()
+{
+    std::printf("[test] parseUpdateManifest rejects file:// asset by default\n");
+    const char *json = R"({
+        "version": "1.0.0",
+        "assets": { "tar_gz": { "url": "file:///tmp/miyoofin.tar.gz", "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "size": 100 } }
+    })";
+    UpdateManifest m;
+    // Production: must reject file:// assets
+    CHECK(!parseUpdateManifest(json, m));
+    // Dev override: must accept file:// assets
+    CHECK(parseUpdateManifest(json, m, true));
+    CHECK_EQ(m.tarGz.url, std::string("file:///tmp/miyoofin.tar.gz"));
+    CHECK(m.tarGz.size == 100);
+    std::printf("[test] parseUpdateManifest rejects file:// asset by default OK\n");
+}
+
+static void testParseManifestAcceptFileAssetDev()
+{
+    std::printf("[test] parseUpdateManifest accepts file:// asset with allowNonHttpsAssets\n");
+    const char *json = R"({
+        "version": "2.0.0",
+        "assets": { "tar_gz": { "url": "file:///home/dev/miyoofin.tar.gz", "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "size": 999 } }
+    })";
+    UpdateManifest m;
+    CHECK(parseUpdateManifest(json, m, true));
+    CHECK_EQ(m.version, std::string("2.0.0"));
+    CHECK_EQ(m.tarGz.url, std::string("file:///home/dev/miyoofin.tar.gz"));
+    CHECK(m.tarGz.size == 999);
+    std::printf("[test] parseUpdateManifest accepts file:// asset with allowNonHttpsAssets OK\n");
+}
+
+static void testParseManifestAcceptAbsolutePathAssetDev()
+{
+    std::printf("[test] parseUpdateManifest accepts absolute path asset with allowNonHttpsAssets\n");
+    const char *json = R"({
+        "version": "2.0.0",
+        "assets": { "tar_gz": { "url": "/tmp/miyoofin.tar.gz", "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "size": 500 } }
+    })";
+    UpdateManifest m;
+    CHECK(parseUpdateManifest(json, m, true));
+    CHECK_EQ(m.tarGz.url, std::string("/tmp/miyoofin.tar.gz"));
+    std::printf("[test] parseUpdateManifest accepts absolute path asset with allowNonHttpsAssets OK\n");
+}
+
+static void testParseManifestRejectsFileAssetStrict()
+{
+    std::printf("[test] parseUpdateManifest strict rejects absolute path asset\n");
+    const char *json = R"({
+        "version": "2.0.0",
+        "assets": { "tar_gz": { "url": "/tmp/miyoofin.tar.gz", "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "size": 500 } }
+    })";
+    UpdateManifest m;
+    CHECK(!parseUpdateManifest(json, m, false));
+    std::printf("[test] parseUpdateManifest strict rejects absolute path asset OK\n");
+}

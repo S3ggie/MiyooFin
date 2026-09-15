@@ -1007,3 +1007,132 @@ static void testInstallUpdateRollbackOnFailure()
     ::unlink(tarPath.c_str());
     std::printf("[test] installUpdate rollback on mid-install failure OK\n");
 }
+
+// ===================================================================
+// parseTarListingLine tests (GNU + BusyBox formats)
+// ===================================================================
+
+static void testParseTarListingLineBusyBoxRegular()
+{
+    std::printf("[test] parseTarListingLine BusyBox regular file\n");
+
+    // BusyBox tar on OnionOS: prints seconds (HH:MM:SS)
+    std::string line =
+        "-rw-r--r-- seggie/seggie        10 2026-09-15 08:54:36 MiyooFin/launch.sh";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/launch.sh");
+    CHECK(!isSymlink);
+    CHECK(!isHardlink);
+
+    std::printf("[test] parseTarListingLine BusyBox regular file OK\n");
+}
+
+static void testParseTarListingLineGNURegular()
+{
+    std::printf("[test] parseTarListingLine GNU regular file\n");
+
+    // GNU tar on host: no seconds (HH:MM)
+    std::string line =
+        "-rw-r--r-- seggie/seggie        10 2026-09-15 08:54 MiyooFin/launch.sh";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/launch.sh");
+    CHECK(!isSymlink);
+    CHECK(!isHardlink);
+
+    std::printf("[test] parseTarListingLine GNU regular file OK\n");
+}
+
+static void testParseTarListingLineBusyBoxDirectory()
+{
+    std::printf("[test] parseTarListingLine BusyBox directory\n");
+
+    std::string line =
+        "drwxr-xr-x seggie/seggie         0 2026-09-15 08:54:36 MiyooFin/lib/";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/lib/");
+    CHECK(!isSymlink);
+    CHECK(!isHardlink);
+
+    std::printf("[test] parseTarListingLine BusyBox directory OK\n");
+}
+
+static void testParseTarListingLineSymlink()
+{
+    std::printf("[test] parseTarListingLine symlink\n");
+
+    std::string line =
+        "lrwxrwxrwx seggie/seggie         0 2026-09-15 08:54:36 "
+        "MiyooFin/current -> MiyooFin/1.2.3";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/current");
+    CHECK(isSymlink);
+    CHECK(!isHardlink);
+
+    std::printf("[test] parseTarListingLine symlink OK\n");
+}
+
+static void testParseTarListingLineHardlink()
+{
+    std::printf("[test] parseTarListingLine hardlink\n");
+
+    std::string line =
+        "hrw-r--r-- seggie/seggie         0 2026-09-15 08:54:36 "
+        "MiyooFin/lib/libbar.so.1 link to MiyooFin/lib/libfoo.so.1";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/lib/libbar.so.1");
+    CHECK(!isSymlink);
+    CHECK(isHardlink);
+
+    std::printf("[test] parseTarListingLine hardlink OK\n");
+}
+
+static void testParseTarListingLineUnparseable()
+{
+    std::printf("[test] parseTarListingLine unparseable\n");
+
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(!parseTarListingLine("", filename, isSymlink, isHardlink));
+    CHECK(!parseTarListingLine("garbage with no datetime", filename,
+                              isSymlink, isHardlink));
+    CHECK(!parseTarListingLine("not a tar line at all", filename,
+                              isSymlink, isHardlink));
+
+    std::printf("[test] parseTarListingLine unparseable OK\n");
+}
+
+static void testParseTarListingLinePathWithDatetimeSubstring()
+{
+    std::printf("[test] parseTarListingLine path with datetime substring\n");
+
+    // The path contains "2026-09-15" which looks like a date but is NOT the
+    // listing datetime — the real datetime appears earlier in the line.
+    std::string line =
+        "-rw-r--r-- seggie/seggie      1234 2026-10-01 12:00:00 "
+        "MiyooFin/backup/2026-09-15_data.bin";
+    std::string filename;
+    bool isSymlink = false, isHardlink = false;
+
+    CHECK(parseTarListingLine(line, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/backup/2026-09-15_data.bin");
+    CHECK(!isSymlink);
+    CHECK(!isHardlink);
+
+    std::printf("[test] parseTarListingLine path with datetime substring OK\n");
+}

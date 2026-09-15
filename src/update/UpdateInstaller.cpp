@@ -240,13 +240,15 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
         type != 'd' && type != 'b' && type != 'c' && type != 'p')
         return false;
 
-    // Find the filename by locating the datetime pattern "YYYY-MM-DD HH:MM"
-    // followed by a space.  Everything after that space is the filename.
+    // Find the filename by locating the ISO datetime pattern and taking
+    // everything after the following space.  GNU tar prints "YYYY-MM-DD HH:MM"
+    // while BusyBox tar (OnionOS) prints "YYYY-MM-DD HH:MM:SS"; accept both.
     // This is more robust than counting variable-width fields.
     size_t nameStart = 0;
-    for (size_t i = 1; i + 16 < line.size(); ++i) {
+    const size_t lineLen = line.size();
+    for (size_t i = 1; i + 16 < lineLen; ++i) {
         // Match: DIGIT DIGIT DIGIT DIGIT '-' DIGIT DIGIT '-' DIGIT DIGIT
-        //        ' ' DIGIT DIGIT ':' DIGIT DIGIT ' '
+        //        ' ' DIGIT DIGIT ':' DIGIT DIGIT
         if (std::isdigit(static_cast<unsigned char>(line[i]))   &&
             std::isdigit(static_cast<unsigned char>(line[i+1])) &&
             std::isdigit(static_cast<unsigned char>(line[i+2])) &&
@@ -262,10 +264,19 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
             std::isdigit(static_cast<unsigned char>(line[i+12])) &&
             line[i+13] == ':' &&
             std::isdigit(static_cast<unsigned char>(line[i+14])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+15])) &&
-            line[i+16] == ' ') {
-            nameStart = i + 17;
-            break;
+            std::isdigit(static_cast<unsigned char>(line[i+15]))) {
+            if (line[i+16] == ' ') {
+                nameStart = i + 17;
+                break;
+            }
+            // BusyBox prints seconds too: "HH:MM:SS name".
+            if (line[i+16] == ':' && i + 19 < lineLen &&
+                std::isdigit(static_cast<unsigned char>(line[i+17])) &&
+                std::isdigit(static_cast<unsigned char>(line[i+18])) &&
+                line[i+19] == ' ') {
+                nameStart = i + 20;
+                break;
+            }
         }
     }
     if (nameStart == 0 || nameStart >= line.size()) return false;
@@ -296,6 +307,20 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
     }
 
     out.filename = namePortion;
+    return true;
+}
+
+/// Public wrapper around the static parseTarVerboseLine.
+/// Delegates to parseTarVerboseLine; does not duplicate logic.
+bool parseTarListingLine(const std::string &line, std::string &filename,
+                         bool &isSymlink, bool &isHardlink)
+{
+    TarEntry entry;
+    if (!parseTarVerboseLine(line, entry))
+        return false;
+    filename   = std::move(entry.filename);
+    isSymlink  = entry.isSymlink;
+    isHardlink = entry.isHardlink;
     return true;
 }
 

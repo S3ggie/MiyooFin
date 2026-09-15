@@ -382,6 +382,7 @@ static void testIsWhitelistedAppPath()
     CHECK(isWhitelistedAppPath("LICENSE"));
     CHECK(isWhitelistedAppPath("THIRD_PARTY_NOTICES.md"));
     CHECK(isWhitelistedAppPath("miyoofin-perf-reporter"));
+    CHECK(isWhitelistedAppPath("miyoofin-playback-reporter"));
     CHECK(isWhitelistedAppPath("playback_runner.sh"));
 
     // Blacklisted

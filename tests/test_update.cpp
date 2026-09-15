@@ -67,6 +67,15 @@ int main()
     // installUpdate additional
     testInstallUpdateRollbackOnFailure();
 
+    // parseTarListingLine
+    testParseTarListingLineBusyBoxRegular();
+    testParseTarListingLineGNURegular();
+    testParseTarListingLineBusyBoxDirectory();
+    testParseTarListingLineSymlink();
+    testParseTarListingLineHardlink();
+    testParseTarListingLineUnparseable();
+    testParseTarListingLinePathWithDatetimeSubstring();
+
     // UpdateManager
     testUpdateStatusText();
     testUpdateManagerInitialState();

@@ -20,6 +20,16 @@ bool isElfMagic(const unsigned char *buf, std::size_t len);
 bool isElfArm(const unsigned char *buf, std::size_t len);
 
 // -------------------------------------------------------------------
+// Tar listing parser — exposed for unit testing
+// -------------------------------------------------------------------
+
+/// Parse one `tar -tv` listing line.  `filename` receives the stripped path
+/// (before any " -> " / " link to " target).  Returns false if unparseable.
+/// Exposed for unit testing.
+bool parseTarListingLine(const std::string &line, std::string &filename,
+                         bool &isSymlink, bool &isHardlink);
+
+// -------------------------------------------------------------------
 // installUpdate — the OTA install engine
 // -------------------------------------------------------------------
 

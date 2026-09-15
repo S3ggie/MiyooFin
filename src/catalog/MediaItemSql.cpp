@@ -217,30 +217,36 @@ bool replaceMediaItemCollections(const MediaItemCollectionStatements &statements
         resetStatement(statements.insertGenre);
     }
 
-    resetStatement(statements.deleteImageTags);
-    if (!bindItemId(statements.deleteImageTags, item, error)
-        || !stepDone(statements.deleteImageTags, error)) {
+    // Only replace image tags when the caller provides a non-empty map.
+    // A transient/empty payload (e.g. server returning "ImageTags": {} while
+    // re-indexing) must not wipe previously stored artwork tags — the item
+    // would lose its poster key and show a gray placeholder permanently.
+    if (!item.imageTags.empty()) {
         resetStatement(statements.deleteImageTags);
-        return false;
-    }
-    resetStatement(statements.deleteImageTags);
-
-    for (const auto &tag : item.imageTags) {
-        resetStatement(statements.insertImageTag);
-        if (!bindResult(sqlite3_bind_text(statements.insertImageTag, 1,
-                                          item.id.c_str(), -1,
-                                          SQLITE_TRANSIENT), error)
-            || !bindResult(sqlite3_bind_text(statements.insertImageTag, 2,
-                                             tag.first.c_str(), -1,
-                                             SQLITE_TRANSIENT), error)
-            || !bindResult(sqlite3_bind_text(statements.insertImageTag, 3,
-                                             tag.second.c_str(), -1,
-                                             SQLITE_TRANSIENT), error)
-            || !stepDone(statements.insertImageTag, error)) {
-            resetStatement(statements.insertImageTag);
+        if (!bindItemId(statements.deleteImageTags, item, error)
+            || !stepDone(statements.deleteImageTags, error)) {
+            resetStatement(statements.deleteImageTags);
             return false;
         }
-        resetStatement(statements.insertImageTag);
+        resetStatement(statements.deleteImageTags);
+
+        for (const auto &tag : item.imageTags) {
+            resetStatement(statements.insertImageTag);
+            if (!bindResult(sqlite3_bind_text(statements.insertImageTag, 1,
+                                              item.id.c_str(), -1,
+                                              SQLITE_TRANSIENT), error)
+                || !bindResult(sqlite3_bind_text(statements.insertImageTag, 2,
+                                                 tag.first.c_str(), -1,
+                                                 SQLITE_TRANSIENT), error)
+                || !bindResult(sqlite3_bind_text(statements.insertImageTag, 3,
+                                                 tag.second.c_str(), -1,
+                                                 SQLITE_TRANSIENT), error)
+                || !stepDone(statements.insertImageTag, error)) {
+                resetStatement(statements.insertImageTag);
+                return false;
+            }
+            resetStatement(statements.insertImageTag);
+        }
     }
     return true;
 }

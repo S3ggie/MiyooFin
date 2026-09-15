@@ -438,6 +438,7 @@ static void testCatalogDbMediaItemCollections()
     CHECK(result.collectionsZero);
     CHECK(result.collectionsMultiple);
     CHECK(result.collectionsUpdateRemoval);
+    CHECK(result.collectionsEmptyTagPreserve);
     CHECK(result.collectionsDeleteCascade);
     CHECK(result.collectionsParity);
 }

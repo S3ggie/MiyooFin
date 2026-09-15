@@ -99,7 +99,8 @@ TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
-               catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session
+               catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
+               imagecache
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=output/test/objects/%.o)

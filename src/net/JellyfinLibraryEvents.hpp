@@ -20,6 +20,7 @@ struct JellyfinLibraryChangeBatch {
     std::vector<std::string> itemsRemoved;
     std::vector<std::string> itemsUpdated;
     bool catchUpRequired = false;
+    bool userDataChanged = false;
 };
 
 enum class JellyfinLibraryEventParse {
@@ -50,6 +51,7 @@ private:
     std::map<std::string, unsigned> m_ids;
     mutable std::mutex m_mutex;
     bool m_overflowed = false;
+    bool m_userDataChanged = false;
 };
 
 class JellyfinLibraryEvents {

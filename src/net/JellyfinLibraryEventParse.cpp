@@ -208,6 +208,10 @@ JellyfinLibraryEventParse JellyfinLibraryEvents::parseMessage(
     if (rawType.empty() || rawType[0] != '"'
         || !parseString(rawType, stringPos, messageType))
         return JellyfinLibraryEventParse::Malformed;
+    if (messageType == "UserDataChanged") {
+        batch.userDataChanged = true;
+        return JellyfinLibraryEventParse::Parsed;
+    }
     if (messageType != "LibraryChanged")
         return JellyfinLibraryEventParse::Ignored;
 

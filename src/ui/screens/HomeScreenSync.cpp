@@ -90,6 +90,7 @@ void HomeScreen::updateMediaPaging()
 bool HomeScreen::liveChangeIsEmpty(const JellyfinLibraryChangeBatch &batch)
 {
     return !batch.catchUpRequired
+        && !batch.userDataChanged
         && batch.itemsAdded.empty()
         && batch.itemsUpdated.empty()
         && batch.itemsRemoved.empty();
@@ -119,7 +120,22 @@ void HomeScreen::updateLiveLibraryChanges()
     if (m_librarySync->takeLiveChange(batch)) {
         if (liveChangeIsEmpty(batch))
             return;
-        startLiveChangeApply(batch);
+        const bool hasItemChanges = !batch.itemsAdded.empty()
+            || !batch.itemsRemoved.empty()
+            || !batch.itemsUpdated.empty()
+            || batch.catchUpRequired;
+        if (hasItemChanges)
+            startLiveChangeApply(batch);
+        if (batch.userDataChanged) {
+            const std::int64_t nowMs = wallClockMs();
+            if (!homeRailRefreshDebounced(nowMs,
+                                          m_lastHomeRailRefreshCompletedMs)
+                && !homeRailRefreshDebounced(nowMs,
+                                             m_lastHomeRailRefreshAttemptMs)) {
+                m_homeSyncActive = true;
+                startHomeRailRefresh();
+            }
+        }
     }
 }
 
@@ -206,6 +222,7 @@ void HomeScreen::startHomeRailRefresh()
     m_homeRailRefreshDone.store(false);
     m_homeRailRefreshInFlight = true;
     m_homeRailRefreshSucceeded = false;
+    m_lastHomeRailRefreshAttemptMs = wallClockMs();
     m_homeRailContinueValid = false;
     m_homeRailRecentValid = false;
     m_homeRailContinueWatching.clear();
@@ -302,6 +319,7 @@ void HomeScreen::startFetch()
     m_fetchDone = false; m_fetchReady.store(false); m_fetchComplete.store(false);
     m_fetchPublished = false; m_fetchPostFinalizeApplied = false; m_fetchError.clear(); m_fetchResult.clear();
     m_fetchCacheSaved = false; m_fetchOfflinePrepared = false;
+    m_homeRailsReady.store(false); m_homeRailsApplied = false;
     {
         std::lock_guard<std::mutex> lock(m_fetchMutex);
         m_animeItemIds.clear();
@@ -398,31 +416,6 @@ void HomeScreen::startFetch()
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
-        // Seed session generation counters from the persisted sync state so
-        // subsequent writeSyncState calls never appear as "regressed" to the
-        // DB rejection check.  The committed_generation persists across app
-        // runs but the per-process counters start at zero.
-        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
-            auto dbSyncState = m_catalogDb->readSyncState(
-                false, 0, 0, metadata).get();
-            if (dbSyncState.success) {
-                const auto gen = dbSyncState.committedGeneration;
-                if (gen > 0) {
-                    m_librarySync->seedGeneration(gen);
-                    if (gen > m_topLevelSyncGeneration)
-                        m_topLevelSyncGeneration = gen;
-                    const auto hierCur = m_hierarchyGeneration.load();
-                    if (gen > hierCur)
-                        m_hierarchyGeneration.store(gen);
-                }
-                if (dbSyncState.lastSuccessfulMs > 0) {
-                    m_syncState.lastSuccessfulMs =
-                        dbSyncState.lastSuccessfulMs;
-                    m_syncState.lastReconcileMs =
-                        dbSyncState.lastReconcileMs;
-                }
-            }
-        }
         // Probe the committed catalog before starting any network refresh. These
         // are bounded reads on the CatalogDb worker; the SDL thread only sees
         // the publication signal in update(). A genuinely empty catalog must
@@ -467,13 +460,63 @@ void HomeScreen::startFetch()
                 m_fetchReady.store(true);
             }
         }
+        // Seed sync state from CatalogDb before branching so the startup
+        // decision uses the latest persisted checkpoint.
+        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
+            auto dbSyncState = m_catalogDb->readSyncState(
+                false, 0, 0, metadata).get();
+            if (dbSyncState.success) {
+                const auto gen = dbSyncState.committedGeneration;
+                if (gen > 0) {
+                    m_librarySync->seedGeneration(gen);
+                    if (gen > m_topLevelSyncGeneration)
+                        m_topLevelSyncGeneration = gen;
+                    const auto hierCur = m_hierarchyGeneration.load();
+                    if (gen > hierCur)
+                        m_hierarchyGeneration.store(gen);
+                }
+                if (dbSyncState.lastSuccessfulMs > 0) {
+                    m_syncState.lastSuccessfulMs =
+                        dbSyncState.lastSuccessfulMs;
+                    m_syncState.lastReconcileMs =
+                        dbSyncState.lastReconcileMs;
+                }
+            }
+        }
+        // Block live-change rail refreshes until the startup population
+        // walk commits so a queued UserDataChanged cannot start a
+        // competing rail refresh during the startup window.
+        m_initialPopulationInProgress = true;
+        // Fetch home rails (Continue Watching / Recently Added) immediately
+        // after the warm CatalogDb probe so they can be published
+        // incrementally before the full population walk completes.
         std::vector<MediaItem> cw; std::string cwErr;
         std::vector<MediaItem> ra; std::string raErr;
-        // Home rails (Continue Watching / Recently Added) are fetched AFTER
-        // the first bounded library page is published so they do not gate
-        // first paint.  The first_bounded_page_ready publish uses empty cw/ra;
-        // the final rebuild after the rails complete populates them.
-        m_initialPopulationInProgress = true;
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
+        ++requestCount;
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
+        ++requestCount;
+        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
+        {
+            std::lock_guard<std::mutex> lock(m_fetchMutex);
+            m_startupRailCW = cw;
+            m_startupRailRA = ra;
+            m_startupRailCWValid = !cw.empty();
+            m_startupRailRAValid = !ra.empty();
+        }
+        m_homeRailsReady.store(true);
+        queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
+        // Decide startup sync strategy using the persisted checkpoint.
+        const bool hasCatalogRows = initialPagePublished;
+        const HomeStartupSync syncDecision = decideHomeStartupSync(
+            wallClockMs(), m_syncState.lastSuccessfulMs,
+            m_syncState.lastReconcileMs,
+            m_catalogDb && m_catalogMetadata.scopeEpoch != 0
+                ? m_topLevelSyncGeneration : std::uint64_t(0),
+            m_catalogDb && m_catalogMetadata.scopeEpoch != 0, hasCatalogRows);
         // Accumulate fetched items per collection type so the
         // post-finalize rebuild can populate Home tab items.
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
@@ -482,6 +525,36 @@ void HomeScreen::startFetch()
         // walk the deferral flag is cleared and poster workers are woken,
         // preventing a permanent low-priority artwork stall.
         try {
+        bool deltaCatchUpSucceeded = false;
+        if (syncDecision == HomeStartupSync::SkipFresh) {
+            // Catalog is within the FRESH_MS window — skip the walk entirely.
+            m_remoteSnapshot.continueWatching = cw;
+            m_remoteSnapshot.recentlyAdded = ra;
+        } else if (syncDecision == HomeStartupSync::DeltaCatchUp) {
+            // Bounded delta catch-up: fetch only items changed since the
+            // last successful checkpoint.
+            uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_started");
+            const auto catchUp = m_librarySync->catchUpChangedCatalog(
+                m_syncState.lastSuccessfulMs, cancellation).get();
+            if (catchUp.success && !catchUp.cancelled && !catchUp.superseded) {
+                m_syncState.lastSuccessfulMs = catchUp.checkpointMs;
+                m_remoteSnapshot.continueWatching = cw;
+                m_remoteSnapshot.recentlyAdded = ra;
+                deltaCatchUpSucceeded = true;
+            } else if (catchUp.cancelled || catchUp.superseded) {
+                // Cancellation or superseded — treat as SkipFresh: rails +
+                // warm catalog already available, no full walk, no error.
+                m_remoteSnapshot.continueWatching = cw;
+                m_remoteSnapshot.recentlyAdded = ra;
+                deltaCatchUpSucceeded = true;
+            } else {
+                // Catch-up failed — fall through to full reconcile.
+            }
+            uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_finished");
+        }
+        if (syncDecision == HomeStartupSync::FullReconcile
+            || (syncDecision == HomeStartupSync::DeltaCatchUp
+                && !deltaCatchUpSucceeded)) {
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
@@ -631,19 +704,6 @@ void HomeScreen::startFetch()
                 if (catalogRefreshFailed) break;
             }
         }
-        // Fetch rails (Continue Watching / Recently Added) AFTER the first
-        // bounded page has been published so they do not gate first paint.
-        {
-        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
-        ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
-        uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
-        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
-        ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
-        uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
-        queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
-        }
         if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
             auto finalized = m_librarySync->finalize(syncGeneration).get();
             if (!finalized.success) {
@@ -672,6 +732,7 @@ void HomeScreen::startFetch()
         } else if (topLevelSyncStarted) {
             m_librarySync->abort(syncGeneration).get();
         }
+        } // FullReconcile scope
         } catch (...) {
             // FIX 2: On exception, guarantee the deferral flag is
             // cleared and poster workers are woken so the low-priority
@@ -693,13 +754,24 @@ void HomeScreen::startFetch()
         // low-priority artwork jobs that were held back during the
         // population walk.
         m_posterWake.notify_all();
-        // Bounded season-poster prefetch: after the initial population
-        // commits, fetch seasons for the highest-value series (from the
-        // already-fetched CW/RA rails, deduplicated and capped) and
-        // queue low-priority poster jobs so series screens have artwork
-        // ready.  Uses librarySync::refreshSeasons (the same API the
-        // hierarchy worker uses) and collectSeasonPosterJobs which
-        // applies the isCached filter for idempotency across restarts.
+        if (catalogRefreshFailed && m_fetchError.empty())
+            m_fetchError = "Library refresh failed";
+        const bool artworkPlanningComplete =
+            !catalogRefreshFailed && !cancellation->load();
+        m_artworkPlanningComplete.store(artworkPlanningComplete);
+        m_metadataActive.store(false);
+        m_remoteSnapshot.continueWatching=cw;
+        m_remoteSnapshot.recentlyAdded=ra;
+        if (optionalRailFailed)
+            std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
+        completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
+        // Bounded season-poster prefetch: before signaling completion, fetch
+        // seasons for the highest-value series (from the already-fetched
+        // CW/RA rails, deduplicated and capped) and queue low-priority poster
+        // jobs so series screens have artwork ready.  Uses
+        // librarySync::refreshSeasons (the same API the hierarchy worker
+        // uses) and collectSeasonPosterJobs which applies the isCached filter
+        // for idempotency across restarts.
         //
         // Each series must be resolved to a FULL MediaItem (type=="show")
         // from the catalog DB (all series rows after the population walk)
@@ -760,17 +832,6 @@ void HomeScreen::startFetch()
         } catch (...) {
             std::printf("[HomeScreen] janitor skipped: exception\n");
         }
-        if (catalogRefreshFailed && m_fetchError.empty())
-            m_fetchError = "Library refresh failed";
-        const bool artworkPlanningComplete =
-            !catalogRefreshFailed && !cancellation->load();
-        m_artworkPlanningComplete.store(artworkPlanningComplete);
-        m_metadataActive.store(false);
-        m_remoteSnapshot.continueWatching=cw;
-        m_remoteSnapshot.recentlyAdded=ra;
-        if (optionalRailFailed)
-            std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
-        completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
         m_fetchComplete.store(true);
         m_fetchDone.store(true);
         m_fetchReady.store(true);

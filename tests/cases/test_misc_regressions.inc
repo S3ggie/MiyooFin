@@ -478,9 +478,96 @@ static void testHomeUsesSharedDownIntentAcrossPageLoads()
     std::printf("[test] Home preserves Down intent across page loads OK\n");
 }
 
+static void testDecideHomeStartupSync()
+{
+    std::printf("[test] decideHomeStartupSync truth table\n");
+    // Zero checkpoint → FullReconcile
+    CHECK(decideHomeStartupSync(1000, 0, 0, 0, true, true) == HomeStartupSync::FullReconcile);
+    // Committed generation 0 → FullReconcile
+    CHECK(decideHomeStartupSync(1000, 100, 100, 0, true, true) == HomeStartupSync::FullReconcile);
+    // Scope epoch invalid → FullReconcile
+    CHECK(decideHomeStartupSync(1000, 100, 100, 1, false, true) == HomeStartupSync::FullReconcile);
+    // Empty catalog → FullReconcile
+    CHECK(decideHomeStartupSync(1000, 100, 100, 1, true, false) == HomeStartupSync::FullReconcile);
+    // lastReconcile > lastSuccessful → FullReconcile
+    CHECK(decideHomeStartupSync(1000, 100, 200, 1, true, true) == HomeStartupSync::FullReconcile);
+    // Clock regressed (now < lastSuccessful) → FullReconcile
+    CHECK(decideHomeStartupSync(50, 100, 50, 1, true, true) == HomeStartupSync::FullReconcile);
+    // Stale lastReconcile (beyond kHomeFullReconcileMs) → FullReconcile
+    const std::int64_t k24h = 24LL*60*60*1000;
+    CHECK(decideHomeStartupSync(1000 + k24h + 1, 1000, 1000, 1, true, true) == HomeStartupSync::FullReconcile);
+    // Within 15min FRESH_MS with valid generation and scope → SkipFresh
+    CHECK(decideHomeStartupSync(500000, 100000, 100000, 1, true, true) == HomeStartupSync::SkipFresh);
+    // Age 1 hour, valid → DeltaCatchUp
+    CHECK(decideHomeStartupSync(1000 + 3600000, 1000, 1000, 1, true, true) == HomeStartupSync::DeltaCatchUp);
+    // Age 25 hours → FullReconcile (beyond delta max age)
+    CHECK(decideHomeStartupSync(1000 + k24h + 3600000, 1000, 1000, 1, true, true) == HomeStartupSync::FullReconcile);
+    std::printf("[test] decideHomeStartupSync truth table OK\n");
+}
+
+static void testHomeStartupSyncSourceOrder()
+{
+    std::printf("[test] Home startup sync source order assertions\n");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    // Rails fetch (getResumeItems) must appear before begin(
+    const auto resumePos = sync.find("getResumeItems");
+    const auto beginPos = sync.find("m_librarySync->begin(");
+    CHECK(resumePos != std::string::npos);
+    CHECK(beginPos != std::string::npos);
+    CHECK(resumePos < beginPos);
+    // ImageCache::runJanitor and season prefetch must appear before the
+    // main m_fetchComplete.store(true) (after the population walk) so they
+    // don't block the UI thread.  Use rfind to skip the early-offline
+    // branch's store.
+    const auto fetchCompletePos = sync.rfind("m_fetchComplete.store(true)");
+    const auto janitorPos = sync.find("ImageCache::runJanitor()");
+    const auto prefetchPos = sync.find("collectBoundedSeriesIds");
+    CHECK(fetchCompletePos != std::string::npos);
+    CHECK(janitorPos != std::string::npos);
+    CHECK(prefetchPos != std::string::npos);
+    CHECK(janitorPos < fetchCompletePos);
+    CHECK(prefetchPos < fetchCompletePos);
+    // Incremental rail-apply must be gated on m_homeRailsReady, not
+    // m_fetchComplete
+    CHECK(apply.find("m_homeRailsReady.load() && !m_homeRailsApplied")
+          != std::string::npos);
+    // Existing source substrings that scan tests pin
+    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
+    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
+    CHECK(sync.find("planHomeRailPosterJobs(cw, ra)") != std::string::npos);
+    CHECK(sync.find("queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)")
+          != std::string::npos);
+    // Startup-rail buffer: fetch worker writes m_startupRailCW under
+    // m_fetchMutex, finishFetch reads under the same mutex.
+    CHECK(sync.find("m_startupRailCW") != std::string::npos);
+    CHECK(apply.find("m_startupRailCW") != std::string::npos);
+    // m_initialPopulationInProgress must be set before the startup rails
+    // fetch so a queued UserDataChanged cannot start a competing rail
+    // refresh during the startup window.
+    const auto initPopPos = sync.find("m_initialPopulationInProgress = true");
+    // Use a fetch-worker-specific pattern (local token variable) to skip
+    // the refresh thread's own getResumeItems call.
+    const auto railsFetchPos = sync.find("getResumeItems(base, token");
+    CHECK(initPopPos != std::string::npos);
+    CHECK(railsFetchPos != std::string::npos);
+    CHECK(initPopPos < railsFetchPos);
+    CHECK(apply.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
+          != std::string::npos);
+    CHECK(apply.find("updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)")
+          != std::string::npos);
+    CHECK(apply.find("planHomeRailPosterJobs") != std::string::npos);
+    CHECK(apply.find("m_fetchPostFinalizeApplied") != std::string::npos);
+    CHECK(apply.find("mediaWindowsFromTabs") != std::string::npos);
+    CHECK(apply.find("m_moviePage.items = warmWindows.movies") != std::string::npos);
+    std::printf("[test] Home startup sync source order assertions OK\n");
+}
+
 static void testShowsPresentation()
 {
     std::printf("[test] shows title, anime classification, and grid helpers\n");
+    testDecideHomeStartupSync();
+    testHomeStartupSyncSourceOrder();
     testHomeIncrementalPublicationPolicy();
     testLibraryChangedEventQueueAndReconnectPolicy();
     testBoundedPagePosterPlanning();

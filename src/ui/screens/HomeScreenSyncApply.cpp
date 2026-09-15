@@ -203,6 +203,7 @@ bool HomeScreen::liveChangeAffectsHome(
 void HomeScreen::publishLiveCatalogItems(
     const library::LiveLibraryChangeResult &result)
 {
+    if (livePublicationIsNoop(result.items.empty(), result.removedIds.empty())) return;
     const auto replace = [&](std::vector<MediaItem> &items,
                              const MediaItem &changed) {
         for (auto &item : items) {

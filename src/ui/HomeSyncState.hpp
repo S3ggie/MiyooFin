@@ -45,6 +45,14 @@ inline bool homeChangeNeedsPublication(bool catchUpRequired,
     return catchUpRequired || catalogItemAffectsHome || cachedHomeItemRemoved;
 }
 
+/// Returns true when a live-change publication carries no actual item changes
+/// (no items and no removals).  Caller should skip the full publish path.
+/// Pure helper — testable without a HomeScreen instance.
+inline bool livePublicationIsNoop(bool itemsEmpty, bool removedIdsEmpty)
+{
+    return itemsEmpty && removedIdsEmpty;
+}
+
 /// Minimum interval between successive live-change rail refreshes.
 /// Prevents the ~16-17 ResumeItems+LatestItems pairs per ~100s window
 /// that each trigger a full network round-trip.

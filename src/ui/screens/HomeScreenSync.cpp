@@ -492,20 +492,24 @@ void HomeScreen::startFetch()
         // incrementally before the full population walk completes.
         std::vector<MediaItem> cw; std::string cwErr;
         std::vector<MediaItem> ra; std::string raErr;
+        bool cwOk = false;
+        bool raOk = false;
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr)) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        cwOk = RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr);
+        if (!cwOk) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
         ++requestCount;
-        if (!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr)) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        raOk = RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr);
+        if (!raOk) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         {
             std::lock_guard<std::mutex> lock(m_fetchMutex);
             m_startupRailCW = cw;
             m_startupRailRA = ra;
-            m_startupRailCWValid = !cw.empty();
-            m_startupRailRAValid = !ra.empty();
+            m_startupRailCWValid = cwOk;
+            m_startupRailRAValid = raOk;
         }
         m_homeRailsReady.store(true);
         queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
@@ -528,8 +532,8 @@ void HomeScreen::startFetch()
         bool deltaCatchUpSucceeded = false;
         if (syncDecision == HomeStartupSync::SkipFresh) {
             // Catalog is within the FRESH_MS window — skip the walk entirely.
-            m_remoteSnapshot.continueWatching = cw;
-            m_remoteSnapshot.recentlyAdded = ra;
+            if (cwOk) m_remoteSnapshot.continueWatching = cw;
+            if (raOk) m_remoteSnapshot.recentlyAdded = ra;
         } else if (syncDecision == HomeStartupSync::DeltaCatchUp) {
             // Bounded delta catch-up: fetch only items changed since the
             // last successful checkpoint.
@@ -538,14 +542,14 @@ void HomeScreen::startFetch()
                 m_syncState.lastSuccessfulMs, cancellation).get();
             if (catchUp.success && !catchUp.cancelled && !catchUp.superseded) {
                 m_syncState.lastSuccessfulMs = catchUp.checkpointMs;
-                m_remoteSnapshot.continueWatching = cw;
-                m_remoteSnapshot.recentlyAdded = ra;
+                if (cwOk) m_remoteSnapshot.continueWatching = cw;
+                if (raOk) m_remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
             } else if (catchUp.cancelled || catchUp.superseded) {
                 // Cancellation or superseded — treat as SkipFresh: rails +
                 // warm catalog already available, no full walk, no error.
-                m_remoteSnapshot.continueWatching = cw;
-                m_remoteSnapshot.recentlyAdded = ra;
+                if (cwOk) m_remoteSnapshot.continueWatching = cw;
+                if (raOk) m_remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
             } else {
                 // Catch-up failed — fall through to full reconcile.
@@ -760,8 +764,8 @@ void HomeScreen::startFetch()
             !catalogRefreshFailed && !cancellation->load();
         m_artworkPlanningComplete.store(artworkPlanningComplete);
         m_metadataActive.store(false);
-        m_remoteSnapshot.continueWatching=cw;
-        m_remoteSnapshot.recentlyAdded=ra;
+        if (cwOk) m_remoteSnapshot.continueWatching=cw;
+        if (raOk) m_remoteSnapshot.recentlyAdded=ra;
         if (optionalRailFailed)
             std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
         completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);

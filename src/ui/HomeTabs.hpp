@@ -21,6 +21,10 @@ std::vector<std::string> tabNames(const std::vector<TabData> &tabs);
 int transitionTabIndex(const std::vector<TabData> &from, int selected, const std::vector<TabData> &to);
 std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);
 
+/// Linear search for the first row with a matching label.  Returns -1 if
+/// absent or if `rows` is empty.  Duplicates return the first index.
+int homeRowIndexByLabel(const std::vector<MediaRow> &rows, const std::string &label);
+
 }
 
 #endif

@@ -17,6 +17,7 @@ int main()
     testShouldShowClockErrorTrue(); testShouldShowClockErrorFalseModernEpoch();
     testShouldShowClockErrorFalseUnrelatedFailure(); testClockMessageFormat();
     testLiveChangeCheckpointPolicy();
+    testHomeRowFocusReconciliation();
     testCardSurfaceCacheEviction(); testNonBlockingFinishPolicy();
     return miyoofin_test::finish("misc-regressions");
 }

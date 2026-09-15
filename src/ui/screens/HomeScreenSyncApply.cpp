@@ -43,9 +43,11 @@ void HomeScreen::applyPresentationProjection() {
 }
 void HomeScreen::restoreOnlinePresentation() {
     if (!m_haveCachedSnapshot) return;
+    const std::string focusedLabel = focusedHomeRowLabel();
     const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab;
     m_tabs=tabsFromSnapshot(m_cachedSnapshot);
     m_activeTab=transitionTabIndex(previous,selected,m_tabs);
+    restoreHomeRowFocus(focusedLabel);
     resetMediaPaging();
     clampNavigation();
 }
@@ -264,6 +266,7 @@ void HomeScreen::finishHomeRailRefresh()
     m_homeRailRefreshInFlight = false;
     if (m_homeRailRefreshSucceeded) {
         m_lastHomeRailRefreshCompletedMs = wallClockMs();
+        const std::string focusedLabel = focusedHomeRowLabel();
         if (m_homeRailContinueValid) {
             updateContinueWatchingRow(m_tabs, m_homeRailContinueWatching);
             m_cachedSnapshot.continueWatching = m_homeRailContinueWatching;
@@ -272,6 +275,7 @@ void HomeScreen::finishHomeRailRefresh()
             updateRecentlyAddedRow(m_tabs, m_homeRailRecentlyAdded);
             m_cachedSnapshot.recentlyAdded = m_homeRailRecentlyAdded;
         }
+        restoreHomeRowFocus(focusedLabel);
         queuePosterJobs(planHomeRailPosterJobs(
             m_homeRailContinueWatching, m_homeRailRecentlyAdded), true);
     } else if (!m_homeRailRefreshError.empty()) {
@@ -319,7 +323,8 @@ void HomeScreen::finishFetch()
                 publishedTabs = std::move(m_fetchResult);
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
-            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            const std::string focusedLabel = focusedHomeRowLabel();
+            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;
@@ -348,13 +353,17 @@ void HomeScreen::finishFetch()
             cwValid = m_startupRailCWValid;
             raValid = m_startupRailRAValid;
         }
-        if (cwValid) {
-            updateContinueWatchingRow(m_tabs, railCW);
-            m_cachedSnapshot.continueWatching = railCW;
-        }
-        if (raValid) {
-            updateRecentlyAddedRow(m_tabs, railRA);
-            m_cachedSnapshot.recentlyAdded = railRA;
+        {
+            const std::string focusedLabel = focusedHomeRowLabel();
+            if (cwValid) {
+                updateContinueWatchingRow(m_tabs, railCW);
+                m_cachedSnapshot.continueWatching = railCW;
+            }
+            if (raValid) {
+                updateRecentlyAddedRow(m_tabs, railRA);
+                m_cachedSnapshot.recentlyAdded = railRA;
+            }
+            restoreHomeRowFocus(focusedLabel);
         }
         queuePosterJobs(planHomeRailPosterJobs(railCW, railRA), true);
         clampNavigation();
@@ -372,6 +381,7 @@ void HomeScreen::finishFetch()
             std::lock_guard<std::mutex> lock(m_fetchMutex);
             rebuiltTabs = std::move(m_fetchResult);
         }
+        const std::string focusedLabel = focusedHomeRowLabel();
         if (m_fetchError.empty() && !rebuiltTabs.empty()) {
             const HomeMediaWindows warmWindows =
                 mediaWindowsFromTabs(rebuiltTabs);
@@ -401,6 +411,8 @@ void HomeScreen::finishFetch()
         }
         updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
         updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
+        restoreHomeRowFocus(focusedLabel);
+        clampNavigation();
         // Mark the sync schedule complete only after the fetch thread has
         // finished (Done atomic set), which means the top-level generation
         // has committed (finalize) or been safely aborted.  This prevents

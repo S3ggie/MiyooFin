@@ -137,6 +137,14 @@ inline int totalRowWidth(const std::vector<MediaItem> &items,
     return x - gap;   // remove trailing gap
 }
 
+/// Horizontal pixel offset used when drawing one Home rail.  Only the focused
+/// row scrolls; all other rows stay pinned to their left edge so scrolling a
+/// longer rail cannot shift a shorter one.
+inline int rowCardScrollOffset(int rowIdx, int activeRow, int activeScroll)
+{
+    return rowIdx == activeRow ? activeScroll : 0;
+}
+
 /// Clamp horizontal pixel scroll so that the selected card is fully visible
 /// within the viewport [0 … viewWidth].
 ///   items       – the row's items

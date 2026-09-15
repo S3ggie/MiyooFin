@@ -409,6 +409,10 @@ private:
     const MediaItem *currentItem() const;
 
     void clampNavigation();
+    /// Return the label of the currently focused Home row, or "" if none.
+    std::string focusedHomeRowLabel() const;
+    /// Reconcile m_activeRow by row label after a Home-row mutation.
+    void restoreHomeRowFocus(const std::string &label);
     void activateTab(int index);
     void drawTabBar(SDL_Surface *fb);
     void drawInfoPanel(SDL_Surface *fb);

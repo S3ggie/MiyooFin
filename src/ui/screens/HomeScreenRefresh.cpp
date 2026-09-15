@@ -121,8 +121,10 @@ void HomeScreen::finishResumeRefresh()
         printf("[HomeScreen] Continue Watching refresh failed: %s\n",
                m_resumeRefreshError.c_str());
     } else {
+        const std::string focusedLabel = focusedHomeRowLabel();
         updateContinueWatchingRow(m_tabs, m_resumeRefreshResult);
         m_cachedSnapshot.continueWatching = m_resumeRefreshResult;
+        restoreHomeRowFocus(focusedLabel);
         if (!m_resumeRefreshCacheSaved)
             printf("[HomeScreen] Continue Watching cache save failed\n");
         clampNavigation();

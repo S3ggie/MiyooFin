@@ -333,7 +333,7 @@ void HomeScreen::drawRowList(SDL_Surface *fb)
         int cardAccumX = HMARGIN;
         for (int ci=0; ci<(int)row.items.size(); ++ci) {
             ArtworkBox sz = artworkBoxSize(row.items[ci]);
-            int screenX = cardAccumX - m_cardScroll;
+            int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + sz.w < HMARGIN) {
                 // Fully off-screen left
                 cardAccumX += sz.w + CARD_GAP;

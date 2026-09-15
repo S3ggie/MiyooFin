@@ -136,3 +136,20 @@ static void testUpdateVersionDecision()
     CHECK(!isNewerThan("0.2.0", "garbage"));
     std::printf("[test] Update version decision helpers OK\n");
 }
+
+// -------------------------------------------------------------------
+// testUpdateCheckErrorMessage — pure helper for manifest-fetch errors
+// -------------------------------------------------------------------
+static void testUpdateCheckErrorMessage()
+{
+    std::printf("[test] Update check error message\n");
+    CHECK_EQ(updateCheckErrorMessage(404, ""),
+             "no published release yet");
+    CHECK_EQ(updateCheckErrorMessage(500, ""),
+             "check failed (HTTP 500)");
+    CHECK_EQ(updateCheckErrorMessage(0, "Could not resolve host"),
+             "network error: Could not resolve host");
+    CHECK_EQ(updateCheckErrorMessage(0, ""),
+             "network unreachable");
+    std::printf("[test] Update check error message OK\n");
+}

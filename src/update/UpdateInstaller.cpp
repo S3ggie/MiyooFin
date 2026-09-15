@@ -104,34 +104,20 @@ static bool mkdirPForFile(const std::string &filePath)
 // fork+execvp helpers — no shell, no word-splitting
 // -------------------------------------------------------------------
 
-/// Probe for tar binary: try PATH entries, /bin/tar, /usr/bin/tar.
-/// Uses fork+execvp to test each candidate (no shell).
+/// Locate a usable `tar`.  Do NOT probe by executing it: BusyBox tar (OnionOS)
+/// rejects `--version` and exits non-zero, which would falsely report tar as
+/// missing.  Prefer an executable absolute path; otherwise fall back to "tar"
+/// and let execvp resolve it from PATH (a real tar error will surface if it
+/// truly is absent).
 static const char *findTar()
 {
     static const char *tarPaths[] = {
-        "tar", "/bin/tar", "/usr/bin/tar"
+        "/bin/tar", "/usr/bin/tar", "/sbin/tar", "/usr/sbin/tar"
     };
-    for (auto *tp : tarPaths) {
-        pid_t pid = ::fork();
-        if (pid == 0) {
-            // Child: try execvp tar --version, suppress all output
-            int devnull = ::open("/dev/null", O_WRONLY);
-            if (devnull >= 0) {
-                ::dup2(devnull, STDOUT_FILENO);
-                ::dup2(devnull, STDERR_FILENO);
-                ::close(devnull);
-            }
-            ::execlp(tp, tp, "--version", nullptr);
-            ::_exit(127);
-        }
-        if (pid > 0) {
-            int status = 0;
-            ::waitpid(pid, &status, 0);
-            if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
-                return tp;
-        }
-    }
-    return nullptr;
+    for (auto *tp : tarPaths)
+        if (::access(tp, X_OK) == 0)
+            return tp;
+    return "tar";
 }
 
 /// Run a command via fork+execvp, capturing stdout into a pipe.

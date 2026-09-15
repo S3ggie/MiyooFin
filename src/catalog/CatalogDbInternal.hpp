@@ -246,6 +246,22 @@ constexpr unsigned char kMediaItemCollectionsOperation = 12;
 constexpr unsigned char kSeedHierarchyQueryOperation = 13;
 constexpr unsigned char kClearHierarchyQueryOperation = 14;
 constexpr unsigned char kMediaPageQueryPlanOperation = 15;
+/// Maximum number of attempts for a page transaction that encounters a
+/// transient SQLite error (SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL).
+constexpr std::size_t kPageTransactionMaxAttempts = 3;
+
+/// Pure helper: decide whether a failed page transaction should be retried.
+/// Returns true when @p sqliteRc is a transient error and the attempt count
+/// has not yet been exhausted.
+inline bool pageTransactionShouldRetry(int sqliteRc, std::size_t attempt,
+                                       std::size_t maxAttempts)
+{
+    if (attempt >= maxAttempts)
+        return false;
+    return sqliteRc == SQLITE_BUSY || sqliteRc == SQLITE_LOCKED
+        || sqliteRc == SQLITE_FULL;
+}
+
 constexpr std::size_t kMaxHierarchyQueryRows = 128;
 constexpr std::size_t kMaxMetadataByIdRows = 64;
 constexpr std::size_t kMaxReconcileSeries = 4096;

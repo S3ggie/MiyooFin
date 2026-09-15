@@ -1,8 +1,12 @@
 #include "ImageCache.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
+#include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
+#include <ctime>
+#include <dirent.h>
 #include <sys/stat.h>
 
 namespace miyoofin {
@@ -161,6 +165,76 @@ bool ImageCache::removeCached(const std::string &itemId, ImageType type,
 {
     std::string path = cachePath(itemId, type, imageTag, width, height);
     return std::remove(path.c_str()) == 0 || errno == ENOENT;
+}
+
+// -------------------------------------------------------------------
+// LRU janitor: disk-cap enforcement
+// -------------------------------------------------------------------
+
+std::vector<std::size_t> ImageCache::selectCacheVictims(
+    std::vector<JanitorFileEntry> &entries,
+    std::int64_t targetBytes)
+{
+    std::vector<std::size_t> victims;
+    if (entries.empty()) return victims;
+
+    // Sort oldest mtime first (stable to preserve insertion order on tie).
+    std::stable_sort(entries.begin(), entries.end(),
+        [](const JanitorFileEntry &a, const JanitorFileEntry &b) {
+            return a.mtime < b.mtime;
+        });
+
+    // Greedily select oldest files for eviction until under target.
+    std::int64_t remaining = 0;
+    for (const auto &e : entries)
+        remaining += e.size;
+
+    for (std::size_t i = 0; i < entries.size() && remaining > targetBytes; ++i) {
+        victims.push_back(i);
+        remaining -= entries[i].size;
+    }
+    return victims;
+}
+
+int ImageCache::runJanitor()
+{
+    const std::string &dir = s_cacheDir;
+    const std::int64_t cap = kMaxImageCacheBytes;
+    const std::int64_t target = static_cast<std::int64_t>(
+        cap * kImageCacheHysteresisRatio);
+
+    DIR *d = opendir(dir.c_str());
+    if (!d) return 0;
+
+    std::vector<JanitorFileEntry> entries;
+    std::int64_t totalBytes = 0;
+    struct dirent *ent;
+    const std::int64_t nowSec = static_cast<std::int64_t>(std::time(nullptr));
+
+    while ((ent = readdir(d)) != nullptr) {
+        if (ent->d_name[0] == '.') continue;  // skip . and .. and hidden
+        const std::string path = dir + ent->d_name;
+        struct stat st;
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (st.st_size <= 0) continue;
+        totalBytes += st.st_size;
+        entries.push_back({path, st.st_size, st.st_mtime});
+    }
+    closedir(d);
+
+    // Early-out: under cap, no work needed.
+    if (totalBytes <= cap) return 0;
+
+    std::vector<std::size_t> victims = selectCacheVictims(entries, target);
+    int deleted = 0;
+    for (std::size_t idx : victims) {
+        const auto &entry = entries[idx];
+        // Never delete a file currently being written (modified recently).
+        if (nowSec - entry.mtime < kImageCacheStaleSec) continue;
+        if (std::remove(entry.path.c_str()) == 0)
+            ++deleted;
+    }
+    return deleted;
 }
 
 } // namespace miyoofin

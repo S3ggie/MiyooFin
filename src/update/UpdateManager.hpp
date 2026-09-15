@@ -26,6 +26,13 @@ struct UpdateSnapshot {
 /// Human-readable status text for a given update snapshot.
 std::string updateStatusText(const UpdateSnapshot &snap);
 
+/// Human-readable message for a failed update check.
+/// httpCode > 0 means the server answered with that HTTP status;
+/// httpCode == 0 means a transport failure (DNS/TLS/connect), for which
+/// transportError carries libcurl's short reason.
+std::string updateCheckErrorMessage(long httpCode,
+                                    const std::string &transportError);
+
 /// Background OTA update manager.  Owns one worker thread; the SDL thread
 /// reads only via snapshot() and polls pollDone().
 class UpdateManager {

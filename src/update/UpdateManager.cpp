@@ -46,6 +46,22 @@ std::string updateStatusText(const UpdateSnapshot &snap)
 }
 
 // -------------------------------------------------------------------
+// updateCheckErrorMessage
+// -------------------------------------------------------------------
+
+std::string updateCheckErrorMessage(long httpCode,
+                                    const std::string &transportError)
+{
+    if (httpCode == 404)
+        return "no published release yet";
+    if (httpCode > 0)
+        return "check failed (HTTP " + std::to_string(httpCode) + ")";
+    if (!transportError.empty())
+        return "network error: " + transportError;
+    return "network unreachable";
+}
+
+// -------------------------------------------------------------------
 // UpdateManager
 // -------------------------------------------------------------------
 
@@ -183,11 +199,11 @@ void UpdateManager::workerRun()
     client.setTimeoutSec(10);
     client.setConnectTimeoutSec(10);
     std::string body;
-    long httpCode;
+    long httpCode = 0;
     std::string error;
 
     if (!client.get(MANIFEST_URL, body, httpCode, error)) {
-        setError("network unreachable");
+        setError(updateCheckErrorMessage(httpCode, error));
         return;
     }
 

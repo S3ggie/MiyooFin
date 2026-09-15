@@ -81,6 +81,7 @@ int main()
     testUpdateManagerInitialState();
     testUpdateManagerEnabled();
     testUpdateVersionDecision();
+    testUpdateCheckErrorMessage();
 
     return miyoofin_test::finish("update");
 }

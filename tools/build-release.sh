@@ -74,7 +74,10 @@ rm -f "$RELEASE_ZIP"
 
 # --- Create gzipped tarball ---
 rm -f "$RELEASE_TAR"
-tar -czpf "$RELEASE_TAR" -C output/package MiyooFin
+# Dereference symlinks so the OTA archive contains no symlink entries.
+# The bundled lib/*.so are symlinks; the installer rejects symlink/hardlink
+# entries (tar-slip defence), so store the real files instead.
+tar -czhpf "$RELEASE_TAR" -C output/package MiyooFin
 
 [ -s "$RELEASE_TAR" ] || {
     echo "ERROR: release tarball was not created" >&2

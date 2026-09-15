@@ -19,6 +19,9 @@ int main()
     testLiveChangeCheckpointPolicy();
     testHomeRowFocusReconciliation();
     testCardSurfaceCacheEviction(); testNonBlockingFinishPolicy();
-    testRefreshMovieFilterHomeNavPreserved(); testLivePublicationNoopEmptyResult();
+    testRefreshMovieFilterHomeNavPreserved();     testLivePublicationNoopEmptyResult();
+    testSqliteTempDirPath();
+    testPageTransactionShouldRetry();
+    testPageTransactionCleanupInvariants();
     return miyoofin_test::finish("misc-regressions");
 }

@@ -1,4 +1,6 @@
 #include "../../src/net/JellyfinLibraryEvents.hpp"
+#include "../../src/update/AppDir.hpp"
+#include "../../src/catalog/CatalogDbInternal.hpp"
 
 static void testHomeIncrementalPublicationPolicy()
 {
@@ -813,4 +815,104 @@ static void testLivePublicationNoopEmptyResult()
     CHECK(apply.find("result.removedIds.empty()") != std::string::npos);
 
     std::printf("[test] livePublicationIsNoop truth table OK\n");
+}
+
+static void testSqliteTempDirPath()
+{
+    std::printf("[test] SQLite temp dir path selection\n");
+    CHECK_EQ(sqliteTempDirPath("/app"), std::string("/app/cache/tmp"));
+    CHECK_EQ(sqliteTempDirPath("/mnt/sdcard/Apps/MiyooFin"),
+             std::string("/mnt/sdcard/Apps/MiyooFin/cache/tmp"));
+    CHECK_EQ(sqliteTempDirPath(""), std::string("/cache/tmp"));
+    std::printf("[test] SQLite temp dir path selection OK\n");
+}
+
+static void testPageTransactionShouldRetry()
+{
+    std::printf("[test] Page transaction retry-bound decision\n");
+    // Transient errors retry when under the limit.
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 3));
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_LOCKED, 1, 3));
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_FULL, 2, 3));
+    // At the limit, no more retries.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 3, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_FULL, 3, 3));
+    // Non-transient errors never retry.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_ERROR, 0, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_CORRUPT, 0, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_DONE, 0, 3));
+    // Edge: maxAttempts=0 means no retries at all.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 0));
+    // Edge: single attempt allowed.
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 1));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 1, 1));
+    std::printf("[test] Page transaction retry-bound decision OK\n");
+}
+
+static void testPageTransactionCleanupInvariants()
+{
+    std::printf("[test] processMediaPageUpsert cleanup invariants\n");
+    const std::string src = readTestBytes("src/catalog/CatalogDbWrite.cpp");
+
+    // Find the processMediaPageUpsert function body.
+    const auto fnStart = src.find("void CatalogDb::processMediaPageUpsert(");
+    CHECK(fnStart != std::string::npos);
+    const auto fnEnd = src.find("} // namespace miyoofin");
+    CHECK(fnEnd != std::string::npos);
+    const std::string fn = src.substr(fnStart, fnEnd - fnStart);
+
+    // All failure exits from the item loop must use itemLoopFatal = true; break;
+    // rather than raw return — so the shared cleanup finalizes statements.
+    // Count the itemLoopFatal assignments inside the function.
+    std::size_t fatalCount = 0;
+    {
+        std::size_t pos = 0;
+        while ((pos = fn.find("itemLoopFatal = true", pos)) != std::string::npos) {
+            ++fatalCount;
+            pos += 20;
+        }
+    }
+    // Injected failure, bind failure, non-retryable media step, sort key,
+    // collections, valid()/stale, membership — at least 7 sites.
+    CHECK(fatalCount >= 7);
+
+    // The item loop must not contain any raw return; that would skip finalization.
+    const auto itemLoopStart = fn.find("for (std::size_t n = 0;");
+    CHECK(itemLoopStart != std::string::npos);
+    const auto itemLoopEnd = fn.find("sqlite3_finalize(view)", itemLoopStart);
+    CHECK(itemLoopEnd != std::string::npos);
+    const std::string itemLoop = fn.substr(itemLoopStart, itemLoopEnd - itemLoopStart);
+    CHECK(itemLoop.find("return;") == std::string::npos);
+
+    // The shared cleanup must finalize all prepared statements.
+    CHECK(fn.find("sqlite3_finalize(view)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(membership)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(upsert)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(dg)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(ig)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(dt)") != std::string::npos);
+    CHECK(fn.find("sqlite3_finalize(it)") != std::string::npos);
+
+    // The fatal handler must set Failed state (unless cancelled/superseded).
+    CHECK(fn.find("if (!result.cancelled && !result.superseded)") != std::string::npos);
+    CHECK(fn.find("m_populationStatus.state = CatalogDbPopulationState::Failed") != std::string::npos);
+
+    // Retry-backoff cancellation must set result.cancelled = true.
+    CHECK(fn.find("result.cancelled = true") != std::string::npos);
+
+    // The function must have exactly one ROLLBACK inside the itemLoopFatal handler.
+    const auto fatalHandlerStart = fn.find("if (itemLoopFatal)");
+    CHECK(fatalHandlerStart != std::string::npos);
+    const auto fatalHandlerBlock = fn.substr(fatalHandlerStart, fn.find("if (itemLoopRetryable)", fatalHandlerStart) - fatalHandlerStart);
+    {
+        std::size_t rbCount = 0;
+        std::size_t pos = 0;
+        while ((pos = fatalHandlerBlock.find("ROLLBACK", pos)) != std::string::npos) {
+            ++rbCount;
+            pos += 8;
+        }
+        CHECK(rbCount == 1);
+    }
+
+    std::printf("[test] processMediaPageUpsert cleanup invariants OK\n");
 }

@@ -1,6 +1,9 @@
 #include "CatalogDb.hpp"
 #include "CatalogDbInternal.hpp"
 
+#include <chrono>
+#include <thread>
+
 namespace miyoofin {
 using namespace catalog_db_internal;
 
@@ -590,106 +593,177 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
         }
     }
     { std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Populating; }
-    catalogDiagnostic("page_transaction_begin");
-    if (sqlite3_exec(m_db,"BEGIN IMMEDIATE;",nullptr,nullptr,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message="CatalogDb transaction begin failed"; catalogDiagnostic("page_transaction_rollback reason=begin_failed"); command->result.set_value(std::move(result)); return; }
-    sqlite3_stmt *upsert=nullptr,*dg=nullptr,*ig=nullptr,*dt=nullptr,*it=nullptr;
-    const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id,art_r=excluded.art_r,art_g=excluded.art_g,art_b=excluded.art_b";
-    bool prepared=sqlite3_prepare_v2(m_db,sql,-1,&upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,&dg,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,&ig,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,&dt,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&it,nullptr)==SQLITE_OK;
-    if (!prepared) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); command->result.set_value(std::move(result)); return; }
-    const MediaItemCollectionStatements c{dg,ig,dt,it};
-    sqlite3_stmt *view=nullptr,*membership=nullptr;
-    const char *viewSql = staged ?
-        "INSERT INTO top_level_sync_views(generation,id,name,collection_type,ordinal) VALUES(?,?,?,?,?) ON CONFLICT(generation,id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type,ordinal=excluded.ordinal" :
-        "INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type";
-    const char *membershipSql = staged ?
-        "INSERT INTO top_level_sync_membership(generation,view_id,item_id,ordinal) VALUES(?,?,?,?) ON CONFLICT(generation,view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal" :
-        "INSERT INTO library_membership(view_id,item_id,ordinal) VALUES(?,?,?) ON CONFLICT(view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal";
-    bool viewReady = command->page.viewId.empty() ||
-        (sqlite3_prepare_v2(m_db,viewSql,-1,&view,nullptr)==SQLITE_OK &&
-         (!staged || sqlite3_bind_int64(view,1,static_cast<sqlite3_int64>(command->page.syncGeneration))==SQLITE_OK) &&
-         sqlite3_bind_text(view,staged?2:1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?3:2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?4:3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(view,staged?5:4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(view)==SQLITE_DONE &&
-         sqlite3_prepare_v2(m_db,membershipSql,-1,&membership,nullptr)==SQLITE_OK);
-    for (std::size_t n = 0; viewReady && n < command->page.items.size(); ++n) {
-        const auto &item = command->page.items[n];
-        MediaItemSqlError e = MediaItemSqlError::None;
-        if (command->failureSpec().failAfterRows >= 0
-            && static_cast<int>(result.rowsWritten)
-                   >= command->failureSpec().failAfterRows) {
-            result.error = CatalogDbErrorCategory::SqliteError;
-            result.message = "injected page failure";
-            pageRollbackDiagnostic("injected_test_failure", n, &item);
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        sqlite3_reset(upsert); sqlite3_clear_bindings(upsert);
-        if (!bindMediaItemScalars(upsert, item, e)) {
-            result.error = CatalogDbErrorCategory::SqliteError;
-            pageRollbackDiagnostic(e == MediaItemSqlError::InvalidKind
-                ? "ID/type" : "scalar validation", n, &item);
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        const int mediaRc = sqlite3_step(upsert);
-        if (mediaRc != SQLITE_DONE) {
-            result.error = CatalogDbErrorCategory::SqliteError;
-            pageRollbackDiagnostic("media bind/step", n, &item, mediaRc);
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        if (!maintainOrganizationalSortKey(m_db, item, result.message)) {
-            result.error = CatalogDbErrorCategory::SqliteError;
-            pageRollbackDiagnostic("sort key", n, &item, sqlite3_errcode(m_db));
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        if (!replaceMediaItemCollections(c, item, e)) {
-            result.error = CatalogDbErrorCategory::SqliteError;
-            pageRollbackDiagnostic("media bind/step", n, &item, sqlite3_errcode(m_db));
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        if (!valid()) {
-            result.error = CatalogDbErrorCategory::Superseded;
-            pageRollbackDiagnostic(result.cancelled ? "stale/cancel" : "stale/cancel", n, &item);
-            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            break;
-        }
-        if (!command->page.viewId.empty()) {
-            sqlite3_reset(membership); sqlite3_clear_bindings(membership);
-            const int offset = staged ? 1 : 0;
-            if (staged) sqlite3_bind_int64(membership, 1, static_cast<sqlite3_int64>(command->page.syncGeneration));
-            sqlite3_bind_text(membership, 1 + offset, command->page.viewId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(membership, 2 + offset, item.id.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(membership, 3 + offset,
-                static_cast<sqlite3_int64>(command->page.ordinalStart + n));
-            const int membershipRc = sqlite3_step(membership);
-            if (membershipRc != SQLITE_DONE) {
-                result.error = CatalogDbErrorCategory::SqliteError;
-                pageRollbackDiagnostic("membership bind/step", n, &item, membershipRc);
-                sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-                break;
+    // Bounded retry for transient SQLite errors (SQLITE_BUSY, SQLITE_LOCKED,
+    // SQLITE_FULL).  Prevents a tight spin when /tmp is full or another
+    // connection holds the lock; a short cancellable backoff gives the
+    // condition time to resolve.
+    for (std::size_t attempt = 0; attempt < kPageTransactionMaxAttempts; ++attempt) {
+        if (attempt > 0) {
+            for (int ms = 0; ms < 100; ms += 10) {
+                if (command->metadata.cancellation && command->metadata.cancellation->load()) {
+                    result.cancelled = true;
+                    result.error = CatalogDbErrorCategory::Superseded;
+                    result.message = "page transaction cancelled during retry backoff";
+                    command->result.set_value(std::move(result));
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+            catalogDiagnostic("page_transaction_retry attempt=" + std::to_string(attempt + 1));
         }
-        ++result.rowsWritten;
-    }
-    if (!viewReady && result.error==CatalogDbErrorCategory::None) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); }
-    sqlite3_finalize(view); sqlite3_finalize(membership);
-    sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);
-    if (result.error==CatalogDbErrorCategory::None && valid()) {
-        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit"); std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten; m_populationStatus.state=command->page.finalPage ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty) : CatalogDbPopulationState::Populating; }
-        else { result.error=CatalogDbErrorCategory::SqliteError; catalogDiagnostic("page_transaction_rollback reason=commit_failed"); sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Failed; }
-    } else {
-        if (result.error == CatalogDbErrorCategory::None) {
-            pageRollbackDiagnostic("population state", result.rowsWritten, nullptr);
-        } else if (result.message.empty()) {
-            pageRollbackDiagnostic("FK/unique", result.rowsWritten, nullptr,
-                                   sqlite3_errcode(m_db));
+        result = CatalogDbMediaPageUpsertResult{};
+        result.workerOwned = true;
+        catalogDiagnostic("page_transaction_begin");
+        if (sqlite3_exec(m_db,"BEGIN IMMEDIATE;",nullptr,nullptr,nullptr)!=SQLITE_OK) {
+            const int rc = sqlite3_errcode(m_db);
+            if (pageTransactionShouldRetry(rc, attempt, kPageTransactionMaxAttempts)) {
+                catalogDiagnostic("page_transaction_retry_begin sqlite_rc=" + std::to_string(rc));
+                continue;
+            }
+            result.error=CatalogDbErrorCategory::SqliteError; result.message="CatalogDb transaction begin failed";
+            catalogDiagnostic("page_transaction_rollback reason=begin_failed sqlite_rc=" + std::to_string(rc));
+            command->result.set_value(std::move(result)); return;
         }
-        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!result.cancelled && !result.superseded)
-            m_populationStatus.state = CatalogDbPopulationState::Failed;
+        sqlite3_stmt *upsert=nullptr,*dg=nullptr,*ig=nullptr,*dt=nullptr,*it=nullptr;
+        const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id,art_r=excluded.art_r,art_g=excluded.art_g,art_b=excluded.art_b";
+        bool prepared=sqlite3_prepare_v2(m_db,sql,-1,&upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,&dg,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,&ig,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,&dt,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&it,nullptr)==SQLITE_OK;
+        if (!prepared) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); command->result.set_value(std::move(result)); return; }
+        const MediaItemCollectionStatements c{dg,ig,dt,it};
+        sqlite3_stmt *view=nullptr,*membership=nullptr;
+        const char *viewSql = staged ?
+            "INSERT INTO top_level_sync_views(generation,id,name,collection_type,ordinal) VALUES(?,?,?,?,?) ON CONFLICT(generation,id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type,ordinal=excluded.ordinal" :
+            "INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,collection_type=excluded.collection_type";
+        const char *membershipSql = staged ?
+            "INSERT INTO top_level_sync_membership(generation,view_id,item_id,ordinal) VALUES(?,?,?,?) ON CONFLICT(generation,view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal" :
+            "INSERT INTO library_membership(view_id,item_id,ordinal) VALUES(?,?,?) ON CONFLICT(view_id,item_id) DO UPDATE SET ordinal=excluded.ordinal";
+        bool viewReady = command->page.viewId.empty() ||
+            (sqlite3_prepare_v2(m_db,viewSql,-1,&view,nullptr)==SQLITE_OK &&
+             (!staged || sqlite3_bind_int64(view,1,static_cast<sqlite3_int64>(command->page.syncGeneration))==SQLITE_OK) &&
+             sqlite3_bind_text(view,staged?2:1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?3:2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(view,staged?4:3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(view,staged?5:4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(view)==SQLITE_DONE &&
+             sqlite3_prepare_v2(m_db,membershipSql,-1,&membership,nullptr)==SQLITE_OK);
+        bool itemLoopRetryable = false;
+        bool itemLoopFatal = false;
+        for (std::size_t n = 0; viewReady && n < command->page.items.size(); ++n) {
+            const auto &item = command->page.items[n];
+            MediaItemSqlError e = MediaItemSqlError::None;
+            if (command->failureSpec().failAfterRows >= 0
+                && static_cast<int>(result.rowsWritten)
+                       >= command->failureSpec().failAfterRows) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = "injected page failure";
+                pageRollbackDiagnostic("injected_test_failure", n, &item);
+                itemLoopFatal = true; break;
+            }
+            sqlite3_reset(upsert); sqlite3_clear_bindings(upsert);
+            if (!bindMediaItemScalars(upsert, item, e)) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                pageRollbackDiagnostic(e == MediaItemSqlError::InvalidKind
+                    ? "ID/type" : "scalar validation", n, &item);
+                itemLoopFatal = true; break;
+            }
+            const int mediaRc = sqlite3_step(upsert);
+            if (mediaRc != SQLITE_DONE) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                pageRollbackDiagnostic("media bind/step", n, &item, mediaRc);
+                if (pageTransactionShouldRetry(mediaRc, attempt, kPageTransactionMaxAttempts)) {
+                    itemLoopRetryable = true;
+                    sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                    break;
+                }
+                itemLoopFatal = true; break;
+            }
+            if (!maintainOrganizationalSortKey(m_db, item, result.message)) {
+                const int sortRc = sqlite3_errcode(m_db);
+                result.error = CatalogDbErrorCategory::SqliteError;
+                pageRollbackDiagnostic("sort key", n, &item, sortRc);
+                if (pageTransactionShouldRetry(sortRc, attempt, kPageTransactionMaxAttempts)) {
+                    itemLoopRetryable = true;
+                    sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                    break;
+                }
+                itemLoopFatal = true; break;
+            }
+            if (!replaceMediaItemCollections(c, item, e)) {
+                const int collRc = sqlite3_errcode(m_db);
+                result.error = CatalogDbErrorCategory::SqliteError;
+                pageRollbackDiagnostic("media bind/step", n, &item, collRc);
+                if (pageTransactionShouldRetry(collRc, attempt, kPageTransactionMaxAttempts)) {
+                    itemLoopRetryable = true;
+                    sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                    break;
+                }
+                itemLoopFatal = true; break;
+            }
+            if (!valid()) {
+                result.error = CatalogDbErrorCategory::Superseded;
+                pageRollbackDiagnostic(result.cancelled ? "stale/cancel" : "stale/cancel", n, &item);
+                itemLoopFatal = true; break;
+            }
+            if (!command->page.viewId.empty()) {
+                sqlite3_reset(membership); sqlite3_clear_bindings(membership);
+                const int offset = staged ? 1 : 0;
+                if (staged) sqlite3_bind_int64(membership, 1, static_cast<sqlite3_int64>(command->page.syncGeneration));
+                sqlite3_bind_text(membership, 1 + offset, command->page.viewId.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(membership, 2 + offset, item.id.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(membership, 3 + offset,
+                    static_cast<sqlite3_int64>(command->page.ordinalStart + n));
+                const int membershipRc = sqlite3_step(membership);
+                if (membershipRc != SQLITE_DONE) {
+                    result.error = CatalogDbErrorCategory::SqliteError;
+                    pageRollbackDiagnostic("membership bind/step", n, &item, membershipRc);
+                    if (pageTransactionShouldRetry(membershipRc, attempt, kPageTransactionMaxAttempts)) {
+                        itemLoopRetryable = true;
+                        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                        break;
+                    }
+                    itemLoopFatal = true; break;
+                }
+            }
+            ++result.rowsWritten;
+        }
+        if (!viewReady && result.error==CatalogDbErrorCategory::None) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); }
+        sqlite3_finalize(view); sqlite3_finalize(membership);
+        sqlite3_finalize(upsert);sqlite3_finalize(dg);sqlite3_finalize(ig);sqlite3_finalize(dt);sqlite3_finalize(it);
+        if (itemLoopFatal) {
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!result.cancelled && !result.superseded)
+                m_populationStatus.state = CatalogDbPopulationState::Failed;
+            command->result.set_value(std::move(result));
+            return;
+        }
+        if (itemLoopRetryable) {
+            continue;
+        }
+        if (result.error==CatalogDbErrorCategory::None && valid()) {
+            if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit"); std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten; m_populationStatus.state=command->page.finalPage ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty) : CatalogDbPopulationState::Populating; command->result.set_value(std::move(result)); return; }
+            const int commitRc = sqlite3_errcode(m_db);
+            if (pageTransactionShouldRetry(commitRc, attempt, kPageTransactionMaxAttempts)) {
+                catalogDiagnostic("page_transaction_retry_commit sqlite_rc=" + std::to_string(commitRc));
+                sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr);
+                continue;
+            }
+            result.error=CatalogDbErrorCategory::SqliteError; catalogDiagnostic("page_transaction_rollback reason=commit_failed sqlite_rc=" + std::to_string(commitRc)); sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Failed;
+        } else {
+            if (result.error == CatalogDbErrorCategory::None) {
+                pageRollbackDiagnostic("population state", result.rowsWritten, nullptr);
+            } else if (result.message.empty()) {
+                pageRollbackDiagnostic("FK/unique", result.rowsWritten, nullptr,
+                                       sqlite3_errcode(m_db));
+            }
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!result.cancelled && !result.superseded)
+                m_populationStatus.state = CatalogDbPopulationState::Failed;
+        }
+        command->result.set_value(std::move(result));
+        return;
     }
+    // All retry attempts exhausted — fail the sync cleanly.
+    result.error = CatalogDbErrorCategory::SqliteError;
+    result.message = "page transaction failed after retries";
+    catalogDiagnostic("page_transaction_exhausted attempts=" + std::to_string(kPageTransactionMaxAttempts));
+    { std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state = CatalogDbPopulationState::Failed; }
     command->result.set_value(std::move(result));
 }
 } // namespace miyoofin

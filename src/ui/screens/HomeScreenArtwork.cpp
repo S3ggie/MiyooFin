@@ -107,6 +107,18 @@ void HomeScreen::touchRowArtwork(const std::string &key)
 
 void HomeScreen::storeDecodedRowArtwork(const std::string &key, DecodedImage image)
 {
+    // Evict any card surfaces whose cache key starts with this row artwork
+    // key.  Surfaces created by prepareCardSurface now own their pixels, but
+    // evicting here ensures stale artwork is never served after an artwork
+    // refresh for the same item.
+    for (auto it = m_cardSurfaceCache.begin(); it != m_cardSurfaceCache.end(); ) {
+        if (it->first.compare(0, key.size(), key) == 0
+            && (it->first.size() == key.size()
+                || it->first[key.size()] == ':')) {
+            if (it->second) SDL_FreeSurface(it->second);
+            it = m_cardSurfaceCache.erase(it);
+        } else ++it;
+    }
     RowArtworkEntry &entry = m_rowArtwork[key];
     entry.status = RowArtworkStatus::Loaded;
     entry.image = std::make_shared<DecodedImage>(std::move(image));
@@ -142,29 +154,25 @@ void HomeScreen::prepareCardSurface(const std::string &cacheKey,
         dw = (int)(boxH * imgAspect + 0.5f);
         if (dw > boxW) dw = boxW;
     }
-    // Create a source surface wrapping the decoded pixels
+    // Create a temporary surface wrapping the decoded pixels for blitting.
     SDL_Surface *src = SDL_CreateRGBSurfaceFrom(
         (void *)img.pixels.data(), img.width, img.height, 32,
         img.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
     if (!src) return;
-    if (dw == img.width && dh == img.height) {
-        // 1:1 — wrap the pixels directly (no extra allocation)
-        m_cardSurfaceCache[cacheKey] = src;
-    } else {
-        // Pre-scale to a new surface
-        SDL_Surface *scaled = SDL_CreateRGBSurface(0, dw, dh, 32,
-            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-        if (scaled) {
-            SDL_Rect srcR = {0, 0, img.width, img.height};
-            SDL_Rect dstR = {0, 0, dw, dh};
-            SDL_BlitScaled(src, &srcR, scaled, &dstR);
-            m_cardSurfaceCache[cacheKey] = scaled;
-        } else {
-            m_cardSurfaceCache[cacheKey] = src;
-            return; // src is kept in cache, don't free
-        }
-        SDL_FreeSurface(src);
+    // Always blit into an owned surface.  The source pixels belong to a
+    // DecodedImage behind a shared_ptr that storeDecodedRowArtwork may
+    // replace at any time; wrapping the source directly (the old 1:1 path)
+    // created a use-after-free when the old entry was destroyed, producing
+    // TV-static garbage and duplicate artwork on neighboring cards.
+    SDL_Surface *owned = SDL_CreateRGBSurface(0, dw, dh, 32,
+        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (owned) {
+        SDL_Rect srcR = {0, 0, img.width, img.height};
+        SDL_Rect dstR = {0, 0, dw, dh};
+        SDL_BlitScaled(src, &srcR, owned, &dstR);
+        m_cardSurfaceCache[cacheKey] = owned;
     }
+    SDL_FreeSurface(src);
 }
 
 void HomeScreen::freeAllCardSurfaces()

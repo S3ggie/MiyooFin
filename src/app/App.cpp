@@ -26,6 +26,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <cerrno>
 #include <cstdlib>
 #include <string>
@@ -373,6 +374,22 @@ bool App::resumePlatform()
     return true;
 }
 
+void App::pollScreenshotRequest()
+{
+    // A single stat() per frame — no allocation, no blocking when absent.
+    static const char *flagPath = "/tmp/miyoofin-screenshot-request";
+    struct stat st;
+    if (stat(flagPath, &st) != 0) return;
+    // Flag file present — consume it and capture the current framebuffer.
+    std::remove(flagPath);
+    if (!m_fb) return;
+    static const char *outPath = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+    if (SDL_SaveBMP(m_fb, outPath) == 0)
+        printf("[App] Screenshot saved: %s\n", outPath);
+    else
+        fprintf(stderr, "[App] Screenshot failed: %s\n", SDL_GetError());
+}
+
 
 int App::run()
 {
@@ -653,6 +670,9 @@ int App::run()
         if (m_playbackStarting) {
             drawPlaybackStartingOverlay(playbackStartingElapsed);
         }
+
+        // Poll for a remote screenshot request (single stat, no-op when absent).
+        pollScreenshotRequest();
 
         {
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1

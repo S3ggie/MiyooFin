@@ -130,6 +130,11 @@ private:
     /// Draw the playback-starting message over the current screen.
     void drawPlaybackStartingOverlay(Uint32 elapsedMs);
 
+    /// Poll for a screenshot request flag file; if present, capture the
+    /// current framebuffer as BMP and delete the flag.  One stat() per
+    /// frame; no I/O when the flag is absent.
+    void pollScreenshotRequest();
+
     // Prevent copy
     App(const App&) = delete;
     App& operator=(const App&) = delete;

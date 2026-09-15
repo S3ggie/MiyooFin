@@ -69,6 +69,11 @@ public:
     const char *diagnosticTabName() const;
 
     static constexpr int kPosterThreads = 3;
+    /// Maximum decode attempts for a cached JPEG before it receives a
+    /// permanent RowArtworkStatus::Failed tombstone.  The per-key counter
+    /// is reset on success and is naturally fresh when the key changes
+    /// (new imageTag).  Defined here so tests can reference the bound.
+    static constexpr int kMaxDecodeAttempts = 3;
     static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
     static SettingsRowAction settingsRowAction(int row);
     static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
@@ -276,6 +281,8 @@ private:
     std::deque<PosterJob> m_highPriorityPosterJobs;
     std::deque<PosterJob> m_lowPriorityPosterJobs;
     std::set<std::string> m_artworkProgressKeys;
+    /// Per-key decode-failure attempt counter (see kMaxDecodeAttempts).
+    std::map<std::string, int> m_rowArtworkAttempts;
     // Session-level guard for bounded season-poster prefetch: each series is
     // prefetched at most once per process lifetime so repeat home fetches are
     // free.

@@ -38,7 +38,8 @@ OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/download output/build-arm/catalog \
              output/build-arm/library \
              output/build-arm/diagnostics output/build-arm/sqlite \
-             output/build-arm/ui/screens output/build-arm/playback
+             output/build-arm/ui/screens output/build-arm/playback \
+             output/build-arm/update
 
 .PHONY: all bridge reporter
 all: $(TARGET)

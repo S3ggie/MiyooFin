@@ -292,6 +292,15 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
         return true;
     }
 
+    // BusyBox tar lists a hardlink with a leading '-' (not 'h') and a
+    // " -> target" suffix, so a plain entry containing " -> " is a link too.
+    auto arrow = namePortion.find(" -> ");
+    if (arrow != std::string::npos) {
+        out.isHardlink = true;
+        out.filename = namePortion.substr(0, arrow);
+        return true;
+    }
+
     out.filename = namePortion;
     return true;
 }

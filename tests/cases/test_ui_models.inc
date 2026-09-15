@@ -102,7 +102,7 @@ static void testHomeSyncStatusStrings()
 static void testHomeSettingsModel()
 {
     std::printf("[test] Home settings address rows and actions\n");
-    CHECK(homeSettingsBaseRowCount() == 9);
+    CHECK(homeSettingsBaseRowCount() == 10);
 
     Session lan;
     lan.serverUrl = "http://192.168.1.5:8096";
@@ -114,11 +114,12 @@ static void testHomeSettingsModel()
     CHECK_EQ(lanRows[1].section, "Public Address");
     CHECK_EQ(lanRows[1].value, "Not Set");
     CHECK(lanRows[1].action == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowCount(lan) == 10);
+    CHECK(homeSettingsRowCount(lan) == 11);
     CHECK(homeSettingsRowAction(0, lan) == HomeSettingsRowAction::OfflineMode);
     CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::ChangeServer);
     CHECK(homeSettingsRowAction(2, lan) == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowAction(9, lan) == HomeSettingsRowAction::Logout);
+    CHECK(homeSettingsRowAction(8, lan) == HomeSettingsRowAction::CheckForUpdates);
+    CHECK(homeSettingsRowAction(10, lan) == HomeSettingsRowAction::Logout);
     CHECK(homeSettingsRowAction(5, lan) == HomeSettingsRowAction::None);
 
     Session pub;
@@ -130,15 +131,17 @@ static void testHomeSettingsModel()
     CHECK_EQ(pubRows[1].section, "Local Address");
     CHECK(pubRows[1].action == HomeSettingsRowAction::LocalAddress);
     CHECK(homeSettingsRowAction(2, pub) == HomeSettingsRowAction::LocalAddress);
+    CHECK(homeSettingsRowCount(pub) == 11);
 
     Session empty;
     const auto emptyRows = homeSettingsAddressRows(empty);
     CHECK_EQ(emptyRows[0].value, "Not connected");
     CHECK_EQ(emptyRows[1].value, "Not Set");
-    CHECK(homeSettingsRowAction(0) == HomeSettingsRowAction::OfflineMode);
-    CHECK(homeSettingsRowAction(2) == HomeSettingsRowAction::LocalAddress);
-    CHECK(homeSettingsRowAction(8) == HomeSettingsRowAction::Logout);
-    CHECK(homeSettingsRowAction(3) == HomeSettingsRowAction::None);
+    CHECK(homeSettingsRowAction(0, empty) == HomeSettingsRowAction::OfflineMode);
+    CHECK(homeSettingsRowAction(2, empty) == HomeSettingsRowAction::LocalAddress);
+    CHECK(homeSettingsRowAction(8, empty) == HomeSettingsRowAction::CheckForUpdates);
+    CHECK(homeSettingsRowAction(10, empty) == HomeSettingsRowAction::Logout);
+    CHECK(homeSettingsRowAction(3, empty) == HomeSettingsRowAction::None);
     std::printf("[test] Home settings address rows and actions OK\n");
 }
 

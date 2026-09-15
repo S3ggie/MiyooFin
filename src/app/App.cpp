@@ -620,7 +620,10 @@ int App::run()
                 }
             }
             else if (auto *home = dynamic_cast<HomeScreen *>(top)) {
-                if (home->takeLocalAddressRequest()) {
+                if (home->updateExitRequested()) {
+                    home->cancelAsyncWork();
+                    m_running = false;
+                } else if (home->takeLocalAddressRequest()) {
                     m_stack.push(std::make_unique<ServerEntryScreen>(
                         m_session.localServerUrl, "", m_session.serverId, true));
                 } else if (home->takePublicAddressRequest()) {

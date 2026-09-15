@@ -110,7 +110,14 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/ui/screens/MovieDetailsWorker.cpp \
     $(SRC_DIR)/ui/screens/MovieDetailsRender.cpp \
     $(SRC_DIR)/playback/PlaybackRequest.cpp \
-    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp
+    $(SRC_DIR)/playback/OfflinePlaybackJournal.cpp \
+    $(SRC_DIR)/update/AppDir.cpp \
+    $(SRC_DIR)/update/Sha256.cpp \
+    $(SRC_DIR)/update/UpdateInstallPlan.cpp \
+    $(SRC_DIR)/update/UpdateInstaller.cpp \
+    $(SRC_DIR)/update/UpdateManifest.cpp \
+    $(SRC_DIR)/update/UpdateVersion.cpp \
+    $(SRC_DIR)/update/UpdateManager.cpp
 
 # Test library sources: derived from the shared production list.
 # Excludes application entry points/screens not linked into the test archive

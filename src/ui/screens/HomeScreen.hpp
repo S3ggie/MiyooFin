@@ -23,6 +23,7 @@
 #include "../HomeTabs.hpp"
 #include "../HomeArtworkPlan.hpp"
 #include "../../diagnostics/TelemetryIds.hpp"
+#include "../../update/UpdateManager.hpp"
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
@@ -81,6 +82,7 @@ public:
     bool changeServerRequested() const { return m_changeServerRequested; }
     bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
     bool takePublicAddressRequest() { const bool requested = m_publicAddressRequested; m_publicAddressRequested = false; return requested; }
+    bool updateExitRequested() const { return m_updateExitRequested; }
     void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
     void cancelAsyncWork() noexcept;
     void requestStopAllWorkers() noexcept;
@@ -210,11 +212,16 @@ private:
     bool m_logoutArmed = false;
     Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
-    enum class SettingsConfirmation { None, ChangeServer, Logout };
+    enum class SettingsConfirmation { None, ChangeServer, Logout, CheckForUpdates };
     SettingsConfirmation m_settingsConfirmation = SettingsConfirmation::None;
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
     bool m_publicAddressRequested = false;
+
+    // Update manager
+    UpdateManager m_updateManager;
+    UpdateSnapshot m_updateSnapshot;
+    bool m_updateExitRequested = false;
 
     // Downloads is rendered only from this copied manager snapshot.  It is
     // refreshed in update(), never while rendering or handling input.

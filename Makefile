@@ -46,7 +46,8 @@ OUT_DIRS    := output/build/app output/build/data output/build/input \
                output/build/library \
                output/build/diagnostics \
                output/build/ui output/build/ui/screens \
-               output/build/playback
+               output/build/playback \
+               output/build/update
 
 TARGET      := output/build/miyoofin
 
@@ -100,7 +101,7 @@ ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache
+               imagecache update
 TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=output/test/objects/%.o)
@@ -146,6 +147,7 @@ output/test/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_cat
 output/test/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
 output/test/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc
 output/test/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
+output/test/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
 
 output/test/objects/%.o: src/%.cpp | output/test
 	@mkdir -p $(@D)

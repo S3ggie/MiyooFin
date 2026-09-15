@@ -20,7 +20,14 @@ static std::string compactSyncAge(std::int64_t timestamp)
 }
 
 HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row)
-{ return homeSettingsRowAction(row); }
+{
+    // Legacy 1-arg wrapper: uses a public session (2 address rows).
+    // Matches the 2-arg overload for non-LAN sessions.
+    Session pub;
+    pub.serverUrl = "https://jellyfin.example.com";
+    pub.localServerUrl = "http://192.168.1.5:8096";
+    return homeSettingsRowAction(row, pub);
+}
 
 std::vector<HomeScreen::SettingsAddressRow> HomeScreen::settingsAddressRows(const Session &session)
 { return homeSettingsAddressRows(session); }
@@ -42,7 +49,18 @@ void HomeScreen::drawSettingsTab(SDL_Surface *fb)
         {"Account", m_userName.empty() ? "Unknown" : m_userName},
         {"LIBRARY", "Last Sync: " + compactSyncAge(m_syncState.lastSuccessfulMs)},
         {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " + formatBytes(m_downloadSnapshot.freeBytes)},
-        {"DIAGNOSTICS", "UI Stall Logger Enabled"},
+        {"DIAGNOSTICS", "UI Stall Logger Enabled"}
+    });
+    // UPDATES row — directly above ABOUT.
+    {
+        std::string updateValue = updateStatusText(m_updateSnapshot);
+        if (m_updateSnapshot.stage == UpdateStage::Available &&
+            m_settingsConfirmation == SettingsConfirmation::CheckForUpdates) {
+            updateValue = "Press A again to install v" + m_updateSnapshot.availableVersion;
+        }
+        rows.push_back({"UPDATES", updateValue});
+    }
+    rows.insert(rows.end(), {
         {"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
         {"ACCOUNT", "Log Out"}
     });

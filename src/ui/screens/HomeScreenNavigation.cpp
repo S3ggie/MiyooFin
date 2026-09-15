@@ -399,6 +399,25 @@ bool HomeScreen::handleAction(Action action)
                 }
                 return true;
             }
+            case SettingsRowAction::CheckForUpdates: {
+                if (!m_updateManager.enabled()) return true;
+                const auto stage = m_updateSnapshot.stage;
+                if (stage == UpdateStage::ReadyToRestart) {
+                    m_updateExitRequested = true;
+                } else if (stage == UpdateStage::Available) {
+                    if (m_settingsConfirmation == SettingsConfirmation::CheckForUpdates) {
+                        m_updateManager.confirmInstall();
+                        m_settingsConfirmation = SettingsConfirmation::None;
+                    } else {
+                        m_settingsConfirmation = SettingsConfirmation::CheckForUpdates;
+                    }
+                } else if (stage == UpdateStage::Idle ||
+                           stage == UpdateStage::UpToDate ||
+                           stage == UpdateStage::Error) {
+                    m_updateManager.checkForUpdates();
+                }
+                return true;
+            }
             case SettingsRowAction::None:
                 break;
             }

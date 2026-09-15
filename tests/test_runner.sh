@@ -20,6 +20,7 @@ test_telemetry_service
 test_catalog_parity_query
 test_catalog_parity_hierarchy
 test_imagecache
+test_update
 '
 pids=
 

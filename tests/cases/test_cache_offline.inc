@@ -83,13 +83,15 @@ static void testOfflineLibraryProjection(){
     CHECK(transitionTabIndex(offline,3,online)==4);
 }
 static void testSettingsRowActions(){
-    CHECK(HomeScreen::settingsRowCount() == 9);
+    CHECK(HomeScreen::settingsRowCount() == 10);
     CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::OfflineMode);
     CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::ChangeServer);
     CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::LocalAddress);
     CHECK(HomeScreen::settingsRowAction(3)==HomeScreen::SettingsRowAction::None);
     CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::Logout);
+    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::CheckForUpdates);
+    // Logout is the last row (count-1 = 10 for 2-address-row sessions)
+    CHECK(HomeScreen::settingsRowAction(10)==HomeScreen::SettingsRowAction::Logout);
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
 static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
@@ -127,7 +129,7 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
     CHECK_EQ(lanRows[1].section,"Public Address");
     CHECK_EQ(lanRows[1].value,"Not Set");
     CHECK(lanRows[1].action==HomeScreen::SettingsRowAction::PublicAddress);
-    CHECK(HomeScreen::settingsRowCount(lanOnly)==10);
+    CHECK(HomeScreen::settingsRowCount(lanOnly)==11);
     CHECK(HomeScreen::settingsRowAction(1,lanOnly)==HomeScreen::SettingsRowAction::ChangeServer);
     CHECK(HomeScreen::settingsRowAction(2,lanOnly)==HomeScreen::SettingsRowAction::PublicAddress);
     lanOnly.publicServerUrl="https://public.example.com";

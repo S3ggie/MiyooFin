@@ -85,6 +85,45 @@ inline std::string artworkSyncStatus(bool active, bool planningComplete,
         return "";
     return "ART " + std::to_string(artwork.percent()) + "%";
 }
+
+enum class HomeStartupSync { SkipFresh, DeltaCatchUp, FullReconcile };
+
+/// Maximum age for DeltaCatchUp path (24h).  Older checkpoints need a
+/// full reconcile to re-establish authoritative membership.
+inline constexpr std::int64_t kHomeDeltaMaxAgeMs = 24LL*60*60*1000;
+
+/// Maximum interval between successive full reconciles (24h).
+inline constexpr std::int64_t kHomeFullReconcileMs = 24LL*60*60*1000;
+
+/// Pure decision helper for the initial home startup sync path.
+/// No I/O — testable without a HomeScreen instance.
+inline HomeStartupSync decideHomeStartupSync(
+    std::int64_t nowMs, std::int64_t lastSuccessfulMs,
+    std::int64_t lastReconcileMs, std::uint64_t committedGeneration,
+    bool scopeEpochValid, bool catalogHasRows)
+{
+    // FullReconcile when the checkpoint is unusable.
+    if (!scopeEpochValid) return HomeStartupSync::FullReconcile;
+    if (!catalogHasRows)  return HomeStartupSync::FullReconcile;
+    if (lastSuccessfulMs <= 0) return HomeStartupSync::FullReconcile;
+    if (committedGeneration == 0) return HomeStartupSync::FullReconcile;
+    if (lastReconcileMs > lastSuccessfulMs) return HomeStartupSync::FullReconcile;
+    if (nowMs < lastSuccessfulMs) return HomeStartupSync::FullReconcile;
+    // Full reconcile after kHomeFullReconcileMs since last full reconcile.
+    if (nowMs - lastReconcileMs >= kHomeFullReconcileMs)
+        return HomeStartupSync::FullReconcile;
+
+    // SkipFresh when within the FRESH_MS window and generation is live.
+    if (nowMs - lastSuccessfulMs < static_cast<std::int64_t>(LibrarySyncSchedule::FRESH_MS))
+        return HomeStartupSync::SkipFresh;
+
+    // DeltaCatchUp for checkpoints younger than the delta max age.
+    if (nowMs - lastSuccessfulMs < kHomeDeltaMaxAgeMs)
+        return HomeStartupSync::DeltaCatchUp;
+
+    return HomeStartupSync::FullReconcile;
+}
+
 } // namespace miyoofin
 
 #endif // MIYOOFIN_HOME_SYNC_STATE_HPP

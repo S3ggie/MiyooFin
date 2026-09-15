@@ -251,12 +251,116 @@ static void testLibraryChangedEventParsing()
 }
 
 // -------------------------------------------------------------------
+// Test: UserDataChanged event parsing
+// -------------------------------------------------------------------
+static void testUserDataChangedEventParsing()
+{
+    std::printf("[test] UserDataChanged event parsing\n");
+    JellyfinLibraryChangeBatch batch;
+
+    // Basic UserDataChanged returns Parsed and sets the flag.
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"UserDataChanged","Data":{"ItemId":"abc"}})",
+        batch) == JellyfinLibraryEventParse::Parsed);
+    CHECK(batch.userDataChanged);
+    CHECK(batch.itemsAdded.empty());
+    CHECK(batch.itemsRemoved.empty());
+    CHECK(batch.itemsUpdated.empty());
+    CHECK(!batch.catchUpRequired);
+
+    // UserDataChanged with no Data object is still Parsed.
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"UserDataChanged"})",
+        batch) == JellyfinLibraryEventParse::Parsed);
+    CHECK(batch.userDataChanged);
+
+    // LibraryChanged still parses ids unchanged.
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"LibraryChanged","Data":{"ItemsAdded":["x"]}})",
+        batch) == JellyfinLibraryEventParse::Parsed);
+    CHECK(!batch.userDataChanged);
+    CHECK(batch.itemsAdded.size() == 1 && batch.itemsAdded[0] == "x");
+
+    // Unrelated type is still Ignored.
+    batch = {};
+    CHECK(JellyfinLibraryEvents::parseMessage(
+        R"({"MessageType":"KeepAlive"})",
+        batch) == JellyfinLibraryEventParse::Ignored);
+    CHECK(!batch.userDataChanged);
+
+    std::printf("[test] UserDataChanged event parsing OK\n");
+}
+
+// -------------------------------------------------------------------
+// Test: queue round-trip for userDataChanged-only batches
+// -------------------------------------------------------------------
+static void testUserDataChangedQueueRoundTrip()
+{
+    std::printf("[test] UserDataChanged queue round-trip\n");
+    JellyfinLibraryEventQueue queue(8);
+
+    // Push a userDataChanged-only batch (no ids).
+    JellyfinLibraryChangeBatch udBatch;
+    udBatch.userDataChanged = true;
+    CHECK(queue.push(udBatch));
+
+    // Pop returns true with userDataChanged set and no ids.
+    JellyfinLibraryChangeBatch result;
+    CHECK(queue.pop(result));
+    CHECK(result.userDataChanged);
+    CHECK(result.itemsAdded.empty());
+    CHECK(result.itemsRemoved.empty());
+    CHECK(result.itemsUpdated.empty());
+    CHECK(!result.catchUpRequired);
+
+    // Second pop returns false (queue is drained).
+    CHECK(!queue.pop(result));
+
+    // Overflow/catchUpRequired behavior is unchanged.
+    JellyfinLibraryEventQueue smallQueue(2);
+    JellyfinLibraryChangeBatch fill1;
+    fill1.itemsAdded = {"a", "b"};
+    CHECK(smallQueue.push(fill1));
+    JellyfinLibraryChangeBatch fill2;
+    fill2.itemsAdded = {"extra"};
+    CHECK(!smallQueue.push(fill2));
+    CHECK(smallQueue.overflowed());
+
+    JellyfinLibraryChangeBatch popped;
+    CHECK(smallQueue.pop(popped));
+    CHECK(popped.catchUpRequired);
+    CHECK(popped.itemsAdded.size() == 2);
+    CHECK(!popped.userDataChanged);
+
+    // userDataChanged coalesces with item changes.
+    JellyfinLibraryEventQueue mergeQueue(8);
+    JellyfinLibraryChangeBatch withItems;
+    withItems.itemsAdded = {"id1"};
+    mergeQueue.push(withItems);
+    JellyfinLibraryChangeBatch udOnly;
+    udOnly.userDataChanged = true;
+    mergeQueue.push(udOnly);
+    JellyfinLibraryChangeBatch merged;
+    CHECK(mergeQueue.pop(merged));
+    CHECK(merged.userDataChanged);
+    CHECK(merged.itemsAdded.size() == 1 && merged.itemsAdded[0] == "id1");
+    CHECK(!mergeQueue.pop(merged));
+
+    std::printf("[test] UserDataChanged queue round-trip OK\n");
+}
+
+// -------------------------------------------------------------------
 // Test: ChangedHierarchy uses only the affected-series projection
 // -------------------------------------------------------------------
 static void testChangedHierarchyLightweightProjection()
 {
     std::printf("[test] ChangedHierarchy lightweight projection\n");
     testLibraryChangedEventParsing();
+    testUserDataChangedEventParsing();
+    testUserDataChangedQueueRoundTrip();
     testChangedCatalogMetadataQuery();
 
     const int listener = ::socket(AF_INET, SOCK_STREAM, 0);

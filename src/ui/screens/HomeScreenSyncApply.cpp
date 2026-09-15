@@ -249,7 +249,8 @@ void HomeScreen::finishLiveChangeApply()
         // completed within kHomeRailRefreshDebounceMs to avoid hammering the
         // server with ResumeItems+LatestItems pairs on rapid live changes.
         const std::int64_t nowMs = wallClockMs();
-        if (!homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshCompletedMs)) {
+        if (!homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshCompletedMs)
+            && !homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshAttemptMs)) {
             m_homeSyncActive = true;
             startHomeRailRefresh();
         }
@@ -329,6 +330,34 @@ void HomeScreen::finishFetch()
                 rebuildShowsPresentation();
             }
         }
+    }
+    // Incremental rail publication: apply home rails as soon as the fetch
+    // worker has them, without waiting for the full population walk.
+    // Read from the worker-owned startup buffer under m_fetchMutex to
+    // avoid data races with the refresh thread's own rail members.
+    if (m_homeRailsReady.load() && !m_homeRailsApplied) {
+        m_homeRailsApplied = true;
+        std::vector<MediaItem> railCW;
+        std::vector<MediaItem> railRA;
+        bool cwValid = false;
+        bool raValid = false;
+        {
+            std::lock_guard<std::mutex> lock(m_fetchMutex);
+            railCW = std::move(m_startupRailCW);
+            railRA = std::move(m_startupRailRA);
+            cwValid = m_startupRailCWValid;
+            raValid = m_startupRailRAValid;
+        }
+        if (cwValid) {
+            updateContinueWatchingRow(m_tabs, railCW);
+            m_cachedSnapshot.continueWatching = railCW;
+        }
+        if (raValid) {
+            updateRecentlyAddedRow(m_tabs, railRA);
+            m_cachedSnapshot.recentlyAdded = railRA;
+        }
+        queuePosterJobs(planHomeRailPosterJobs(railCW, railRA), true);
+        clampNavigation();
     }
     if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied) {
         m_fetchPostFinalizeApplied = true;

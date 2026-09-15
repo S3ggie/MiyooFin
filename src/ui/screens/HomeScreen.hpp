@@ -373,6 +373,21 @@ private:
     std::vector<MediaItem> m_homeRailRecentlyAdded;
     std::string m_homeRailRefreshError;
     std::int64_t m_lastHomeRailRefreshCompletedMs = 0;
+    std::int64_t m_lastHomeRailRefreshAttemptMs = 0;
+
+    /// Incremental rail publication during startup: set by the fetch worker
+    /// after rails are fetched but before the full walk completes.
+    std::atomic<bool> m_homeRailsReady{false};
+    bool m_homeRailsApplied = false;
+
+    /// Worker-owned startup rail buffer: written by the fetch worker under
+    /// m_fetchMutex, read by finishFetch() under the same mutex.  Kept
+    /// separate from the refresh-thread-owned m_homeRailContinueWatching /
+    /// m_homeRailRecentlyAdded to eliminate concurrent write/write.
+    std::vector<MediaItem> m_startupRailCW;
+    std::vector<MediaItem> m_startupRailRA;
+    bool m_startupRailCWValid = false;
+    bool m_startupRailRAValid = false;
 
     void updateLiveLibraryChanges();
     void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch);

@@ -36,6 +36,7 @@ bool JellyfinLibraryEventQueue::push(const JellyfinLibraryChangeBatch &batch)
     merge(batch.itemsRemoved, 2u);
     merge(batch.itemsUpdated, 4u);
     if (batch.catchUpRequired) m_overflowed = true;
+    if (batch.userDataChanged) m_userDataChanged = true;
     return accepted;
 }
 
@@ -44,6 +45,11 @@ bool JellyfinLibraryEventQueue::pop(JellyfinLibraryChangeBatch &batch)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_ids.empty()) {
         batch = {};
+        if (m_userDataChanged) {
+            batch.userDataChanged = true;
+            m_userDataChanged = false;
+            return true;
+        }
         if (m_overflowed) {
             batch.catchUpRequired = true;
             m_overflowed = false;
@@ -53,6 +59,8 @@ bool JellyfinLibraryEventQueue::pop(JellyfinLibraryChangeBatch &batch)
     }
     batch = {};
     batch.catchUpRequired = m_overflowed;
+    batch.userDataChanged = m_userDataChanged;
+    m_userDataChanged = false;
     for (const auto &entry : m_ids) {
         if (entry.second & 1u) batch.itemsAdded.push_back(entry.first);
         if (entry.second & 2u) batch.itemsRemoved.push_back(entry.first);

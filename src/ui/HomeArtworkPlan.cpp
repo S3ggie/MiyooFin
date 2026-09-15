@@ -75,4 +75,22 @@ std::vector<HomePosterJob> planSeasonPosterJobs(const std::vector<MediaItem> &se
     return out;
 }
 
+static constexpr std::size_t kSeasonPrefetchSeriesLimit = 25;
+
+std::vector<std::string> collectBoundedSeriesIds(
+    const std::vector<MediaItem> &continueWatching,
+    const std::vector<MediaItem> &recentlyAdded)
+{
+    std::set<std::string> seen;
+    std::vector<std::string> ids;
+    const auto add = [&](const MediaItem &item) {
+        if (item.seriesId.empty()) return;
+        if (seen.insert(item.seriesId).second && ids.size() < kSeasonPrefetchSeriesLimit)
+            ids.push_back(item.seriesId);
+    };
+    for (const auto &item : continueWatching) add(item);
+    for (const auto &item : recentlyAdded) add(item);
+    return ids;
+}
+
 } // namespace miyoofin

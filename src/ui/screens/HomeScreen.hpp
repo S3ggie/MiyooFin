@@ -269,6 +269,10 @@ private:
     std::deque<PosterJob> m_highPriorityPosterJobs;
     std::deque<PosterJob> m_lowPriorityPosterJobs;
     std::set<std::string> m_artworkProgressKeys;
+    // Session-level guard for bounded season-poster prefetch: each series is
+    // prefetched at most once per process lifetime so repeat home fetches are
+    // free.
+    std::set<std::string> m_seasonPrefetchedIds;
     bool m_stopPosterWorker = false;
     // Hierarchy discovery is deliberately a single background worker: it keeps
     // startup and the SDL thread free while placing a firm bound on requests.

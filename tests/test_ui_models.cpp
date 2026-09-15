@@ -12,5 +12,6 @@ int main()
     testTransitionTabIndex(); testHomeArtworkPlan();
     testColdStartPopulationProducesNonEmptyTabs();
     testPosterJobScheduling(); testHomeRailRefreshDebounce();
+    testCollectBoundedSeriesIds();
     return miyoofin_test::finish("ui-models");
 }

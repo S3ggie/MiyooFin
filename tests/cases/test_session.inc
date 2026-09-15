@@ -302,7 +302,10 @@ static void testAuthTypes()
 
     CHECK(std::string(APP_NAME) == "MiyooFin");
     CHECK(std::string(DEVICE_NAME) == "Miyoo Mini Plus");
-    CHECK(std::string(VERSION_STR) == "0.1.0");
+    CHECK(std::string(VERSION_STR)
+          == std::to_string(VERSION_MAJOR) + "."
+             + std::to_string(VERSION_MINOR) + "."
+             + std::to_string(VERSION_PATCH));
 
     std::printf("[test] AuthResult/AuthError types OK\n");
 }

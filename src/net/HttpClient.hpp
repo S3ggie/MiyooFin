@@ -1,12 +1,17 @@
 #ifndef MIYOOFIN_HTTP_CLIENT_HPP
 #define MIYOOFIN_HTTP_CLIENT_HPP
 
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include <atomic>
 #include <curl/curl.h>
 
 namespace miyoofin {
+
+/// Progress callback for streaming downloads.
+using DownloadProgress = std::function<void(std::uint64_t received, std::uint64_t total)>;
 
 /// Result of a single HTTP request. The HTTP status code is always
 /// reported even for error responses so callers can distinguish
@@ -83,6 +88,29 @@ public:
                  HttpResponse &response,
                  std::string &error,
                  const std::atomic<bool> *cancelled = nullptr);
+
+    /// Download a URL directly to a file, streaming through disk.
+    ///
+    /// When *resumeFrom* > 0 a `Range: bytes=<resumeFrom>-` header is sent.
+    /// If the server responds 200 instead of 206 the file is truncated and
+    /// the download restarts from offset 0.
+    ///
+    /// The partial file is kept on cancellation (caller may retry later).
+    /// The file is fsynced before close.  Disk-full (ENOSPC) is detected
+    /// and reported in *error*.
+    ///
+    /// Never retries internally; the caller is responsible for retry loops.
+    /// Must NOT be called from the SDL thread.
+    bool downloadToFile(const std::string &url,
+                        const std::vector<std::string> &headers,
+                        const std::string &destTmpPath,
+                        std::string &error,
+                        std::uint64_t *outBytes = nullptr,
+                        DownloadProgress progress = {},
+                        const std::atomic<bool> *cancelled = nullptr,
+                        long timeoutSec = 300,
+                        long connectTimeoutSec = 15,
+                        std::uint64_t resumeFrom = 0);
 
     /// Set request timeout in seconds (default 5).
     void setTimeoutSec(long sec) { m_timeoutSec = sec; }

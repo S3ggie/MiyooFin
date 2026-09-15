@@ -1,6 +1,7 @@
 #include "HomeScreen.hpp"
 #include "../../net/RouteStatus.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
+#include "../../update/AppDir.hpp"
 #include <cstdio>
 #include <ctime>
 
@@ -38,6 +39,13 @@ HomeScreen::HomeScreen(const Session &session,
         m_posterThreads.emplace_back(&HomeScreen::posterWorker, this);
     m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
+
+    // Enable OTA updates if app directory can be resolved.
+    {
+        std::string dir;
+        if (appDir(dir))
+            m_updateManager.enable(std::move(dir));
+    }
 }
 
 HomeScreen::~HomeScreen()
@@ -59,6 +67,7 @@ void HomeScreen::requestStopAllWorkers() noexcept
         m_safetyReconcileCancellation->store(true);
     if (m_homeRailRefreshCancellation)
         m_homeRailRefreshCancellation->store(true);
+    m_updateManager.cancel();
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
         m_stopHierarchyWorker = true;
@@ -273,6 +282,10 @@ void HomeScreen::update(Uint32 dt)
     // Queue missing visible row artwork for background decode.
     if (m_loadState == LoadState::Ready)
         { UiDiagnostics::Scope scope("HomeScreen::queueVisibleArtwork"); tryLoadOneRowArtwork(); }
+
+    // Poll OTA update manager for stage changes.
+    m_updateManager.pollDone();
+    m_updateSnapshot = m_updateManager.snapshot();
 }
 
 

@@ -166,6 +166,7 @@ struct CatalogDbTestResult {
     bool collectionsZero = false;
     bool collectionsMultiple = false;
     bool collectionsUpdateRemoval = false;
+    bool collectionsEmptyTagPreserve = false;
     bool collectionsDeleteCascade = false;
     bool collectionsParity = false;
     bool hierarchyFixture = false;

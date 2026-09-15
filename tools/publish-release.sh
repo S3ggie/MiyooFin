@@ -71,20 +71,23 @@ echo "  Manifest: $(sha256sum "$RELEASE_MANIFEST" | cut -d' ' -f1)  $RELEASE_MAN
 echo ""
 
 # --- Prepare release notes ---
-if [ -n "$NOTES_FILE" ] && [ -s "$NOTES_FILE" ]; then
-    NOTES_FLAGS="--notes-file $NOTES_FILE"
-else
-    NOTES_FLAGS="--notes \"Release ${TAG}\""
-fi
-
 # --- Create GitHub release with assets ---
 echo "Creating GitHub release $TAG..."
-eval gh release create "$TAG" \
-    "$RELEASE_ZIP" \
-    "$RELEASE_TAR" \
-    "$RELEASE_MANIFEST" \
-    --title "MiyooFin $TAG" \
-    $NOTES_FLAGS
+if [ -n "$NOTES_FILE" ] && [ -s "$NOTES_FILE" ]; then
+    gh release create "$TAG" \
+        "$RELEASE_ZIP" \
+        "$RELEASE_TAR" \
+        "$RELEASE_MANIFEST" \
+        --title "MiyooFin $TAG" \
+        --notes-file "$NOTES_FILE"
+else
+    gh release create "$TAG" \
+        "$RELEASE_ZIP" \
+        "$RELEASE_TAR" \
+        "$RELEASE_MANIFEST" \
+        --title "MiyooFin $TAG" \
+        --notes "Release $TAG"
+fi
 
 echo ""
 echo "Release $TAG published successfully."

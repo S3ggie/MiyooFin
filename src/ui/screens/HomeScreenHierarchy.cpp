@@ -293,10 +293,14 @@ void HomeScreen::posterWorker()
         m_artworkCompleted.fetch_add(1);
         {
             std::lock_guard<std::mutex> lock(m_posterMutex);
-            if (!complete) {
-                const std::string key = posterJobKey(job);
-                m_artworkProgressKeys.erase(key);
-            }
+            // Erase the key on BOTH success and failure so that a later
+            // queuePosterJobs call can re-admit it.  On success the
+            // isCached shortcut (line 283) prevents a redundant HTTP
+            // fetch when the file is still on disk; on failure the
+            // network path runs again.  This also allows recovery after
+            // the ImageCache janitor evicts a previously-downloaded file.
+            const std::string key = posterJobKey(job);
+            m_artworkProgressKeys.erase(key);
             if (m_artworkCompleted.load() >= m_artworkTotal.load()
                 && m_highPriorityPosterJobs.empty()
                 && m_lowPriorityPosterJobs.empty())

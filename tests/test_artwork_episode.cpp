@@ -23,5 +23,16 @@ int main()
     testRowCardScrollOffsetFocused(); testRowCardScrollOffsetUnfocused();
     testRowCardScrollOffsetReportedScenario();
     testRowCardScrollOffsetEqualityContract();
+    testPosterDedupPreventsRequeueWhilePending();
+    testPosterDedupSuccessEraseAllowsReAdmit();
+    testPosterDedupEvictionRecovery();
+    testDecodeRetryBoundBelowLimit();
+    testDecodeRetryBoundAtLimit();
+    testDecodeRetryBoundSuccessResets();
+    testDecodeRetryBoundNewKeyIsFresh();
+    testBuildPosterJobFromKeyPrimary();
+    testBuildPosterJobFromKeyThumb();
+    testEvictedKeyResubmittedForDecode();
+    testFailedKeySkippedByGate();
     return miyoofin_test::finish("artwork-episode");
 }

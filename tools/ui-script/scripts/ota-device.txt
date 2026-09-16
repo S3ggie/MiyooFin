@@ -1,0 +1,28 @@
+# Device OTA flow: Settings -> UPDATES -> check -> arm -> install (dev manifest).
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 3000
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+SETTLE 2000
+SCREENSHOT updates-row-selected
+KEY Confirm 3 4000
+SETTLE 6000
+SCREENSHOT updates-checked
+KEY Confirm 3 4000
+SETTLE 4000
+SCREENSHOT updates-armed
+KEY Confirm 3 4000
+SETTLE 40000
+SCREENSHOT updates-after-install
+QUIT

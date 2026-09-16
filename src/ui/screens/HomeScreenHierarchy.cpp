@@ -101,57 +101,6 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std
     return out;
 }
 
-void HomeScreen::startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
-                                     const std::set<std::string> &changedSeries)
-{
-    std::vector<MediaItem> all, shows; std::set<std::string> seen;
-    for (const auto &view : snapshot.shows) for (const auto &show : view.items)
-        if (!show.id.empty() && seen.insert(show.id).second) all.push_back(show);
-    std::map<std::string,MediaItem> old;
-    for(const auto&v:previous.shows)for(const auto&i:v.items)old[i.id]=i;
-    for(const auto&s:all){auto it=old.find(s.id);if(m_forceHierarchyReconcile||changedSeries.count(s.id)||it==old.end()||!LibraryCache::itemEquivalent(it->second,s))shows.push_back(s);}
-
-    std::uint64_t generation=0;
-    std::shared_ptr<std::atomic_bool> cancellation;
-    {
-        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-        generation=m_hierarchyGeneration.fetch_add(1)+1;
-        const std::size_t superseded=m_pendingHierarchyShows.size();
-        if (m_catalogGenerationCancellation)
-            m_catalogGenerationCancellation->store(true);
-        cancellation=std::make_shared<std::atomic_bool>(false);
-        m_catalogGenerationCancellation=cancellation;
-        m_pendingHierarchyShows=std::move(shows); // a newer library snapshot supersedes queued work
-        m_pendingHierarchyGeneration=generation;
-        m_hierarchyCompleted.store(0);
-        m_hierarchyTotal.store(m_pendingHierarchyShows.size());
-        m_hierarchyActive.store(!m_pendingHierarchyShows.empty());
-        PerformanceTelemetry &telemetry=performanceTelemetry();
-        telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy,
-                                      static_cast<uint32_t>(m_pendingHierarchyShows.size()));
-        telemetry.setWorkerActive(WorkerId::HomeHierarchy, !m_pendingHierarchyShows.empty());
-        if (superseded != 0)
-            telemetry.addWorkerCancelled(WorkerId::HomeHierarchy,
-                                         static_cast<uint32_t>(superseded));
-    }
-
-    bool catalogReady=false;
-    if (m_librarySync) {
-        const auto result=m_librarySync->reconcileSeries(all,true,cancellation).get();
-        catalogReady=result.success;
-    }
-    m_hierarchyOffline.store(!catalogReady);
-
-    bool noPending=false;
-    {
-        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-        noPending=m_pendingHierarchyShows.empty();
-    }
-    if(noPending && catalogReady && !publishHierarchyCheckpoint(generation))
-        m_hierarchyOffline.store(true);
-    m_hierarchyWake.notify_one();
-}
-
 void HomeScreen::hierarchyWorker()
 {
     for (;;) {

@@ -39,7 +39,6 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/catalog/CatalogCompatibility.cpp \
     $(SRC_DIR)/diagnostics/UiDiagnostics.cpp \
     $(SRC_DIR)/app/ScreenStack.cpp \
-    $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/input/InputManager.cpp \
     $(SRC_DIR)/image/stb_image_impl.cpp \
     $(SRC_DIR)/image/ImageDecoder.cpp \
@@ -127,7 +126,6 @@ MIYOOFIN_TEST_EXCLUDED_SRCS := \
     $(SRC_DIR)/app/App.cpp \
     $(SRC_DIR)/app/AppSession.cpp \
     $(SRC_DIR)/app/AppPlayback.cpp \
-    $(SRC_DIR)/data/MockData.cpp \
     $(SRC_DIR)/ui/screens/StartupScreen.cpp \
     $(SRC_DIR)/ui/screens/ConnectScreen.cpp \
     $(SRC_DIR)/ui/screens/AuthCheckScreen.cpp \

@@ -24,6 +24,16 @@ int main()
     testDownloadPlanBatchAccounting(); testHlsSizeEstimates();
     testHlsFailureClassification(); testStartupReconcileSkip();
     testReconcileShouldSkip();
+    testReconcilerPreservesLiveState();
+    testTransferPreservesLiveState(); testDownloadPlanFullCardRejection();
     testCatalogDbHierarchyPlanning();
+    testPredictedDownloadTotalBytes(); testSpeedStallGap();
+    testHlsSegmentCompletedIncremental(); testSegmentRecoveryMatchesIncremental();
+    testFreeSpaceCachePolicy(); testTlsCaBundleCache();
+    testDownloadPipelineIoGuards();
+    testTransferSourceIdentityGuard(); testTransferFinishDecision();
+    testWorkerPersistMatchesLiveState(); testStalePlaylistDiscoverySuppressed();
+    testAbandonedDeleteFlagConsumed(); testStaleSegmentRemovalUnderLock();
+    testDequeuePersistIsPerItem();
     return miyoofin_test::finish("downloads");
 }

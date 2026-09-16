@@ -64,8 +64,11 @@ public:
     // gap retains the last meaningful rate; an idle period eventually reports 0.
     static bool updateRecentSpeed(RecentSpeedSample &sample, std::uint64_t downloadedBytes, std::uint64_t nowMs, std::uint64_t &bytesPerSec);
 private:
-    void worker(); void planner(); void reconciler(); bool transfer(DownloadItem &item, const Session &session, const std::string &scope, std::uint64_t generation); bool waitForHlsSegmentRetry(const std::string &itemId, const std::string &scope, std::uint64_t generation, unsigned seconds); void persistLocked(); std::uint64_t freeBytes() const;
-    DownloadStore m_store; Session m_session; std::string m_scope; mutable std::mutex m_mutex; std::condition_variable m_wake, m_planWake, m_reconcileWake; std::thread m_thread, m_planThread, m_reconcileThread; bool m_stop=false,m_playback=false,m_reconcileRequested=false,m_persistRequested=false,m_startupReconcile=false; std::uint64_t m_generation=0, m_nextPlanId=1, m_persistRevision=0; std::set<std::string> m_deleteRequested; std::map<std::string,RecentSpeedSample> m_progressSamples; std::vector<DownloadItem> m_items;
+    void worker(); void planner(); void reconciler(); bool transfer(DownloadItem &item, const Session &session, const std::string &scope, std::uint64_t generation); bool waitForHlsSegmentRetry(const std::string &itemId, const std::string &scope, std::uint64_t generation, unsigned seconds);     void persistLocked(); void persistItemLocked(const std::string &itemId); std::uint64_t freeBytes() const; static bool statvfsFreeBytes(const DownloadStore &store, const std::string &scope, std::uint64_t &out);
+    DownloadStore m_store; Session m_session; std::string m_scope; mutable std::mutex m_mutex; std::condition_variable m_wake, m_planWake, m_reconcileWake; std::thread m_thread, m_planThread, m_reconcileThread; bool m_stop=false,m_playback=false,m_reconcileRequested=false,m_persistRequested=false,m_startupReconcile=false; std::uint64_t m_generation=0, m_nextPlanId=1, m_persistRevision=0;     std::set<std::string> m_deleteRequested; std::map<std::string,RecentSpeedSample> m_progressSamples; std::vector<DownloadItem> m_items;
+    // Cached statvfs result so snapshot() (polled ~every 500ms) does not take
+    // a syscall under the mutex on every call.  Guarded by m_mutex.
+    mutable std::uint64_t m_freeBytesCached=0, m_freeBytesCachedAtMs=0;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     std::shared_ptr<library::LibrarySync> m_librarySync;
     std::shared_ptr<std::atomic_bool> m_activePlanCancellation;

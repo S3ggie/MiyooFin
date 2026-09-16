@@ -568,7 +568,12 @@ void HomeScreen::drawDownloadsTab(SDL_Surface *fb)
         if(item->itemType=="episode") detail=episodeDownloadLabel(*item);
         else detail=std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
         if(item->state==DownloadState::Downloading) {
-            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s/s",downloadPercent(*item),formatBytes(item->recentBytesPerSec).c_str()); detail=active;
+            const std::uint64_t total=predictedDownloadTotalBytes(*item);
+            const bool approxTotal=item->hlsStorage&&!completedHls;
+            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s / %s%s | %s/s",
+                downloadPercent(*item),formatBytes(item->downloadedBytes).c_str(),
+                approxTotal?"~":"",formatBytes(total).c_str(),
+                formatBytes(item->recentBytesPerSec).c_str()); detail=active;
         } else if(item->itemType=="episode") detail += " | "+std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
         if(!item->lastError.empty() && (item->state==DownloadState::Failed || item->state==DownloadState::WaitingForNetwork || item->state==DownloadState::Unauthorized))
             detail=std::string(downloadStateLabel(item->state))+" | "+item->lastError;

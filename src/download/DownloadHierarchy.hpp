@@ -57,11 +57,11 @@ inline DownloadAggregate downloadHierarchyAggregate(const std::vector<const Down
         if (downloadHierarchyComplete(i)) ++out.complete;
         if (i.state==DownloadState::Downloading) ++out.active;
         out.bytes=saturatingAdd(out.bytes,i.downloadedBytes);
-        // Incomplete HLS expected bytes are a planning estimate, not a real
-        // aggregate denominator.  Completed local HLS bytes are real.
-        const bool known=!i.hlsStorage || downloadHierarchyComplete(i);
-        if (!known || !displayDownloadBytes(i)) out.bytesKnown=false;
-        else out.totalBytes=saturatingAdd(out.totalBytes,displayDownloadBytes(i));
+        // Use predictedDownloadTotalBytes which gives a measured estimate for
+        // in-progress HLS instead of the raw preflight expectedSize.
+        const std::uint64_t predicted=predictedDownloadTotalBytes(i);
+        if (!predicted) out.bytesKnown=false;
+        else out.totalBytes=saturatingAdd(out.totalBytes,predicted);
         progressSum+=downloadPercent(i); // child progress is the worker's real progress
     }
     out.progressKnown=!items.empty();

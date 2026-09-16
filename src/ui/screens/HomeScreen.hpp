@@ -324,8 +324,6 @@ private:
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
     void posterWorker();
-    void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
-                             const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
     bool publishHierarchyCheckpoint(std::uint64_t generation);
     std::string syncStatusText() const;

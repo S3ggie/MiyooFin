@@ -497,6 +497,11 @@ case "$NAME" in
         SHOT="$OUT/shots/restore-show-selected.bmp"
         CHECKS="rendered"
         ;;
+    ota-install)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/ota-after-install.bmp"
+        CHECKS="rendered"
+        ;;
     ota-live)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/ota-live.bmp"

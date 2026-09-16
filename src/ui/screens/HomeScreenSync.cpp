@@ -160,6 +160,10 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
     m_liveChangeThread = std::thread(
         [this, sync, batch, cancellation, checkpointMs] {
             library::LiveLibraryChangeResult result;
+            // Any commit below (bounded catch-up, full reconcile) advances
+            // the epoch immediately, so a later apply failure cannot leave a
+            // stale cached offline snapshot in place.
+            bool catalogCommitted = false;
             if (batch.catchUpRequired) {
                 if (!liveChangeNeedsFullReconcile(checkpointMs,
                                                   batch.catchUpRequired)) {
@@ -178,6 +182,8 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                         m_liveChangeDone.store(true);
                         return;
                     }
+                    catalogCommitted = true;
+                    ++m_topLevelSyncGeneration;
                 } else {
                     // No usable checkpoint — full reconcile to establish one.
                     const auto reconciled = sync->reconcileAuthoritativeMembership(
@@ -195,6 +201,8 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                     }
                     // Successful full reconcile — write checkpoint so the next
                     // cycle is bounded.
+                    catalogCommitted = true;
+                    ++m_topLevelSyncGeneration;
                     const std::int64_t nowMs = wallClockMs();
                     auto cp = sync->writeSyncState(
                         nowMs, nowMs, reconciled.generation,
@@ -206,6 +214,11 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                 }
             }
             result = sync->applyLibraryChanges(batch, cancellation).get();
+            // A successful live change committed catalog metadata: advance
+            // the epoch so a cached offline snapshot is rebuilt, not reused.
+            // An earlier commit in this same run (catch-up or full reconcile)
+            // counts even when the apply itself failed.
+            if (result.success || catalogCommitted) ++m_topLevelSyncGeneration;
             m_liveChangeResult = std::move(result);
             m_liveChangeDone.store(true);
         });
@@ -294,10 +307,18 @@ void HomeScreen::startSafetyReconcile()
                     m_safetyReconcileDone.store(true);
                     return;
                 }
+                // Catch-up committed catalog metadata before the authoritative
+                // reconcile below runs: advance the epoch now, so a later
+                // reconcile failure cannot leave a stale cached offline
+                // snapshot in place.
+                ++m_topLevelSyncGeneration;
             }
             const auto result = sync->reconcileAuthoritativeMembership(
                 cancellation).get();
             if (!result.success) m_safetyReconcileError = result.message;
+            // A successful safety reconcile committed catalog metadata:
+            // advance the epoch so a cached offline snapshot is rebuilt.
+            else ++m_topLevelSyncGeneration;
             m_safetyReconcileDone.store(true);
         });
 }
@@ -404,7 +425,8 @@ bool HomeScreen::startFetch()
             // download changes.
             m_offlineSnapshotCache = m_cachedSnapshot;
             m_haveOfflineSnapshotCache = true;
-            m_offlineSignature = computeOfflineSignature(downloads);
+            m_offlineSignature = computeOfflineSignature(
+                downloads, m_topLevelSyncGeneration.load());
             m_haveOfflineSignature = true;
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
@@ -476,11 +498,22 @@ bool HomeScreen::startFetch()
                 const auto gen = dbSyncState.committedGeneration;
                 if (gen > 0) {
                     m_librarySync->seedGeneration(gen);
-                    if (gen > m_topLevelSyncGeneration)
-                        m_topLevelSyncGeneration = gen;
-                    const auto hierCur = m_hierarchyGeneration.load();
-                    if (gen > hierCur)
-                        m_hierarchyGeneration.store(gen);
+                    // Monotonic max via CAS: a plain load-then-store can lose
+                    // a concurrent increment from a live-change rail refresh.
+                    {
+                        auto cur = m_topLevelSyncGeneration.load();
+                        while (gen > cur
+                            && !m_topLevelSyncGeneration.compare_exchange_weak(
+                                cur, gen)) {
+                        }
+                    }
+                    {
+                        auto hierCur = m_hierarchyGeneration.load();
+                        while (gen > hierCur
+                            && !m_hierarchyGeneration.compare_exchange_weak(
+                                hierCur, gen)) {
+                        }
+                    }
                 }
                 if (dbSyncState.lastSuccessfulMs > 0) {
                     m_syncState.lastSuccessfulMs =
@@ -526,7 +559,7 @@ bool HomeScreen::startFetch()
             wallClockMs(), m_syncState.lastSuccessfulMs,
             m_syncState.lastReconcileMs,
             m_catalogDb && m_catalogMetadata.scopeEpoch != 0
-                ? m_topLevelSyncGeneration : std::uint64_t(0),
+                ? m_topLevelSyncGeneration.load() : std::uint64_t(0),
             m_catalogDb && m_catalogMetadata.scopeEpoch != 0, hasCatalogRows);
         // Accumulate fetched items per collection type so the
         // post-finalize rebuild can populate Home tab items.
@@ -549,6 +582,9 @@ bool HomeScreen::startFetch()
                 m_syncState.lastSuccessfulMs, cancellation).get();
             if (catchUp.success && !catchUp.cancelled && !catchUp.superseded) {
                 m_syncState.lastSuccessfulMs = catchUp.checkpointMs;
+                // Delta catch-up committed catalog metadata: advance the
+                // epoch so a cached offline snapshot is rebuilt, not reused.
+                ++m_topLevelSyncGeneration;
                 if (cwOk) m_remoteSnapshot.continueWatching = cw;
                 if (raOk) m_remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;

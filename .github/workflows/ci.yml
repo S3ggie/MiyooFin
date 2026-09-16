@@ -30,6 +30,30 @@ jobs:
         # xvfb provides a display for the SDL-backed host tests on the runner.
         run: xvfb-run -a sh tools/refactor-check.sh
 
+  sanitizers:
+    # Runs the host test suite under AddressSanitizer + UndefinedBehaviorSanitizer
+    # to catch memory errors, UB, and leaks in first-party code. A ThreadSanitizer
+    # job is intentionally out of scope (the codebase uses SDL threads in ways
+    # TSan would flag noisily and it needs a separate instrumented build).
+    name: Host tests under ASan+UBSan
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=0:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libsdl2-dev libsdl2-ttf-dev \
+            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+
+      - name: Tests under ASan+UBSan
+        # xvfb provides a display for the SDL-backed host tests on the runner.
+        run: xvfb-run -a make test-sanitize -j2
+
   # The OnionOS/ARM build needs shared libraries imported from a physical
   # Miyoo device (vendor/miyoo/lib, gitignored) and is intentionally not run
   # here. Validate it locally with `make import-miyoo-libs`, then

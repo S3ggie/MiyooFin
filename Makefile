@@ -13,8 +13,19 @@ CXX         := g++
 CC          := gcc
 PERF_TELEMETRY ?= 1
 RELEASE     ?= 0
+# Opt-in sanitizer switch for host builds only (never forwarded to
+# Makefile.cross, so the ARM build is unaffected).
+#   SANITIZE=1 make test   — or the `test-sanitize` convenience target below.
+# Default (SANITIZE=0) leaves CXXFLAGS/LDFLAGS exactly as before.
+SANITIZE    ?= 0
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
+ifeq ($(SANITIZE),1)
+SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g
+CXXFLAGS    += $(SANITIZE_FLAGS)
+LDFLAGS     += -fsanitize=address,undefined
+SQLITE_CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g
+endif
 INCLUDES    := -I. -Iinclude
 SQLITE_DIR  := vendor/sqlite
 SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
@@ -110,7 +121,7 @@ TEST_PROD_DEPS := $(TEST_PROD_OBJS:.o=.d)
 TEST_PROD_LIB := output/test/libmiyoofin-test.a
 -include $(TEST_PROD_DEPS)
 
-.PHONY: test
+.PHONY: test test-sanitize
 test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@$(TEST_TARGET)
 	@$(SQLITE_TEST_TARGET)
@@ -120,12 +131,17 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@sh $(ONION_REMOTE_LAUNCH_TEST)
 	@python3 $(TELEMETRY_DECODER_TEST)
 
+# Convenience entry point for the sanitizer run: rebuilds and runs the host
+# test suite with AddressSanitizer + UndefinedBehaviorSanitizer.
+test-sanitize:
+	@$(MAKE) SANITIZE=1 test
+
 .PHONY: refactor-check
 refactor-check:
 	@sh tools/refactor-check.sh
 
 $(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(CURL_LIBS) $(SDL_LIBS)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
@@ -165,11 +181,11 @@ $(TEST_TARGET): tests/test_runner.sh $(TEST_GROUP_TARGETS) | output/test
 	chmod +x $@
 
 $(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS)
 	@echo "  [LINK] $@"
 
 $(CATALOG_BENCHMARK_TARGET): $(CATALOG_BENCHMARK_TEST_SRC) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ -lpthread
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS) -lpthread
 	@echo "  [LINK] $@"
 
 .PHONY: catalog-journal-benchmark-test catalog-journal-benchmark
@@ -393,6 +409,7 @@ help:
 	@echo "MiyooFin Makefile"
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
+	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1)"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make desktop-run — Run the host desktop development runtime"

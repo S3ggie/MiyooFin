@@ -49,46 +49,6 @@ static constexpr int META_X         = 363;
 static constexpr int META_Y         = 305;
 static constexpr int META_WRAP      = 24;    // chars before wrapping overview
 
-/// Word-wrap text into lines of at most wrapCols characters.
-/// Breaks at spaces when possible; hard-breaks long words.
-static std::vector<std::string> wrapOverview(const char *text, int wrapCols)
-{
-    std::vector<std::string> lines;
-    if (!text || !*text) return lines;
-
-    std::string input(text);
-    size_t pos = 0;
-
-    while (pos < input.size()) {
-        size_t newline = input.find('\n', pos);
-        std::string para = (newline != std::string::npos)
-            ? input.substr(pos, newline - pos)
-            : input.substr(pos);
-
-        while (!para.empty()) {
-            if ((int)para.size() <= wrapCols) {
-                lines.push_back(para);
-                break;
-            }
-            size_t lastSpace = para.rfind(' ', wrapCols);
-            if (lastSpace != std::string::npos && lastSpace > 0) {
-                lines.push_back(para.substr(0, lastSpace));
-                para = para.substr(lastSpace + 1);
-            } else {
-                lines.push_back(para.substr(0, wrapCols));
-                para = para.substr(wrapCols);
-            }
-        }
-
-        if (newline != std::string::npos)
-            pos = newline + 1;
-        else
-            break;
-    }
-
-    return lines;
-}
-
 SeriesScreen::SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads, bool networkOffline,
                            std::vector<MediaItem> cachedSeasons, bool downloadedOnly,
                            std::shared_ptr<CatalogDb> catalogDb,

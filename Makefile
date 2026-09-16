@@ -80,6 +80,12 @@ output/build/%.o: src/%.cpp | $(OUT_DIRS)
 	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
+# Vendored third-party stb_image triggers -Wunused-parameter under -Wall
+# -Wextra. Suppress only that warning for only this translation unit so our
+# own unused parameters are still diagnosed. Third-party source is not edited.
+output/build/image/stb_image_impl.o: CXXFLAGS += -Wno-unused-parameter
+output/test/objects/image/stb_image_impl.o: TEST_CXXFLAGS += -Wno-unused-parameter
+
 $(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
 	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"

@@ -1,0 +1,21 @@
+# Open a movie, select Download, start it, then Back out (Back, not NextTab:
+# on this screen NextTab scrolls the bio).
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 12000
+KEY NextTab 3
+SETTLE 10000
+KEY Confirm 3 4000
+SETTLE 10000
+KEY Right 3 2000
+SETTLE 10000
+SCREENSHOT dl-md-selected
+KEY Confirm 3 4000
+SETTLE 10000
+SCREENSHOT dl-md-armed
+KEY Confirm 3 4000
+SETTLE 15000
+SCREENSHOT dl-md-after-confirm
+KEY Back 3 4000
+SETTLE 8000
+SCREENSHOT dl-back-to-grid
+QUIT

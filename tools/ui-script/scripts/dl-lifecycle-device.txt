@@ -1,0 +1,22 @@
+# Download lifecycle: let it run, Pause, Resume, then delete (Y,Y). Screenshots
+# at each step are the verification.
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 25000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+SCREENSHOT lc-downloading
+KEY Confirm 3 4000
+SETTLE 8000
+SCREENSHOT lc-paused
+KEY Confirm 3 4000
+SETTLE 12000
+SCREENSHOT lc-resumed
+KEY Raw:226 3 4000
+SETTLE 5000
+SCREENSHOT lc-delete-armed
+KEY Raw:226 3 4000
+SETTLE 10000
+SCREENSHOT lc-deleted
+QUIT

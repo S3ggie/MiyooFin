@@ -497,6 +497,21 @@ case "$NAME" in
         SHOT="$OUT/shots/restore-show-selected.bmp"
         CHECKS="rendered"
         ;;
+    dl-lifecycle)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/lc-deleted.bmp"
+        CHECKS="rendered"
+        ;;
+    dl-start)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/dl-back-to-grid.bmp"
+        CHECKS="rendered"
+        ;;
+    dl-pause)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/dl-paused.bmp"
+        CHECKS="rendered"
+        ;;
     shows-grid)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/shows-grid.bmp"

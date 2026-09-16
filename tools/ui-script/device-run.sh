@@ -497,6 +497,16 @@ case "$NAME" in
         SHOT="$OUT/shots/restore-show-selected.bmp"
         CHECKS="rendered"
         ;;
+    ota-live)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/ota-live.bmp"
+        CHECKS="rendered"
+        ;;
+    offline)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/offline-on.bmp"
+        CHECKS="rendered"
+        ;;
     dl-lifecycle)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/lc-deleted.bmp"

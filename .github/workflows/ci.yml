@@ -54,7 +54,56 @@ jobs:
         # xvfb provides a display for the SDL-backed host tests on the runner.
         run: xvfb-run -a make test-sanitize -j2
 
-  # The OnionOS/ARM build needs shared libraries imported from a physical
-  # Miyoo device (vendor/miyoo/lib, gitignored) and is intentionally not run
-  # here. Validate it locally with `make import-miyoo-libs`, then
-  # `make onionos && make verify-arm`.
+  arm-verify:
+    # Real ARM cross-build verification using the prebuilt toolchain image.
+    #
+    # WHY THIS WORKS WITHOUT THE DEVICE BLOBS: the six device-imported
+    # libraries in vendor/miyoo/lib (libEGL, libGLESv2, libmi_*) are only
+    # needed to *build the Miyoo-patched SDL2* inside the Docker image (see
+    # Dockerfile.onionos). That SDL2 is already built and baked into the
+    # published miyoofin-toolchain image, so building MiyooFin itself needs
+    # no blobs: our binary's NEEDED list contains no libmi_*/libEGL entries
+    # (the device supplies libmi_* at runtime), and a build with an empty
+    # /opt/miyoo/lib is byte-identical to one with the blobs present.
+    # We therefore deliberately avoid `make onionos` / `make package` here:
+    # those targets depend on `check-miyoo-libs` and would fail in CI where
+    # the blobs cannot exist.
+    name: ARM cross build + verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PERF_TELEMETRY: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull private toolchain image
+        run: |
+          OWNER_LC="$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER_LC}/miyoofin-toolchain:latest"
+          if ! docker pull "$IMAGE"; then
+            echo "::error::Could not pull $IMAGE."
+            echo "The private toolchain image has not been published yet, or this repository has no access to it."
+            echo "Publish it once from a machine that has built the image with:"
+            echo "  sh tools/push-toolchain-image.sh"
+            echo "See docs/toolchain.md (CI toolchain image) for details."
+            exit 1
+          fi
+          # make verify-arm and the cross build below expect this local tag.
+          docker tag "$IMAGE" miyoofin-toolchain:latest
+
+      - name: Cross-build ARM binaries
+        # Same invocation as the Makefile's `onionos` target, minus the
+        # blob preconditions (check-miyoo-libs) that CI cannot satisfy.
+        # `mkdir -p` is normally done by the `onionos` target itself.
+        run: |
+          mkdir -p output/build-arm
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/build miyoofin-toolchain \
+            make -f Makefile.cross PERF_TELEMETRY="$PERF_TELEMETRY" RELEASE=1 all bridge reporter
+
+      - name: Verify ARM binaries
+        run: make verify-arm

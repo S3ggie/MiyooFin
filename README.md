@@ -9,6 +9,48 @@ Built with C++17, SDL2, libcurl, and json-c.
 > and “OnionOS” are used only to identify software compatibility and the target
 > platform. MiyooFin uses its own name and logo.
 
+## Features
+
+- **Library browsing** — Movies and Shows (including separate library views such
+  as Anime), drill-down from series → seasons → episodes, and an alphabet rail
+  for jumping through large libraries.
+- **Home rails** — Continue Watching and Recently Added, with resume positions
+  from your server.
+- **Downloads** — server-side transcoded HLS (H.264/AAC) for a movie, episode,
+  season or whole series. Segmented and resumable, recoverable after a crash or
+  reboot, with pause / resume / retry / delete.
+- **Playback** — local-first: plays the downloaded copy when there is one, and
+  otherwise streams. Progress is reported back to Jellyfin, so Continue Watching
+  stays in sync.
+- **Offline mode** — switch it on and the UI lists only what you have downloaded
+  (the Home tab disappears); browsing and playback keep working with no network.
+- **Over-the-air updates** — check for and install new versions from the Settings
+  screen (0.2.0 and later), with SHA-256 verification and rollback on failure.
+- **Small** — the client is about 1.7 MB; the release download is ~3.4 MB.
+
+## Screenshots
+
+| Home | Seasons |
+|---|---|
+| ![Home rails](docs/screenshots/home.png) | ![Season list](docs/screenshots/seasons.png) |
+
+| Downloads | Shows |
+|---|---|
+| ![Downloads with live progress](docs/screenshots/downloads.png) | ![Shows grid](docs/screenshots/shows.png) |
+
+## Known limitations
+
+Stated up front rather than discovered later:
+
+- **No text search** — you can only move through the library with the alphabet
+  rail on the left of the Movies and Shows tabs.
+- **No subtitles** — external subtitle tracks are not fetched or displayed.
+- **Movies and TV only** — no music, albums, or audio playback.
+- **No quality picker** — downloads use one fixed profile tuned for the device's
+  640x480 screen.
+- **No mark-as-played/unplayed**, favourites, playlists or collections from the
+  device.
+
 ## Installation
 
 **Requires:** Miyoo Mini Plus running [OnionOS](https://github.com/OnionUI/Onion).
@@ -23,10 +65,16 @@ Built with C++17, SDL2, libcurl, and json-c.
 No manual shared-library setup is required for a normal installation;
 the prebuilt package is designed to run within the OnionOS environment.
 
+> **Updating from a beta:** `v0.1.0-beta.x` builds have no updater. Download the
+> current `MiyooFin.zip` and copy the folder over your existing installation —
+> settings and downloads are preserved. From 0.2.0 onward, **Settings → UPDATES**
+> installs new versions in place.
+
 ## Status
 
-Active development — browsing, playback, downloads, and offline mode
-are functional.
+Active development — browsing, playback, downloads, offline mode and OTA updates
+are functional and verified on hardware. See
+[Known limitations](#known-limitations) for what is not there yet.
 
 ## Building
 

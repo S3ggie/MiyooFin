@@ -3,6 +3,7 @@
 
 int main()
 {
+    testSourceMatcherTolerance();
     testRouteRequest(); testMovieOrganizationalTitles();
     testMovieAlphabetOrganization(); testMovieOrganizationalSort();
     testMovieAlphabetFocus(); testBoundedPagePosterPlanning();

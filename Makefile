@@ -18,13 +18,28 @@ RELEASE     ?= 0
 #   SANITIZE=1 make test   — or the `test-sanitize` convenience target below.
 # Default (SANITIZE=0) leaves CXXFLAGS/LDFLAGS exactly as before.
 SANITIZE    ?= 0
+# Sanitizer builds use their own output tree (output/sanitize/...) so that
+# switching SANITIZE always forces a full rebuild: sharing output/build and
+# output/test let `make test-sanitize` silently re-run stale non-sanitized
+# binaries left over from a plain `make test`.  SANITIZE=0 paths expand to
+# exactly the historical locations, so default behaviour is byte-identical.
+ifeq ($(SANITIZE),1)
+BUILD_DIR   := output/sanitize/build
+TEST_DIR    := output/sanitize/test
+else
+BUILD_DIR   := output/build
+TEST_DIR    := output/test
+endif
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 ifeq ($(SANITIZE),1)
 SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g
 CXXFLAGS    += $(SANITIZE_FLAGS)
 LDFLAGS     += -fsanitize=address,undefined
-SQLITE_CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g
+# Sanitizer flags for the vendored sqlite host object.  These must stay a
+# separate variable: SQLITE_CFLAGS is assigned (not appended) below, so
+# appending here would be silently overwritten.
+SQLITE_SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
 endif
 INCLUDES    := -I. -Iinclude
 SQLITE_DIR  := vendor/sqlite
@@ -32,8 +47,8 @@ SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
 SQLITE_DEFINES := -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 \
                  -DSQLITE_DQS=0 -DSQLITE_TRUSTED_SCHEMA=0 \
                  -DSQLITE_OMIT_LOAD_EXTENSION
-SQLITE_CFLAGS := -Os $(SQLITE_DEFINES)
-SQLITE_HOST_OBJ := output/build/sqlite/sqlite3.o
+SQLITE_CFLAGS := -Os $(SQLITE_DEFINES) $(SQLITE_SANITIZE_FLAGS)
+SQLITE_HOST_OBJ := $(BUILD_DIR)/sqlite/sqlite3.o
 
 # SDL2 flags from pkg-config
 SDL_CFLAGS  := $(shell pkg-config --cflags sdl2 2>/dev/null || echo '-I/usr/include/SDL2')
@@ -49,19 +64,19 @@ include sources.mk
 
 SRCS        := $(MIYOOFIN_PROD_SRCS) $(TELEMETRY_SRCS)
 
-OBJS        := $(SRCS:src/%.cpp=output/build/%.o)
+OBJS        := $(SRCS:src/%.cpp=$(BUILD_DIR)/%.o)
 OBJS        += $(SQLITE_HOST_OBJ)
 DEPS        := $(OBJS:.o=.d)
-OUT_DIRS    := output/build/app output/build/data output/build/input \
-               output/build/image output/build/net output/build/cache \
-               output/build/download output/build/catalog \
-               output/build/library \
-               output/build/diagnostics \
-               output/build/ui output/build/ui/screens \
-               output/build/playback \
-               output/build/update
+OUT_DIRS    := $(BUILD_DIR)/app $(BUILD_DIR)/data $(BUILD_DIR)/input \
+               $(BUILD_DIR)/image $(BUILD_DIR)/net $(BUILD_DIR)/cache \
+               $(BUILD_DIR)/download $(BUILD_DIR)/catalog \
+               $(BUILD_DIR)/library \
+               $(BUILD_DIR)/diagnostics \
+               $(BUILD_DIR)/ui $(BUILD_DIR)/ui/screens \
+               $(BUILD_DIR)/playback \
+               $(BUILD_DIR)/update
 
-TARGET      := output/build/miyoofin
+TARGET      := $(BUILD_DIR)/miyoofin
 
 .DEFAULT_GOAL := all
 -include $(DEPS)
@@ -72,21 +87,21 @@ TARGET      := output/build/miyoofin
 .PHONY: all
 all: $(TARGET)
 
-$(TARGET): $(OBJS) | output/build
+$(TARGET): $(OBJS) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(SDL_LIBS) $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
-output/build/%.o: src/%.cpp | $(OUT_DIRS)
+$(BUILD_DIR)/%.o: src/%.cpp | $(OUT_DIRS)
 	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 # Vendored third-party stb_image triggers -Wunused-parameter under -Wall
 # -Wextra. Suppress only that warning for only this translation unit so our
 # own unused parameters are still diagnosed. Third-party source is not edited.
-output/build/image/stb_image_impl.o: CXXFLAGS += -Wno-unused-parameter
-output/test/objects/image/stb_image_impl.o: TEST_CXXFLAGS += -Wno-unused-parameter
+$(BUILD_DIR)/image/stb_image_impl.o: CXXFLAGS += -Wno-unused-parameter
+$(TEST_DIR)/objects/image/stb_image_impl.o: TEST_CXXFLAGS += -Wno-unused-parameter
 
-$(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
+$(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | $(BUILD_DIR)/sqlite
 	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"
 
@@ -94,23 +109,23 @@ $(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
 $(OUT_DIRS):
 	@mkdir -p $@
 
-output/build:
+$(BUILD_DIR):
 	@mkdir -p $@
 
-output/build/sqlite:
+$(BUILD_DIR)/sqlite:
 	@mkdir -p $@
 
 # -------------------------------------------------------------------
 # Test
 # -------------------------------------------------------------------
-TEST_TARGET := output/test/test_runner
-SQLITE_TEST_TARGET := output/test/test_sqlite_build
+TEST_TARGET := $(TEST_DIR)/test_runner
+SQLITE_TEST_TARGET := $(TEST_DIR)/test_sqlite_build
 SQLITE_TEST_SRC := tests/test_sqlite_build.cpp
-CATALOG_BENCHMARK_TARGET := output/test/test_catalog_journal_benchmark
+CATALOG_BENCHMARK_TARGET := $(TEST_DIR)/test_catalog_journal_benchmark
 CATALOG_BENCHMARK_TEST_SRC := tests/test_catalog_journal_benchmark.cpp
 CATALOG_BENCHMARK_SRC := tools/catalog_journal_benchmark.cpp
 CATALOG_BENCHMARK_MAIN := tools/catalog_journal_benchmark_main.cpp
-CATALOG_BENCHMARK_RUNNER := output/build/catalog-journal-benchmark
+CATALOG_BENCHMARK_RUNNER := $(BUILD_DIR)/catalog-journal-benchmark
 TEST_CXXFLAGS := $(CXXFLAGS) -DMIYOOFIN_TELEMETRY_HOST_TEST=1 -DMIYOOFIN_TEST_BUILD=1
 RUNNER_TEST := tests/test_playback_runner.sh
 CA_BUNDLE_TEST := tests/test_ca_bundle.sh
@@ -120,11 +135,11 @@ TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
                imagecache update
-TEST_GROUP_TARGETS := $(addprefix output/test/test_,$(TEST_GROUPS))
+TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
-TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=output/test/objects/%.o)
+TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
 TEST_PROD_DEPS := $(TEST_PROD_OBJS:.o=.d)
-TEST_PROD_LIB := output/test/libmiyoofin-test.a
+TEST_PROD_LIB := $(TEST_DIR)/libmiyoofin-test.a
 -include $(TEST_PROD_DEPS)
 
 .PHONY: test test-sanitize
@@ -138,7 +153,9 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@python3 $(TELEMETRY_DECODER_TEST)
 
 # Convenience entry point for the sanitizer run: rebuilds and runs the host
-# test suite with AddressSanitizer + UndefinedBehaviorSanitizer.
+# test suite with AddressSanitizer + UndefinedBehaviorSanitizer in its own
+# output tree (output/sanitize/...), so it never reuses stale non-sanitized
+# objects or binaries from a plain `make test`.
 test-sanitize:
 	@$(MAKE) SANITIZE=1 test
 
@@ -146,51 +163,51 @@ test-sanitize:
 refactor-check:
 	@sh tools/refactor-check.sh
 
-$(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | output/test
+$(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | $(TEST_DIR)
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
-output/test/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
-output/test/test_api_core: tests/cases/test_api_core.inc
-output/test/test_api_events: tests/cases/test_api_events.inc
-output/test/test_session: tests/cases/test_session.inc
-output/test/test_ui_foundation: tests/cases/test_ui_foundation.inc
-output/test/test_ui_models: tests/cases/test_ui_models.inc
-output/test/test_cache_offline: tests/cases/test_cache_offline.inc
-output/test/test_artwork_episode: tests/cases/test_artwork_episode.inc
-output/test/test_downloads: tests/cases/test_downloads.inc
-output/test/test_misc: tests/cases/test_misc_regressions.inc
-output/test/test_playback: tests/cases/test_playback_ui.inc
-output/test/test_telemetry: tests/cases/test_telemetry_core.inc
-output/test/test_telemetry_format: tests/cases/test_telemetry_format.inc
-output/test/test_telemetry_service: tests/cases/test_telemetry_service.inc
-output/test/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc
-output/test/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_hierarchy.inc tests/cases/test_catalog_parity_sync.inc
-output/test/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
-output/test/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc
-output/test/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
-output/test/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
+$(TEST_DIR)/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
+$(TEST_DIR)/test_api_core: tests/cases/test_api_core.inc
+$(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc
+$(TEST_DIR)/test_session: tests/cases/test_session.inc
+$(TEST_DIR)/test_ui_foundation: tests/cases/test_ui_foundation.inc
+$(TEST_DIR)/test_ui_models: tests/cases/test_ui_models.inc
+$(TEST_DIR)/test_cache_offline: tests/cases/test_cache_offline.inc
+$(TEST_DIR)/test_artwork_episode: tests/cases/test_artwork_episode.inc
+$(TEST_DIR)/test_downloads: tests/cases/test_downloads.inc
+$(TEST_DIR)/test_misc: tests/cases/test_misc_regressions.inc
+$(TEST_DIR)/test_playback: tests/cases/test_playback_ui.inc
+$(TEST_DIR)/test_telemetry: tests/cases/test_telemetry_core.inc
+$(TEST_DIR)/test_telemetry_format: tests/cases/test_telemetry_format.inc
+$(TEST_DIR)/test_telemetry_service: tests/cases/test_telemetry_service.inc
+$(TEST_DIR)/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc
+$(TEST_DIR)/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_hierarchy.inc tests/cases/test_catalog_parity_sync.inc
+$(TEST_DIR)/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
+$(TEST_DIR)/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc
+$(TEST_DIR)/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
+$(TEST_DIR)/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
 
-output/test/objects/%.o: src/%.cpp | output/test
+$(TEST_DIR)/objects/%.o: src/%.cpp | $(TEST_DIR)
 	@mkdir -p $(@D)
 	$(CXX) $(TEST_CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
-$(TEST_PROD_LIB): $(TEST_PROD_OBJS) | output/test
+$(TEST_PROD_LIB): $(TEST_PROD_OBJS) | $(TEST_DIR)
 	rm -f $@
 	$(AR) rcs $@ $^
 	@echo "  [AR]   $@"
 
-$(TEST_TARGET): tests/test_runner.sh $(TEST_GROUP_TARGETS) | output/test
+$(TEST_TARGET): tests/test_runner.sh $(TEST_GROUP_TARGETS) | $(TEST_DIR)
 	cp tests/test_runner.sh $@
 	chmod +x $@
 
-$(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
+$(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | $(TEST_DIR)
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS)
 	@echo "  [LINK] $@"
 
-$(CATALOG_BENCHMARK_TARGET): $(CATALOG_BENCHMARK_TEST_SRC) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/test
+$(CATALOG_BENCHMARK_TARGET): $(CATALOG_BENCHMARK_TEST_SRC) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | $(TEST_DIR)
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS) -lpthread
 	@echo "  [LINK] $@"
 
@@ -201,11 +218,11 @@ catalog-journal-benchmark-test: $(CATALOG_BENCHMARK_TARGET)
 catalog-journal-benchmark: $(CATALOG_BENCHMARK_RUNNER)
 	@$(CATALOG_BENCHMARK_RUNNER) --help
 
-$(CATALOG_BENCHMARK_RUNNER): $(CATALOG_BENCHMARK_MAIN) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/build
+$(CATALOG_BENCHMARK_RUNNER): $(CATALOG_BENCHMARK_MAIN) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ -lpthread
 	@echo "  [LINK] $@"
 
-output/test:
+$(TEST_DIR):
 	@mkdir -p $@
 
 # -------------------------------------------------------------------
@@ -337,16 +354,16 @@ package: onionos check-ca-bundle check-miyoo-libs
 # HTTPS bridge (standalone helper — NOT linked into MiyooFin)
 # -------------------------------------------------------------------
 BRIDGE_SRC     := tools/https_bridge.cpp
-BRIDGE_HOST    := output/build/miyoofin-https-bridge
-BRIDGE_TEST    := output/test/test_bridge_parse
+BRIDGE_HOST    := $(BUILD_DIR)/miyoofin-https-bridge
+BRIDGE_TEST    := $(TEST_DIR)/test_bridge_parse
 BRIDGE_TEST_SRC := tests/test_bridge_parse.cpp
-BRIDGE_LOCAL_TEST := output/test/test_bridge_local
+BRIDGE_LOCAL_TEST := $(TEST_DIR)/test_bridge_local
 BRIDGE_LOCAL_TEST_SRC := tests/test_bridge_local.cpp
 
 .PHONY: bridge
 bridge: $(BRIDGE_HOST)
 
-$(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | output/build
+$(BRIDGE_HOST): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -355,21 +372,21 @@ bridge-test: $(BRIDGE_TEST) $(BRIDGE_LOCAL_TEST) bridge
 	@$(BRIDGE_TEST)
 	@$(BRIDGE_LOCAL_TEST)
 
-$(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | output/test
+$(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -I. -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
-$(BRIDGE_LOCAL_TEST): $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/DownloadStore.hpp | output/test
-	$(CXX) $(CXXFLAGS) -I. -o $@ $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp
+$(BRIDGE_LOCAL_TEST): $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/DownloadStore.hpp | $(TEST_DIR)
+	$(CXX) $(CXXFLAGS) -DMIYOOFIN_BRIDGE_BIN='"$(BRIDGE_HOST)"' -I. -o $@ $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp
 	@echo "  [LINK] $@"
 
 # -------------------------------------------------------------------
 # wait_menu_release (tiny evdev helper — detects MENU button release)
 # -------------------------------------------------------------------
 WAIT_RELEASE_SRC  := tools/wait_menu_release.c
-WAIT_RELEASE_HOST := output/build/wait_menu_release
+WAIT_RELEASE_HOST := $(BUILD_DIR)/wait_menu_release
 
-$(WAIT_RELEASE_HOST): $(WAIT_RELEASE_SRC) | output/build
+$(WAIT_RELEASE_HOST): $(WAIT_RELEASE_SRC) | $(BUILD_DIR)
 	$(CC) -Wall -Wextra -pedantic -O2 -o $@ $<
 	@echo "  [LINK] $@"
 
@@ -380,14 +397,14 @@ wait-release: $(WAIT_RELEASE_HOST)
 # playback reporter (standalone Jellyfin playback reporting helper)
 # -------------------------------------------------------------------
 REPORTER_SRC     := tools/playback_reporter.cpp
-REPORTER_HOST    := output/build/miyoofin-playback-reporter
-REPORTER_TEST    := output/test/test_playback_reporter
+REPORTER_HOST    := $(BUILD_DIR)/miyoofin-playback-reporter
+REPORTER_TEST    := $(TEST_DIR)/test_playback_reporter
 REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
 
 .PHONY: reporter
 reporter: $(REPORTER_HOST)
 
-$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/build
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -395,7 +412,7 @@ $(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback
 reporter-test: $(REPORTER_TEST)
 	@$(REPORTER_TEST)
 
-$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/test
+$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -415,7 +432,7 @@ help:
 	@echo "MiyooFin Makefile"
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
-	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1)"
+	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1, separate output/sanitize tree)"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make desktop-run — Run the host desktop development runtime"

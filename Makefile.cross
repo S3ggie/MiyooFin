@@ -11,8 +11,24 @@ CXX := $(CROSS_PREFIX)g++
 CC  := $(CROSS_PREFIX)gcc
 AR  := $(CROSS_PREFIX)ar
 
+# RELEASE switch: set to 1 for a slim release build.
+# RELEASE=0 (default): dev build with -g -O2 for debugging.
+# RELEASE=1:           slim release with -Os, no debug info, unused-section
+#                      stripping via -ffunction-sections/-fdata-sections and
+#                      linker --gc-sections/-s.  Do NOT add -DNDEBUG (assert
+#                      side effects are not audited) or -march/-mcpu (CPU is
+#                      not pinned; hardware risk).
+RELEASE ?= 0
+ifeq ($(RELEASE),1)
+  REL_CXXFLAGS := -Os -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables
+  REL_LDFLAGS  := -Wl,--gc-sections -Wl,-s
+else
+  REL_CXXFLAGS := -g -O2
+  REL_LDFLAGS  :=
+endif
+
 PERF_TELEMETRY ?= 1
-CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -g -O2 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
+CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic $(REL_CXXFLAGS) -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 INCLUDES := -I. -Iinclude -I$(SYSROOT)/include/SDL2 -D_GNU_SOURCE=1 -D_REENTRANT
 SQLITE_DIR := vendor/sqlite
 SQLITE_SRC := $(SQLITE_DIR)/sqlite3.c
@@ -59,7 +75,7 @@ $(BENCHMARK_ARM): $(BENCHMARK_MAIN) $(BENCHMARK_SRC) src/catalog/MediaItemSql.cp
 	@echo "  [LINK] $@"
 
 $(TARGET): $(OBJS) | output/build-arm
-	$(CXX) $(CXXFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2 -lcurl -lpthread
+	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2 -lcurl -lpthread
 	@echo "  [LINK] $@"
 
 output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)
@@ -85,7 +101,7 @@ BRIDGE_ARM := output/build-arm/miyoofin-https-bridge
 bridge: $(BRIDGE_ARM)
 
 $(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | output/build-arm
-	$(CXX) $(CXXFLAGS) -Itools -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
+	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 
 # -------------------------------------------------------------------
@@ -110,7 +126,7 @@ REPORTER_ARM     := output/build-arm/miyoofin-playback-reporter
 reporter: $(REPORTER_ARM)
 
 $(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | output/build-arm
-	$(CXX) $(CXXFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
+	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 
 .PHONY: clean

@@ -5,7 +5,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-make package
+make package RELEASE=1
 
 PACKAGE_DIR="output/package/MiyooFin"
 RELEASE_DIR="output/release"

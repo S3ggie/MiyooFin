@@ -382,3 +382,264 @@ static void testUiDiagnostics()
     std::printf("[test] UI diagnostics watchdog/ring OK\n");
 }
 
+static void testLoginBackRequestsServerEntry()
+{
+    std::printf("[test] LoginScreen Back requests server entry\n");
+    LoginScreen screen("https://server", "Server", "device");
+    CHECK(!screen.wantsServerEntry());
+    // Field mode: Back must not be swallowed — the stack holds only this
+    // screen, so App pushes a fresh ServerEntryScreen with the URL carried
+    // back for editing (see App:: LoginScreen back -> ServerEntry).
+    CHECK(screen.handleAction(Action::Back));
+    CHECK(screen.wantsServerEntry());
+    CHECK(!screen.finished());
+    std::printf("[test] LoginScreen Back requests server entry OK\n");
+}
+
+static void testLoginKeyboardBackDeletes()
+{
+    std::printf("[test] LoginScreen keyboard Back deletes, not exits\n");
+    LoginScreen screen("https://server", "Server", "device");
+    screen.handleAction(Action::Down);
+    screen.handleAction(Action::Confirm);
+    CHECK_EQ(screen.username(), "1");
+    CHECK(!screen.wantsServerEntry());
+    // Keyboard mode: Back is delete-character (mirrors the on-screen B hint).
+    screen.handleAction(Action::Back);
+    CHECK_EQ(screen.username(), "");
+    CHECK(!screen.wantsServerEntry());
+    std::printf("[test] LoginScreen keyboard Back deletes, not exits OK\n");
+}
+
+// Thread-restart guard audit: assigning over a joinable std::thread calls
+// std::terminate() (SIGABRT, "exited unexpectedly (134)" on a second
+// Sign In / Connect). Every `Member = std::thread(` site in the audited
+// translation units below must carry a guard in the same-function
+// neighbourhood before the assignment — one of:
+//   - restart: `M.joinable()` ... `M.join()` for the same member M (the
+//     join reclaims an already-finished worker; a still-running worker is
+//     refused via an early return instead of blocking the UI thread), or
+//   - refuse: `if (... M.joinable() ...) ... return` (a joinable worker
+//     refuses the new attempt, so the assignment never runs joinable), or
+//   - gate-once: `if (!M.joinable()) M = std::thread(` (long-lived workers
+//     started exactly once; the target is never joinable here).
+// Matching runs on comment-stripped token text (string literals preserved,
+// so a URL cannot end the strip early), so explanatory comments mentioning
+// joinable/join can never satisfy the check. Detach-after-assign
+// (ConnectScreen) and single-shot workers (one assignment per owner
+// lifetime, joined in leave()/dtor) are covered by the explicit allowlists
+// below — each row pins the member plus its proof token — never by
+// silence. A new `= std::thread(` site in any audited file that matches
+// none of these fails the test, and a new TU that spawns threads must be
+// added to kThreadAuditFiles (the audit scans listed files; it cannot
+// discover files it is not told about). Member-init (`: m_x(...)`) and
+// emplace_back constructions are single-construction by language semantics
+// (never a re-assignment) and out of scope here.
+static const std::size_t kThreadGuardRawWindow = 4000;
+
+struct ThreadAuditAllow {
+    const char *file;
+    const char *member;
+};
+
+static const char *const kThreadAuditFiles[] = {
+    "src/app/AppPlayback.cpp",
+    "src/app/AppSession.cpp",
+    "src/diagnostics/PerformanceTelemetryService.cpp",
+    "src/diagnostics/UiDiagnostics.cpp",
+    "src/download/DownloadManager.cpp",
+    "src/library/LibrarySyncEvents.cpp",
+    "src/ui/screens/AuthCheckScreen.cpp",
+    "src/ui/screens/ConnectScreen.cpp",
+    "src/ui/screens/EpisodeBrowserArtwork.cpp",
+    "src/ui/screens/EpisodeBrowserData.cpp",
+    "src/ui/screens/HomeScreen.cpp",
+    "src/ui/screens/HomeScreenRefresh.cpp",
+    "src/ui/screens/HomeScreenSync.cpp",
+    "src/ui/screens/LoginScreen.cpp",
+    "src/ui/screens/MovieDetailsScreen.cpp",
+    "src/ui/screens/SeriesScreenWorker.cpp",
+    "src/ui/screens/ServerEntryScreen.cpp",
+    "src/update/UpdateManager.cpp",
+};
+
+// Detach-after-assign: the target is never joinable, so no terminate.
+// Each row pins exactly one assignment plus the detach call.
+static const ThreadAuditAllow kThreadDetach[] = {
+    {"src/ui/screens/ConnectScreen.cpp", "m_connectThread"},
+};
+
+// Single-shot workers: exactly one assignment per owner lifetime, joined
+// in leave()/dtor paths — no restart guard applies.
+static const ThreadAuditAllow kThreadSingleShot[] = {
+    {"src/ui/screens/AuthCheckScreen.cpp", "m_checkThread"},
+    {"src/ui/screens/MovieDetailsScreen.cpp", "m_prepareThread"},
+    {"src/ui/screens/HomeScreen.cpp", "m_hierarchyThread"},
+    {"src/ui/screens/HomeScreen.cpp", "m_decodeThread"},
+    {"src/app/AppSession.cpp", "m_savedValidationThread"},
+    {"src/download/DownloadManager.cpp", "m_thread"},
+    {"src/download/DownloadManager.cpp", "m_planThread"},
+    {"src/download/DownloadManager.cpp", "m_reconcileThread"},
+};
+
+// stop()-then-start: the assigning function calls stop() first and stop()
+// joins the worker (PerformanceTelemetry::start).
+static const ThreadAuditAllow kThreadStopDelegated[] = {
+    {"src/diagnostics/PerformanceTelemetryService.cpp", "m_serviceThread"},
+};
+
+static bool threadAuditAllowed(const ThreadAuditAllow *list, std::size_t n,
+                               const std::string &file,
+                               const std::string &member)
+{
+    for (std::size_t i = 0; i < n; ++i)
+        if (file == list[i].file && member == list[i].member) return true;
+    return false;
+}
+
+static std::size_t threadTokenCount(const std::string &hay,
+                                    const std::string &token)
+{
+    std::size_t count = 0, pos = 0;
+    while ((pos = hay.find(token, pos)) != std::string::npos) {
+        ++count;
+        pos += token.size();
+    }
+    return count;
+}
+
+// Token-space guard probe over `seg` (comment-stripped token text ending at
+// the `M = std::thread(` assignment) for member `member`.
+static bool threadSiteGuarded(const std::string &seg,
+                              const std::string &member)
+{
+    // Gate-once: `if (!M.joinable()) M = std::thread(` (seg ends at the
+    // assignment, so the token tail is `...M=`).
+    const std::string gate = "if(!" + member + ".joinable())" + member + "=";
+    if (seg.size() >= gate.size() &&
+        seg.compare(seg.size() - gate.size(), gate.size(), gate) == 0)
+        return true;
+    // Restart: `M.joinable()` ... `M.join()` in order before the assign.
+    const std::string joinable = member + ".joinable()";
+    const std::string joined = member + ".join()";
+    const std::size_t seen = seg.find(joinable);
+    if (seen == std::string::npos) return false;
+    if (seg.find(joined, seen) != std::string::npos) return true;
+    // Refuse: `if (... M.joinable() ...` with a return before any `;`.
+    const std::size_t iff = seg.rfind("if(", seen);
+    if (iff == std::string::npos) return false;
+    const std::size_t semi = seg.find(";", iff);
+    if (semi != std::string::npos && semi < seen) return false;
+    const std::size_t ret = seg.find("return", seen);
+    if (ret == std::string::npos) return false;
+    const std::size_t semi2 = seg.find(";", seen);
+    return semi2 == std::string::npos || semi2 > ret;
+}
+
+static void auditThreadFile(const char *path)
+{
+    const std::string raw = readTestBytes(path);
+    CHECK(!raw.empty());
+    if (raw.empty()) return;
+    // Comment-stripped with newlines preserved, so raw offsets stay stable
+    // and the guard window can stop at the enclosing function's end.
+    const std::string stripped = stripSourceComments(raw);
+    const std::string hay = sourceTokenString(stripped);
+    const std::string file = path;
+    static const std::string kSpawn = "std::thread(";
+    std::size_t rawPos = 0;
+    while ((rawPos = stripped.find(kSpawn, rawPos)) != std::string::npos) {
+        // Walk left over whitespace to `=` and on to the member name, so
+        // `M=std::thread(`, `M = std::thread(`, and reflowed variants all
+        // resolve to the assigned member.
+        std::size_t p = rawPos;
+        while (p > 0 && (stripped[p - 1] == ' ' || stripped[p - 1] == '\t' ||
+                         stripped[p - 1] == '\r' || stripped[p - 1] == '\n'))
+            --p;
+        bool shaped = (p > 0 && stripped[p - 1] == '=');
+        std::string member;
+        if (shaped) {
+            --p;
+            while (p > 0 && (stripped[p - 1] == ' ' || stripped[p - 1] == '\t' ||
+                             stripped[p - 1] == '\r' || stripped[p - 1] == '\n'))
+                --p;
+            const std::size_t end = p;
+            while (p > 0 && (std::isalnum(
+                                 static_cast<unsigned char>(stripped[p - 1])) ||
+                             stripped[p - 1] == '_'))
+                --p;
+            member = stripped.substr(p, end - p);
+            shaped = !member.empty();
+        }
+        if (!shaped) {
+            std::printf("  FAIL %s: non-assignment std::thread( site "
+                        "(needs explicit handling)\n", path);
+            CHECK(false);
+            rawPos += kSpawn.size();
+            continue;
+        }
+        const std::string assignTok = member + "=std::thread(";
+        bool pass = false;
+        if (threadAuditAllowed(kThreadDetach, sizeof(kThreadDetach) /
+                                                 sizeof(kThreadDetach[0]),
+                               file, member)) {
+            pass = threadTokenCount(hay, assignTok) == 1u &&
+                   hay.find(member + ".detach()") != std::string::npos;
+        } else if (threadAuditAllowed(
+                       kThreadSingleShot,
+                       sizeof(kThreadSingleShot) / sizeof(kThreadSingleShot[0]),
+                       file, member)) {
+            pass = threadTokenCount(hay, assignTok) == 1u &&
+                   hay.find(member + ".join()") != std::string::npos;
+        } else {
+            // Same-function neighbourhood: back to the previous top-level
+            // `}` (a column-0 close ends the enclosing function), capped at
+            // kThreadGuardRawWindow chars so one-line functions cannot
+            // borrow a guard from an unrelated earlier function.
+            std::size_t winStart =
+                (rawPos > kThreadGuardRawWindow) ? rawPos - kThreadGuardRawWindow
+                                                 : 0;
+            const std::size_t close = stripped.rfind("\n}", rawPos);
+            if (close != std::string::npos && close + 2 > winStart)
+                winStart = close + 2;
+            const std::string seg = sourceTokenString(
+                stripped.substr(winStart, rawPos - winStart));
+            if (threadAuditAllowed(kThreadStopDelegated,
+                                   sizeof(kThreadStopDelegated) /
+                                       sizeof(kThreadStopDelegated[0]),
+                                   file, member)) {
+                // Delegation proof spans the whole assigning function head
+                // (stop() runs at its top, far above the assignment), while
+                // the joinable()/join() proof lives TU-wide in stop().
+                const std::size_t fnStart =
+                    (close == std::string::npos) ? 0 : close + 2;
+                const std::string fnHead = sourceTokenString(
+                    stripped.substr(fnStart, rawPos - fnStart));
+                pass = fnHead.find("stop()") != std::string::npos &&
+                       hay.find(member + ".joinable()") != std::string::npos &&
+                       hay.find(member + ".join()") != std::string::npos;
+            } else {
+                pass = threadSiteGuarded(seg, member);
+            }
+        }
+        if (!pass)
+            std::printf("  thread-guard MISSING: %s %s\n", path,
+                        member.c_str());
+        CHECK(pass);
+        rawPos += kSpawn.size();
+    }
+}
+
+static void testThreadRestartGuards()
+{
+    std::printf("[test] std::thread restart guards (double-submit SIGABRT pin)\n");
+    // Assigning over a joinable std::thread calls std::terminate() (SIGABRT,
+    // "exited unexpectedly (134)" on a second Sign In / Connect). Each
+    // audited TU is scanned for real `= std::thread(` sites above, so a new
+    // unguarded restart fails here instead of slipping past a
+    // hand-maintained function list. Behavioural proof lives in the
+    // login-400 ui-script flow (double submit plus Back to the URL screen).
+    for (const char *path : kThreadAuditFiles) auditThreadFile(path);
+    std::printf("[test] std::thread restart guards OK\n");
+}
+

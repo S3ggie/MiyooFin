@@ -8,5 +8,7 @@ int main()
     testServerEntrySpace(); testLoginUsernameSpace(); testLoginPasswordSpace();
     testSharedKeyboardLayoutConsistency(); testKeyboardVerticalNavActionRow();
     testUiDiagnostics();
+    testLoginBackRequestsServerEntry(); testLoginKeyboardBackDeletes();
+    testThreadRestartGuards();
     return miyoofin_test::finish("ui-foundation");
 }

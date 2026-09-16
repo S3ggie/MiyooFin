@@ -96,6 +96,61 @@ inline std::string sourceTokenString(const std::string &text)
     return out;
 }
 
+// Comment-stripper for structural source scans: replaces `//...` and
+// `/*...*/` with spaces (newlines preserved, so raw offsets stay stable)
+// while leaving string/char literals intact (a URL such as "http://..."
+// must not start a line comment). Structural checks must run on the result:
+// comment prose mentioning an identifier can never satisfy them.
+inline std::string stripSourceComments(const std::string &text)
+{
+    std::string out = text;
+    enum State { Code, Line, Block, Str, Chr };
+    State state = Code;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const char c = out[i];
+        const char next = (i + 1 < out.size()) ? out[i + 1] : '\0';
+        switch (state) {
+        case Code:
+            if (c == '/' && next == '/') {
+                out[i] = out[i + 1] = ' ';
+                ++i;
+                state = Line;
+            } else if (c == '/' && next == '*') {
+                out[i] = out[i + 1] = ' ';
+                ++i;
+                state = Block;
+            } else if (c == '"') {
+                state = Str;
+            } else if (c == '\'') {
+                state = Chr;
+            }
+            break;
+        case Line:
+            if (c == '\n') state = Code;
+            else out[i] = ' ';
+            break;
+        case Block:
+            if (c == '*' && next == '/') {
+                out[i] = out[i + 1] = ' ';
+                ++i;
+                state = Code;
+            } else if (c != '\n') {
+                out[i] = ' ';
+            }
+            break;
+        case Str:
+            if (c == '\\' && i + 1 < out.size()) ++i;
+            else if (c == '"') state = Code;
+            break;
+        case Chr:
+            if (c == '\\' && i + 1 < out.size()) ++i;
+            else if (c == '\'') state = Code;
+            break;
+        }
+    }
+    return out;
+}
+
 inline bool sourceContains(const std::string &haystack,
                            const std::string &needle)
 {
@@ -219,6 +274,7 @@ inline int finish(const char *group)
 
 using miyoofin_test::readTestBytes;
 using miyoofin_test::sourceTokenString;
+using miyoofin_test::stripSourceComments;
 using miyoofin_test::sourceContains;
 using miyoofin_test::sourceLacks;
 using miyoofin_test::sourceCount;

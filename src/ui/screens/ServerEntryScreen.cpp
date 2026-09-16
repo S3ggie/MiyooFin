@@ -62,6 +62,14 @@ void ServerEntryScreen::startConnection()
     }
     std::string normalised = JellyfinApi::normaliseUrl(m_url);
     m_url = normalised;
+    // Never assign over a joinable std::thread (std::terminate). update()
+    // joins the previous attempt before clearing m_connecting, so a joinable
+    // thread here is already finished (join returns immediately); a still-
+    // running worker refuses a second attempt instead of blocking the UI.
+    if (m_connectThread.joinable()) {
+        if (m_connectDone.load()) m_connectThread.join();
+        else return;
+    }
     m_connecting = true;
     m_connectDone = false;
     m_connectSuccess = false;

@@ -47,6 +47,19 @@ void LoginScreen::submitLogin()
         return;
     }
 
+    // Never assign over a joinable std::thread: that calls std::terminate()
+    // (SIGABRT, "exited unexpectedly (134)" on a second Sign In). Checked
+    // before mutating state so refusing a still-running worker changes
+    // nothing. finishLogin() joins the previous attempt, so a joinable
+    // thread here is normally already finished (join returns immediately);
+    // a genuinely running worker refuses instead of blocking the UI thread
+    // on network I/O (unreachable via handleAction: it gates on
+    // !m_connecting, and Back is swallowed while connecting).
+    if (m_loginThread.joinable()) {
+        if (m_loginDone.load()) m_loginThread.join();
+        else return;
+    }
+
     m_connecting = true;
     m_loginDone = false;
     m_loginSuccess = false;
@@ -77,6 +90,11 @@ void LoginScreen::submitLogin()
 
 void LoginScreen::finishLogin()
 {
+    // The worker set m_loginDone as its last act, so it has exited: this
+    // join returns immediately and also establishes the happens-before edge
+    // for m_loginError/m_loginResult. Reclaim here so the next submitLogin()
+    // never assigns over a joinable thread.
+    if (m_loginThread.joinable()) m_loginThread.join();
     m_loginDone = false;
     m_connecting = false;
 
@@ -89,6 +107,7 @@ void LoginScreen::finishLogin()
     }
 
     m_message = m_loginError;
+    printf("[LoginScreen] Sign-in failed: %s\n", m_loginError.c_str());
 }
 
 void LoginScreen::enter()
@@ -128,7 +147,10 @@ bool LoginScreen::handleAction(Action action)
             m_activeField = 1;
             return true;
         case Action::Back:
-            m_message.clear();
+            // The stack holds only this screen (App popped ServerEntry/
+            // Connect first), so going back pushes a fresh ServerEntryScreen
+            // via App (see wantsServerEntry()) instead of popping.
+            m_wantsServerEntry = true;
             return true;
         case Action::Settings:
             if (!m_connecting && !m_success) submitLogin();

@@ -620,3 +620,84 @@ static void testBuildLibraryItemsUrl()
 }
 
 
+
+static void testClassifyAuthError()
+{
+    std::printf("[test] classifyAuthError messages\n");
+    // Drive the private classifier through public authenticateByName
+    // against a loopback stub. HTTP 400 with no server message must NOT
+    // blame empty fields — submitLogin() already rejects those
+    // client-side, so a 400 here means something else. Truthful status
+    // text instead.
+    auto authAgainst = [](const std::string &statusLine,
+                          const std::string &body,
+                          AuthError &errCode, std::string &error) {
+        const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        CHECK(listener >= 0); if (listener < 0) return std::string();
+        int reuse = 1;
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(0);
+        CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
+                     sizeof(address)) == 0);
+        socklen_t size = sizeof(address);
+        CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
+                            &size) == 0);
+        CHECK(::listen(listener, 1) == 0);
+        const std::string port = std::to_string(ntohs(address.sin_port));
+        std::string request;
+        std::thread server([&] {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client < 0) return;
+            char buffer[4096];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t n = ::recv(client, buffer, sizeof(buffer), 0);
+                if (n <= 0) break;
+                request.append(buffer, static_cast<size_t>(n));
+            }
+            const std::string response = statusLine
+                + "Content-Type: application/json\r\nContent-Length: "
+                + std::to_string(body.size())
+                + "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        });
+        AuthResult result;
+        const bool ok = JellyfinApi::authenticateByName(
+            "http://127.0.0.1:" + port, "user", "pass", "device",
+            result, errCode, error);
+        server.join();
+        ::close(listener);
+        CHECK(request.find("/Users/AuthenticateByName") != std::string::npos);
+        return request;
+    };
+    {
+        AuthError err = AuthError::None;
+        std::string error;
+        authAgainst("HTTP/1.1 400 Bad Request\r\n", "", err, error);
+        CHECK(err == AuthError::BadRequest);
+        CHECK(!error.empty());
+        CHECK(error.find("400") != std::string::npos);
+        CHECK(error.find("Username") == std::string::npos);
+        CHECK(error.find("required") == std::string::npos);
+    }
+    { // Server-supplied Error.Message keeps highest priority on 400 too.
+        AuthError err = AuthError::None;
+        std::string error;
+        authAgainst("HTTP/1.1 400 Bad Request\r\n",
+                    "{\"Error\":{\"Message\":\"Custom server msg\"}}",
+                    err, error);
+        CHECK(err == AuthError::BadRequest);
+        CHECK_EQ(error, "Custom server msg");
+    }
+    { // Other status mappings are unchanged.
+        AuthError err = AuthError::None;
+        std::string error;
+        authAgainst("HTTP/1.1 401 Unauthorized\r\n", "", err, error);
+        CHECK(err == AuthError::InvalidCredentials);
+        CHECK_EQ(error, "Invalid username or password.");
+    }
+    std::printf("[test] classifyAuthError messages OK\n");
+}

@@ -40,6 +40,11 @@ public:
     /// The server URL used for this login.
     const std::string &serverUrl() const { return m_serverUrl; }
 
+    /// True when the user pressed Back on the field row: App should return
+    /// to the server-URL entry screen (the stack holds only this screen,
+    /// so there is nothing beneath to pop to).
+    bool wantsServerEntry() const { return m_wantsServerEntry; }
+
     // Keyboard state accessors support deterministic host tests.
     bool capsEnabled() const { return m_keyboard.capsEnabled(); }
     const std::string &username() const { return m_username; }
@@ -64,6 +69,7 @@ private:
     bool m_connecting = false;
     bool m_finished = false;
     bool m_success = false;
+    bool m_wantsServerEntry = false;
     AuthResult m_result;
     std::thread m_loginThread;
     std::atomic<bool> m_loginDone{false};

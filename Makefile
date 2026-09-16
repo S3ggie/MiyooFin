@@ -12,6 +12,7 @@
 CXX         := g++
 CC          := gcc
 PERF_TELEMETRY ?= 1
+RELEASE     ?= 0
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 INCLUDES    := -I. -Iinclude
@@ -215,7 +216,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter benchmark
+	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image
@@ -294,6 +295,14 @@ package: onionos check-ca-bundle check-miyoo-libs
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libstdc++.so.6.0.25 /out/ && \
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1 /out/ && \
 	    echo "  Libraries bundled successfully"'
+	@echo "  Stripping packaged binaries..."
+	@docker run --rm --user $(DOCKER_USER) -v $(PWD)/$(PACKAGE_DIR):/pkg miyoofin-toolchain \
+	    bash -c '\
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-https-bridge && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-playback-reporter && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/lib/libSDL2-2.0.so.0.18.2 && \
+	    echo "  Packaged binaries stripped successfully"'
 	@echo "  Verifying package binary architecture..."
 	@file $(PACKAGE_DIR)/miyoofin | grep -qi 'ARM' || \
 	    { echo "ERROR: $(PACKAGE_DIR)/miyoofin is NOT ARM!"; exit 1; }
@@ -389,6 +398,7 @@ help:
 	@echo "  make desktop-run — Run the host desktop development runtime"
 	@echo "  make desktop-test — Check desktop runtime wiring"
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
+	@echo "  make onionos RELEASE=1 — Cross-compile slim release for Miyoo"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"
 	@echo "  make import-miyoo-libs — Import Miyoo build libraries from device"

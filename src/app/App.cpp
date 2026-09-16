@@ -584,7 +584,17 @@ int App::run()
                 }
             }
             else if (auto *login = dynamic_cast<LoginScreen *>(top)) {
-                if (login->finished()) {
+                if (login->wantsServerEntry()) {
+                    // Back from the field row: return to the server-URL
+                    // screen with the URL carried back for editing. pop()
+                    // calls leave(), which joins the login thread (already
+                    // finished or never started: Back is gated on
+                    // !m_connecting), so no worker outlives the screen.
+                    printf("[App] LoginScreen back -> ServerEntry\n");
+                    m_stack.pop();
+                    m_stack.push(
+                        std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
+                } else if (login->finished()) {
                     if (login->success()) {
                         // Save the session
                         printf("[App] LoginScreen success -> Home\n");

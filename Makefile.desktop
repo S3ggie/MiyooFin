@@ -19,3 +19,4 @@ ui-script-test:
 	@sh tools/ui-script/test-launcher-roundtrip.sh
 	@sh tools/ui-script/run.sh smoke
 	@sh tools/ui-script/run.sh series
+	@sh tools/ui-script/run.sh login-400

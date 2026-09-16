@@ -63,6 +63,13 @@ void HomeScreen::finishDownloadRefresh()
 
 void HomeScreen::startResumeRefresh()
 {
+    // Never block the UI thread joining a still-running worker: a refresh
+    // already in flight coalesces into a pending rerun, so the join below
+    // only ever reclaims an already-finished thread.
+    if (m_resumeRefreshInFlight) {
+        m_resumeRefreshPending = true;
+        return;
+    }
     // Continue Watching is an ephemeral rail; the legacy compatibility table
     // is not a runtime source or destination for this refresh.
     if (m_resumeRefreshThread.joinable())

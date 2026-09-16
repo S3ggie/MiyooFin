@@ -4,7 +4,10 @@
 Serves canned responses for exactly the endpoints the desktop build hits on
 the smoke/series flows, on 127.0.0.1 with an ephemeral port:
 
-  GET /Users/<uid>                       token validation -> 200
+   GET /System/Info/Public              fixed stub server identity
+   POST /Users/AuthenticateByName        HTTP 400 with an empty body
+                                         (login-400 regression flow)
+   GET /Users/<uid>                       token validation -> 200
   GET /Users/<uid>/Views                  libraries (Movies + TV Shows)
   GET /Users/<uid>/Items?ParentId=...     library pages (movies / series)
   GET /Users/<uid>/Items/Resume           empty continue-watching rail
@@ -12,7 +15,7 @@ the smoke/series flows, on 127.0.0.1 with an ephemeral port:
   GET /Shows/<series>/Seasons             two seasons
   GET /Shows/<series>/Episodes            a few episodes
 
-Everything else (artwork, playback, system info) -> 404, which the app
+Everything else (artwork, playback) -> 404, which the app
 already treats as placeholder/empty. No network beyond loopback, no state,
 no auth enforcement.
 
@@ -113,6 +116,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_raw(self, code, body):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -123,6 +133,12 @@ class Handler(BaseHTTPRequestHandler):
             # response, so probing a 404 path would report a perfectly good
             # tunnel as unreachable.
             self._send(200, {"status": "ok"})
+        elif path == "/System/Info/Public":
+            # ConnectScreen/ServerEntryScreen probe. A fixed name keeps the
+            # login-400 harness deterministic.
+            self._send(200, {"Id": "stub-server", "ServerName": "Stub",
+                             "Version": "10.9.0",
+                             "OperatingSystem": "stub"})
         elif path == "/Users/%s" % UID:
             self._send(200, {"Id": UID, "Name": "stub"})
         elif path == "/Users/%s/Views" % UID:
@@ -147,6 +163,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "stub has no such endpoint"})
 
     def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/Users/AuthenticateByName":
+            # Regression pin for the login-400 report: HTTP 400 with an
+            # empty body. Consume the request body so the connection stays
+            # in sync, then answer with zero bytes.
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 0:
+                self.rfile.read(length)
+            self._send_raw(400, b"")
+            return
         self._send(404, {"error": "stub has no such endpoint"})
 
 

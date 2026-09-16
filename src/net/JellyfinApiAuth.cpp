@@ -19,7 +19,11 @@ AuthError JellyfinApi::classifyAuthError(long httpStatus, const std::string &bod
     switch (httpStatus) {
     case 200: return AuthError::None;
     case 400:
-        if (message.empty()) message = "Username and password required.";
+        // submitLogin() already rejects empty fields client-side, so a 400
+        // here never means "you typed nothing": say what happened instead.
+        if (message.empty())
+            message = "Sign-in failed (HTTP 400). "
+                      "Check the server address and credentials.";
         return AuthError::BadRequest;
     case 401:
         if (message.empty()) message = "Invalid username or password.";

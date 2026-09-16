@@ -1,0 +1,27 @@
+# Login-400: regression flow for the "second Sign In aborts (134)" report.
+# Boot with a saved server URL but no session, so ConnectScreen succeeds
+# against the stub and the app lands on LoginScreen. The stub answers
+# POST /Users/AuthenticateByName with HTTP 400 + empty body, so each
+# Sign In fails with error text. Typing uses the proven unit-test path:
+# Down+Confirm types "1" at the keyboard home position (see
+# testLoginKeyboardCaps), Up/Right/Down moves to the password field.
+# Raw:40 is START (Action::Settings = Sign In) via the shim escape.
+WAIT_LOG [LoginScreen] enter 30000
+KEY Down
+KEY Confirm
+KEY Up
+KEY Right
+KEY Down
+KEY Confirm
+KEY Raw:40
+WAIT_LOG [LoginScreen] Sign-in failed 30000
+KEY Raw:40
+SETTLE 3000
+SCREENSHOT login-error
+# Back out to the server-URL screen: Up returns from the keyboard to the
+# field row (selection is still row 0), then Back on the field row asks App
+# to pop Login and push a fresh ServerEntryScreen (see wantsServerEntry).
+KEY Up
+KEY Back
+WAIT_LOG [ServerEntryScreen] enter 30000
+QUIT

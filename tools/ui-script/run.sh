@@ -11,13 +11,13 @@
 #   5. collects framebuffer BMPs + app log into output/ui-script/<name>/,
 #   6. runs the coarse screenshot assertions; exits non-zero on any failure.
 #
-# Usage: sh tools/ui-script/run.sh <smoke|series>
+# Usage: sh tools/ui-script/run.sh <smoke|series|login-400>
 # Screenshots land in output/ui-script/<name>/ (checked-in? no: gitignored
 # output/ tree). Per-script log-marker + pixel expectations live below.
 
 set -eu
 
-NAME=${1:?usage: run.sh '<smoke|series>'}
+NAME=${1:?usage: run.sh '<smoke|series|login-400>'}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 SCRIPT_DIR="$ROOT/tools/ui-script"
 SCRIPT="$SCRIPT_DIR/scripts/$NAME.txt"
@@ -71,16 +71,23 @@ done
 [ -n "$PORT" ] || fail "stub server did not report a port"
 echo "ui-script: stub Jellyfin on 127.0.0.1:$PORT"
 
-# Seeded session: valid token/user against the stub only. Runs entirely on
-# loopback; no real server, no credentials, no network.
-cat >"$RUNDIR/session.txt" <<EOF
+# Seeding per flow. The login-400 flow must reach LoginScreen, so it boots
+# with a saved server URL but deliberately no session: ConnectScreen
+# succeeds against the stub, finds no valid session, and App pushes Login.
+# All other flows use the seeded valid session (loopback only, no real
+# server, no credentials, no network).
+if [ "$NAME" = "login-400" ]; then
+    printf 'http://127.0.0.1:%s\n' "$PORT" >"$RUNDIR/server.txt"
+else
+    cat >"$RUNDIR/session.txt" <<EOF
 server_url=http://127.0.0.1:$PORT
 access_token=stub-token
 user_id=user-stub
 user_name=stub
 manual_offline_mode=0
 EOF
-chmod 600 "$RUNDIR/session.txt"
+    chmod 600 "$RUNDIR/session.txt"
+fi
 
 # --- 3. run the app with the input shim -----------------------------------
 mkdir -p "$OUT/shots"
@@ -151,12 +158,40 @@ case "$NAME" in
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
         ;;
+    login-400)
+        want='[LoginScreen] Sign-in failed'
+        SHOT="$OUT/shots/login-error.bmp"
+        CHECKS="rendered"
+        ;;
     *) fail "no expectations defined for script '$NAME'" ;;
 esac
 
 grep -Fq "$want" "$APPLOG" \
     || fail "expected screen marker missing from log: $want"
 echo "ui-script: log marker OK: $want"
+
+if [ "$NAME" = "login-400" ]; then
+    # Both Sign In attempts must have run to completion: a double-submit
+    # abort (SIGABRT, exit 134) kills the app at the second attempt, so a
+    # clean exit plus two app-side failure lines pins the regression.
+    # (Line-anchored: excludes the shim's own WAIT_LOG echo line, and
+    # independent of the exact failure wording.)
+    count=$(grep -ac "^\[LoginScreen\] Sign-in failed" "$APPLOG" || true)
+    [ "$count" -ge 2 ] \
+        || fail "expected 2 sign-in failures, saw $count (see $APPLOG)"
+    echo "ui-script: double-submit marker OK ($count failures, no abort)"
+    # Back from the Login field row must return to the server-URL screen:
+    # App pops Login and pushes a fresh ServerEntryScreen, which logs its
+    # enter marker after the back-transition.
+    grep -Fq '[App] LoginScreen back -> ServerEntry' "$APPLOG" \
+        || fail "expected Login back-transition missing (see $APPLOG)"
+    echo "ui-script: Login back-transition marker OK"
+    awk 'index($0, "[App] LoginScreen back -> ServerEntry") { seen = 1 }
+         seen && index($0, "[ServerEntryScreen] enter") { found = 1; exit }
+         END { exit !found }' "$APPLOG" \
+        || fail "expected [ServerEntryScreen] enter after the back-transition (see $APPLOG)"
+    echo "ui-script: ServerEntry re-enter marker OK (Back returns to URL screen)"
+fi
 
 [ -f "$SHOT" ] || fail "expected screenshot missing: $SHOT"
 python3 "$SCRIPT_DIR/assert_shots.py" --shot "$SHOT" --checks "$CHECKS" \

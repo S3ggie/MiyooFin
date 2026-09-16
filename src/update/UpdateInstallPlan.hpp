@@ -10,6 +10,12 @@ namespace miyoofin {
 /// is on the update whitelist.
 bool isWhitelistedAppPath(const std::string &relativeOut);
 
+/// Check whether a relative install path must land executable (mode 0755).
+/// Single source of truth for executable install modes: the OTA installer
+/// (installMode) derives from this, so newly whitelisted miyoofin-* helpers
+/// and scripts cannot drift into a 0644 install again.
+bool isExecutableInstallPath(const std::string &rel);
+
 /// Validate a single tar entry.  Returns true if the entry is safe to
 /// extract, setting *normalizedOut* to the path relative to the app root
 /// (without the leading MiyooFin/ prefix).

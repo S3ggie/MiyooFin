@@ -107,6 +107,23 @@ bool isWhitelistedAppPath(const std::string &rel)
 }
 
 // -------------------------------------------------------------------
+bool isExecutableInstallPath(const std::string &rel)
+{
+    // Native MiyooFin binaries: the main binary plus every miyoofin-*
+    // helper (https bridge, playback reporter, perf reporter, and any
+    // future one).  The prefix form — not a per-binary list — is what
+    // keeps a newly whitelisted helper from landing 0644 after an OTA.
+    if (rel == "miyoofin" || rel.compare(0, 9, "miyoofin-") == 0)
+        return true;
+
+    // OnionOS shell scripts (launch.sh, playback_runner.sh, ...).
+    if (rel.size() >= 3 && rel.compare(rel.size() - 3, 3, ".sh") == 0)
+        return true;
+
+    return false;
+}
+
+// -------------------------------------------------------------------
 bool isSafeTarEntry(const std::string &entry,
                     std::string &normalizedOut)
 {

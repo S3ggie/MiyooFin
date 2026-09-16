@@ -1,0 +1,10 @@
+# Clean movie preview: open the highlighted movie and screenshot without
+# touching the action buttons (PLAY stays selected).
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 12000
+KEY NextTab 3
+SETTLE 10000
+KEY Confirm 3 4000
+SETTLE 12000
+SCREENSHOT movie-preview
+QUIT

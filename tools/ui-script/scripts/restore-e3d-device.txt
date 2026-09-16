@@ -1,0 +1,33 @@
+# Restore Adventure Time S1E3 "Prisoners of Love" (deleted by mistake).
+# Shows -> Adventure Time -> Season 1 -> E03 -> EPISODE button -> plan/arm/start,
+# then hold the app open long enough for the download to complete.
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 12000
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+KEY Right 3 2500
+KEY Right 3 2500
+SETTLE 4000
+KEY Confirm 3 4000
+SETTLE 12000
+KEY Right 3 2500
+SETTLE 4000
+KEY Confirm 3 4000
+SETTLE 14000
+KEY Down 3 1500
+KEY Down 3 1500
+SETTLE 3000
+SCREENSHOT restore-e3-selected
+KEY Right 3 2000
+KEY Right 3 2000
+SETTLE 3000
+SCREENSHOT restore-e3-episode-btn
+KEY Confirm 3 4000
+SETTLE 10000
+KEY Confirm 3 4000
+SETTLE 6000
+KEY Confirm 3 4000
+SETTLE 540000
+SCREENSHOT restore-e3-final
+QUIT

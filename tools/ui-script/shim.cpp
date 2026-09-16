@@ -368,10 +368,15 @@ struct Harness {
                 // then raise the flag file the app polls once per frame.
                 const std::string dest = shotDir + "/" + st.arg + ".bmp";
                 std::remove(dest.c_str());
-                setenv("MIYOOFIN_SCREENSHOT_PATH", dest.c_str(), 1);
+                const int se = setenv("MIYOOFIN_SCREENSHOT_PATH", dest.c_str(), 1);
+                const char *back = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
                 FILE *f = std::fopen("/tmp/miyoofin-screenshot-request", "w");
+                const bool flagged = (f != nullptr);
                 if (f) std::fclose(f);
-                std::fprintf(stderr, "[uishim] SCREENSHOT %s\n", st.arg.c_str());
+                std::fprintf(stderr,
+                    "[uishim] SCREENSHOT %s dest=%s setenv=%d readback=%s flag=%d\n",
+                    st.arg.c_str(), dest.c_str(), se, back ? back : "(null)",
+                    flagged ? 1 : 0);
             } else if (st.kind == Step::Quit) {
                 SDL_Event ev;
                 std::memset(&ev, 0, sizeof(ev));
@@ -423,6 +428,14 @@ struct Harness {
                 ++stepIdx;
                 stepStarted = false;
             } else if (now - stepStartMs >= 5000) {
+                const char *devDefault = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+                FILE *ad = std::fopen(dest.c_str(), "rb");
+                FILE *bd = std::fopen(devDefault, "rb");
+                std::fprintf(stderr,
+                    "[uishim] SCREENSHOT miss: dest_exists=%d dev_default_exists=%d\n",
+                    ad ? 1 : 0, bd ? 1 : 0);
+                if (ad) std::fclose(ad);
+                if (bd) std::fclose(bd);
                 fail("SCREENSHOT timeout: " + dest);
             }
             break;

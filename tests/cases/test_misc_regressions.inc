@@ -481,6 +481,22 @@ static void testAnimeSelectionSurvivesSharedWindowTrim()
     std::printf("[test] Anime selection survives shared window trim OK\n");
 }
 
+static void testTopLevelSyncEpochMaxIsAtomic()
+{
+    std::printf("[test] top-level sync epoch max is atomic\n");
+    const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(!sync.empty());
+    // Structural: the catalog-seed site runs on the fetch worker while
+    // live-change rail refreshes increment the same epoch, so a
+    // load-then-store max can lose an increment — both epoch seeds must be
+    // CAS loops.  The interleaving needs two live workers, so the shape is
+    // pinned by scan (structural-only).
+    CHECK(sourceCount(sync,"compare_exchange_weak")==2);
+    CHECK(sourceLacks(sync,"m_topLevelSyncGeneration = gen"));
+    CHECK(sourceLacks(sync,"m_hierarchyGeneration.store(gen)"));
+    std::printf("[test] top-level sync epoch max is atomic OK\n");
+}
+
 static void testHomeUsesDedicatedAnimeCatalogPage()
 {
     std::printf("[test] Home uses dedicated Anime catalog page\n");
@@ -1293,6 +1309,26 @@ static void testOfflineSnapshotSignatureStability()
               != HomeScreen::computeOfflineSignature(b));
     }
 
+    // Same downloads but different catalog generations must differ: a
+    // metadata-only catalog sync (titles, artwork tags, playback state)
+    // must invalidate the cached offline snapshot.
+    {
+        DownloadSnapshot a;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete; item.downloadedBytes = 100;
+        a.items.push_back(item);
+        a.localBytes = 100;
+        CHECK(HomeScreen::computeOfflineSignature(a, 5)
+              != HomeScreen::computeOfflineSignature(a, 6));
+        // Same generation still matches.
+        CHECK(HomeScreen::computeOfflineSignature(a, 5)
+              == HomeScreen::computeOfflineSignature(a, 5));
+        // The generation rides in the signature field itself.
+        CHECK(HomeScreen::computeOfflineSignature(a, 7).catalogGeneration == 7);
+        CHECK(HomeScreen::computeOfflineSignature(a).catalogGeneration == 0);
+    }
+
     // Source-scan: header must declare the signature infrastructure.
     // Structural: the declarations have no behaviour of their own; the
     // signature semantics above are covered behaviourally.
@@ -1305,6 +1341,10 @@ static void testOfflineSnapshotSignatureStability()
     CHECK(sourceContains(hdr, "m_offlineSignature"));
     CHECK(sourceContains(hdr, "m_haveOfflineSignature"));
     CHECK(sourceContains(hdr, "m_haveOfflineSnapshotCache"));
+    // The signature must carry the catalog epoch, backed by an atomic
+    // counter the UI thread can read without a database query.
+    CHECK(sourceContains(hdr, "catalogGeneration"));
+    CHECK(sourceContains(hdr, "std::atomic<std::uint64_t> m_topLevelSyncGeneration"));
 
     std::printf("[test] Offline snapshot signature stability/change detection OK\n");
 }
@@ -1363,11 +1403,13 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(apply, "!m_haveCachedSnapshot && !m_offlineModeFetchPending"));
     }
 
-    // Offline worker path must store the cached snapshot + signature.
+    // Offline worker path must store the cached snapshot + signature,
+    // with the current catalog generation folded into the signature.
     {
         CHECK(sourceContains(sync, "m_offlineSnapshotCache = m_cachedSnapshot"));
         CHECK(sourceContains(sync, "m_haveOfflineSnapshotCache = true"));
-        CHECK(sourceContains(sync, "m_offlineSignature = computeOfflineSignature(downloads)"));
+        CHECK(sourceContains(sync, "m_offlineSignature = computeOfflineSignature(downloads,"));
+        CHECK(sourceContains(sync, "m_topLevelSyncGeneration.load()"));
         CHECK(sourceContains(sync, "m_haveOfflineSignature = true"));
     }
 
@@ -1376,7 +1418,8 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(offline, "HomeScreen::tryApplyCachedOfflineSnapshot()"));
         CHECK(sourceContains(offline, "m_haveOfflineSignature"));
         CHECK(sourceContains(offline, "m_haveOfflineSnapshotCache"));
-        CHECK(sourceContains(offline, "computeOfflineSignature(downloads)"));
+        CHECK(sourceContains(offline, "computeOfflineSignature(downloads,"));
+        CHECK(sourceContains(offline, "m_topLevelSyncGeneration.load()"));
         CHECK(sourceContains(offline, "m_offlineSnapshotCache"));
         CHECK(sourceContains(offline, "applyPresentationProjection()"));
     }

@@ -53,11 +53,12 @@ void HomeScreen::applyOfflineProjection()
 }
 
 HomeScreen::OfflineSnapshotSignature HomeScreen::computeOfflineSignature(
-    const DownloadSnapshot &downloads)
+    const DownloadSnapshot &downloads, std::uint64_t catalogGeneration)
 {
     OfflineSnapshotSignature sig;
     sig.localBytes = downloads.localBytes;
     sig.reservedBytes = downloads.reservedBytes;
+    sig.catalogGeneration = catalogGeneration;
     for (const auto &item : downloads.items) {
         if (OfflineLibraryQuery::isAvailable(item.state)) {
             sig.availableItemIds.insert(item.itemId);
@@ -74,7 +75,12 @@ bool HomeScreen::tryApplyCachedOfflineSnapshot()
         || !m_haveOfflineSnapshotCache || !m_downloads)
         return false;
     const DownloadSnapshot downloads = m_downloads->snapshot();
-    const auto sig = computeOfflineSignature(downloads);
+    // Cheap atomic load — no database query on the UI thread.  A catalog
+    // sync that changed only metadata (titles, artwork tags, playback
+    // state) advances the generation, so the stale cache misses here and
+    // the snapshot is rebuilt instead of showing stale metadata forever.
+    const auto sig = computeOfflineSignature(
+        downloads, m_topLevelSyncGeneration.load());
     if (sig != m_offlineSignature)
         return false;
     // Cache hit — apply the snapshot directly on the UI thread.

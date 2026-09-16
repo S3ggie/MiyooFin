@@ -162,12 +162,20 @@ public:
         std::uint64_t totalDownloadedBytes = 0;
         std::uint64_t localBytes = 0;
         std::uint64_t reservedBytes = 0;
+        // Catalog epoch at build time: a cheap identity for the catalog
+        // metadata (titles, artwork tags, playback state) backing the
+        // snapshot.  Bumped at each top-level sync commit, so a
+        // metadata-only sync cannot compare equal against an older cache.
+        // (Hierarchy-only season/episode commits are not covered; see
+        // m_topLevelSyncGeneration.)
+        std::uint64_t catalogGeneration = 0;
         std::set<std::string> availableItemIds;
         bool operator==(const OfflineSnapshotSignature &o) const {
             return availableItemCount == o.availableItemCount
                 && totalDownloadedBytes == o.totalDownloadedBytes
                 && localBytes == o.localBytes
                 && reservedBytes == o.reservedBytes
+                && catalogGeneration == o.catalogGeneration
                 && availableItemIds == o.availableItemIds;
         }
         bool operator!=(const OfflineSnapshotSignature &o) const {
@@ -175,7 +183,8 @@ public:
         }
     };
     static OfflineSnapshotSignature computeOfflineSignature(
-        const DownloadSnapshot &downloads);
+        const DownloadSnapshot &downloads,
+        std::uint64_t catalogGeneration = 0);
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -216,7 +225,15 @@ private:
     std::shared_ptr<library::LibrarySync> m_librarySync;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     CatalogDbJobMetadata m_catalogMetadata;
-    std::uint64_t m_topLevelSyncGeneration = 0;
+    // Top-level catalog epoch: seeded from the persisted committed
+    // generation and bumped at each point a top-level sync commits catalog
+    // metadata (startup full sync, delta catch-up, safety catch-up and
+    // reconcile, live-change catch-up/reconcile/apply — including a commit
+    // whose later step fails).  Atomic so the SDL thread can read it for
+    // the offline-snapshot signature without a DB query.  Hierarchy-only
+    // commits (seasons/episodes via the hierarchy worker, tracked by the
+    // separate m_hierarchyGeneration below) do NOT advance this epoch.
+    std::atomic<std::uint64_t> m_topLevelSyncGeneration{0};
     std::string m_userName;
 
     struct MediaPageState {

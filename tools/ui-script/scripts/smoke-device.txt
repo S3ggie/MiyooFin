@@ -1,0 +1,16 @@
+# Device smoke: boot through the privileged Onion launch against the REAL
+# server/session, reach a rendered Home with rails populated, capture it,
+# exit. Runs on slow hardware over a real network, so every bound here is
+# roomier than the desktop smoke.txt.
+# NOTE: only stdout markers are pollable via WAIT_LOG ("[HomeScreen]
+# Library loaded" is a printf). The startup stage= markers (e.g.
+# recently_added_finished) go to the diagnostics file, not stdout, so they
+# must not be used here. The SETTLE below is what lets the in-flight rail
+# fetches land before the screenshot: screenshotting the instant Library
+# loaded matches captures "No content" and QUIT then aborts the rails
+# ("Transport: Operation was aborted by an application callback"). The
+# rails screenshot assertion after the settle is the real verdict.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+SCREENSHOT home
+QUIT

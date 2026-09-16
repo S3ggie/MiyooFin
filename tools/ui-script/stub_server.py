@@ -18,8 +18,9 @@ no auth enforcement.
 
 Usage: stub_server.py <portfile> [bind-address]   (binds an ephemeral
 port, writes the port, serves). Default bind is 127.0.0.1 (desktop
-runner); the device runner passes 0.0.0.0 so the Miyoo on the LAN can
-reach the stub — loopback-only by default, never exposed otherwise.
+runner and device runner alike); the device runner exposes the stub to
+the Miyoo via a reverse SSH tunnel (device-127.0.0.1 -> host-127.0.0.1)
+instead of a LAN bind — loopback-only, never exposed otherwise.
 """
 import json
 import sys
@@ -116,7 +117,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
-        if path == "/Users/%s" % UID:
+        if path == "/healthz":
+            # Reachability probe for the device harness. The probe MUST get a
+            # 2xx: it runs `wget -q`, and wget exits 8 on ANY HTTP error
+            # response, so probing a 404 path would report a perfectly good
+            # tunnel as unreachable.
+            self._send(200, {"status": "ok"})
+        elif path == "/Users/%s" % UID:
             self._send(200, {"Id": UID, "Name": "stub"})
         elif path == "/Users/%s/Views" % UID:
             self._send(200, page(VIEWS))

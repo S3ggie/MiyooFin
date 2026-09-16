@@ -8,6 +8,10 @@ namespace miyoofin {
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
 void HomeScreen::applyPresentationProjection() {
+    // Called from finishFetch() after the offline worker path has populated
+    // m_cachedSnapshot / m_haveCachedSnapshot.  Not called directly from
+    // the Settings toggle (that path now drives startFetch() so the worker
+    // builds the snapshot on a background thread).
     if (!m_haveCachedSnapshot) return;
     // Offline hierarchy comes from durable DownloadStore metadata.  The
     // legacy catalog is not a runtime authority; an empty catalog lets the
@@ -42,6 +46,10 @@ void HomeScreen::applyPresentationProjection() {
     applyOfflineProjection();
 }
 void HomeScreen::restoreOnlinePresentation() {
+    // Restores tabs from m_cachedSnapshot (the snapshot taken at last sync).
+    // Note: the Settings offline-mode toggle no longer calls this directly;
+    // it drives startFetch() instead.  This function remains available for
+    // finishFetch() and other callers that need immediate tab restoration.
     if (!m_haveCachedSnapshot) return;
     const std::string focusedLabel = focusedHomeRowLabel();
     const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab;
@@ -203,6 +211,7 @@ bool HomeScreen::liveChangeAffectsHome(
 void HomeScreen::publishLiveCatalogItems(
     const library::LiveLibraryChangeResult &result)
 {
+    if (livePublicationIsNoop(result.items.empty(), result.removedIds.empty())) return;
     const auto replace = [&](std::vector<MediaItem> &items,
                              const MediaItem &changed) {
         for (auto &item : items) {
@@ -315,7 +324,7 @@ void HomeScreen::finishFetch()
     if (!m_fetchReady.load())
         return;
     if (!m_fetchPublished) {
-        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
+        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot && !m_offlineModeFetchPending)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
         else {
             std::vector<TabData> publishedTabs;
             {
@@ -423,6 +432,14 @@ void HomeScreen::finishFetch()
             m_lastSafetyReconcileMs = wallClockMs();
         } else {
             m_lastSafetyReconcileMs = 0;
+        }
+        // If the user toggled offline mode while this fetch was in-flight,
+        // the fetched tabs may not match the current session mode.  Re-fetch
+        // so the worker takes the correct path (offline snapshot or full
+        // online sync) and publishes tabs that match the toggled mode.
+        if (m_offlineModeFetchPending) {
+            m_offlineModeFetchPending = false;
+            startFetch();
         }
         m_fetchDone.store(false);
     }

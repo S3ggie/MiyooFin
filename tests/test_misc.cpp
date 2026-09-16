@@ -3,6 +3,7 @@
 
 int main()
 {
+    testSourceMatcherTolerance();
     testRouteRequest(); testMovieOrganizationalTitles();
     testMovieAlphabetOrganization(); testMovieOrganizationalSort();
     testMovieAlphabetFocus(); testBoundedPagePosterPlanning();
@@ -19,5 +20,12 @@ int main()
     testLiveChangeCheckpointPolicy();
     testHomeRowFocusReconciliation();
     testCardSurfaceCacheEviction(); testNonBlockingFinishPolicy();
+    testRefreshMovieFilterHomeNavPreserved();     testLivePublicationNoopEmptyResult();
+    testSqliteTempDirPath();
+    testPageTransactionShouldRetry();
+    testPageTransactionCleanupInvariants();
+    testOfflineModeToggleDrivesFetchPath();
+    testOfflineSnapshotSignatureStability();
+    testOfflineToggleCancelsFetchAndUsesCache();
     return miyoofin_test::finish("misc-regressions");
 }

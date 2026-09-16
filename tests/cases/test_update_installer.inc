@@ -1098,6 +1098,18 @@ static void testParseTarListingLineHardlink()
     CHECK(!isSymlink);
     CHECK(isHardlink);
 
+    // BusyBox tar lists a hardlink with a leading '-' and a " -> " suffix
+    // (indistinguishable from a symlink except for the type char), so this
+    // must be detected as a link or a bogus filename (with " -> target")
+    // ends up in the install plan.
+    std::string busyboxLine =
+        "-rwxr-xr-x seggie/seggie         0 2026-09-15 08:54:36 "
+        "MiyooFin/lib/libSDL2-2.0.so.0 -> MiyooFin/lib/libSDL2.so";
+    filename.clear(); isSymlink = false; isHardlink = false;
+    CHECK(parseTarListingLine(busyboxLine, filename, isSymlink, isHardlink));
+    CHECK(filename == "MiyooFin/lib/libSDL2-2.0.so.0");
+    CHECK(isHardlink);
+
     std::printf("[test] parseTarListingLine hardlink OK\n");
 }
 

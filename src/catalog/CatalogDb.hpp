@@ -28,6 +28,7 @@ class CatalogCompatibility;
 struct CatalogCompatibilitySeedRequest;
 struct CatalogCompatibilitySeedResult;
 struct CatalogCompatibilityReadResult;
+struct MediaItemCollectionStatements;
 
 enum class CatalogDbPriority : unsigned char {
     InteractiveRead,
@@ -166,6 +167,7 @@ struct CatalogDbTestResult {
     bool collectionsZero = false;
     bool collectionsMultiple = false;
     bool collectionsUpdateRemoval = false;
+    bool collectionsEmptyTagPreserve = false;
     bool collectionsDeleteCascade = false;
     bool collectionsParity = false;
     bool hierarchyFixture = false;
@@ -493,6 +495,42 @@ private:
     void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
     void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
     void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command);
+    // Media-page upsert write-path helpers (CatalogDbWrite.cpp). The per-item
+    // SQL text and bind order must stay identical to the original inline body.
+    enum class MediaPageItemLoopOutcome : unsigned char {
+        Completed,
+        Fatal,
+        Retryable,
+    };
+    enum class MediaPageAttemptOutcome : unsigned char {
+        Complete,
+        Retry,
+    };
+    bool mediaPageUpsertStillValid(
+        const std::shared_ptr<MediaPageUpsertCommand> &command,
+        CatalogDbMediaPageUpsertResult &result);
+    void logMediaPageRollback(const std::shared_ptr<MediaPageUpsertCommand> &command,
+                              const char *stage, std::size_t itemOrdinal,
+                              const MediaItem *item, int sqliteRc);
+    void markMediaPagePopulationFailed(
+        const CatalogDbMediaPageUpsertResult &result);
+    bool prepareMediaPageItemStatements(sqlite3_stmt **upsert,
+                                       sqlite3_stmt **deleteGenres,
+                                       sqlite3_stmt **insertGenre,
+                                       sqlite3_stmt **deleteImageTags,
+                                       sqlite3_stmt **insertImageTag,
+                                       CatalogDbMediaPageUpsertResult &result);
+    bool prepareMediaPageViewRow(
+        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
+        sqlite3_stmt **view, sqlite3_stmt **membership);
+    MediaPageItemLoopOutcome writeMediaPageItemRows(
+        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
+        std::size_t attempt, bool viewReady, sqlite3_stmt *upsert,
+        const MediaItemCollectionStatements &collections,
+        sqlite3_stmt *membership, CatalogDbMediaPageUpsertResult &result);
+    MediaPageAttemptOutcome attemptMediaPageUpsert(
+        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
+        std::size_t attempt, CatalogDbMediaPageUpsertResult &result);
     void processTopLevelSync(const std::shared_ptr<TopLevelSyncCommand> &command);
     std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
         const MediaItem &series, const std::vector<MediaItem> &seasons,

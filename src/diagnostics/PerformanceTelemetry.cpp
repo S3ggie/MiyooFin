@@ -17,50 +17,6 @@
 
 namespace miyoofin {
 // Static schema contracts retained across telemetry translation-unit splits: read_media_page_dequeued, read_media_page_ready.
-namespace {
-
-#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
-#endif
-
-uint64_t monotonicUs() noexcept
-{
-#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
-    if (telemetry_internal::g_testHooks.monotonicUs != nullptr)
-        return telemetry_internal::g_testHooks.monotonicUs();
-#endif
-    return TelemetryClock::monotonicUs();
-}
-
-uint32_t clampToUint32(uint64_t value) noexcept
-{
-    return value > std::numeric_limits<uint32_t>::max()
-        ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(value);
-}
-
-void updateMaximum(std::atomic<uint32_t> &maximum, uint64_t value) noexcept
-{
-    const uint32_t clamped = clampToUint32(value);
-    uint32_t observed = maximum.load(std::memory_order_relaxed);
-    while (clamped > observed
-        && !maximum.compare_exchange_weak(observed, clamped,
-                                           std::memory_order_relaxed,
-                                           std::memory_order_relaxed)) {
-    }
-}
-
-LinuxProcessMetricsSnapshot sampleProcessMetrics(LinuxProcessMetrics &metrics,
-                                                 bool includeFreeStorage) noexcept
-{
-#if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
-    return telemetry_internal::g_testHooks.processMetrics != nullptr
-        ? telemetry_internal::g_testHooks.processMetrics(metrics, includeFreeStorage)
-        : metrics.sample(includeFreeStorage);
-#else
-    return metrics.sample(includeFreeStorage);
-#endif
-}
-
-} // namespace
 
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
 void PerformanceTelemetry::setTestHooks(const TestHooks &hooks) noexcept

@@ -1,4 +1,43 @@
 #include "../../src/net/JellyfinLibraryEvents.hpp"
+#include "../../src/update/AppDir.hpp"
+#include "../../src/catalog/CatalogDbInternal.hpp"
+#include "../../src/ui/HomeTabs.hpp"
+
+static void testSourceMatcherTolerance()
+{
+    std::printf("[test] whitespace-tolerant source matcher\n");
+    // Matches across line breaks and indentation.
+    CHECK(sourceContains("int f() {\n        return 1;\n    }",
+                         "int f() { return 1; }"));
+    CHECK(sourceContains("a   =\n    b;", "a=b;"));
+    CHECK(sourceContains("publishTransferProgress(i,\n item)",
+                         "publishTransferProgress(i,item)"));
+    // Still fails on genuinely different code.
+    CHECK(!sourceContains("a = c;", "a=b;"));
+    CHECK(!sourceContains("int f() { return 2; }", "return 1;"));
+    // Empty/unreadable haystack never matches ...
+    CHECK(!sourceContains("", "x"));
+    // ... and never satisfies an absence check (no vacuous pass on a
+    // missing file).
+    CHECK(!sourceLacks("", "x"));
+    CHECK(sourceLacks("a = c;", "a=b;"));
+    CHECK(!sourceLacks("a=\nb;", "a = b;"));
+    // Counts and ordering work in whitespace-free token space.
+    CHECK(sourceCount("f(x); f( x );", "f(x);") == 2);
+    CHECK(sourceCount("", "f(x);") == 0);
+    CHECK(sourcePos("aa bb cc", "bb") < sourcePos("aa bb cc", "cc"));
+    CHECK(sourcePos("x", "missing") == std::string::npos);
+    CHECK(sourceRPos("a b a", "a") > sourcePos("a b a", "a"));
+    // Region helpers pin a function / ordered window, not the whole file.
+    const std::string twoFns = "void A::f(){\n x();\n}\nvoid A::g(){\n y();\n}\n";
+    CHECK(sourceContains(sourceFunction(twoFns, "void A::f("), "x();"));
+    CHECK(sourceLacks(sourceFunction(twoFns, "void A::f("), "y();"));
+    CHECK(sourceFunction(twoFns, "void A::missing(").empty());
+    CHECK(sourceContains(sourceBetween("START a=1; END", "START", "END"),
+                         "a=1;"));
+    CHECK(sourceBetween("no anchors here", "START", "END").empty());
+    std::printf("[test] whitespace-tolerant source matcher OK\n");
+}
 
 static void testHomeIncrementalPublicationPolicy()
 {
@@ -10,14 +49,20 @@ static void testHomeIncrementalPublicationPolicy()
     CHECK_EQ(std::string(homeSyncStatus(true)), "HOME SYNCING...");
     CHECK_EQ(std::string(homeSyncStatus(false)), "");
     const std::string render = readTestBytes("src/ui/screens/HomeScreenRender.cpp");
-    CHECK(render.find("homeSyncStatus(true)") != std::string::npos);
+    CHECK(!render.empty());
+    CHECK(sourceContains(render, "homeSyncStatus(true)"));
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(sync.find("updateLiveLibraryChanges()") != std::string::npos);
-    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
-    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
-    CHECK(apply.find("m_lastSafetyReconcileMs") != std::string::npos);
-    CHECK(apply.find("m_cachedSnapshot.continueWatching") != std::string::npos);
+    CHECK(!sync.empty());
+    CHECK(!apply.empty());
+    // Structural: these call sites have no pure unit behind them (they run
+    // on the fetch worker), so the wiring is pinned by scan while the
+    // policy above is covered behaviourally.
+    CHECK(sourceContains(sync, "updateLiveLibraryChanges()"));
+    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
+    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
+    CHECK(sourceContains(apply, "m_lastSafetyReconcileMs"));
+    CHECK(sourceContains(apply, "m_cachedSnapshot.continueWatching"));
     std::printf("[test] Home incremental publication policy OK\n");
 }
 
@@ -245,57 +290,71 @@ static void testInitialHomeArtworkScheduling()
 {
     std::printf("[test] initial Home artwork scheduling\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(source.find("queuePosterJobs(planHomeRailPosterJobs(cw, ra), true)")
-          != std::string::npos);
-    CHECK(source.find("if (start == 0)\n                        queuePosterJobs(planMediaPagePosterJobs(page.items), true)")
-          == std::string::npos);
-    CHECK(source.find("queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)")
-          != std::string::npos);
+    CHECK(!source.empty());
+    CHECK(sourceContains(source, "queuePosterJobs(planHomeRailPosterJobs(cw, ra), true)"));
+    // Structural: the page-poster call must stay gated on `start == 0` (the
+    // unconditioned `, true)` variant in this file would requeue every page
+    // on every validation). The gating expression itself lives inline in the
+    // call argument, so no unit can observe it; the scan pins the shape.
+    CHECK(sourceLacks(source, "queuePosterJobs(planMediaPagePosterJobs(page.items), true)"));
+    CHECK(sourceContains(source, "queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)"));
     const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
-    CHECK(coordinator.find("m_posterThreads.emplace_back") != std::string::npos);
+    CHECK(!coordinator.empty());
+    CHECK(sourceContains(coordinator, "m_posterThreads.emplace_back"));
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(apply.find("queuePosterJobs(planMediaPagePosterJobs(result.items), true)")
-          != std::string::npos);
-    CHECK(source.find("m_artworkPlanningComplete.store(false)")
-          != std::string::npos);
-    CHECK(source.find("m_artworkPlanningComplete.store(artworkPlanningComplete)")
-          != std::string::npos);
+    CHECK(!apply.empty());
+    CHECK(sourceContains(apply, "queuePosterJobs(planMediaPagePosterJobs(result.items), true)"));
+    CHECK(sourceContains(source, "m_artworkPlanningComplete.store(false)"));
+    CHECK(sourceContains(source, "m_artworkPlanningComplete.store(artworkPlanningComplete)"));
     const std::string hierarchy=readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
-    CHECK(hierarchy.find("HttpClient client;") != std::string::npos);
-    CHECK(hierarchy.find("for (;;) {\n        PosterJob job;") != std::string::npos);
+    CHECK(!hierarchy.empty());
+    // Structural: the poster worker owns its client/loop in this
+    // translation unit; scoped to posterWorker so the hierarchy worker's
+    // own loop cannot satisfy the check.
+    const std::string posterWorker = sourceFunction(hierarchy, "void HomeScreen::posterWorker(");
+    CHECK(!posterWorker.empty());
+    CHECK(sourceContains(posterWorker, "HttpClient client;"));
+    CHECK(sourceContains(posterWorker, "for (;;)"));
+    CHECK(sourceContains(posterWorker, "PosterJob job;"));
     const std::string http=readTestBytes("src/net/HttpClient.hpp");
-    CHECK(http.find("CURL *m_curl") != std::string::npos);
-    CHECK(http.find("~HttpClient") != std::string::npos);
+    CHECK(!http.empty());
+    CHECK(sourceContains(http, "CURL *m_curl"));
+    CHECK(sourceContains(http, "~HttpClient"));
     std::printf("[test] initial Home artwork scheduling OK\n");
 }
 
 static void testPersistentHttpClientPatterns()
 {
     std::printf("[test] persistent HttpClient patterns in worker threads\n");
-    // HomeScreen fetch worker reuses one client across all metadata calls
+    // HomeScreen fetch worker reuses one client across all metadata calls.
+    // Structural: thread-local client reuse has no observable unit (the
+    // sharing only matters across sequential network calls), so the
+    // declaration-before-use wiring is pinned by scan.
     const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(sync.find("HttpClient fetchClient;") != std::string::npos);
-    CHECK(sync.find("JellyfinApi::getViews(base, token, uid, devId, views,\n                                             viewsErr, fetchClient, cancellation.get())") != std::string::npos
-          || sync.find("JellyfinApi::getViews(base, token, uid, devId, views,viewsErr, fetchClient, cancellation.get())") != std::string::npos
-          || sync.find("fetchClient, cancellation.get())") != std::string::npos);
-    CHECK(sync.find("HttpClient railClient;") != std::string::npos);
+    CHECK(!sync.empty());
+    CHECK(sourceContains(sync, "HttpClient fetchClient;"));
+    CHECK(sourceContains(sync, "JellyfinApi::getViews(base, token, uid, devId, views, viewsErr, fetchClient, cancellation.get())"));
+    CHECK(sourcePos(sync, "HttpClient fetchClient;") < sourcePos(sync, "fetchClient, cancellation.get()"));
+    CHECK(sourceContains(sync, "HttpClient railClient;"));
     // LibrarySync reconcile reuses one client across views + pages loop
     const std::string inc=readTestBytes("src/library/LibrarySyncIncremental.cpp");
-    CHECK(inc.find("HttpClient reconcileClient;") != std::string::npos);
+    CHECK(!inc.empty());
+    CHECK(sourceContains(inc, "HttpClient reconcileClient;"));
     // EpisodeBrowser artwork worker reuses one client
     const std::string ep=readTestBytes("src/ui/screens/EpisodeBrowserArtwork.cpp");
-    CHECK(ep.find("HttpClient artworkClient;") != std::string::npos);
-    CHECK(ep.find("artworkClient.setTimeoutSec(3)") != std::string::npos);
+    CHECK(!ep.empty());
+    CHECK(sourceContains(ep, "HttpClient artworkClient;"));
+    CHECK(sourceContains(ep, "artworkClient.setTimeoutSec(3)"));
     // SeriesScreen artwork worker reuses one client
     const std::string ss=readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
-    CHECK(ss.find("HttpClient artworkClient;") != std::string::npos);
-    CHECK(ss.find("artworkClient.setTimeoutSec(8)") != std::string::npos);
+    CHECK(!ss.empty());
+    CHECK(sourceContains(ss, "HttpClient artworkClient;"));
+    CHECK(sourceContains(ss, "artworkClient.setTimeoutSec(8)"));
     // JellyfinApiLibrary exposes HttpClient& overloads
     const std::string api=readTestBytes("src/net/JellyfinApiLibrary.cpp");
-    CHECK(api.find("HttpClient &client,") != std::string::npos);
-    CHECK(api.find("return getViews(baseUrl, accessToken, userId, deviceId, views, error,\n                    client, cancelled)") != std::string::npos
-          || api.find("return getViews(baseUrl, accessToken, userId, deviceId, views, error,client, cancelled)") != std::string::npos
-          || api.find("client, cancelled)") != std::string::npos);
+    CHECK(!api.empty());
+    CHECK(sourceContains(api, "HttpClient &client,"));
+    CHECK(sourceContains(api, "return getViews(baseUrl, accessToken, userId, deviceId, views, error, client, cancelled)"));
     std::printf("[test] persistent HttpClient patterns in worker threads OK\n");
 }
 
@@ -355,8 +414,10 @@ static void testRecentlyAddedWarmPublication()
           && tabs[0].rows[1].label=="Recently Added"
           && tabs[0].rows[1].items[0].id==replacement.id);
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(apply.find("updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)")
-          != std::string::npos);
+    CHECK(!apply.empty());
+    // Structural: the warm-publication call site runs on the fetch worker;
+    // the row helper itself is covered behaviourally above.
+    CHECK(sourceContains(apply, "updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)"));
     std::printf("[test] Recently Added warm publication OK\n");
 }
 
@@ -365,14 +426,19 @@ static void testWarmHomeCatalogWindows()
     std::printf("[test] warm Home catalog windows\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(source.find("initialPagePublished = true") != std::string::npos);
-    CHECK(apply.find("mediaWindowsFromTabs") != std::string::npos);
-    CHECK(apply.find("m_moviePage.items = warmWindows.movies")
-          != std::string::npos);
-    CHECK(apply.find("m_showPage.items = warmWindows.shows")
-          != std::string::npos);
-    CHECK(apply.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
-          != std::string::npos);
+    CHECK(!source.empty());
+    CHECK(!apply.empty());
+    CHECK(sourceContains(source, "initialPagePublished = true"));
+    // Structural: the warm-window extraction runs inside finishFetch on the
+    // worker, so the call sites are pinned by scan (scoped to finishFetch so
+    // other mediaWindowsFromTabs users cannot satisfy them) while the
+    // extraction helper itself is covered behaviourally.
+    const std::string finishFetch = sourceFunction(apply, "void HomeScreen::finishFetch(");
+    CHECK(!finishFetch.empty());
+    CHECK(sourceContains(finishFetch, "mediaWindowsFromTabs"));
+    CHECK(sourceContains(finishFetch, "m_moviePage.items = warmWindows.movies"));
+    CHECK(sourceContains(finishFetch, "m_showPage.items = warmWindows.shows"));
+    CHECK(sourceContains(finishFetch, "updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)"));
     std::printf("[test] warm Home catalog windows OK\n");
 }
 
@@ -398,11 +464,15 @@ static void testAnimeSelectionSurvivesSharedWindowTrim()
     std::printf("[test] Anime selection survives shared window trim\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(source.find("m_showSelected = std::max(0, m_showSelected -")
-          == std::string::npos);
-    CHECK(source.find("m_animeSelected = std::max(0, m_animeSelected -")
-          == std::string::npos);
-    CHECK(apply.find("rebuildShowsPresentation();") != std::string::npos);
+    CHECK(!source.empty());
+    CHECK(!apply.empty());
+    // Structural: the old manual clamp-back assignments must stay gone from
+    // the sync worker (selection is owned by restoreSelectionIndex +
+    // rebuildShowsPresentation, covered behaviourally below). Absence of any
+    // direct assignment is the pin: reintroducing the clamp fails this.
+    CHECK(sourceLacks(source, "m_showSelected ="));
+    CHECK(sourceLacks(source, "m_animeSelected ="));
+    CHECK(sourceContains(apply, "rebuildShowsPresentation();"));
     CHECK(HomeScreen::restoreSelectionIndex(
               {titledShow("show-a", "Show A"), titledShow("anime-b", "Anime B")},
               "anime-b", 0) == 1);
@@ -418,11 +488,18 @@ static void testHomeUsesDedicatedAnimeCatalogPage()
     const std::string screen=readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string query=readTestBytes("src/library/LibraryQuery.hpp");
     const std::string catalog=readTestBytes("src/catalog/CatalogDb.hpp");
-    CHECK(home.find("m_animePage") != std::string::npos);
-    CHECK(home.find("m_libraryQuery->anime") != std::string::npos);
-    CHECK(screen.find("m_animePage.items") != std::string::npos);
-    CHECK(query.find("anime(") != std::string::npos);
-    CHECK(catalog.find("CatalogDbMediaPageFilter") != std::string::npos);
+    CHECK(!home.empty());
+    CHECK(!screen.empty());
+    CHECK(!query.empty());
+    CHECK(!catalog.empty());
+    // Structural: the dedicated Anime page is a cross-file wiring invariant
+    // (worker page + query surface + catalog filter); no single pure unit
+    // observes all four ends, so each end is pinned by scan.
+    CHECK(sourceContains(home, "m_animePage"));
+    CHECK(sourceContains(home, "m_libraryQuery->anime"));
+    CHECK(sourceContains(screen, "m_animePage.items"));
+    CHECK(sourceContains(query, "anime("));
+    CHECK(sourceContains(catalog, "CatalogDbMediaPageFilter"));
     std::printf("[test] Home uses dedicated Anime catalog page OK\n");
 }
 
@@ -431,11 +508,15 @@ static void testHomeRefreshPreservesActiveGridSelection()
     std::printf("[test] Home refresh preserves active grid selection\n");
     const std::string header=readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    CHECK(header.find("m_moviePreviewId") != std::string::npos);
-    CHECK(source.find("const MediaItem *previousItem = showsSelectedItem();")
-          != std::string::npos);
-    CHECK(source.find("m_moviePreviewId") != std::string::npos);
-    CHECK(source.find("m_showsPreviewId = item->id") != std::string::npos);
+    CHECK(!header.empty());
+    CHECK(!source.empty());
+    // Structural: grid-selection preservation is member state captured
+    // around refresh (needs a live HomeScreen, so no unit can observe it);
+    // the capture sites are pinned by scan.
+    CHECK(sourceContains(header, "m_moviePreviewId"));
+    CHECK(sourceContains(source, "const MediaItem *previousItem = showsSelectedItem();"));
+    CHECK(sourceContains(source, "m_moviePreviewId"));
+    CHECK(sourceContains(source, "m_showsPreviewId = item->id"));
     std::printf("[test] Home refresh preserves active grid selection OK\n");
 }
 
@@ -446,11 +527,18 @@ static void testHomeBoundedPagesCanRewind()
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(header.find("hasEarlier") != std::string::npos);
-    CHECK(header.find("replaceWindowOnNextPage") != std::string::npos);
-    CHECK(navigation.find("requestEarlierMediaPage") != std::string::npos);
-    CHECK(sync.find("replaceWindowOnNextPage") != std::string::npos);
-    CHECK(apply.find("hasEarlier = true") != std::string::npos);
+    CHECK(!header.empty());
+    CHECK(!navigation.empty());
+    CHECK(!sync.empty());
+    CHECK(!apply.empty());
+    // Structural: bounded-page rewind is a four-file protocol (header state
+    // + nav edge + sync window flag + apply arm); the protocol ends are
+    // pinned by scan because the cursor behaviour needs a live screen.
+    CHECK(sourceContains(header, "hasEarlier"));
+    CHECK(sourceContains(header, "replaceWindowOnNextPage"));
+    CHECK(sourceContains(navigation, "requestEarlierMediaPage"));
+    CHECK(sourceContains(sync, "replaceWindowOnNextPage"));
+    CHECK(sourceContains(apply, "hasEarlier = true"));
     std::printf("[test] Home bounded pages rewind without cursor jumps OK\n");
 }
 
@@ -458,10 +546,14 @@ static void testHomeUsesSharedGridRewindEdge()
 {
     std::printf("[test] Home uses shared grid rewind edge\n");
     const std::string source=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    CHECK(source.find("gridAtTopRow") != std::string::npos);
-    CHECK(source.find("gridAtTopRow(m_showSelected") != std::string::npos);
-    CHECK(source.find("gridAtTopRow(m_animeSelected") != std::string::npos);
-    CHECK(source.find("gridAtTopRow(m_activeCard") != std::string::npos);
+    CHECK(!source.empty());
+    // Structural: the shared top-row edge helper is static in this
+    // translation unit (no unit can link it), so each grid's use of the
+    // shared helper — not a local copy — is pinned by scan.
+    CHECK(sourceContains(source, "gridAtTopRow"));
+    CHECK(sourceContains(source, "gridAtTopRow(m_showSelected"));
+    CHECK(sourceContains(source, "gridAtTopRow(m_animeSelected"));
+    CHECK(sourceContains(source, "gridAtTopRow(m_activeCard"));
     std::printf("[test] Home uses shared grid rewind edge OK\n");
 }
 
@@ -471,10 +563,16 @@ static void testHomeUsesSharedDownIntentAcrossPageLoads()
     const std::string header=readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(header.find("pendingDown") != std::string::npos);
-    CHECK(navigation.find("gridAtBottomRow") != std::string::npos);
-    CHECK(navigation.find("pendingDown") != std::string::npos);
-    CHECK(apply.find("applyPendingDown") != std::string::npos);
+    CHECK(!header.empty());
+    CHECK(!navigation.empty());
+    CHECK(!apply.empty());
+    // Structural: the Down-intent handoff is member state set during page
+    // loads and consumed on apply (needs a live screen); both ends are
+    // pinned by scan.
+    CHECK(sourceContains(header, "pendingDown"));
+    CHECK(sourceContains(navigation, "gridAtBottomRow"));
+    CHECK(sourceContains(navigation, "pendingDown"));
+    CHECK(sourceContains(apply, "applyPendingDown"));
     std::printf("[test] Home preserves Down intent across page loads OK\n");
 }
 
@@ -510,9 +608,15 @@ static void testHomeStartupSyncSourceOrder()
     std::printf("[test] Home startup sync source order assertions\n");
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(!sync.empty());
+    CHECK(!apply.empty());
+    // Structural: fetch ordering across worker threads has no deterministic
+    // unit (thread interleaving), so the call-site order is pinned by scan
+    // in whitespace-free token space (positions, unlike raw offsets, are
+    // unaffected by reformatting).
     // Rails fetch (getResumeItems) must appear before begin(
-    const auto resumePos = sync.find("getResumeItems");
-    const auto beginPos = sync.find("m_librarySync->begin(");
+    const auto resumePos = sourcePos(sync, "getResumeItems");
+    const auto beginPos = sourcePos(sync, "m_librarySync->begin(");
     CHECK(resumePos != std::string::npos);
     CHECK(beginPos != std::string::npos);
     CHECK(resumePos < beginPos);
@@ -520,9 +624,9 @@ static void testHomeStartupSyncSourceOrder()
     // main m_fetchComplete.store(true) (after the population walk) so they
     // don't block the UI thread.  Use rfind to skip the early-offline
     // branch's store.
-    const auto fetchCompletePos = sync.rfind("m_fetchComplete.store(true)");
-    const auto janitorPos = sync.find("ImageCache::runJanitor()");
-    const auto prefetchPos = sync.find("collectBoundedSeriesIds");
+    const auto fetchCompletePos = sourceRPos(sync, "m_fetchComplete.store(true)");
+    const auto janitorPos = sourcePos(sync, "ImageCache::runJanitor()");
+    const auto prefetchPos = sourcePos(sync, "collectBoundedSeriesIds");
     CHECK(fetchCompletePos != std::string::npos);
     CHECK(janitorPos != std::string::npos);
     CHECK(prefetchPos != std::string::npos);
@@ -530,36 +634,32 @@ static void testHomeStartupSyncSourceOrder()
     CHECK(prefetchPos < fetchCompletePos);
     // Incremental rail-apply must be gated on m_homeRailsReady, not
     // m_fetchComplete
-    CHECK(apply.find("m_homeRailsReady.load() && !m_homeRailsApplied")
-          != std::string::npos);
+    CHECK(sourceContains(apply, "m_homeRailsReady.load() && !m_homeRailsApplied"));
     // Existing source substrings that scan tests pin
-    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
-    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
-    CHECK(sync.find("planHomeRailPosterJobs(cw, ra)") != std::string::npos);
-    CHECK(sync.find("queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)")
-          != std::string::npos);
+    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
+    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
+    CHECK(sourceContains(sync, "planHomeRailPosterJobs(cw, ra)"));
+    CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)"));
     // Startup-rail buffer: fetch worker writes m_startupRailCW under
     // m_fetchMutex, finishFetch reads under the same mutex.
-    CHECK(sync.find("m_startupRailCW") != std::string::npos);
-    CHECK(apply.find("m_startupRailCW") != std::string::npos);
+    CHECK(sourceContains(sync, "m_startupRailCW"));
+    CHECK(sourceContains(apply, "m_startupRailCW"));
     // m_initialPopulationInProgress must be set before the startup rails
     // fetch so a queued UserDataChanged cannot start a competing rail
     // refresh during the startup window.
-    const auto initPopPos = sync.find("m_initialPopulationInProgress = true");
+    const auto initPopPos = sourcePos(sync, "m_initialPopulationInProgress = true");
     // Use a fetch-worker-specific pattern (local token variable) to skip
     // the refresh thread's own getResumeItems call.
-    const auto railsFetchPos = sync.find("getResumeItems(base, token");
+    const auto railsFetchPos = sourcePos(sync, "getResumeItems(base, token");
     CHECK(initPopPos != std::string::npos);
     CHECK(railsFetchPos != std::string::npos);
     CHECK(initPopPos < railsFetchPos);
-    CHECK(apply.find("updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)")
-          != std::string::npos);
-    CHECK(apply.find("updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)")
-          != std::string::npos);
-    CHECK(apply.find("planHomeRailPosterJobs") != std::string::npos);
-    CHECK(apply.find("m_fetchPostFinalizeApplied") != std::string::npos);
-    CHECK(apply.find("mediaWindowsFromTabs") != std::string::npos);
-    CHECK(apply.find("m_moviePage.items = warmWindows.movies") != std::string::npos);
+    CHECK(sourceContains(apply, "updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching)"));
+    CHECK(sourceContains(apply, "updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded)"));
+    CHECK(sourceContains(apply, "planHomeRailPosterJobs"));
+    CHECK(sourceContains(apply, "m_fetchPostFinalizeApplied"));
+    CHECK(sourceContains(apply, "mediaWindowsFromTabs"));
+    CHECK(sourceContains(apply, "m_moviePage.items = warmWindows.movies"));
     std::printf("[test] Home startup sync source order assertions OK\n");
 }
 
@@ -671,9 +771,13 @@ static void testLiveChangeCheckpointPolicy()
     CHECK(!HomeScreen::liveChangeNeedsFullReconcile(1000, false));
 
     // Tripwire: both bounded and full reconcile paths remain in the source.
+    // Structural: which path live changes take is a worker-thread decision
+    // (needs network + timing), so both callees' presence is pinned by scan
+    // while the empty/full-reconcile policy above is covered behaviourally.
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(sync.find("catchUpChangedCatalog") != std::string::npos);
-    CHECK(sync.find("reconcileAuthoritativeMembership") != std::string::npos);
+    CHECK(!sync.empty());
+    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
+    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
 
     std::printf("[test] live change checkpoint policy OK\n");
 }
@@ -687,48 +791,75 @@ static void testHomeRowFocusReconciliation()
     const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string tabsHeader = readTestBytes("src/ui/HomeTabs.hpp");
     const std::string tabsImpl = readTestBytes("src/ui/HomeTabs.cpp");
+    CHECK(!apply.empty());
+    CHECK(!refresh.empty());
+    CHECK(!navigation.empty());
+    CHECK(!header.empty());
+    CHECK(!tabsHeader.empty());
+    CHECK(!tabsImpl.empty());
+    // Behavioural: the row-lookup helper the reconciliation sites share.
+    {
+        MediaRow first; first.label = "Continue Watching";
+        MediaRow second; second.label = "Recently Added";
+        const std::vector<MediaRow> rows{first, second};
+        CHECK(homeRowIndexByLabel(rows, "Continue Watching") == 0);
+        CHECK(homeRowIndexByLabel(rows, "Recently Added") == 1);
+        CHECK(homeRowIndexByLabel(rows, "Missing") == -1);
+        CHECK(homeRowIndexByLabel({}, "Continue Watching") == -1);
+        MediaRow dup; dup.label = "Continue Watching";
+        CHECK(homeRowIndexByLabel({first, dup}, "Continue Watching") == 0);
+    }
+    // Structural: the member helpers and every Home-row mutation site using
+    // them need a live HomeScreen, so declaration + wiring are pinned by
+    // scan while the lookup above is covered behaviourally.
     // homeRowIndexByLabel must exist and be usable by restoreHomeRowFocus
-    CHECK(tabsHeader.find("homeRowIndexByLabel") != std::string::npos);
-    CHECK(tabsImpl.find("homeRowIndexByLabel") != std::string::npos);
-    CHECK(navigation.find("homeRowIndexByLabel") != std::string::npos);
+    CHECK(sourceContains(tabsHeader, "homeRowIndexByLabel"));
+    CHECK(sourceContains(tabsImpl, "homeRowIndexByLabel"));
+    CHECK(sourceContains(navigation, "homeRowIndexByLabel"));
     // restoreHomeRowFocus must be declared and implemented
-    CHECK(header.find("restoreHomeRowFocus") != std::string::npos);
-    CHECK(navigation.find("restoreHomeRowFocus") != std::string::npos);
+    CHECK(sourceContains(header, "restoreHomeRowFocus"));
+    CHECK(sourceContains(navigation, "restoreHomeRowFocus"));
     // focusedHomeRowLabel must be declared and implemented
-    CHECK(header.find("focusedHomeRowLabel") != std::string::npos);
-    CHECK(navigation.find("focusedHomeRowLabel") != std::string::npos);
+    CHECK(sourceContains(header, "focusedHomeRowLabel"));
+    CHECK(sourceContains(navigation, "focusedHomeRowLabel"));
     // Reconciliation must be wired at every Home-row mutation site
-    CHECK(apply.find("restoreHomeRowFocus") != std::string::npos);
-    CHECK(refresh.find("restoreHomeRowFocus") != std::string::npos);
+    CHECK(sourceContains(apply, "restoreHomeRowFocus"));
+    CHECK(sourceContains(refresh, "restoreHomeRowFocus"));
     // Source files must not mutate m_tabs without focus reconciliation
     // (the tab-move sites in SyncApply must call focusedHomeRowLabel)
-    CHECK(apply.find("focusedHomeRowLabel") != std::string::npos);
-    CHECK(refresh.find("focusedHomeRowLabel") != std::string::npos);
+    CHECK(sourceContains(apply, "focusedHomeRowLabel"));
+    CHECK(sourceContains(refresh, "focusedHomeRowLabel"));
     std::printf("[test] Home row focus reconciliation sites OK\n");
 }
 
 static void testCardSurfaceCacheEviction()
 {
     std::printf("[test] Card surface cache eviction policy\n");
-    // Verify the render source uses cached surface lookup pattern
+    // Verify the render source uses cached surface lookup pattern.
+    // Structural: surface lifetime is owned by the render thread (needs a
+    // live screen + SDL surfaces), so the cache plumbing is pinned by scan.
     const std::string render = readTestBytes("src/ui/screens/HomeScreenRender.cpp");
-    CHECK(render.find("m_cardSurfaceCache") != std::string::npos);
-    CHECK(render.find("prepareCardSurface") != std::string::npos);
+    CHECK(!render.empty());
+    CHECK(sourceContains(render, "m_cardSurfaceCache"));
+    CHECK(sourceContains(render, "prepareCardSurface"));
 
     // Verify the artwork source prepares and evicts cached surfaces
     const std::string artwork = readTestBytes("src/ui/screens/HomeScreenArtwork.cpp");
-    CHECK(artwork.find("m_cardSurfaceCache") != std::string::npos);
-    CHECK(artwork.find("freeAllCardSurfaces") != std::string::npos);
+    CHECK(!artwork.empty());
+    CHECK(sourceContains(artwork, "m_cardSurfaceCache"));
+    CHECK(sourceContains(artwork, "freeAllCardSurfaces"));
 
     // Verify the destructor frees cached surfaces
     const std::string homeScreen = readTestBytes("src/ui/screens/HomeScreen.cpp");
-    CHECK(homeScreen.find("freeAllCardSurfaces()") != std::string::npos);
+    CHECK(!homeScreen.empty());
+    CHECK(sourceContains(homeScreen, "freeAllCardSurfaces()"));
 
     // Verify the header declares the cache and helpers
     const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
-    CHECK(header.find("m_cardSurfaceCache") != std::string::npos);
-    CHECK(header.find("prepareCardSurface") != std::string::npos);
-    CHECK(header.find("freeAllCardSurfaces") != std::string::npos);
+    CHECK(!header.empty());
+    CHECK(sourceContains(header, "m_cardSurfaceCache"));
+    CHECK(sourceContains(header, "prepareCardSurface"));
+    CHECK(sourceContains(header, "freeAllCardSurfaces"));
 
     std::printf("[test] Card surface cache eviction policy OK\n");
 }
@@ -736,33 +867,525 @@ static void testCardSurfaceCacheEviction()
 static void testNonBlockingFinishPolicy()
 {
     std::printf("[test] Non-blocking finish* join policy\n");
-    // Verify finish* functions no longer join worker threads
+    // Verify finish* functions no longer join worker threads.
+    // Structural: UI-thread blocking only manifests on device under load,
+    // so each finish body is pinned by scan (scoped to the function, since
+    // the sibling start* functions legitimately join). A reintroduced join
+    // in any finish body fails the absence check below; the old test only
+    // checked the function names existed, which passed even when they
+    // joined.
     const std::string syncApply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(!syncApply.empty());
 
     // finishLiveChangeApply should not contain thread.join()
     // It should contain the "Thread join deferred" comment
-    CHECK(syncApply.find("finishLiveChangeApply") != std::string::npos);
+    CHECK(sourceContains(syncApply, "finishLiveChangeApply"));
+    const std::string liveChangeBody = sourceFunction(syncApply, "void HomeScreen::finishLiveChangeApply(");
+    CHECK(!liveChangeBody.empty());
+    CHECK(sourceLacks(liveChangeBody, ".join()"));
+    CHECK(sourceContains(liveChangeBody, "Thread join deferred"));
     // finishHomeRailRefresh should not join
-    CHECK(syncApply.find("finishHomeRailRefresh") != std::string::npos);
+    CHECK(sourceContains(syncApply, "finishHomeRailRefresh"));
+    const std::string homeRailBody = sourceFunction(syncApply, "void HomeScreen::finishHomeRailRefresh(");
+    CHECK(!homeRailBody.empty());
+    CHECK(sourceLacks(homeRailBody, ".join()"));
+    CHECK(sourceContains(homeRailBody, "Thread join deferred"));
     // finishSafetyReconcile should not join
-    CHECK(syncApply.find("finishSafetyReconcile") != std::string::npos);
+    CHECK(sourceContains(syncApply, "finishSafetyReconcile"));
+    const std::string safetyBody = sourceFunction(syncApply, "void HomeScreen::finishSafetyReconcile(");
+    CHECK(!safetyBody.empty());
+    CHECK(sourceLacks(safetyBody, ".join()"));
+    CHECK(sourceContains(safetyBody, "Thread join deferred"));
 
     // finishFetch uses m_fetchPostFinalizeApplied flag instead of join
-    CHECK(syncApply.find("m_fetchPostFinalizeApplied") != std::string::npos);
+    CHECK(sourceContains(syncApply, "m_fetchPostFinalizeApplied"));
 
     const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
+    CHECK(!refresh.empty());
     // finishResumeRefresh should not join
-    CHECK(refresh.find("finishResumeRefresh") != std::string::npos);
+    CHECK(sourceContains(refresh, "finishResumeRefresh"));
+    const std::string resumeBody = sourceFunction(refresh, "void HomeScreen::finishResumeRefresh(");
+    CHECK(!resumeBody.empty());
+    CHECK(sourceLacks(resumeBody, ".join()"));
+    CHECK(sourceContains(resumeBody, "Thread join deferred"));
     // finishDownloadRefresh should not join
-    CHECK(refresh.find("finishDownloadRefresh") != std::string::npos);
+    CHECK(sourceContains(refresh, "finishDownloadRefresh"));
+    const std::string downloadBody = sourceFunction(refresh, "void HomeScreen::finishDownloadRefresh(");
+    CHECK(!downloadBody.empty());
+    CHECK(sourceLacks(downloadBody, ".join()"));
+    CHECK(sourceContains(downloadBody, "Thread join deferred"));
 
     // Verify start* functions still join before starting new threads
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(sync.find("m_liveChangeDone.load() || !m_liveChangeInFlight") != std::string::npos);
+    CHECK(!sync.empty());
+    CHECK(sourceContains(sync, "m_liveChangeDone.load() || !m_liveChangeInFlight"));
 
     // Verify the header declares the post-finalize flag
     const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
-    CHECK(header.find("m_fetchPostFinalizeApplied") != std::string::npos);
+    CHECK(!header.empty());
+    CHECK(sourceContains(header, "m_fetchPostFinalizeApplied"));
 
     std::printf("[test] Non-blocking finish* join policy OK\n");
+}
+
+static void testRefreshMovieFilterHomeNavPreserved()
+{
+    std::printf("[test] refreshMovieFilter preserves Home nav state\n");
+    const std::string navigation = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    CHECK(!navigation.empty());
+    // Structural: nav-state preservation is member state around a row
+    // rebuild (needs a live screen), so the guard ordering is pinned by
+    // scan in token space: the guard must sit between the rows assignment
+    // and the nav-state writes. Scoped to refreshMovieFilter so the other
+    // m_activeRow = 0 sites cannot satisfy the order.
+    const std::string filterFn = sourceFunction(navigation, "void HomeScreen::refreshMovieFilter(");
+    CHECK(!filterFn.empty());
+    // refreshMovieFilter must capture moviesActive BEFORE mutations
+    CHECK(sourceContains(filterFn, "activeTabNamed(\"Movies\")"));
+    // The nav-state mutation block (m_activeRow=0, m_activeCard, etc.)
+    // must be guarded so it is skipped when Movies tab is not active.
+    // The guard "if (!moviesActive) return;" must appear between the
+    // row rebuild and the nav-state writes.
+    const std::string marker = "if (!moviesActive) return;";
+    CHECK(sourceContains(filterFn, marker));
+
+    // Verify the guard appears AFTER the rows assignment but BEFORE m_activeRow=0
+    const auto rowsAssign = sourcePos(filterFn, "m_tabs[movies].rows");
+    const auto guard = sourcePos(filterFn, marker);
+    const auto activeRow = sourcePos(filterFn, "m_activeRow = 0");
+    CHECK(rowsAssign != std::string::npos);
+    CHECK(guard != std::string::npos);
+    CHECK(activeRow != std::string::npos);
+    CHECK(rowsAssign < guard);
+    CHECK(guard < activeRow);
+
+    // Verify the pure helper exists in the header (structural: the header
+    // declaration has no behaviour; the predicate is covered below).
+    const std::string stateHeader = readTestBytes("src/ui/HomeSyncState.hpp");
+    CHECK(!stateHeader.empty());
+    CHECK(sourceContains(stateHeader, "livePublicationIsNoop"));
+
+    std::printf("[test] refreshMovieFilter preserves Home nav state OK\n");
+}
+
+static void testLivePublicationNoopEmptyResult()
+{
+    std::printf("[test] livePublicationIsNoop truth table\n");
+    // Pure predicate: true only when BOTH containers are empty
+    CHECK(livePublicationIsNoop(true, true));
+    CHECK(!livePublicationIsNoop(true, false));
+    CHECK(!livePublicationIsNoop(false, true));
+    CHECK(!livePublicationIsNoop(false, false));
+
+    // Source-reading: publishLiveCatalogItems must call livePublicationIsNoop.
+    // Structural: the gating call runs on the fetch worker (needs live
+    // results), so it is pinned by scan scoped to publishLiveCatalogItems —
+    // other livePublicationIsNoop users cannot satisfy it — while the
+    // predicate itself is covered behaviourally above.
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(!apply.empty());
+    const std::string publishFn = sourceFunction(apply, "void HomeScreen::publishLiveCatalogItems(");
+    CHECK(!publishFn.empty());
+    CHECK(sourceContains(publishFn, "livePublicationIsNoop"));
+    CHECK(sourceContains(publishFn, "result.items.empty()"));
+    CHECK(sourceContains(publishFn, "result.removedIds.empty()"));
+
+    std::printf("[test] livePublicationIsNoop truth table OK\n");
+}
+
+static void testSqliteTempDirPath()
+{
+    std::printf("[test] SQLite temp dir path selection\n");
+    CHECK_EQ(sqliteTempDirPath("/app"), std::string("/app/cache/tmp"));
+    CHECK_EQ(sqliteTempDirPath("/mnt/sdcard/Apps/MiyooFin"),
+             std::string("/mnt/sdcard/Apps/MiyooFin/cache/tmp"));
+    CHECK_EQ(sqliteTempDirPath(""), std::string("/cache/tmp"));
+    std::printf("[test] SQLite temp dir path selection OK\n");
+}
+
+static void testPageTransactionShouldRetry()
+{
+    std::printf("[test] Page transaction retry-bound decision\n");
+    // Transient errors retry when under the limit.
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 3));
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_LOCKED, 1, 3));
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_FULL, 2, 3));
+    // At the limit, no more retries.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 3, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_FULL, 3, 3));
+    // Non-transient errors never retry.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_ERROR, 0, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_CORRUPT, 0, 3));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_DONE, 0, 3));
+    // Edge: maxAttempts=0 means no retries at all.
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 0));
+    // Edge: single attempt allowed.
+    CHECK(catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 0, 1));
+    CHECK(!catalog_db_internal::pageTransactionShouldRetry(SQLITE_BUSY, 1, 1));
+    std::printf("[test] Page transaction retry-bound decision OK\n");
+}
+
+static void testPageTransactionCleanupInvariants()
+{
+    std::printf("[test] processMediaPageUpsert cleanup invariants\n");
+    const std::string src = readTestBytes("src/catalog/CatalogDbWrite.cpp");
+    const std::string internal =
+        readTestBytes("src/catalog/CatalogDbInternal.hpp");
+    // A missing or renamed source file must fail loudly: every search below
+    // would otherwise pass vacuously against an empty string.
+    CHECK(!src.empty());
+    CHECK(!internal.empty());
+
+    // Pin the checks to the refactored page-upsert helpers so unrelated code
+    // elsewhere in the file cannot satisfy them. (Structural throughout:
+    // statement lifetimes and rollback placement only exist as source
+    // structure; behaviour is covered by the catalog tests' injected-failure
+    // runs. All matching below is whitespace-insensitive.)
+    const auto helpersStart =
+        src.find("void CatalogDb::markMediaPagePopulationFailed(");
+    const auto processStart =
+        src.find("void CatalogDb::processMediaPageUpsert(");
+    CHECK(helpersStart != std::string::npos);
+    CHECK(processStart != std::string::npos);
+    CHECK(processStart > helpersStart);
+    const std::string pageHelpers =
+        src.substr(helpersStart, processStart - helpersStart);
+
+    const auto itemWriterStart =
+        pageHelpers.find("CatalogDb::writeMediaPageItemRows(");
+    const auto attemptStart =
+        pageHelpers.find("CatalogDb::attemptMediaPageUpsert(");
+    CHECK(itemWriterStart != std::string::npos);
+    CHECK(attemptStart != std::string::npos);
+    CHECK(attemptStart > itemWriterStart);
+    const std::string itemWriter = pageHelpers.substr(
+        itemWriterStart, attemptStart - itemWriterStart);
+    const std::string attempt = pageHelpers.substr(attemptStart);
+
+    // RAII owns every prepared statement in the helpers now: no manual
+    // finalize remains in the write path, and the old flag-based cleanup
+    // scaffolding (itemLoopFatal/itemLoopRetryable) is gone. Statement
+    // release is automatic on every exit, so no exit can forget it.
+    CHECK(sourceLacks(pageHelpers, "sqlite3_finalize"));
+    CHECK(sourceLacks(pageHelpers, "itemLoopFatal"));
+    CHECK(sourceLacks(pageHelpers, "itemLoopRetryable"));
+    // All seven RAII guards are declared in the attempt helper.
+    CHECK(sourceContains(attempt, "upsertGuard"));
+    CHECK(sourceContains(attempt, "deleteGenresGuard"));
+    CHECK(sourceContains(attempt, "insertGenreGuard"));
+    CHECK(sourceContains(attempt, "deleteImageTagsGuard"));
+    CHECK(sourceContains(attempt, "insertImageTagGuard"));
+    CHECK(sourceContains(attempt, "viewGuard"));
+    CHECK(sourceContains(attempt, "membershipGuard"));
+    CHECK(sourceContains(internal, "class ScopedSqliteStmt"));
+
+    // All failure exits from the per-item writer must map to
+    // MediaPageItemLoopOutcome::Fatal. Count only genuine `return` sites in
+    // the item writer: the `if (itemOutcome == ...)` dispatch comparisons in
+    // the attempt helper must not satisfy this count. Sites: injected
+    // failure, bind failure, non-retryable media step, sort key,
+    // collections, valid()/stale, membership — 7 sites.
+    CHECK(sourceCount(itemWriter, "return MediaPageItemLoopOutcome::Fatal") >= 7);
+
+    // Transient media step, sort key, collection, and membership failures
+    // must still map to MediaPageItemLoopOutcome::Retryable (4 sites).
+    CHECK(sourceCount(itemWriter, "return MediaPageItemLoopOutcome::Retryable") >= 4);
+    CHECK(sourceContains(itemWriter, "return MediaPageItemLoopOutcome::Completed"));
+
+    // Every exit from the per-item writer reports an outcome: a bare
+    // `return;` cannot even appear in this value-returning function, so its
+    // absence alone proves nothing. Instead pin what matters for the new
+    // structure — all returns carry an explicit outcome, and the writer never
+    // publishes results itself (commit/rollback/result publication belong to
+    // the attempt helper, so no exit can skip guard cleanup).
+    CHECK(sourceCount(itemWriter, "return MediaPageItemLoopOutcome::") >= 12);
+    CHECK(sourceCount(itemWriter, "return")
+          == sourceCount(itemWriter, "return MediaPageItemLoopOutcome::"));
+    CHECK(sourceLacks(itemWriter, "command->result.set_value"));
+    CHECK(sourceLacks(itemWriter, "markMediaPagePopulationFailed"));
+
+    // Fatal exits must fail the population (unless cancelled/superseded).
+    CHECK(sourceContains(pageHelpers, "markMediaPagePopulationFailed"));
+    CHECK(sourceContains(pageHelpers, "if (!result.cancelled && !result.superseded)"));
+    CHECK(sourceContains(pageHelpers, "m_populationStatus.state = CatalogDbPopulationState::Failed"));
+    // Every fatal exit routes through the helper: begin-failed,
+    // prepare-failed, item-fatal, and the trailing else branch.
+    CHECK(sourceCount(attempt, "markMediaPagePopulationFailed(result)") >= 4);
+
+    // Transaction boundaries, the bounded retry policy, and the outcome
+    // dispatch live in the attempt helper.
+    CHECK(sourceContains(attempt, "BEGIN IMMEDIATE;"));
+    CHECK(sourceContains(attempt, "\"COMMIT;\""));
+    CHECK(sourceContains(pageHelpers, "kPageTransactionMaxAttempts"));
+    CHECK(sourceContains(pageHelpers, "pageTransactionShouldRetry"));
+    CHECK(sourceContains(attempt, "if (itemOutcome == MediaPageItemLoopOutcome::Fatal)"));
+    CHECK(sourceContains(attempt, "if (itemOutcome == MediaPageItemLoopOutcome::Retryable)"));
+
+    // The test-injection hook used by the catalog tests is intact in the
+    // item writer.
+    CHECK(sourceContains(itemWriter, "failureSpec().failAfterRows"));
+    CHECK(sourceContains(itemWriter, "injected page failure"));
+
+    // Retry-backoff cancellation lives in processMediaPageUpsert.
+    const auto fnEnd = src.find("} // namespace miyoofin", processStart);
+    CHECK(fnEnd != std::string::npos);
+    const std::string processFn =
+        src.substr(processStart, fnEnd - processStart);
+    // Retry-backoff cancellation must set result.cancelled = true.
+    CHECK(sourceContains(processFn, "result.cancelled = true"));
+    CHECK(sourceContains(processFn, "kPageTransactionMaxAttempts"));
+
+    // The fatal branch must roll back exactly once before failing, measured
+    // between the Fatal dispatch and the Retryable dispatch (token space, so
+    // reformatting the handler cannot shift the window).
+    const std::string fatalHandlerBlock = sourceBetween(
+        attempt, "MediaPageItemLoopOutcome::Fatal)",
+        "MediaPageItemLoopOutcome::Retryable");
+    CHECK(!fatalHandlerBlock.empty());
+    CHECK(sourceCount(fatalHandlerBlock, "ROLLBACK") == 1);
+
+    std::printf("[test] processMediaPageUpsert cleanup invariants OK\n");
+}
+
+static void testOfflineModeToggleDrivesFetchPath()
+{
+    std::printf("[test] Offline mode toggle drives fetch path\n");
+
+    const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string hdr = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(!nav.empty());
+    CHECK(!sync.empty());
+    CHECK(!apply.empty());
+    CHECK(!hdr.empty());
+
+    // The Settings OfflineMode toggle handler must call startFetch() rather
+    // than applyPresentationProjection() / restoreOnlinePresentation().
+    // The old code did: if (manualOfflineMode) applyPresentationProjection();
+    //                    else if (!m_libraryOffline) restoreOnlinePresentation();
+    // This was a silent no-op when m_haveCachedSnapshot was not populated.
+    // Structural: the toggle runs on the UI thread against live worker
+    // state, so the handler shape is pinned by scan scoped to the
+    // OfflineMode case (a missing anchor fails loudly instead of slicing
+    // garbage).
+    const std::size_t toggleStart = nav.find("SettingsRowAction::OfflineMode");
+    CHECK(toggleStart != std::string::npos);
+    // Search for the closing brace of the OfflineMode case block.
+    // The next case (LocalAddress) starts after it.
+    const std::size_t nextCase = toggleStart == std::string::npos
+        ? std::string::npos
+        : nav.find("LocalAddress", toggleStart);
+    CHECK(nextCase != std::string::npos);
+    CHECK(nextCase > toggleStart);
+    const std::string toggleCode = (toggleStart == std::string::npos
+                                    || nextCase == std::string::npos
+                                    || nextCase <= toggleStart)
+        ? std::string()
+        : nav.substr(toggleStart, nextCase - toggleStart);
+    CHECK(!toggleCode.empty());
+    CHECK(sourceContains(toggleCode, "startFetch()"));
+    // The toggle must NOT call applyPresentationProjection() or
+    // restoreOnlinePresentation() as direct function calls (with parens).
+    // They may appear in comments explaining what was replaced.
+    CHECK(sourceLacks(toggleCode, "applyPresentationProjection()"));
+    CHECK(sourceLacks(toggleCode, "restoreOnlinePresentation()"));
+    // The toggle must set the pending flag when startFetch() returns false.
+    CHECK(sourceContains(toggleCode, "m_offlineModeFetchPending"));
+
+    // startFetch() must return bool so callers can detect in-flight.
+    CHECK(sourceContains(sync, "bool HomeScreen::startFetch()"));
+    CHECK(sourceContains(hdr, "bool startFetch()"));
+
+    // finishFetch() must re-fetch when the pending flag is set.
+    CHECK(sourceContains(apply, "m_offlineModeFetchPending"));
+    CHECK(sourceContains(apply, "startFetch()"));
+
+    // The offline worker path must populate m_haveCachedSnapshot.
+    CHECK(sourceContains(sync, "m_haveCachedSnapshot = true"));
+    CHECK(sourceContains(sync, "m_fetchCacheSaved = true"));
+
+    std::printf("[test] Offline mode toggle drives fetch path OK\n");
+}
+
+static void testOfflineSnapshotSignatureStability()
+{
+    std::printf("[test] Offline snapshot signature stability/change detection\n");
+
+    // Empty snapshots must match.
+    {
+        DownloadSnapshot a, b;
+        const auto sigA = HomeScreen::computeOfflineSignature(a);
+        const auto sigB = HomeScreen::computeOfflineSignature(b);
+        CHECK(sigA == sigB);
+        CHECK(!(sigA != sigB));
+        CHECK(sigA.availableItemCount == 0);
+        CHECK(sigA.totalDownloadedBytes == 0);
+    }
+
+    // Identical snapshots must match.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete;
+        item.downloadedBytes = 1024;
+        a.items.push_back(item); b.items.push_back(item);
+        a.localBytes = 2048; b.localBytes = 2048;
+        a.reservedBytes = 512; b.reservedBytes = 512;
+        const auto sigA = HomeScreen::computeOfflineSignature(a);
+        const auto sigB = HomeScreen::computeOfflineSignature(b);
+        CHECK(sigA == sigB);
+        CHECK(sigA.availableItemCount == 1);
+        CHECK(sigA.totalDownloadedBytes == 1024);
+        CHECK(sigA.availableItemIds.count("m1") == 1);
+    }
+
+    // Different item count must differ.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete; item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.itemId = "m2";
+        b.items.push_back(item);
+        b.items.push_back(item);
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Different downloadedBytes must differ.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete;
+        item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.downloadedBytes = 200;
+        b.items.push_back(item);
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Unavailable items must not affect the signature.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete; item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.itemId = "m2";
+        item.state = DownloadState::Queued;
+        a.items.push_back(item);
+        b = a;
+        b.items[1].state = DownloadState::Downloading;
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              == HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Different localBytes must differ.
+    {
+        DownloadSnapshot a, b;
+        a.localBytes = 1000; b.localBytes = 2000;
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Source-scan: header must declare the signature infrastructure.
+    // Structural: the declarations have no behaviour of their own; the
+    // signature semantics above are covered behaviourally.
+    const std::string hdr = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(!hdr.empty());
+    CHECK(sourceContains(hdr, "OfflineSnapshotSignature"));
+    CHECK(sourceContains(hdr, "computeOfflineSignature"));
+    CHECK(sourceContains(hdr, "tryApplyCachedOfflineSnapshot"));
+    CHECK(sourceContains(hdr, "m_offlineSnapshotCache"));
+    CHECK(sourceContains(hdr, "m_offlineSignature"));
+    CHECK(sourceContains(hdr, "m_haveOfflineSignature"));
+    CHECK(sourceContains(hdr, "m_haveOfflineSnapshotCache"));
+
+    std::printf("[test] Offline snapshot signature stability/change detection OK\n");
+}
+
+static void testOfflineToggleCancelsFetchAndUsesCache()
+{
+    std::printf("[test] Offline toggle cancels in-flight fetch and uses cache\n");
+
+    const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string offline = readTestBytes("src/ui/screens/HomeScreenOffline.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(!nav.empty());
+    CHECK(!sync.empty());
+    CHECK(!offline.empty());
+    CHECK(!apply.empty());
+
+    // Toggle handler must cancel the in-flight fetch before calling startFetch.
+    // Structural: the cancel/fetch race needs live threads, so the handler
+    // shape is pinned by scan (a missing anchor fails loudly instead of
+    // slicing garbage). Scoped to the whole OfflineMode case (through
+    // LocalAddress): the startFetch() call sits after the cached-path early
+    // return, so ending the window at the first `return true;` would exclude
+    // it and make the order check vacuous.
+    {
+        const std::size_t toggleStart = nav.find("SettingsRowAction::OfflineMode");
+        CHECK(toggleStart != std::string::npos);
+        const std::size_t toggleEnd = toggleStart == std::string::npos
+            ? std::string::npos
+            : nav.find("LocalAddress", toggleStart);
+        CHECK(toggleEnd != std::string::npos);
+        CHECK(toggleEnd > toggleStart);
+        const std::string toggleCode = (toggleStart == std::string::npos
+                                        || toggleEnd == std::string::npos
+                                        || toggleEnd <= toggleStart)
+            ? std::string()
+            : nav.substr(toggleStart, toggleEnd - toggleStart);
+        CHECK(!toggleCode.empty());
+        // Must set cancellation flag before startFetch()
+        CHECK(sourceContains(toggleCode, "m_fetchCancellation->store(true)"));
+        // Must try the cached path when entering offline mode
+        CHECK(sourceContains(toggleCode, "tryApplyCachedOfflineSnapshot()"));
+        // The cancellation store must appear before the startFetch() call
+        const auto cancelPos = sourcePos(toggleCode, "m_fetchCancellation->store(true)");
+        const auto fetchPos = sourcePos(toggleCode, "startFetch()");
+        CHECK(cancelPos != std::string::npos);
+        CHECK(fetchPos != std::string::npos);
+        CHECK(cancelPos < fetchPos);
+    }
+
+    // finishFetch error path must not set LoadState::Error when a mode switch
+    // is pending (avoids transient error flash on cancel).
+    {
+        CHECK(sourceContains(apply, "m_offlineModeFetchPending"));
+        // The guard must be: !m_haveCachedSnapshot && !m_offlineModeFetchPending
+        CHECK(sourceContains(apply, "!m_haveCachedSnapshot && !m_offlineModeFetchPending"));
+    }
+
+    // Offline worker path must store the cached snapshot + signature.
+    {
+        CHECK(sourceContains(sync, "m_offlineSnapshotCache = m_cachedSnapshot"));
+        CHECK(sourceContains(sync, "m_haveOfflineSnapshotCache = true"));
+        CHECK(sourceContains(sync, "m_offlineSignature = computeOfflineSignature(downloads)"));
+        CHECK(sourceContains(sync, "m_haveOfflineSignature = true"));
+    }
+
+    // tryApplyCachedOfflineSnapshot must exist and use the cache.
+    {
+        CHECK(sourceContains(offline, "HomeScreen::tryApplyCachedOfflineSnapshot()"));
+        CHECK(sourceContains(offline, "m_haveOfflineSignature"));
+        CHECK(sourceContains(offline, "m_haveOfflineSnapshotCache"));
+        CHECK(sourceContains(offline, "computeOfflineSignature(downloads)"));
+        CHECK(sourceContains(offline, "m_offlineSnapshotCache"));
+        CHECK(sourceContains(offline, "applyPresentationProjection()"));
+    }
+
+    // computeOfflineSignature must exist and use isAvailable.
+    {
+        CHECK(sourceContains(offline, "HomeScreen::computeOfflineSignature("));
+        CHECK(sourceContains(offline, "OfflineLibraryQuery::isAvailable"));
+    }
+
+    std::printf("[test] Offline toggle cancels in-flight fetch and uses cache OK\n");
 }

@@ -32,6 +32,7 @@ The manifest is served at:
 
 ```sh
 # 1. Build the release assets (ZIP, tarball, manifest).
+#    RELEASE=1 enables the slim release profile (-Os, no debug info, stripped).
 sh tools/build-release.sh
 
 # 2. Run the legal/packaging checks.

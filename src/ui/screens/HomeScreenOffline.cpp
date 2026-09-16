@@ -1,5 +1,6 @@
 #include "HomeScreen.hpp"
 #include "../../playback/OfflineLibraryProjection.hpp"
+#include "../../library/OfflineLibraryQuery.hpp"
 
 namespace miyoofin {
 
@@ -49,6 +50,41 @@ void HomeScreen::applyOfflineProjection()
     m_fetchOfflinePrepared = false;
     resetMediaPaging();
     clampNavigation();
+}
+
+HomeScreen::OfflineSnapshotSignature HomeScreen::computeOfflineSignature(
+    const DownloadSnapshot &downloads)
+{
+    OfflineSnapshotSignature sig;
+    sig.localBytes = downloads.localBytes;
+    sig.reservedBytes = downloads.reservedBytes;
+    for (const auto &item : downloads.items) {
+        if (OfflineLibraryQuery::isAvailable(item.state)) {
+            sig.availableItemIds.insert(item.itemId);
+            sig.totalDownloadedBytes += item.downloadedBytes;
+            ++sig.availableItemCount;
+        }
+    }
+    return sig;
+}
+
+bool HomeScreen::tryApplyCachedOfflineSnapshot()
+{
+    if (!m_haveCachedSnapshot || !m_haveOfflineSignature
+        || !m_haveOfflineSnapshotCache || !m_downloads)
+        return false;
+    const DownloadSnapshot downloads = m_downloads->snapshot();
+    const auto sig = computeOfflineSignature(downloads);
+    if (sig != m_offlineSignature)
+        return false;
+    // Cache hit — apply the snapshot directly on the UI thread.
+    // Mirrors applyPresentationProjection() but uses the cached offline
+    // snapshot instead of rebuilding from downloads + metadata.
+    m_cachedSnapshot = m_offlineSnapshotCache;
+    m_haveCachedSnapshot = true;
+    m_libraryOffline = true;
+    applyPresentationProjection();
+    return true;
 }
 
 } // namespace miyoofin

@@ -30,7 +30,12 @@ struct UpdateManifest {
 /// `assets.tar_gz.size`.  All others are optional.  SHA-256 values are
 /// validated to be exactly 64 hex characters and normalised to lowercase.
 /// Robust to key order, whitespace, and nested objects.
-bool parseUpdateManifest(const std::string &json, UpdateManifest &out);
+///
+/// When `allowNonHttpsAssets` is true, the defense-in-depth check requiring
+/// HTTPS URLs on github.com/objects.githubusercontent.com is skipped.
+/// This is DEV-ONLY; production callers must pass false (the default).
+bool parseUpdateManifest(const std::string &json, UpdateManifest &out,
+                         bool allowNonHttpsAssets = false);
 
 } // namespace miyoofin
 

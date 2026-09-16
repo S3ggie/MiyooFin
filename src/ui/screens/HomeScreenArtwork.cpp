@@ -16,6 +16,30 @@ static constexpr int MOVIE_GRID_ROWS = 3;
 // distinct keys accumulate faster than row-eviction cleans them up.
 static constexpr int MAX_CARD_SURFACES = 128;
 
+/// Parse a row-artwork key ("itemId:imageType:imageTag:WxH") back into a
+/// PosterJob suitable for ImageCache::removeCached().  Returns a zeroed
+/// job when the key format is unrecognised (width == 0).
+static HomePosterJob buildPosterJobFromKey(const std::string &key)
+{
+    // Format: "itemId:Primary:imageTag:WxH"
+    auto p1 = key.find(':');
+    if (p1 == std::string::npos) return {};
+    auto p2 = key.find(':', p1 + 1);
+    if (p2 == std::string::npos) return {};
+    auto p3 = key.find(':', p2 + 1);
+    if (p3 == std::string::npos) return {};
+    auto px = key.find('x', p3 + 1);
+    if (px == std::string::npos) return {};
+    HomePosterJob job;
+    job.itemId   = key.substr(0, p1);
+    const std::string typeName = key.substr(p1 + 1, p2 - p1 - 1);
+    job.imageType = (typeName == "Thumb") ? ImageType::Thumb : ImageType::Primary;
+    job.imageTag  = key.substr(p2 + 1, p3 - p2 - 1);
+    job.width     = std::atoi(key.substr(p3 + 1, px - p3 - 1).c_str());
+    job.height    = std::atoi(key.substr(px + 1).c_str());
+    return job;
+}
+
 void HomeScreen::tryLoadSelectedArtwork()
 {
     const MediaItem *item = activeTabNamed("Shows") ? showsSelectedItem() : currentItem();
@@ -228,13 +252,29 @@ void HomeScreen::drainDecodedArtwork()
             continue;
         }
         if (result.image.empty()) {
-            m_rowArtwork[result.key].status = RowArtworkStatus::Failed;
+            // Corrupt/undecodable cached file.  Delete it so poster sync can
+            // re-download, and only set a permanent Failed tombstone after
+            // kMaxDecodeAttempts retries to bound infinite retry loops.
+            // Parse the key to extract parameters for removeCached.
+            // Key format: "itemId:imageType:imageTag:WxH"
+            const auto artwork = buildPosterJobFromKey(result.key);
+            if (artwork.width > 0)
+                ImageCache::removeCached(artwork.itemId, artwork.imageType,
+                                         artwork.imageTag, artwork.width,
+                                         artwork.height);
+            int &attempts = m_rowArtworkAttempts[result.key];
+            ++attempts;
+            if (attempts >= kMaxDecodeAttempts)
+                m_rowArtwork[result.key].status = RowArtworkStatus::Failed;
+            // else: entry is NOT added/kept in m_rowArtwork, so
+            // tryLoadOneRowArtwork will resubmit the decode on the next cycle.
         } else {
             if(result.key==m_selectedArtworkId) {
                 m_selectedArtwork=result.image;
                 m_selectedArtworkAttempted=true;
             }
             storeDecodedRowArtwork(result.key, std::move(result.image));
+            m_rowArtworkAttempts.erase(result.key);
         }
     }
 }

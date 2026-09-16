@@ -50,62 +50,6 @@ static constexpr Uint8 FOCUS_IR = 255, FOCUS_IG = 255, FOCUS_IB = 120;
 static constexpr int SCROLL_STEP = 3;
 
 // -------------------------------------------------------------------
-// Word-wrap helper (same algorithm as SeriesScreen / EpisodeBrowserScreen)
-// -------------------------------------------------------------------
-static std::vector<std::string> wrapText(const char *text, int wrapCols)
-{
-    std::vector<std::string> lines;
-    if (!text || !*text) return lines;
-
-    std::string input(text);
-    size_t pos = 0;
-
-    while (pos < input.size()) {
-        size_t newline = input.find('\n', pos);
-        std::string para = (newline != std::string::npos)
-            ? input.substr(pos, newline - pos)
-            : input.substr(pos);
-
-        while (!para.empty()) {
-            if ((int)para.size() <= wrapCols) {
-                lines.push_back(para);
-                break;
-            }
-            size_t lastSpace = para.rfind(' ', wrapCols);
-            if (lastSpace != std::string::npos && lastSpace > 0) {
-                lines.push_back(para.substr(0, lastSpace));
-                para = para.substr(lastSpace + 1);
-            } else {
-                lines.push_back(para.substr(0, wrapCols));
-                para = para.substr(wrapCols);
-            }
-        }
-
-        if (newline != std::string::npos)
-            pos = newline + 1;
-        else
-            break;
-    }
-
-    return lines;
-}
-
-// -------------------------------------------------------------------
-// Bottom hint bar renderer (matches SeriesScreen)
-// -------------------------------------------------------------------
-static void renderBottomHints(SDL_Surface *fb, const char *hint)
-{
-    int y = FB_H - BOTTOM_H;
-    BitmapFont::fillRect(fb, 0, y, FB_W, BOTTOM_H,
-        Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-        Theme::BG_B * 2 / 3, 255);
-    BitmapFont::drawString(fb, 8, y + 2, hint,
-        Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-        Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-        Theme::BG_B * 2 / 3);
-}
-
-// -------------------------------------------------------------------
 // Constructor
 // -------------------------------------------------------------------
 MovieDetailsScreen::MovieDetailsScreen(const Session &session,
@@ -203,7 +147,9 @@ bool MovieDetailsScreen::handleAction(Action action)
 
     // Confirm
     case Action::Confirm:
-        if (m_confirmDownload) { if (m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready&&m_planSnapshot.plan.canFit) m_downloads->enqueue(m_planSnapshot.plan.items); m_confirmDownload=false; return true; }
+        if (m_confirmDownload) { if (m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready&&m_planSnapshot.plan.canFit) m_downloads->enqueue(m_planSnapshot.plan.items);
+            m_confirmDownload=false;
+            return true; }
         if (m_actionBtn == ActionButton::Play) {
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());

@@ -153,3 +153,130 @@ static void testUpdateCheckErrorMessage()
              "network unreachable");
     std::printf("[test] Update check error message OK\n");
 }
+
+// -------------------------------------------------------------------
+// testResolveManifestSource — pure helper for override resolution
+// -------------------------------------------------------------------
+static void testResolveManifestSource()
+{
+    std::printf("[test] resolveManifestSource\n");
+    const std::string defaultUrl = "https://github.com/S3ggie/MiyooFin/releases/latest/download/manifest.json";
+
+    // Neither env nor file → production URL, no override
+    {
+        ManifestSource src = resolveManifestSource("", "", defaultUrl);
+        CHECK_EQ(src.url, defaultUrl);
+        CHECK(!src.devOverride);
+    }
+
+    // Env var set → takes priority
+    {
+        ManifestSource src = resolveManifestSource(
+            "file:///tmp/test-manifest.json", "", defaultUrl);
+        CHECK_EQ(src.url, std::string("file:///tmp/test-manifest.json"));
+        CHECK(src.devOverride);
+    }
+
+    // File contents with valid URL → override
+    {
+        ManifestSource src = resolveManifestSource(
+            "", "file:///mnt/SDCARD/App/MiyooFin/manifest.json\n", defaultUrl);
+        CHECK_EQ(src.url, std::string("file:///mnt/SDCARD/App/MiyooFin/manifest.json"));
+        CHECK(src.devOverride);
+    }
+
+    // File with comments and blank lines → skips to first real line
+    {
+        ManifestSource src = resolveManifestSource(
+            "", "# comment\n\n  \nfile:///dev/manifest.json\n", defaultUrl);
+        CHECK_EQ(src.url, std::string("file:///dev/manifest.json"));
+        CHECK(src.devOverride);
+    }
+
+    // File with only comments/blank → falls through to default
+    {
+        ManifestSource src = resolveManifestSource(
+            "", "# comment\n\n  \n", defaultUrl);
+        CHECK_EQ(src.url, defaultUrl);
+        CHECK(!src.devOverride);
+    }
+
+    // Empty file contents → falls through to default
+    {
+        ManifestSource src = resolveManifestSource("", "", defaultUrl);
+        CHECK_EQ(src.url, defaultUrl);
+        CHECK(!src.devOverride);
+    }
+
+    // Env var takes priority even when file is present
+    {
+        ManifestSource src = resolveManifestSource(
+            "http://env/manifest.json",
+            "file:///file/manifest.json\n",
+            defaultUrl);
+        CHECK_EQ(src.url, std::string("http://env/manifest.json"));
+        CHECK(src.devOverride);
+    }
+
+    // HTTP URL in file → also works
+    {
+        ManifestSource src = resolveManifestSource(
+            "", "https://example.com/manifest.json\n", defaultUrl);
+        CHECK_EQ(src.url, std::string("https://example.com/manifest.json"));
+        CHECK(src.devOverride);
+    }
+
+    std::printf("[test] resolveManifestSource OK\n");
+}
+
+// -------------------------------------------------------------------
+// testIsLocalAsset — local file detection helper
+// -------------------------------------------------------------------
+static void testIsLocalAsset()
+{
+    std::printf("[test] isLocalAsset\n");
+    CHECK(isLocalAsset("file:///tmp/test.tar.gz"));
+    CHECK(isLocalAsset("/tmp/test.tar.gz"));
+    CHECK(isLocalAsset("/mnt/SDCARD/App/MiyooFin/update.tar.gz"));
+    CHECK(!isLocalAsset("https://github.com/test.tar.gz"));
+    CHECK(!isLocalAsset("http://example.com/test.tar.gz"));
+    CHECK(!isLocalAsset(""));
+    CHECK(!isLocalAsset("relative/path.tar.gz"));
+    CHECK(!isLocalAsset("ftp://example.com/test.tar.gz"));
+    std::printf("[test] isLocalAsset OK\n");
+}
+
+// -------------------------------------------------------------------
+// testLocalAssetPath — file:// prefix stripping
+// -------------------------------------------------------------------
+static void testLocalAssetPath()
+{
+    std::printf("[test] localAssetPath\n");
+    CHECK_EQ(localAssetPath("file:///tmp/test.tar.gz"),
+             std::string("/tmp/test.tar.gz"));
+    CHECK_EQ(localAssetPath("/tmp/test.tar.gz"),
+             std::string("/tmp/test.tar.gz"));
+    CHECK_EQ(localAssetPath("file:///mnt/SDCARD/App/miyoofin.tar.gz"),
+             std::string("/mnt/SDCARD/App/miyoofin.tar.gz"));
+    // No file:// prefix → returned unchanged
+    CHECK_EQ(localAssetPath("/just/a/path"),
+             std::string("/just/a/path"));
+    std::printf("[test] localAssetPath OK\n");
+}
+
+// -------------------------------------------------------------------
+// testDevOverrideActive — UpdateManager devOverride flag
+// -------------------------------------------------------------------
+static void testDevOverrideActive()
+{
+    std::printf("[test] UpdateManager devOverrideActive\n");
+    {
+        UpdateManager mgr;
+        CHECK(!mgr.devOverrideActive());
+    }
+    {
+        UpdateManager mgr("/tmp/miyoofin-test-update");
+        CHECK(!mgr.devOverrideActive());
+    }
+    std::printf("[test] UpdateManager devOverrideActive OK\n");
+}

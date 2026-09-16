@@ -15,7 +15,10 @@ namespace miyoofin { namespace {
 struct WriteCtx { FILE *f=nullptr; std::uint64_t remain=0; DownloadManager *manager=nullptr; std::string itemId,scope; std::uint64_t generation=0; std::uint64_t baseDownloaded=0; };
 bool nonemptyFile(const std::string &path,std::uint64_t &size){struct stat st{};if(::stat(path.c_str(),&st)||st.st_size<=0)return false;size=(std::uint64_t)st.st_size;return true;}
 size_t writeCb(char*p,size_t a,size_t b,void*u){auto*c=(WriteCtx*)u;std::uint64_t n=a*b;if(n>c->remain)return 0;size_t w=std::fwrite(p,1,(size_t)n,c->f);c->remain-=w;return w;}
-int progressCb(void*u,curl_off_t total,curl_off_t,curl_off_t now,curl_off_t){auto*c=(WriteCtx*)u;if(!c->manager)return 1;auto ms=(std::uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();c->manager->recordProgress(c->itemId,c->scope,c->generation,c->baseDownloaded+(now>0?(std::uint64_t)now:0),ms,now>0?(std::uint64_t)now:0,total>0?(std::uint64_t)total:0);return c->manager->shouldAbort(c->itemId,c->scope,c->generation);}
+int progressCb(void*u,curl_off_t total,curl_off_t,curl_off_t now,curl_off_t){auto*c=(WriteCtx*)u;if(!c->manager)return 1;
+        auto ms=(std::uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        c->manager->recordProgress(c->itemId,c->scope,c->generation,c->baseDownloaded+(now>0?(std::uint64_t)now:0),ms,now>0?(std::uint64_t)now:0,total>0?(std::uint64_t)total:0);
+        return c->manager->shouldAbort(c->itemId,c->scope,c->generation);}
 void recordHlsSegmentAttempt(bool measured, std::uint64_t durationUs,
                              std::uint32_t jobSequence,
                              std::uint64_t segmentOrdinal, unsigned attempt,
@@ -107,8 +110,17 @@ bool DownloadManager::hlsSegmentRetryable(long httpStatus,int curlCode){
 bool DownloadManager::hlsSegmentShouldRetry(long httpStatus,int curlCode,unsigned completedAttempts){
     return completedAttempts<HLS_SEGMENT_ATTEMPTS&&hlsSegmentRetryable(httpStatus,curlCode);
 }
-void DownloadManager::recordProgress(const std::string&id,const std::string&scope,std::uint64_t generation,std::uint64_t downloaded,std::uint64_t now,std::uint64_t currentBytes,std::uint64_t currentSize){std::lock_guard<std::mutex>l(m_mutex);if(generation!=m_generation||scope!=m_scope)return;for(auto&i:m_items)if(i.itemId==id&&i.state==DownloadState::Downloading){if(!i.hlsStorage)downloaded=std::min(downloaded,i.expectedSize);const std::uint64_t previous=i.downloadedBytes;updateRecentSpeed(m_progressSamples[id],downloaded,now,i.recentBytesPerSec);i.downloadedBytes=downloaded;if(downloaded>previous)performanceTelemetry().addDownloadBytes(downloaded-previous);if(i.hlsStorage){i.hlsCurrentSegmentBytes=currentBytes;i.hlsCurrentSegmentSize=currentSize;i.hlsActivePercent=downloadPercent(i);}return;}}
-bool DownloadManager::shouldAbort(const std::string&id,const std::string&scope,std::uint64_t generation)const{std::lock_guard<std::mutex>l(m_mutex);if(m_stop||m_playback||generation!=m_generation||scope!=m_scope)return true;for(const auto&i:m_items)if(i.itemId==id)return i.state!=DownloadState::Downloading||m_deleteRequested.count(id);return true;}
+void DownloadManager::recordProgress(const std::string&id,const std::string&scope,std::uint64_t generation,std::uint64_t downloaded,std::uint64_t now,std::uint64_t currentBytes,
+    std::uint64_t currentSize){std::lock_guard<std::mutex>l(m_mutex);if(generation!=m_generation||scope!=m_scope)return;
+        for(auto&i:m_items)if(i.itemId==id&&i.state==DownloadState::Downloading){if(!i.hlsStorage)downloaded=std::min(downloaded,i.expectedSize);
+            const std::uint64_t previous=i.downloadedBytes;updateRecentSpeed(m_progressSamples[id],downloaded,now,i.recentBytesPerSec);i.downloadedBytes=downloaded;
+            if(downloaded>previous)performanceTelemetry().addDownloadBytes(downloaded-previous);
+            if(i.hlsStorage){i.hlsCurrentSegmentBytes=currentBytes;i.hlsCurrentSegmentSize=currentSize;
+                i.hlsActivePercent=downloadPercent(i);}return;}}
+bool DownloadManager::shouldAbort(const std::string&id,const std::string&scope,std::uint64_t generation)const{std::lock_guard<std::mutex>l(m_mutex);
+        if(m_stop||m_playback||generation!=m_generation||scope!=m_scope)return true;
+        for(const auto&i:m_items)if(i.itemId==id)return i.state!=DownloadState::Downloading||m_deleteRequested.count(id);
+        return true;}
 bool DownloadManager::waitForHlsSegmentRetry(const std::string&id,const std::string&scope,std::uint64_t generation,unsigned seconds){
     std::unique_lock<std::mutex> l(m_mutex);
     return !m_wake.wait_for(l,std::chrono::seconds(seconds),[&]{
@@ -117,18 +129,40 @@ bool DownloadManager::waitForHlsSegmentRetry(const std::string&id,const std::str
         return true;
     });
 }
-void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::string scope;std::uint64_t generation=0,persistRevision=0;std::vector<DownloadItem> snapshot;bool persistOnly=false;{std::unique_lock<std::mutex>l(m_mutex);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);m_wake.wait(l,[&]{if(m_stop||m_persistRequested)return true;if(!m_playback)for(const auto&i:m_items)if(i.state==DownloadState::Queued)return true;return false;});if(m_stop)return;
+void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::string scope;std::uint64_t generation=0,persistRevision=0;std::vector<DownloadItem> snapshot;
+            bool persistOnly=false;{std::unique_lock<std::mutex>l(m_mutex);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);
+                m_wake.wait(l,[&]{if(m_stop||m_persistRequested)return true;if(!m_playback)for(const auto&i:m_items)if(i.state==DownloadState::Queued)return true;return false;});
+                if(m_stop)return;
         if(m_persistRequested){snapshot=m_items;scope=m_scope;generation=m_generation;persistRevision=m_persistRevision;persistOnly=true;}
-        else {auto p=std::find_if(m_items.begin(),m_items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;});if(p==m_items.end())continue;p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;snapshot=m_items;publishDownloadGauges(m_items,m_planJobs.size());performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,true);}}
-    // All snapshots are written manifest-first, then as one index.  This runs
-    // only on the worker, so enqueue never performs removable-storage I/O.
-    for(const auto&i:snapshot){if(i.hlsStorage)m_store.ensureHlsDirectories(scope,i.itemId);m_store.saveManifest(scope,i,nullptr);}m_store.saveIndex(scope,snapshot,nullptr);
-    if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}
+        else {auto p=std::find_if(m_items.begin(),m_items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;});if(p==m_items.end())continue;
+                p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;snapshot=m_items;
+                publishDownloadGauges(m_items,m_planJobs.size());performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,true);}
+    // Persists stay under the SAME lock acquisition as the snapshot/state
+    // change above (never split copy/write/re-acquire: a concurrent
+    // pause()/resume()/erase() persist landing between would be overwritten
+    // with stale bytes).  The dequeue flip changes no ids — the on-disk
+    // index already lists this id (it is rewritten whenever the id set
+    // changes: enqueue persist pass, erase, configure), so only the dequeued
+    // item's manifest is rewritten instead of fsyncing the whole library on
+    // every download start; the id-changing persist-only pass still writes
+    // manifests plus the index.  Bounded local metadata I/O only: never
+    // network I/O, and no lock order changes (m_mutex alone, as every other
+    // persistLocked() call site).
+    if(persistOnly){for(const auto&i:snapshot){if(i.hlsStorage)m_store.ensureHlsDirectories(scope,i.itemId);m_store.saveManifest(scope,i,nullptr);}m_store.saveIndex(scope,snapshot,nullptr);}
+    else{if(work.hlsStorage)m_store.ensureHlsDirectories(scope,work.itemId);persistItemLocked(work.itemId);}
+    if(persistOnly){if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}}
+    // Enqueue never performs removable-storage I/O: the worker above persists
+    // before any transfer starts, so UI-thread enqueue stays in-memory only.
     transfer(work,session,scope,generation);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);}}
 bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std::string&scope,std::uint64_t generation){
     const std::uint32_t telemetryJobSequence = static_cast<std::uint32_t>(
         performanceTelemetry().nextEphemeralId());
     if(!session.valid()) return false;
+    // Source identity this transfer is working on (A): captured once after
+    // the dequeue.  Every publish point below rechecks the live item under
+    // the lock and aborts instead of republishing when the reconciler has
+    // since reset the item to a new source.
+    const std::string transferSourceId=item.mediaSourceId, transferEtag=item.sourceEtag;
     // A v1 payload is only retained when it is already complete.  New work is
     // always HLS and must never issue the original /Download request.
     if(!item.hlsStorage){
@@ -138,41 +172,99 @@ bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std
         item.hlsProfile=HLS_PROFILE_NAME;
     }
     std::vector<std::string> urls; std::string error; JellyfinApi::HlsFailure failure;
-    if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getHlsSegmentUrls(base,session.accessToken,session.deviceId,item.itemId,item.mediaSourceId,urls,error,&failure);},error)){
-        std::lock_guard<std::mutex> l(m_mutex); for(auto &i:m_items)if(i.itemId==item.itemId){i.state=failure==JellyfinApi::HlsFailure::Network?DownloadState::WaitingForNetwork:(failure==JellyfinApi::HlsFailure::Unauthorized?DownloadState::Unauthorized:DownloadState::Failed);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);i.lastError=error;m_store.saveManifest(scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());} return false;
+    if(!RouteRequest(session).run([&](const std::string &base){
+            return JellyfinApi::getHlsSegmentUrls(base,session.accessToken,session.deviceId,item.itemId,item.mediaSourceId,urls,error,&failure);},error)){
+        std::lock_guard<std::mutex> l(m_mutex);
+        for(auto &i:m_items)if(i.itemId==item.itemId){
+            // A reconciler reset to a new source during discovery leaves Queued: it must not take this stale failure state.  Preserve a pause/playback interrupt that landed during playlist discovery: only a still-active item takes the failure state.
+            if(transferSourceChanged(i,transferSourceId,transferEtag))return false;
+            if(i.state!=DownloadState::Paused
+                &&i.state!=DownloadState::PausedForPlayback)i.state=failure==JellyfinApi::HlsFailure::Network?
+                DownloadState::WaitingForNetwork:(failure==JellyfinApi::HlsFailure::Unauthorized?
+                DownloadState::Unauthorized:DownloadState::Failed);
+                i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);i.lastError=error;m_store.saveManifest(scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());
+                } return false;
     }
     item.hlsSegmentCount=urls.size(); m_store.ensureHlsDirectories(scope,item.itemId);
     // Persist discovery before fetching segment zero: first-segment transcodes
     // may take a while, but the manifest must retain the discovered playlist.
-    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i.hlsSegmentCount=item.hlsSegmentCount;i.hlsStorage=true;m_store.saveManifest(scope,i,nullptr);persistLocked();break;}}
+    // A reconciler reset to a new source during discovery suppresses this
+    // stale publish (same class as the guarded failure path above); the early
+    // return also keeps the OLD-identity reconcile below from running, so it
+    // can never write the stale identity back over the reset live item.  The
+    // id set is unchanged by discovery, so only this item's manifest is
+    // persisted (the index already lists this id).
+    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){if(transferSourceChanged(i,transferSourceId,transferEtag))return false;
+                i.hlsSegmentCount=item.hlsSegmentCount;i.hlsStorage=true;persistItemLocked(i.itemId);break;}}
     m_store.reconcile(scope,item,nullptr);
-    item.hlsCompletedSegments=m_store.firstIncompleteSegment(scope,item);
+    // Recovery scan runs once per transfer; the resume offset is reused below
+    // instead of scanning the segment directory a second time.
+    const std::uint64_t resumeFrom=m_store.firstIncompleteSegment(scope,item);
+    item.hlsCompletedSegments=resumeFrom;
     item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0;
     item.hlsActivePercent=downloadPercent(item);
-    item.state=DownloadState::Downloading;
-    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i=item;m_store.saveManifest(scope,i,nullptr);persistLocked();break;}}
-    for(std::uint64_t k=m_store.firstIncompleteSegment(scope,item);k<urls.size();++k){
-        if(shouldAbort(item.itemId,scope,generation)) return false;
+    // Publish only transfer-owned progress onto the LIVE item: a pause or
+    // playback interrupt that landed after the dequeue must survive instead
+    // of being reverted to Downloading by a stale whole-item assignment.
+    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){if(transferSourceChanged(i,transferSourceId,transferEtag))return false;
+                publishTransferProgress(i,item);persistItemLocked(i.itemId);break;}}
+    for(std::uint64_t k=resumeFrom;k<urls.size();++k){
+        // Consume an abandoned delete flag exactly like the segment-failure
+        // path: a delete requested then left pending must remove now instead
+        // of surviving to silently delete a later re-enqueue of this id.
+        // Delete still wins over pause/playback/generation aborts.
+        if(shouldAbort(item.itemId,scope,generation)){std::lock_guard<std::mutex>l(m_mutex);
+                if(m_deleteRequested.erase(item.itemId)){auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});
+                    if(p!=m_items.end()){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);}persistLocked();
+                    publishDownloadGauges(m_items,m_planJobs.size());}return false;}
         std::string part=m_store.segmentPath(scope,item.itemId,k,true), done=m_store.segmentPath(scope,item.itemId,k);
-        CURLcode rc=CURLE_OK; long code=0; std::uint64_t bytes=0; bool good=false, primaryGood=false, fallbackGood=false; std::uint64_t primaryDuration=0, primaryBytes=0, fallbackDuration=0, fallbackBytes=0; long primaryCode=0, fallbackCode=0; CURLcode primaryRc=CURLE_OK, fallbackRc=CURLE_OK; bool primaryMeasured=false, fallbackMeasured=false, fallbackAttempted=false;
+        CURLcode rc=CURLE_OK; long code=0; std::uint64_t bytes=0; bool good=false, primaryGood=false, fallbackGood=false;
+            std::uint64_t primaryDuration=0, primaryBytes=0, fallbackDuration=0, fallbackBytes=0; long primaryCode=0, fallbackCode=0; CURLcode primaryRc=CURLE_OK, fallbackRc=CURLE_OK;
+            bool primaryMeasured=false, fallbackMeasured=false, fallbackAttempted=false;
         for(unsigned attempt=1;attempt<=HLS_SEGMENT_ATTEMPTS;++attempt){
-            primaryDuration=primaryBytes=fallbackDuration=fallbackBytes=0; primaryCode=fallbackCode=0; primaryRc=fallbackRc=CURLE_OK; primaryMeasured=fallbackMeasured=fallbackAttempted=false; primaryGood=fallbackGood=false;
+            primaryDuration=primaryBytes=fallbackDuration=fallbackBytes=0; primaryCode=fallbackCode=0; primaryRc=fallbackRc=CURLE_OK;
+                primaryMeasured=fallbackMeasured=fallbackAttempted=false; primaryGood=fallbackGood=false;
             // "wb" deliberately replaces a failed response body before every retry.
             FILE *f=std::fopen(part.c_str(),"wb"); if(!f){rc=CURLE_WRITE_ERROR;break;}
             CURL *c=curl_easy_init(); if(!c){std::fclose(f);rc=CURLE_FAILED_INIT;break;}
             auto headers=JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId); curl_slist *sl=nullptr; for(auto &h:headers)sl=curl_slist_append(sl,h.c_str());
             WriteCtx ctx{f,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes};
-            std::string segmentUrl=urls[k]; const RouteRequest routes(session); const std::string lanUrl=routes.lan(), publicBase=routes.publicRoute(); const RouteKind primaryRoute=(!lanUrl.empty()&&segmentUrl.compare(0,lanUrl.size(),lanUrl)==0)?RouteKind::Lan:RouteKind::Public; curl_easy_setopt(c,CURLOPT_URL,segmentUrl.c_str()); curl_easy_setopt(c,CURLOPT_HTTPHEADER,sl); curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L); curl_easy_setopt(c,CURLOPT_MAXREDIRS,5L); curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L); curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,15L); std::string tlsError; if(!configureTls(c,segmentUrl,&tlsError)){rc=CURLE_SSL_CACERT;std::fclose(f);curl_slist_free_all(sl);curl_easy_cleanup(c);break;} curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,64L); curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,180L); curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,writeCb); curl_easy_setopt(c,CURLOPT_WRITEDATA,&ctx); curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L); curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,progressCb); curl_easy_setopt(c,CURLOPT_XFERINFODATA,&ctx);
-            TelemetryRouteScope primaryRouteScope(primaryRoute,static_cast<std::uint8_t>(attempt),false); TelemetryTimer primaryTimer; rc=curl_easy_perform(c); primaryDuration=primaryTimer.elapsedUs(); primaryMeasured=primaryTimer.active(); code=0; curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&code); std::fflush(f); std::fclose(f); curl_slist_free_all(sl); curl_easy_cleanup(c);
+            std::string segmentUrl=urls[k]; const RouteRequest routes(session); const std::string lanUrl=routes.lan(), publicBase=routes.publicRoute();
+                const RouteKind primaryRoute=(!lanUrl.empty()&&segmentUrl.compare(0,lanUrl.size(),lanUrl)==0)?RouteKind::Lan:RouteKind::Public; curl_easy_setopt(c,CURLOPT_URL,segmentUrl.c_str());
+                curl_easy_setopt(c,CURLOPT_HTTPHEADER,sl); curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L); curl_easy_setopt(c,CURLOPT_MAXREDIRS,5L); curl_easy_setopt(c,CURLOPT_NOSIGNAL,1L);
+                curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,15L); std::string tlsError; if(!configureTls(c,segmentUrl,&tlsError)){rc=CURLE_SSL_CACERT;std::fclose(f);curl_slist_free_all(sl);
+                    curl_easy_cleanup(c);break;} curl_easy_setopt(c,CURLOPT_LOW_SPEED_LIMIT,64L); curl_easy_setopt(c,CURLOPT_LOW_SPEED_TIME,180L); curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,writeCb);
+                curl_easy_setopt(c,CURLOPT_WRITEDATA,&ctx); curl_easy_setopt(c,CURLOPT_NOPROGRESS,0L); curl_easy_setopt(c,CURLOPT_XFERINFOFUNCTION,progressCb);
+                curl_easy_setopt(c,CURLOPT_XFERINFODATA,&ctx);
+            TelemetryRouteScope primaryRouteScope(primaryRoute,static_cast<std::uint8_t>(attempt),false); TelemetryTimer primaryTimer; rc=curl_easy_perform(c);
+                primaryDuration=primaryTimer.elapsedUs(); primaryMeasured=primaryTimer.active(); code=0; curl_easy_getinfo(c,CURLINFO_RESPONSE_CODE,&code); std::fflush(f); std::fclose(f);
+                curl_slist_free_all(sl); curl_easy_cleanup(c);
             good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); primaryRc=rc; primaryCode=code; primaryBytes=good?bytes:0; primaryGood=good;
-            if(!good && rc!=CURLE_OK && !lanUrl.empty() && !publicBase.empty() && segmentUrl.compare(0,lanUrl.size(),lanUrl)==0){ fallbackAttempted=true; std::printf("[Route] LAN failed; public fallback\n"); std::remove(part.c_str()); FILE *fallback=std::fopen(part.c_str(),"wb"); if(fallback){ CURL *pc=curl_easy_init(); if(pc){ curl_slist *ps=nullptr;for(const auto &h:JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId))ps=curl_slist_append(ps,h.c_str()); WriteCtx pctx{fallback,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes}; std::string publicUrl=RouteRequest::replaceBase(segmentUrl,lanUrl,publicBase); curl_easy_setopt(pc,CURLOPT_URL,publicUrl.c_str());curl_easy_setopt(pc,CURLOPT_HTTPHEADER,ps);curl_easy_setopt(pc,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(pc,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(pc,CURLOPT_CONNECTTIMEOUT,15L);std::string tlsError;if(!configureTls(pc,publicUrl,&tlsError)){rc=CURLE_SSL_CACERT;curl_slist_free_all(ps);curl_easy_cleanup(pc);}else{curl_easy_setopt(pc,CURLOPT_WRITEFUNCTION,writeCb);curl_easy_setopt(pc,CURLOPT_WRITEDATA,&pctx);curl_easy_setopt(pc,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(pc,CURLOPT_XFERINFOFUNCTION,progressCb);curl_easy_setopt(pc,CURLOPT_XFERINFODATA,&pctx); TelemetryRouteScope fallbackRouteScope(RouteKind::Public,static_cast<std::uint8_t>(attempt),true); TelemetryTimer fallbackTimer; rc=curl_easy_perform(pc); fallbackDuration=fallbackTimer.elapsedUs(); fallbackMeasured=fallbackTimer.active(); code=0; curl_easy_getinfo(pc,CURLINFO_RESPONSE_CODE,&code); fallbackRc=rc; fallbackCode=code;curl_slist_free_all(ps);curl_easy_cleanup(pc);}} std::fflush(fallback);std::fclose(fallback); good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); } }
+            if(!good && rc!=CURLE_OK && !lanUrl.empty() && !publicBase.empty() && segmentUrl.compare(0,lanUrl.size(),lanUrl)==0){ fallbackAttempted=true;
+                    std::printf("[Route] LAN failed; public fallback\n"); std::remove(part.c_str()); FILE *fallback=std::fopen(part.c_str(),"wb"); if(fallback){ CURL *pc=curl_easy_init();
+                        if(pc){ curl_slist *ps=nullptr;for(const auto &h:JellyfinApi::buildAuthHeaders(session.accessToken,session.deviceId))ps=curl_slist_append(ps,h.c_str());
+                            WriteCtx pctx{fallback,std::numeric_limits<std::uint64_t>::max(),this,item.itemId,scope,generation,item.downloadedBytes};
+                            std::string publicUrl=RouteRequest::replaceBase(segmentUrl,lanUrl,publicBase);
+                            curl_easy_setopt(pc,CURLOPT_URL,publicUrl.c_str());
+                            curl_easy_setopt(pc,CURLOPT_HTTPHEADER,ps);
+                            curl_easy_setopt(pc,CURLOPT_FOLLOWLOCATION,1L);curl_easy_setopt(pc,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(pc,CURLOPT_CONNECTTIMEOUT,15L);std::string tlsError;
+                            if(!configureTls(pc,publicUrl,&tlsError)){rc=CURLE_SSL_CACERT;curl_slist_free_all(ps);curl_easy_cleanup(pc);}else{curl_easy_setopt(pc,CURLOPT_WRITEFUNCTION,writeCb);
+                            curl_easy_setopt(pc,CURLOPT_WRITEDATA,&pctx);curl_easy_setopt(pc,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(pc,CURLOPT_XFERINFOFUNCTION,progressCb);
+                            curl_easy_setopt(pc,CURLOPT_XFERINFODATA,&pctx);
+                            TelemetryRouteScope fallbackRouteScope(RouteKind::Public,static_cast<std::uint8_t>(attempt),true);
+                            TelemetryTimer fallbackTimer;
+                            rc=curl_easy_perform(pc); fallbackDuration=fallbackTimer.elapsedUs(); fallbackMeasured=fallbackTimer.active(); code=0; curl_easy_getinfo(pc,CURLINFO_RESPONSE_CODE,&code);
+                            fallbackRc=rc; fallbackCode=code;curl_slist_free_all(ps);curl_easy_cleanup(pc);}} std::fflush(fallback);std::fclose(fallback);
+                        good=rc==CURLE_OK&&code>=200&&code<300&&nonemptyFile(part,bytes); } }
             if(fallbackAttempted){fallbackGood=good;fallbackBytes=good?bytes:0;}
             bool retry=false;
             if(!good && rc!=CURLE_ABORTED_BY_CALLBACK)
                 retry=hlsSegmentShouldRetry(code,(int)rc,attempt);
             const std::uint16_t retryDelayMs=retry?static_cast<std::uint16_t>((1u<<(attempt-1))*1000u):0;
-            recordHlsSegmentAttempt(primaryMeasured,primaryDuration,telemetryJobSequence,k,attempt,retryDelayMs,primaryRoute,primaryGood?Outcome::Success:(primaryRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,primaryBytes,primaryCode,primaryRc);
-            if(fallbackAttempted)recordHlsSegmentAttempt(fallbackMeasured,fallbackDuration,telemetryJobSequence,k,attempt,retryDelayMs,RouteKind::Public,fallbackGood?Outcome::Success:(fallbackRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,fallbackBytes,fallbackCode,fallbackRc);
+            recordHlsSegmentAttempt(primaryMeasured,primaryDuration,telemetryJobSequence,k,attempt,retryDelayMs,primaryRoute,
+                primaryGood?Outcome::Success:(primaryRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,primaryBytes,primaryCode,primaryRc);
+            if(fallbackAttempted)recordHlsSegmentAttempt(fallbackMeasured,fallbackDuration,telemetryJobSequence,k,attempt,retryDelayMs,RouteKind::Public,
+                fallbackGood?Outcome::Success:(fallbackRc==CURLE_ABORTED_BY_CALLBACK?Outcome::Cancelled:Outcome::Failure),retry,fallbackBytes,fallbackCode,fallbackRc);
             if(good){std::printf("[Download] segment=%llu attempt=%u HTTP=%ld\n",(unsigned long long)k,attempt,code);break;}
             if(rc==CURLE_ABORTED_BY_CALLBACK) break;
             std::printf("[Download] segment=%llu attempt=%u HTTP=%ld%s\n",(unsigned long long)k,attempt,code,retry?" retrying":"");
@@ -181,10 +273,53 @@ bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std
             if(willRetry)performanceTelemetry().addDownloadSegmentRetries();
             if(!willRetry) break;
         }
-        if(!good){std::string detail="segment="+std::to_string(k)+" curl="+std::to_string((int)rc)+" "+curl_easy_strerror(rc)+" HTTP="+std::to_string(code);std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p==m_items.end())return false;if(m_deleteRequested.erase(item.itemId)){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}if(rc==CURLE_ABORTED_BY_CALLBACK){p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}p->state=hlsSegmentFailureState(code,(int)rc);p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);p->lastError=detail;m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}
+        if(!good){std::string detail="segment="+std::to_string(k)+" curl="+std::to_string((int)rc)+" "+curl_easy_strerror(rc)+" HTTP="+std::to_string(code);
+                std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p==m_items.end())return false;
+                if(m_deleteRequested.erase(item.itemId)){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();
+                    publishDownloadGauges(m_items,m_planJobs.size());return false;}if(rc==CURLE_ABORTED_BY_CALLBACK){p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);
+                    m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;
+                    }if(p->state!=DownloadState::Paused&&p->state!=DownloadState::PausedForPlayback)p->state=hlsSegmentFailureState(code,(int)rc);p->recentBytesPerSec=0;
+                m_progressSamples.erase(item.itemId);p->lastError=detail;m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}
         if(std::rename(part.c_str(),done.c_str())) return false;
         performanceTelemetry().addDownloadSegmentCompleted();
-        m_store.reconcile(scope,item,nullptr); item.hlsCompletedSegments=k+1; item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0; item.hlsActivePercent=downloadPercent(item); item.state=DownloadState::Downloading; {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i=item;m_store.saveManifest(scope,i,nullptr);persistLocked();}}
+        // The segment file just renamed to its final name is the source of
+        // truth: account for its bytes incrementally instead of rescanning
+        // every segment from disk, and persist only this item's manifest.
+        // The index (item ids) is unchanged by segment progress, and a crash
+        // between segments still recovers: startup reconcile rebuilds the
+        // counters from the segment files on disk.
+        applyHlsSegmentCompleted(item,k,bytes); item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0; item.hlsActivePercent=downloadPercent(item);
+            {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){
+        // The reconciler already wiped this source's segment files when it
+        // reset the identity above; drop the just-renamed stale file inside
+        // this same critical section (never after unlock, never twice) so a
+        // concurrently restarted new-source transfer cannot rename a valid
+        // segment onto this path in between, then stop cleanly.
+        if(transferSourceChanged(i,transferSourceId,transferEtag)){std::remove(done.c_str());return false;}publishTransferProgress(i,item);persistItemLocked(i.itemId);break;}}
     }
-    std::lock_guard<std::mutex>l(m_mutex); auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;}); if(p==m_items.end()||!m_store.validateCompletedDownload(scope,item,nullptr))return false; m_store.reconcile(scope,item,nullptr); item.state=DownloadState::Complete; item.recentBytesPerSec=0; item.lastError.clear(); *p=item; m_progressSamples.erase(item.itemId);m_store.saveManifest(scope,item,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return true;
+    std::lock_guard<std::mutex>l(m_mutex); auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;}); if(p==m_items.end())return false;
+    // The delete flag is consumed here as on the failure path: a delete
+    // requested during the final segment removes instead of completing (B).
+    const bool deleteRequested=m_deleteRequested.erase(item.itemId)!=0;
+    // Identity this transfer ran under vs the live item (A); validation only
+    // runs when neither delete nor a source change already decided it (C).
+    const bool sourceChanged=!deleteRequested&&transferSourceChanged(*p,transferSourceId,transferEtag);
+    std::string validationError; const bool validated=!deleteRequested&&!sourceChanged&&m_store.validateCompletedDownload(scope,item,&validationError);
+    switch(decideTransferFinish(deleteRequested,sourceChanged,validated)){
+    case TransferFinish::Removed:
+        m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;
+    case TransferFinish::StaleAborted:
+        return false;
+    case TransferFinish::RetryFailed:
+        applyTransferValidationFailure(*p,validationError);m_progressSamples.erase(p->itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();
+            publishDownloadGauges(m_items,m_planJobs.size());return false;
+    case TransferFinish::Complete:
+        break;
+    }
+    m_store.reconcile(scope,item,nullptr); item.state=DownloadState::Complete; item.recentBytesPerSec=0; item.lastError.clear();
+    // Disk-validated completion is terminal truth, so Complete is published even over an interrupt; still field-wise, never a stale whole-item copy.
+    p->hlsStorage=item.hlsStorage; p->hlsSegmentCount=item.hlsSegmentCount; p->hlsProfile=item.hlsProfile; p->expectedSize=item.expectedSize; p->downloadedBytes=item.downloadedBytes;
+        p->hlsCompletedSegments=item.hlsCompletedSegments; p->hlsCurrentSegmentBytes=0; p->hlsCurrentSegmentSize=0; p->hlsActivePercent=item.hlsActivePercent;
+        p->state=DownloadState::Complete; p->recentBytesPerSec=0; p->lastError.clear(); m_progressSamples.erase(p->itemId);m_store.saveManifest(scope,*p,nullptr);persistLocked();
+        publishDownloadGauges(m_items,m_planJobs.size());return true;
 }}

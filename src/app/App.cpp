@@ -41,20 +41,6 @@ constexpr Uint32 PLAYBACK_STARTING_PHASE_COUNT = 7;
 constexpr Uint32 PLAYBACK_STARTING_DURATION_MS =
     PLAYBACK_STARTING_PHASE_MS * PLAYBACK_STARTING_PHASE_COUNT;
 
-const char *playbackStartingLabel(Uint32 elapsedMs)
-{
-    static const char *const labels[] = {
-        "Loading...", "Loading..", "Loading.", "Loading",
-        "Loading.", "Loading..", "Loading..."
-    };
-
-    Uint32 phase = elapsedMs / PLAYBACK_STARTING_PHASE_MS;
-    if (phase >= PLAYBACK_STARTING_PHASE_COUNT) {
-        phase = PLAYBACK_STARTING_PHASE_COUNT - 1;
-    }
-    return labels[phase];
-}
-
 bool desktopNativeWindowRequested() noexcept
 {
     const char *value = std::getenv("MIYOOFIN_DESKTOP_WINDOW");

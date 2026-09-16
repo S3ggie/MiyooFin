@@ -220,7 +220,8 @@ static bool normalizeSha256(const std::string &in, std::string &out)
 }
 
 // -------------------------------------------------------------------
-bool parseUpdateManifest(const std::string &json, UpdateManifest &out)
+bool parseUpdateManifest(const std::string &json, UpdateManifest &out,
+                         bool allowNonHttpsAssets)
 {
     out = UpdateManifest{};
 
@@ -254,18 +255,21 @@ bool parseUpdateManifest(const std::string &json, UpdateManifest &out)
     if (tarSha.empty()) return false;
     if (tarSize.empty()) return false;
 
-    // Defense-in-depth: reject non-HTTPS URLs and non-GitHub hosts.
-    if (tarUrl.compare(0, 8, "https://") != 0) return false;
-    {
-        // Must be hosted on github.com or objects.githubusercontent.com
-        bool okHost = false;
-        static const char *trusted[] = {
-            "github.com/", "objects.githubusercontent.com/"
-        };
-        for (auto *h : trusted) {
-            if (tarUrl.find(h) != std::string::npos) { okHost = true; break; }
+    // Defense-in-depth: reject non-HTTPS URLs and non-GitHub hosts
+    // unless dev override is active (allowNonHttpsAssets).
+    if (!allowNonHttpsAssets) {
+        if (tarUrl.compare(0, 8, "https://") != 0) return false;
+        {
+            // Must be hosted on github.com or objects.githubusercontent.com
+            bool okHost = false;
+            static const char *trusted[] = {
+                "github.com/", "objects.githubusercontent.com/"
+            };
+            for (auto *h : trusted) {
+                if (tarUrl.find(h) != std::string::npos) { okHost = true; break; }
+            }
+            if (!okHost) return false;
         }
-        if (!okHost) return false;
     }
 
     std::string shaNorm;

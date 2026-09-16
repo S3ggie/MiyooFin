@@ -77,6 +77,11 @@ the captured app log.
   with populated rails (Continue Watching / Recently Added from stub).
 - `series.txt` — Home → `NextTab`×2 → Shows → `Right` into the grid →
   `Confirm` opens "Testville" → assert seasons listed.
+- `login-400.txt` — boot with a saved server URL but no session, so the
+  app lands on LoginScreen; the stub answers AuthenticateByName with
+  HTTP 400 + empty body. Types a username/password, presses Sign In
+  twice, and asserts the app survives (regression pin for the
+  double-submit SIGABRT) with a rendered error frame.
 - `smoke-device.txt` / `series-device.txt` — device counterparts used
   only by `device-run.sh` (roomier bounds, settle before screenshots,
   real-server content; see "Device scripts and the rails marker").
@@ -84,7 +89,7 @@ the captured app log.
 ## Run it
 
 ```sh
-make ui-script-test            # launcher round-trip, then both scripts (screenshots to output/ui-script/)
+make ui-script-test            # launcher round-trip, then the scripted flows (screenshots to output/ui-script/)
 sh tools/ui-script/run.sh smoke    # one script
 MIYOOFIN_UI_TIMEOUT_S=60 sh tools/ui-script/run.sh series
 ```

@@ -477,6 +477,36 @@ case "$NAME" in
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
         ;;
+    restore-e3d)
+        want='[EpisodeBrowserScreen]'
+        SHOT="$OUT/shots/restore-e3-final.bmp"
+        CHECKS="rendered"
+        ;;
+    restore-e3c)
+        want='[EpisodeBrowserScreen]'
+        SHOT="$OUT/shots/restore-episodes.bmp"
+        CHECKS="rendered"
+        ;;
+    restore-e3b)
+        want='[SeriesScreen] enter series='
+        SHOT="$OUT/shots/restore-seasons.bmp"
+        CHECKS="rendered,seasons"
+        ;;
+    restore-e3)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/restore-show-selected.bmp"
+        CHECKS="rendered"
+        ;;
+    shows-grid)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/shows-grid.bmp"
+        CHECKS="rendered"
+        ;;
+    dl-delete)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/dl-after-delete.bmp"
+        CHECKS="rendered"
+        ;;
     dlview)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/downloads-tab.bmp"

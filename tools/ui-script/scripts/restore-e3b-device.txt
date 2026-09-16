@@ -1,0 +1,13 @@
+# Stage 2a: open Adventure Time and look at the season list.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 12000
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+KEY Right 3 2500
+KEY Right 3 2500
+SETTLE 4000
+KEY Confirm 3 4000
+SETTLE 12000
+SCREENSHOT restore-seasons
+QUIT

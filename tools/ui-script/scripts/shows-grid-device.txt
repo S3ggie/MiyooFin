@@ -1,0 +1,7 @@
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 12000
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+SCREENSHOT shows-grid
+QUIT

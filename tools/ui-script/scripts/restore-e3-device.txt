@@ -1,0 +1,11 @@
+# Stage 1: move to Adventure Time in the Shows grid and VERIFY before opening.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 12000
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+KEY Right 3 2500
+KEY Right 3 2500
+SETTLE 5000
+SCREENSHOT restore-show-selected
+QUIT

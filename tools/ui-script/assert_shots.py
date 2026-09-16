@@ -27,8 +27,14 @@ W, H = 640, 480
 # Populated Home: distinct=11 dominant=0.635; empty Home: distinct=4
 # dominant=0.911. Rails band populated: distinct=8 bright=0.013; empty
 # rails: distinct=2 bright=0.0024.
-MIN_DISTINCT_RENDERED = 8
+# "rendered" means something was drawn, not "lots of colours": a legitimately
+# flat screen (e.g. the Downloads list) has few colours but still has text.
+# Blank/single-colour frames fail on the colour count; frames with no text at
+# all fail on the bright fraction.  Calibrated: populated Home distinct=11
+# bright=0.186; Downloads list distinct=7 bright~0.02; blank frame distinct<=4.
+MIN_DISTINCT_RENDERED = 5
 MAX_DOMINANT_RENDERED = 0.88
+MIN_BRIGHT_RENDERED = 0.002
 MIN_DISTINCT_RAILS = 5
 MIN_BRIGHT_RAILS = 0.006
 MIN_DISTINCT_SEASONS = 5
@@ -85,10 +91,12 @@ def band(px, y0, y1):
 def check_rendered(px):
     s = stats(px)
     ok = s["distinct"] >= MIN_DISTINCT_RENDERED \
-        and s["dominant"] <= MAX_DOMINANT_RENDERED
-    return ok, ("distinct=%d (>=%d) dominant=%.3f (<=%.2f)"
+        and s["dominant"] <= MAX_DOMINANT_RENDERED \
+        and s["bright_frac"] >= MIN_BRIGHT_RENDERED
+    return ok, ("distinct=%d (>=%d) dominant=%.3f (<=%.2f) bright=%.4f (>=%.4f)"
                 % (s["distinct"], MIN_DISTINCT_RENDERED,
-                   s["dominant"], MAX_DOMINANT_RENDERED))
+                   s["dominant"], MAX_DOMINANT_RENDERED,
+                   s["bright_frac"], MIN_BRIGHT_RENDERED))
 
 
 def check_rails(px):

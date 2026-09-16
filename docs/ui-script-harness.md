@@ -77,11 +77,14 @@ the captured app log.
   with populated rails (Continue Watching / Recently Added from stub).
 - `series.txt` — Home → `NextTab`×2 → Shows → `Right` into the grid →
   `Confirm` opens "Testville" → assert seasons listed.
+- `smoke-device.txt` / `series-device.txt` — device counterparts used
+  only by `device-run.sh` (roomier bounds, settle before screenshots,
+  real-server content; see "Device scripts and the rails marker").
 
 ## Run it
 
 ```sh
-make ui-script-test            # both scripts, screenshots to output/ui-script/
+make ui-script-test            # launcher round-trip, then both scripts (screenshots to output/ui-script/)
 sh tools/ui-script/run.sh smoke    # one script
 MIYOOFIN_UI_TIMEOUT_S=60 sh tools/ui-script/run.sh series
 ```
@@ -99,9 +102,10 @@ marker/shot/checks row to the `case` in `run.sh`, and extend
 ## Device variant (ARM, Miyoo Mini Plus over SSH)
 
 `tools/ui-script/device-run.sh` drives the **real installed ARM binary**
-on the device with the same scripted timeline: the same `shim.cpp`
-cross-compiled to `output/ui-script/shim-arm.so`, the same script files,
-and the same `assert_shots.py` oracle. Screenshots go through the same
+on the device through the **real privileged Onion launch path**: the
+same `shim.cpp` cross-compiled to `output/ui-script/shim-arm.so`, the
+device script files (`scripts/<name>-device.txt`), and the same
+`assert_shots.py` oracle. Screenshots go through the same
 `/tmp/miyoofin-screenshot-request` flag + app framebuffer hook that
 `tools/miyoo/miyoofin-screenshot.sh` uses (the shim sets a per-shot
 `MIYOOFIN_SCREENSHOT_PATH` under the device scratch dir instead of the
@@ -109,19 +113,120 @@ fixed `screenshot.bmp`).
 
 ```sh
 make -f tools/ui-script/Makefile.arm verify   # build ARM shim + readelf/nm evidence
-sh tools/ui-script/device-run.sh --dry-run smoke   # print every SSH action, do nothing
+sh tools/ui-script/device-run.sh --dry-run smoke   # print every host/remote action, do nothing
 sh tools/ui-script/device-run.sh smoke             # run smoke against the device
 MIYOOFIN_UI_TIMEOUT_S=300 sh tools/ui-script/device-run.sh series
 ```
 
-The device cannot reach the host's loopback stub, so the runner starts
-`stub_server.py <portfile> 0.0.0.0` on the host (loopback-only remains
-the default; the LAN bind is opt-in per invocation) and seeds the
-device scratch session with `server_url=http://<host-LAN-IP>:<port>`.
-The host IP is auto-detected via `ip route get`; override with
-`MIYOOFIN_UI_HOST_IP` when detection fails (VPNs, multiple NICs).
-SSH target/port/key come from `tools/miyoo/ssh-common.sh`
-(`MIYOO_SSH_TARGET`, `MIYOO_SSH_PORT`, `MIYOO_SSH_KEY`).
+### Why privileged: non-root launch cannot work
+
+Launching the binary directly over SSH runs as the default non-root
+SSH user (`$MIYOO_SSH_TARGET`, usually `onion`), and that path is a
+proven dead end, not a supported mode: `/dev/mi/gfx` and `/dev/mi/sys`
+are root-only and `/dev/urandom` is `0660 root:root` on stock OnionOS,
+so the app logs `failed to open /dev/mi/... (Permission denied)`,
+never renders, and exits about one second after `[App] Initialisation
+complete`. There is no root SSH and no sudo on the device — the only
+privileged path is Onion's own handoff, which is what this harness
+uses. Production launches the app as root via
+`/mnt/SDCARD/App/MiyooFin/launch.sh`; the harness temporarily borrows
+that exact path and gives it back (next section).
+
+### Privileged flow step by step
+
+1. Build the ARM shim; check preconditions over SSH: `launch.sh`
+   exists, is executable, and contains the `./miyoofin` line; **no**
+   harness backup is already present (refuse rather than clobber — see
+   below); no `miyoofin` is running; MainUI is the sole foreground UI
+   (the Onion handoff requires it).
+2. `mkdir -p` the `/tmp/miyoofin-ui-script` scratch dir (`scp` does not
+   create parents) and push `shim-arm.so` + the device script.
+3. Copy `launch.sh` to `launch.sh.uiscript-bak` **on the device** with a
+   plain `cp` (no `-p`), then rewrite `launch.sh` strictly **in place**
+   (`cat ... > launch.sh`: no `chmod`, no `mv`, no rename) to add, just
+   before `./miyoofin`:
+   `LD_PRELOAD=<scratch>/shim-arm.so`, the `MIYOOFIN_UI_*` env
+   (`SCRIPT/LOG/SHOT_DIR/RESULT`, plus `MIYOOFIN_UI_DEVICE_KEYS=1`
+   unless `--desktop-keys`), truncates the app log and verdict file,
+   and redirects the app's stdout into that log
+   (`./miyoofin >>"$MIYOOFIN_UI_LOG" 2>&1`). The rest of `launch.sh`
+   is untouched. In-place writes preserve the root-owned 0777 inode, so
+   no ownership/permission syscall can fail midway: `cp -p` and `chmod`
+   on the launcher both fail with `Operation not permitted` for the
+   unprivileged SSH user, and are never used (not for backup, inject, or
+   restore).
+4. Trigger `tools/miyoo/onion-remote-launch.sh` in the background: it
+   queues the same `/tmp/cmd_to_run.sh` handoff MainUI uses, MainUI
+   exits, and the Onion runtime launches the app **as root** — with its
+   REAL session and real server. The host polls the robust
+   `/proc/[0-9]*/comm` loop for `miyoofin` (BusyBox `pgrep -x` is
+   broken on this device), bounded at 120s.
+5. Poll the scratch `result.txt` every 3s for the shim's verdict
+   (`script complete, quitting app` or `FAIL`), bounded by
+   `MIYOOFIN_UI_TIMEOUT_S` (default 300s). The device scripts end with
+   `QUIT`, so a clean run self-exits; otherwise
+   `tools/miyoo/onion-remote-exit.sh` exits it gracefully and MainUI's
+   return is verified.
+6. Pull `result.txt`, the shots, and the app log into
+   `output/ui-script/device-<name>/`, **restore `launch.sh` with
+   verification, remove scratch**, then run the same grep +
+   `assert_shots.py` oracle as `run.sh`.
+
+There is deliberately no stub server and no reverse SSH tunnel on this
+path: the app uses its real session against the real server, exactly as
+production does, so the whole tunnel/healthz complexity is gone from
+the device script. (The stub still serves the desktop harness
+`tools/ui-script/run.sh`, which has no server of its own.) The device
+harness therefore exercises the real server/session; what it still
+cannot verify is listed under "What the device variant can and cannot
+verify" below.
+
+### Backup/restore guarantee
+
+The device must never be left with an injected launcher. Enforcement:
+
+- The backup lives on the device next to the original
+  (`<app>/launch.sh.uiscript-bak`). If it is already present at entry,
+  the run **refuses immediately** with the manual restore command
+  (`cat '<app>/launch.sh.uiscript-bak' > '<app>/launch.sh' && rm
+  '<app>/launch.sh.uiscript-bak'`) instead of clobbering it — a stale
+  backup means a previous run failed to restore, and only the operator
+  can judge the installed launcher.
+- Before touching `launch.sh`, the run pulls a pristine copy and records
+  its on-device checksum; then `NEEDS_RESTORE` is armed, so an `EXIT`
+  trap (with `INT`/`TERM` converted to failure exits so the same trap
+  fires) restores on **every** path: success, assertion failure,
+  timeout, injection failure partway through, `INT`, `TERM`. The inject
+  and restore code is one shared file
+  (`tools/ui-script/launcher-surgery.sh`) piped to the device over SSH —
+  the offline test runs its exact bytes locally.
+- Restore is verified, not assumed: write the backup back **in place**,
+  `cmp` byte-compare against the backup, match the pre-injection
+  checksum, confirm `MIYOOFIN_UI_`/`LD_PRELOAD=` are absent, confirm the
+  executable bit is kept, then remove the backup. Restore is retried with
+  backoff across transient SSH failures. Any step failing exits non-zero
+  with a `CRITICAL` line carrying the exact manual recovery command.
+- Scratch (`/tmp/miyoofin-ui-script`) is removed on the same trap, and
+  the background launch-helper client is reaped; every wait is bounded
+  (app appearance 120s, verdict `MIYOOFIN_UI_TIMEOUT_S`, helper reap
+  30s, per-SSH `ConnectTimeout` 10s). The harness never reboots or
+  power-cycles the device.
+
+### Failure modes
+
+- Helper rejects the handoff (MainUI not resident, stale queue, app
+  already running): the run fails before anything is injected, naming
+  the helper's reason.
+- App never appears / never reaches a verdict: fail loudly after the
+  bound; the launcher is still restored and verified.
+- Graceful exit fails: a non-root SSH user cannot signal the root-run
+  app, so there is no TERM/KILL escalation on this path — the run
+  warns, restores the launcher regardless, and the operator exits the
+  app physically if it is still up.
+- Restore unverifiable: `CRITICAL` non-zero exit carrying the exact
+  manual recovery command; fix by writing the named backup back in
+  place (`cat '<app>/launch.sh.uiscript-bak' > '<app>/launch.sh'`)
+  before launching from Onion again.
 
 ### Scancode mapping
 
@@ -146,58 +251,92 @@ Device codes are the physical scancodes from `InputManager`
 Reachable only via `Raw:`: START=40, MENU=41, R2=42, L2=43, X=225,
 Y=226, SELECT=228 (e.g. `KEY Raw:40`).
 
+### Device scripts and the rails marker
+
+The desktop scripts (`smoke.txt`, `series.txt`) are unchanged. The
+device uses its own `smoke-device.txt` / `series-device.txt`: same
+shape and key names (the shim remaps to device scancodes under
+`MIYOOFIN_UI_DEVICE_KEYS=1`), but roomier bounds and an explicit settle
+before each screenshot.
+
+The settle is load-bearing, not cosmetic: on hardware the smoke
+script's `WAIT_LOG [HomeScreen] Library loaded` matched while the rail
+fetches were still in flight, so the screenshot captured `No content`
+and the script's `QUIT` aborted them (`Transport: Operation was aborted
+by an application callback`). The device scripts therefore wait for
+`Library loaded`, then `SETTLE` (8s smoke, 5s home + 4s seasons
+series), then screenshot — and the `rails`/`seasons` screenshot
+assertion is the real rails-populated verdict.
+
+Why not `WAIT_LOG` the rails directly: the `startup stage=`
+markers (`continue_watching_finished`, `recently_added_finished`) are
+written with `uiDiagnostics().log()`, which goes to the diagnostics
+file — not to stdout — so the shim's log poll (which watches the
+stdout capture) can never match them, and the app is out of scope for
+test-only changes. If a stdout rails-complete marker is ever added to
+the app, prefer it over the settle here.
+
+`series-device.txt` runs against the real server, so it cannot name the
+stub's series: its `WAIT_LOG [SeriesScreen] enter series=` relies on
+substring matching and accepts whichever real series the focused Shows
+tile opens. It needs at least one visible show; an empty Shows grid
+fails loudly at the `WAIT_LOG` instead of screenshotting nothing.
+
 ### Safety rules (unattended hardware)
 
 - Never reboots or power-cycles the device — no such command exists in
   the harness.
-- Never modifies or deletes user data: everything the harness writes on
-  the device lives under `/tmp/miyoofin-ui-script` (shim, script,
-  isolated runtime cwd with the seeded `session.txt`, shots, logs).
-  The app runs with cwd=scratch, so its cwd-relative state (session,
-  cache, downloads, catalog) lands there, not in the real app dir. The
-  installed binary and `lib/` are used read-only.
-- Refuses to start while a `miyoofin` is already running.
-- MainUI is never stopped or started; its residency is recorded at entry
-  and verified unchanged at exit (warning on mismatch, never a restart).
-- Cleanup runs on EXIT/INT/TERM/timeout: graceful exit via the SIGUSR1
-  helper when present (`/tmp/miyoofin-graceful-exit`, the same helper
-  `onion-remote-exit.sh` uses), else SIGTERM, else SIGKILL — each step
-  bounded (15s) — then scratch removal. No orphaned `miyoofin`, no
-  device left with the app running.
-- Every wait is bounded (stub port 10s, app run `MIYOOFIN_UI_TIMEOUT_S`
-  default 180s, per-SSH `ConnectTimeout` 10s); the whole run terminates
-  deterministically.
+- The only writes outside `/tmp/miyoofin-ui-script` are the launcher
+  backup + injected copy inside the app dir, both covered by the
+  verified restore above. The installed binary and `lib/` are used
+  read-only; the real session/catalog are used as production uses them
+  (that is the point of the exercise).
+- Refuses to start while a `miyoofin` is already running, while MainUI
+  is not the sole foreground UI, or while a harness backup is already
+  present.
+- MainUI is never stopped or started directly; the Onion helpers own
+  the handoff. Sole-MainUI residency is verified after the run
+  (warning on mismatch, never a restart).
+- Cleanup runs on EXIT/INT/TERM/timeout: graceful exit via
+  `onion-remote-exit.sh` when the app is still resident (no
+  TERM/KILL escalation exists — a non-root SSH user cannot signal the
+  root-run app), then verified launcher restore, then scratch removal,
+  then the launch-helper client is reaped. No device left with an
+  injected launcher or the app running.
+- Every wait is bounded (app appearance 120s, verdict
+  `MIYOOFIN_UI_TIMEOUT_S` default 300s, helper reap 30s, per-SSH
+  `ConnectTimeout` 10s); the whole run terminates deterministically.
 
 ### What the device variant can and cannot verify
 
 Can: app logic and flow on the real ARM binary through the SDL event
-boundary — boot to Home against the stub, navigation wiring with real
-device scancodes, rails/seasons rendering via the framebuffer hook,
-clean exit behaviour. This is the path that will carry download,
-playback, offline-mode and OTA flows once scripts exist for them.
+boundary — privileged root launch through the production Onion
+handoff, boot to Home against the real server/session, navigation
+wiring with real device scancodes, rails/seasons rendering via the
+framebuffer hook, clean exit behaviour. This is the path that will
+carry download, playback, offline-mode and OTA flows once scripts
+exist for them.
 
 Cannot: the physical button→driver path (input is injected at
 `SDL_PollEvent`, below the driver but above the buttons), real
 video/audio output (framebuffer BMPs only), genuine SD-card/WiFi
-timing (stub over LAN WiFi, scratch on `/tmp`), or ARM performance
-characteristics. Direct-launch alongside a resident MainUI is assumed
-but NOT yet verified on hardware (see below).
+timing (real server over WiFi, scratch on `/tmp`), or ARM performance
+characteristics.
 
 ### Hardware status
 
-NOT yet verified against real hardware. Once the device is online:
+Privileged launch verified once by a manual experiment: the app ran as
+root, the log showed `[uishim] loaded 3 steps ...`, `result.txt`
+contained `PASS WAIT_LOG matched: [HomeScreen] Library loaded`, `PASS
+captured .../home.bmp`, `PASS script complete, quitting app`, and a
+real 640x480 framebuffer BMP showed the actual device UI. The earlier
+non-root attempt is the documented dead end above (permission-denied
+`/dev/mi`, exit ~1s after initialisation).
 
-```sh
-make -f tools/ui-script/Makefile.arm verify
-sh tools/ui-script/device-run.sh smoke
-```
-
-Troubleshooting on first hardware contact: if the app refuses the
-`LD_PRELOAD` shim (setuid/suid env scrubbing), if the mmiyoo video
-driver conflicts with a resident MainUI (blank/corrupt framebuffer
-grabs), or if the device cannot route to the host stub IP, the run
-fails loudly with the step named — fix that layer before trusting any
-screenshot verdict.
+Still to verify live: the automated `device-run.sh` end to end
+(backup → inject → handoff → verdict → exit → verified restore),
+including the rails settle timing and the `series-device.txt`
+content-dependent navigation.
 
 ## CI
 

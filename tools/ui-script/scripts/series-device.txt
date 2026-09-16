@@ -1,0 +1,22 @@
+# Device series: from Home, tab over to Shows, open the focused series,
+# assert its seasons screen renders with seasons listed, exit.
+# Tab order is Home, Movies, Shows, Downloads, Settings.
+# Unlike the desktop series.txt this runs against the REAL server/session,
+# so no stub title can be named: WAIT_LOG matches a substring, and the
+# "[SeriesScreen] enter series=" prefix matches whichever real series the
+# focused tile opens. Requires at least one show visible; an empty Shows
+# grid fails loudly at the WAIT_LOG instead of screenshotting nothing.
+# The SETTLE after Library loaded (see smoke-device.txt) and after the
+# SeriesScreen marker (seasons arrive via a worker with no log marker)
+# are what keep the screenshots past the async fetches.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 5000
+KEY NextTab 80 500
+KEY NextTab 80 500
+# Shows tab starts on the alphabet rail; step into the grid first.
+KEY Right 80 500
+KEY Confirm 80 800
+WAIT_LOG [SeriesScreen] enter series= 30000
+SETTLE 4000
+SCREENSHOT series-seasons
+QUIT

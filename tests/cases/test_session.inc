@@ -278,6 +278,59 @@ static void testDeviceIdentityLoadOrCreate()
 }
 
 // -------------------------------------------------------------------
+// Test: DeviceIdentity fallback entropy (unreadable /dev/urandom path)
+// -------------------------------------------------------------------
+static void testDeviceIdentityFallbackEntropy()
+{
+    std::printf("[test] DeviceIdentity fallback entropy\n");
+
+    // The fallback seed must never throw, even where std::random_device
+    // cannot open /dev/urandom (non-root OnionOS ships it 0660 root:root).
+    uint64_t s1 = 0, s2 = 0;
+    try {
+        s1 = DeviceIdentity::fallbackSeed();
+        s2 = DeviceIdentity::fallbackSeed();
+    } catch (...) {
+        CHECK(false);
+    }
+    CHECK(s1 != s2);  // per-call counter keeps rapid calls distinct
+
+    // Same seed -> same UUID; distinct seeds -> distinct UUIDs, all v4-shaped.
+    std::string u1, u2, u3;
+    try {
+        u1 = DeviceIdentity::uuidFromSeed(s1);
+        u2 = DeviceIdentity::uuidFromSeed(s1);
+        u3 = DeviceIdentity::uuidFromSeed(s2);
+    } catch (...) {
+        CHECK(false);
+    }
+    CHECK_EQ(u1, u2);
+    CHECK(u1 != u3);
+    for (const std::string *u : {&u1, &u3}) {
+        CHECK(u->size() == 36);
+        CHECK((*u)[8] == '-');
+        CHECK((*u)[13] == '-');
+        CHECK((*u)[18] == '-');
+        CHECK((*u)[23] == '-');
+        CHECK((*u)[14] == '4');  // version 4
+        char variant = (*u)[19];
+        CHECK(variant == '8' || variant == '9' || variant == 'a' || variant == 'b');
+    }
+
+    // The full generation path must not throw either.
+    std::string g;
+    try {
+        g = DeviceIdentity::generateUuidV4();
+    } catch (...) {
+        CHECK(false);
+    }
+    CHECK(g.size() == 36);
+    CHECK(g[14] == '4');
+
+    std::printf("[test] DeviceIdentity fallback entropy OK\n");
+}
+
+// -------------------------------------------------------------------
 // Test 6: AuthResult, AuthError, and version constants
 // -------------------------------------------------------------------
 static void testAuthTypes()

@@ -1,29 +1,24 @@
 #include "DeviceIdentity.hpp"
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <exception>
 #include <random>
 #include <ctime>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <unistd.h>
+#endif
 
 namespace miyoofin {
 
 // -------------------------------------------------------------------
 // UUID v4 generation — no external dependencies.
 // -------------------------------------------------------------------
-std::string DeviceIdentity::generateUuidV4()
+std::string DeviceIdentity::uuidFromSeed(uint64_t seed)
 {
-    std::mt19937_64 rng;
-
-#if defined(__linux__) || defined(__APPLE__)
-    std::random_device rd;
-    // Seed with 64 bits from the OS entropy source.
-    uint64_t seed = ((uint64_t)rd() << 32) ^ rd();
-    // Mix in time in case the entropy source is weak.
-    seed ^= (uint64_t)std::time(nullptr);
-    rng.seed(seed);
-#else
-    rng.seed(std::time(nullptr));
-#endif
+    std::mt19937_64 rng(seed);
 
     uint8_t bytes[16];
     for (int i = 0; i < 16; ++i) {
@@ -42,6 +37,63 @@ std::string DeviceIdentity::generateUuidV4()
         bytes[8], bytes[9], bytes[10], bytes[11],
         bytes[12], bytes[13], bytes[14], bytes[15]);
     return std::string(buf);
+}
+
+// Non-throwing fallback seed: portable, no /dev/urandom dependency.
+// Goal is a stable-shaped unique device id, not cryptographic randomness.
+uint64_t DeviceIdentity::fallbackSeed() noexcept
+{
+    static uint64_t callCount = 0;
+    ++callCount;
+
+    uint64_t seed = callCount * 0x9E3779B97F4A7C15ULL;
+
+    const uint64_t steady =
+        (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+    const uint64_t system =
+        (uint64_t)std::chrono::system_clock::now().time_since_epoch().count();
+    seed ^= steady + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
+    seed ^= system + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
+
+    // Stack/heap address material (values only, never logged).
+    int stackMarker = 0;
+    static int anchor = 0;
+    const uint64_t addrMix = (uint64_t)(uintptr_t)&stackMarker
+        ^ ((uint64_t)(uintptr_t)&anchor << 33);
+    seed ^= addrMix + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
+
+#if defined(__linux__) || defined(__APPLE__)
+    seed ^= (uint64_t)(uintptr_t)::getpid() * 0x9E3779B97F4A7C15ULL;
+#endif
+
+    // splitmix64-style avalanche so clustered inputs spread across 64 bits.
+    seed += 0x9E3779B97F4A7C15ULL;
+    seed = (seed ^ (seed >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    seed = (seed ^ (seed >> 27)) * 0x94D049BB133111EBULL;
+    seed ^= (seed >> 31);
+    return seed;
+}
+
+std::string DeviceIdentity::generateUuidV4()
+{
+#if defined(__linux__) || defined(__APPLE__)
+    try {
+        std::random_device rd;
+        // Seed with 64 bits from the OS entropy source.
+        uint64_t seed = ((uint64_t)rd() << 32) ^ rd();
+        // Mix in time in case the entropy source is weak.
+        seed ^= (uint64_t)std::time(nullptr);
+        return uuidFromSeed(seed);
+    } catch (const std::exception &) {
+        // e.g. libstdc++ throws std::runtime_error when /dev/urandom
+        // cannot be opened (non-root OnionOS ships it 0660 root:root).
+        return uuidFromSeed(fallbackSeed());
+    } catch (...) {
+        return uuidFromSeed(fallbackSeed());
+    }
+#else
+    return uuidFromSeed((uint64_t)std::time(nullptr));
+#endif
 }
 
 // -------------------------------------------------------------------

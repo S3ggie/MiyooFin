@@ -28,7 +28,7 @@ grep -Fq 'MiyooFin.tar.gz' "$BUILD_SCRIPT" || \
     fail "build script does not reference MiyooFin.tar.gz"
 grep -Fq 'manifest.json' "$BUILD_SCRIPT" || \
     fail "build script does not reference manifest.json"
-grep -Fq 'tar -czp' "$BUILD_SCRIPT" || \
+grep -Eq 'tar +-[a-zA-Z]*(cz|zc)' "$BUILD_SCRIPT" || \
     fail "build script does not create the gzipped tarball"
 grep -Fq 'sha256sum' "$BUILD_SCRIPT" || \
     fail "build script does not compute sha256 checksums"

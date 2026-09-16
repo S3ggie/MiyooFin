@@ -1,0 +1,22 @@
+# Ask the app to check for updates against the PUBLISHED release (one A press
+# only: check, don't install).
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 12000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 8000
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+KEY Down 3
+SETTLE 2000
+KEY Confirm 3 4000
+SETTLE 15000
+SCREENSHOT ota-live
+QUIT

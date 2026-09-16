@@ -853,65 +853,174 @@ static void testPageTransactionCleanupInvariants()
 {
     std::printf("[test] processMediaPageUpsert cleanup invariants\n");
     const std::string src = readTestBytes("src/catalog/CatalogDbWrite.cpp");
+    const std::string internal =
+        readTestBytes("src/catalog/CatalogDbInternal.hpp");
+    // A missing or renamed source file must fail loudly: every search below
+    // would otherwise pass vacuously against an empty string.
+    CHECK(!src.empty());
+    CHECK(!internal.empty());
 
-    // Find the processMediaPageUpsert function body.
-    const auto fnStart = src.find("void CatalogDb::processMediaPageUpsert(");
-    CHECK(fnStart != std::string::npos);
-    const auto fnEnd = src.find("} // namespace miyoofin");
-    CHECK(fnEnd != std::string::npos);
-    const std::string fn = src.substr(fnStart, fnEnd - fnStart);
+    // Pin the checks to the refactored page-upsert helpers so unrelated code
+    // elsewhere in the file cannot satisfy them.
+    const auto helpersStart =
+        src.find("void CatalogDb::markMediaPagePopulationFailed(");
+    const auto processStart =
+        src.find("void CatalogDb::processMediaPageUpsert(");
+    CHECK(helpersStart != std::string::npos);
+    CHECK(processStart != std::string::npos);
+    CHECK(processStart > helpersStart);
+    const std::string pageHelpers =
+        src.substr(helpersStart, processStart - helpersStart);
 
-    // All failure exits from the item loop must use itemLoopFatal = true; break;
-    // rather than raw return — so the shared cleanup finalizes statements.
-    // Count the itemLoopFatal assignments inside the function.
+    const auto itemWriterStart =
+        pageHelpers.find("CatalogDb::writeMediaPageItemRows(");
+    const auto attemptStart =
+        pageHelpers.find("CatalogDb::attemptMediaPageUpsert(");
+    CHECK(itemWriterStart != std::string::npos);
+    CHECK(attemptStart != std::string::npos);
+    CHECK(attemptStart > itemWriterStart);
+    const std::string itemWriter = pageHelpers.substr(
+        itemWriterStart, attemptStart - itemWriterStart);
+    const std::string attempt = pageHelpers.substr(attemptStart);
+
+    // RAII owns every prepared statement in the helpers now: no manual
+    // finalize remains in the write path, and the old flag-based cleanup
+    // scaffolding (itemLoopFatal/itemLoopRetryable) is gone. Statement
+    // release is automatic on every exit, so no exit can forget it.
+    CHECK(pageHelpers.find("sqlite3_finalize") == std::string::npos);
+    CHECK(pageHelpers.find("itemLoopFatal") == std::string::npos);
+    CHECK(pageHelpers.find("itemLoopRetryable") == std::string::npos);
+    // All seven RAII guards are declared in the attempt helper.
+    CHECK(attempt.find("upsertGuard") != std::string::npos);
+    CHECK(attempt.find("deleteGenresGuard") != std::string::npos);
+    CHECK(attempt.find("insertGenreGuard") != std::string::npos);
+    CHECK(attempt.find("deleteImageTagsGuard") != std::string::npos);
+    CHECK(attempt.find("insertImageTagGuard") != std::string::npos);
+    CHECK(attempt.find("viewGuard") != std::string::npos);
+    CHECK(attempt.find("membershipGuard") != std::string::npos);
+    CHECK(internal.find("class ScopedSqliteStmt") != std::string::npos);
+
+    // All failure exits from the per-item writer must map to
+    // MediaPageItemLoopOutcome::Fatal. Count only genuine `return` sites in
+    // the item writer: the `if (itemOutcome == ...)` dispatch comparisons in
+    // the attempt helper must not satisfy this count. Sites: injected
+    // failure, bind failure, non-retryable media step, sort key,
+    // collections, valid()/stale, membership — 7 sites.
     std::size_t fatalCount = 0;
     {
         std::size_t pos = 0;
-        while ((pos = fn.find("itemLoopFatal = true", pos)) != std::string::npos) {
+        while ((pos = itemWriter.find(
+                    "return MediaPageItemLoopOutcome::Fatal", pos))
+               != std::string::npos) {
             ++fatalCount;
             pos += 20;
         }
     }
-    // Injected failure, bind failure, non-retryable media step, sort key,
-    // collections, valid()/stale, membership — at least 7 sites.
     CHECK(fatalCount >= 7);
 
-    // The item loop must not contain any raw return; that would skip finalization.
-    const auto itemLoopStart = fn.find("for (std::size_t n = 0;");
-    CHECK(itemLoopStart != std::string::npos);
-    const auto itemLoopEnd = fn.find("sqlite3_finalize(view)", itemLoopStart);
-    CHECK(itemLoopEnd != std::string::npos);
-    const std::string itemLoop = fn.substr(itemLoopStart, itemLoopEnd - itemLoopStart);
-    CHECK(itemLoop.find("return;") == std::string::npos);
-
-    // The shared cleanup must finalize all prepared statements.
-    CHECK(fn.find("sqlite3_finalize(view)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(membership)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(upsert)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(dg)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(ig)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(dt)") != std::string::npos);
-    CHECK(fn.find("sqlite3_finalize(it)") != std::string::npos);
-
-    // The fatal handler must set Failed state (unless cancelled/superseded).
-    CHECK(fn.find("if (!result.cancelled && !result.superseded)") != std::string::npos);
-    CHECK(fn.find("m_populationStatus.state = CatalogDbPopulationState::Failed") != std::string::npos);
-
-    // Retry-backoff cancellation must set result.cancelled = true.
-    CHECK(fn.find("result.cancelled = true") != std::string::npos);
-
-    // The function must have exactly one ROLLBACK inside the itemLoopFatal handler.
-    const auto fatalHandlerStart = fn.find("if (itemLoopFatal)");
-    CHECK(fatalHandlerStart != std::string::npos);
-    const auto fatalHandlerBlock = fn.substr(fatalHandlerStart, fn.find("if (itemLoopRetryable)", fatalHandlerStart) - fatalHandlerStart);
+    // Transient media step, sort key, collection, and membership failures
+    // must still map to MediaPageItemLoopOutcome::Retryable (4 sites).
+    std::size_t retryableCount = 0;
     {
-        std::size_t rbCount = 0;
         std::size_t pos = 0;
-        while ((pos = fatalHandlerBlock.find("ROLLBACK", pos)) != std::string::npos) {
-            ++rbCount;
+        while ((pos = itemWriter.find(
+                    "return MediaPageItemLoopOutcome::Retryable", pos))
+               != std::string::npos) {
+            ++retryableCount;
+            pos += 20;
+        }
+    }
+    CHECK(retryableCount >= 4);
+    CHECK(itemWriter.find("return MediaPageItemLoopOutcome::Completed")
+          != std::string::npos);
+
+    // Every exit from the per-item writer reports an outcome: a bare
+    // `return;` cannot even appear in this value-returning function, so its
+    // absence alone proves nothing. Instead pin what matters for the new
+    // structure — all returns carry an explicit outcome, and the writer never
+    // publishes results itself (commit/rollback/result publication belong to
+    // the attempt helper, so no exit can skip guard cleanup).
+    {
+        std::size_t returnCount = 0;
+        std::size_t pos = 0;
+        while ((pos = itemWriter.find("return", pos)) != std::string::npos) {
+            ++returnCount;
+            pos += 6;
+        }
+        std::size_t outcomeCount = 0;
+        pos = 0;
+        while ((pos = itemWriter.find("return MediaPageItemLoopOutcome::", pos))
+               != std::string::npos) {
+            ++outcomeCount;
+            pos += 6;
+        }
+        CHECK(outcomeCount >= 12);
+        CHECK(returnCount == outcomeCount);
+    }
+    CHECK(itemWriter.find("command->result.set_value") == std::string::npos);
+    CHECK(itemWriter.find("markMediaPagePopulationFailed") == std::string::npos);
+
+    // Fatal exits must fail the population (unless cancelled/superseded).
+    CHECK(pageHelpers.find("markMediaPagePopulationFailed") != std::string::npos);
+    CHECK(pageHelpers.find("if (!result.cancelled && !result.superseded)") != std::string::npos);
+    CHECK(pageHelpers.find("m_populationStatus.state = CatalogDbPopulationState::Failed") != std::string::npos);
+    // Every fatal exit routes through the helper: begin-failed,
+    // prepare-failed, item-fatal, and the trailing else branch.
+    {
+        std::size_t failedCallCount = 0;
+        std::size_t pos = 0;
+        while ((pos = attempt.find("markMediaPagePopulationFailed(result)", pos)) != std::string::npos) {
+            ++failedCallCount;
             pos += 8;
         }
-        CHECK(rbCount == 1);
+        CHECK(failedCallCount >= 4);
+    }
+
+    // Transaction boundaries, the bounded retry policy, and the outcome
+    // dispatch live in the attempt helper.
+    CHECK(attempt.find("BEGIN IMMEDIATE;") != std::string::npos);
+    CHECK(attempt.find("\"COMMIT;\"") != std::string::npos);
+    CHECK(pageHelpers.find("kPageTransactionMaxAttempts") != std::string::npos);
+    CHECK(pageHelpers.find("pageTransactionShouldRetry") != std::string::npos);
+    CHECK(attempt.find("if (itemOutcome == MediaPageItemLoopOutcome::Fatal)")
+          != std::string::npos);
+    CHECK(attempt.find("if (itemOutcome == MediaPageItemLoopOutcome::Retryable)")
+          != std::string::npos);
+
+    // The test-injection hook used by the catalog tests is intact in the
+    // item writer.
+    CHECK(itemWriter.find("failureSpec().failAfterRows") != std::string::npos);
+    CHECK(itemWriter.find("injected page failure") != std::string::npos);
+
+    // Retry-backoff cancellation lives in processMediaPageUpsert.
+    const auto fnEnd = src.find("} // namespace miyoofin", processStart);
+    CHECK(fnEnd != std::string::npos);
+    const std::string processFn =
+        src.substr(processStart, fnEnd - processStart);
+    // Retry-backoff cancellation must set result.cancelled = true.
+    CHECK(processFn.find("result.cancelled = true") != std::string::npos);
+    CHECK(processFn.find("kPageTransactionMaxAttempts") != std::string::npos);
+
+    // The fatal branch must roll back exactly once before failing.
+    const auto fatalHandlerStart =
+        attempt.find("MediaPageItemLoopOutcome::Fatal) {");
+    CHECK(fatalHandlerStart != std::string::npos);
+    if (fatalHandlerStart != std::string::npos) {
+        const auto fatalHandlerEnd = attempt.find(
+            "MediaPageItemLoopOutcome::Retryable", fatalHandlerStart);
+        CHECK(fatalHandlerEnd != std::string::npos);
+        if (fatalHandlerEnd != std::string::npos
+            && fatalHandlerEnd > fatalHandlerStart) {
+            const std::string fatalHandlerBlock = attempt.substr(
+                fatalHandlerStart, fatalHandlerEnd - fatalHandlerStart);
+            std::size_t rbCount = 0;
+            std::size_t pos = 0;
+            while ((pos = fatalHandlerBlock.find("ROLLBACK", pos)) != std::string::npos) {
+                ++rbCount;
+                pos += 8;
+            }
+            CHECK(rbCount == 1);
+        }
     }
 
     std::printf("[test] processMediaPageUpsert cleanup invariants OK\n");

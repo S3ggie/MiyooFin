@@ -13,15 +13,16 @@ AR  := $(CROSS_PREFIX)ar
 
 # RELEASE switch: set to 1 for a slim release build.
 # RELEASE=0 (default): dev build with -g -O2 for debugging.
-# RELEASE=1:           slim release with -Os, no debug info, unused-section
-#                      stripping via -ffunction-sections/-fdata-sections and
-#                      linker --gc-sections/-s.  Do NOT add -DNDEBUG (assert
-#                      side effects are not audited) or -march/-mcpu (CPU is
-#                      not pinned; hardware risk).
+# RELEASE=1:           release build with -O2 (same optimisation as dev),
+#                      no debug info, strip symbols via -Wl,-s.  The size
+#                      win comes from dropping -g, not from risky flags.
+#                      Do NOT add -DNDEBUG (assert side effects are not
+#                      audited) or -march/-mcpu (CPU is not pinned; hardware
+#                      risk).
 RELEASE ?= 0
 ifeq ($(RELEASE),1)
-  REL_CXXFLAGS := -Os -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables
-  REL_LDFLAGS  := -Wl,--gc-sections -Wl,-s
+  REL_CXXFLAGS := -O2
+  REL_LDFLAGS  := -Wl,-s
 else
   REL_CXXFLAGS := -g -O2
   REL_LDFLAGS  :=

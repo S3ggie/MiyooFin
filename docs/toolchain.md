@@ -137,6 +137,63 @@ import is rejected and the existing libraries remain unchanged.
 After that, `make onionos` and `make package` will work as usual. Use
 `tools/build-release.sh` when producing a public binary ZIP.
 
+## CI toolchain image (private GHCR package)
+
+CI cannot import the device blobs: `vendor/miyoo/lib/` is gitignored and no
+Miyoo device is reachable from a GitHub runner. That is fine, because the app
+itself does not need the blobs — only the SDL2 build inside the Docker image
+does. The device supplies `libmi_*` at runtime, our binary's NEEDED list
+contains no `libmi_*`/`libEGL` entries, and a build with an empty
+`/opt/miyoo/lib` produces a byte-identical binary. So instead of importing
+blobs in CI, we publish the finished toolchain image (cross-compiler plus the
+already-built Miyoo-patched SDL2) as a private package and pull it in CI.
+
+### One-time auth setup
+
+Publishing needs the `write:packages` scope, which a default `gh` login does
+not have:
+
+```shell
+gh auth refresh -h github.com -s write:packages
+```
+
+### Publish / refresh the image
+
+From a machine that already has the local `miyoofin-toolchain:latest` image
+(built via `docker build -f Dockerfile.onionos -t miyoofin-toolchain .`):
+
+```shell
+sh tools/push-toolchain-image.sh
+```
+
+The script tags the local image as
+`ghcr.io/<owner>/miyoofin-toolchain:latest` (owner defaults to the lowercased
+owner of git remote `origin`; override with an argument or `$TOOLCHAIN_OWNER`)
+and pushes it with the label
+`org.opencontainers.image.source=https://github.com/<owner>/MiyooFin`. That
+label is what links the package to this repository on GitHub, which in turn
+is what allows the workflow's `GITHUB_TOKEN` (`packages: read`) to pull the
+private image. Auth comes from `gh auth token` when available, otherwise from
+a prior `docker login ghcr.io`. Re-running is safe (same content pushes the
+same digest) and prints the pushed digest at the end. Preview with:
+
+```shell
+sh tools/push-toolchain-image.sh --dry-run
+```
+
+### What the CI job does
+
+The `arm-verify` job in `.github/workflows/ci.yml` logs in to GHCR, pulls the
+private image, tags it locally as `miyoofin-toolchain:latest` (the tag `make
+verify-arm` expects), cross-builds with the same invocation as the Makefile's
+`onionos` target minus the blob preconditions (`make -f Makefile.cross
+PERF_TELEMETRY=1 RELEASE=1 all bridge reporter`), and runs `make verify-arm`
+(ARM architecture check plus the GLIBC <= 2.28 check inside the container).
+`make onionos` / `make package` are deliberately not used: they depend on
+`check-miyoo-libs` and would fail where the blobs cannot exist.
+
+Note: the image is ~946MB, so it is pulled fresh on every run of the job.
+
 ## Investigation History
 
 1. **steward-fu toolchain** — URL `toolchain.tar.gz` returned 302

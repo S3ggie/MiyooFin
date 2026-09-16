@@ -23,5 +23,8 @@ int main()
     testSqliteTempDirPath();
     testPageTransactionShouldRetry();
     testPageTransactionCleanupInvariants();
+    testOfflineModeToggleDrivesFetchPath();
+    testOfflineSnapshotSignatureStability();
+    testOfflineToggleCancelsFetchAndUsesCache();
     return miyoofin_test::finish("misc-regressions");
 }

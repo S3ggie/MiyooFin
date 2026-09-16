@@ -916,3 +916,207 @@ static void testPageTransactionCleanupInvariants()
 
     std::printf("[test] processMediaPageUpsert cleanup invariants OK\n");
 }
+
+static void testOfflineModeToggleDrivesFetchPath()
+{
+    std::printf("[test] Offline mode toggle drives fetch path\n");
+
+    const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string hdr = readTestBytes("src/ui/screens/HomeScreen.hpp");
+
+    // The Settings OfflineMode toggle handler must call startFetch() rather
+    // than applyPresentationProjection() / restoreOnlinePresentation().
+    // The old code did: if (manualOfflineMode) applyPresentationProjection();
+    //                    else if (!m_libraryOffline) restoreOnlinePresentation();
+    // This was a silent no-op when m_haveCachedSnapshot was not populated.
+    const std::size_t toggleStart = nav.find("SettingsRowAction::OfflineMode");
+    CHECK(toggleStart != std::string::npos);
+    // Search for the closing brace of the OfflineMode case block.
+    // The next case (LocalAddress) starts after it.
+    const std::size_t nextCase = nav.find("LocalAddress", toggleStart);
+    CHECK(nextCase != std::string::npos);
+    const std::string toggleCode = nav.substr(toggleStart, nextCase - toggleStart);
+    CHECK(toggleCode.find("startFetch()") != std::string::npos);
+    // The toggle must NOT call applyPresentationProjection() or
+    // restoreOnlinePresentation() as direct function calls (with parens).
+    // They may appear in comments explaining what was replaced.
+    CHECK(toggleCode.find("applyPresentationProjection()") == std::string::npos);
+    CHECK(toggleCode.find("restoreOnlinePresentation()") == std::string::npos);
+    // The toggle must set the pending flag when startFetch() returns false.
+    CHECK(toggleCode.find("m_offlineModeFetchPending") != std::string::npos);
+
+    // startFetch() must return bool so callers can detect in-flight.
+    CHECK(sync.find("bool HomeScreen::startFetch()") != std::string::npos);
+    CHECK(hdr.find("bool startFetch()") != std::string::npos);
+
+    // finishFetch() must re-fetch when the pending flag is set.
+    CHECK(apply.find("m_offlineModeFetchPending") != std::string::npos);
+    CHECK(apply.find("startFetch()") != std::string::npos);
+
+    // The offline worker path must populate m_haveCachedSnapshot.
+    CHECK(sync.find("m_haveCachedSnapshot = true") != std::string::npos);
+    CHECK(sync.find("m_fetchCacheSaved = true") != std::string::npos);
+
+    std::printf("[test] Offline mode toggle drives fetch path OK\n");
+}
+
+static void testOfflineSnapshotSignatureStability()
+{
+    std::printf("[test] Offline snapshot signature stability/change detection\n");
+
+    // Empty snapshots must match.
+    {
+        DownloadSnapshot a, b;
+        const auto sigA = HomeScreen::computeOfflineSignature(a);
+        const auto sigB = HomeScreen::computeOfflineSignature(b);
+        CHECK(sigA == sigB);
+        CHECK(!(sigA != sigB));
+        CHECK(sigA.availableItemCount == 0);
+        CHECK(sigA.totalDownloadedBytes == 0);
+    }
+
+    // Identical snapshots must match.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete;
+        item.downloadedBytes = 1024;
+        a.items.push_back(item); b.items.push_back(item);
+        a.localBytes = 2048; b.localBytes = 2048;
+        a.reservedBytes = 512; b.reservedBytes = 512;
+        const auto sigA = HomeScreen::computeOfflineSignature(a);
+        const auto sigB = HomeScreen::computeOfflineSignature(b);
+        CHECK(sigA == sigB);
+        CHECK(sigA.availableItemCount == 1);
+        CHECK(sigA.totalDownloadedBytes == 1024);
+        CHECK(sigA.availableItemIds.count("m1") == 1);
+    }
+
+    // Different item count must differ.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete; item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.itemId = "m2";
+        b.items.push_back(item);
+        b.items.push_back(item);
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Different downloadedBytes must differ.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete;
+        item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.downloadedBytes = 200;
+        b.items.push_back(item);
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Unavailable items must not affect the signature.
+    {
+        DownloadSnapshot a, b;
+        DownloadItem item;
+        item.itemId = "m1"; item.itemType = "movie";
+        item.state = DownloadState::Complete; item.downloadedBytes = 100;
+        a.items.push_back(item);
+        item.itemId = "m2";
+        item.state = DownloadState::Queued;
+        a.items.push_back(item);
+        b = a;
+        b.items[1].state = DownloadState::Downloading;
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              == HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Different localBytes must differ.
+    {
+        DownloadSnapshot a, b;
+        a.localBytes = 1000; b.localBytes = 2000;
+        CHECK(HomeScreen::computeOfflineSignature(a)
+              != HomeScreen::computeOfflineSignature(b));
+    }
+
+    // Source-scan: header must declare the signature infrastructure.
+    const std::string hdr = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(hdr.find("OfflineSnapshotSignature") != std::string::npos);
+    CHECK(hdr.find("computeOfflineSignature") != std::string::npos);
+    CHECK(hdr.find("tryApplyCachedOfflineSnapshot") != std::string::npos);
+    CHECK(hdr.find("m_offlineSnapshotCache") != std::string::npos);
+    CHECK(hdr.find("m_offlineSignature") != std::string::npos);
+    CHECK(hdr.find("m_haveOfflineSignature") != std::string::npos);
+    CHECK(hdr.find("m_haveOfflineSnapshotCache") != std::string::npos);
+
+    std::printf("[test] Offline snapshot signature stability/change detection OK\n");
+}
+
+static void testOfflineToggleCancelsFetchAndUsesCache()
+{
+    std::printf("[test] Offline toggle cancels in-flight fetch and uses cache\n");
+
+    const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string offline = readTestBytes("src/ui/screens/HomeScreenOffline.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+
+    // Toggle handler must cancel the in-flight fetch before calling startFetch.
+    {
+        const std::size_t toggleStart = nav.find("SettingsRowAction::OfflineMode");
+        CHECK(toggleStart != std::string::npos);
+        const std::size_t toggleEnd = nav.find("return true;", toggleStart);
+        CHECK(toggleEnd != std::string::npos);
+        const std::string toggleCode = nav.substr(toggleStart, toggleEnd - toggleStart);
+        // Must set cancellation flag before startFetch()
+        CHECK(toggleCode.find("m_fetchCancellation->store(true)") != std::string::npos);
+        // Must try the cached path when entering offline mode
+        CHECK(toggleCode.find("tryApplyCachedOfflineSnapshot()") != std::string::npos);
+        // The cancellation store must appear before the startFetch() call
+        const auto cancelPos = toggleCode.find("m_fetchCancellation->store(true)");
+        const auto fetchPos = toggleCode.find("startFetch()");
+        CHECK(cancelPos < fetchPos);
+    }
+
+    // finishFetch error path must not set LoadState::Error when a mode switch
+    // is pending (avoids transient error flash on cancel).
+    {
+        CHECK(apply.find("m_offlineModeFetchPending") != std::string::npos);
+        // The guard must be: !m_haveCachedSnapshot && !m_offlineModeFetchPending
+        CHECK(apply.find("!m_haveCachedSnapshot && !m_offlineModeFetchPending") != std::string::npos);
+    }
+
+    // Offline worker path must store the cached snapshot + signature.
+    {
+        CHECK(sync.find("m_offlineSnapshotCache = m_cachedSnapshot") != std::string::npos);
+        CHECK(sync.find("m_haveOfflineSnapshotCache = true") != std::string::npos);
+        CHECK(sync.find("m_offlineSignature = computeOfflineSignature(downloads)") != std::string::npos);
+        CHECK(sync.find("m_haveOfflineSignature = true") != std::string::npos);
+    }
+
+    // tryApplyCachedOfflineSnapshot must exist and use the cache.
+    {
+        CHECK(offline.find("HomeScreen::tryApplyCachedOfflineSnapshot()") != std::string::npos);
+        CHECK(offline.find("m_haveOfflineSignature") != std::string::npos);
+        CHECK(offline.find("m_haveOfflineSnapshotCache") != std::string::npos);
+        CHECK(offline.find("computeOfflineSignature(downloads)") != std::string::npos);
+        CHECK(offline.find("m_offlineSnapshotCache") != std::string::npos);
+        CHECK(offline.find("applyPresentationProjection()") != std::string::npos);
+    }
+
+    // computeOfflineSignature must exist and use isAvailable.
+    {
+        CHECK(offline.find("HomeScreen::computeOfflineSignature(") != std::string::npos);
+        CHECK(offline.find("OfflineLibraryQuery::isAvailable") != std::string::npos);
+    }
+
+    std::printf("[test] Offline toggle cancels in-flight fetch and uses cache OK\n");
+}

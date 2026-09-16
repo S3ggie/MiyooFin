@@ -376,8 +376,23 @@ bool HomeScreen::handleAction(Action action)
                 std::printf("[HomeScreen] manual_offline_mode=%s saved=%s\n",
                             m_session.manualOfflineMode ? "ON" : "OFF",
                             sessionSaved ? "yes" : "no");
-                if (m_session.manualOfflineMode) applyPresentationProjection();
-                else if (!m_libraryOffline) restoreOnlinePresentation();
+                // Cancel any in-flight fetch so the mode switch happens as
+                // soon as the fetch notices cancellation (bounded: between
+                // pages), instead of running the old mode's sync to completion.
+                if (m_fetchCancellation) m_fetchCancellation->store(true);
+                // When entering offline mode, try the instant cached path
+                // first — avoids a full fetch when downloads haven't changed.
+                if (m_session.manualOfflineMode
+                    && tryApplyCachedOfflineSnapshot()) {
+                    return true;
+                }
+                // Drive the existing manual-offline fetch path via startFetch().
+                // The worker captures session by value, sees the toggled
+                // manualOfflineMode, and either builds the offline snapshot
+                // (offlineTabsFromSnapshot, removing Home/Search tabs) or runs
+                // the full online sync.
+                if (!startFetch())
+                    m_offlineModeFetchPending = true;
                 return true;
             }
             case SettingsRowAction::LocalAddress:

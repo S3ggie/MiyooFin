@@ -42,15 +42,17 @@ void DownloadManager::reconciler(){for(;;){Session session;std::string scope;std
                 const bool discard=applyReconciledSource(*p,result,source,nowMs);
                 if(discard)m_store.removePartialBytes(scope,p->itemId,nullptr);
                 changed.push_back({old.itemId,discard});}}
-// One persist pass per reconcile: manifests only for items this pass touched,
-// then a single index write.  Stale partial-byte removal happens atomically
+// One persist pass per reconcile: manifests only for items this pass touched.
+// The id set is unchanged by reconcile (source/state flips only; stale bytes
+// are removed, never manifests), so the index is NOT rewritten here —
+// segment/state churn never needs it.  Stale partial-byte removal happens atomically
 // with the in-memory apply above (same critical section) so a wake in between
 // cannot start the new source's transfer over mixed old/new segment files;
-// only the manifest/index writes are deferred here.
+// only the manifest writes are deferred here.
 {std::lock_guard<std::mutex>l(m_mutex);
         if(!aborted&&!m_stop&&generation==m_generation&&scope==m_scope&&!changed.empty()){for(const auto&c:changed){
                 auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==c.first;});if(p==m_items.end()||p->state==DownloadState::Downloading)continue;
-                m_store.saveManifest(scope,*p,nullptr);}m_store.saveIndex(scope,m_items,nullptr);publishDownloadGauges(m_items,m_planJobs.size());}}
+                if(m_store.saveManifest(scope,*p,nullptr))m_indexedIds.insert(p->itemId);}publishDownloadGauges(m_items,m_planJobs.size());}}
 performanceTelemetry().setWorkerActive(WorkerId::DownloadReconcile,false);}}
 
 } // namespace miyoofin

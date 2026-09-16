@@ -35,5 +35,6 @@ int main()
     testWorkerPersistMatchesLiveState(); testStalePlaylistDiscoverySuppressed();
     testAbandonedDeleteFlagConsumed(); testStaleSegmentRemovalUnderLock();
     testDequeuePersistIsPerItem();
+    testPersistTouchesOnlyAffectedItem(); testPersistPendingCrashDurabilityAndTmpSweep(); testIndexNeverNamesMissingManifest(); testPlaybackToggleTouchesOnlyAffectedItems();
     return miyoofin_test::finish("downloads");
 }

@@ -866,7 +866,9 @@ static void testDownloadPipelineIoGuards()
     CHECK(!worker.empty());
     // Reconciler persists once per pass, not once per item.
     CHECK(sourceLacks(worker,"persistLocked"));
-    CHECK(sourceCount(worker,"saveIndex")==1);
+    // The id set is unchanged by reconcile, so no index write: manifests of
+    // touched items only.
+    CHECK(sourceLacks(worker,"saveIndex"));
     CHECK(sourceContains(worker,"saveManifest"));
     // The apply step operates on the LIVE item under the lock: the shared
     // helper merges into *p, and only {id,discard} is recorded for the
@@ -876,7 +878,8 @@ static void testDownloadPipelineIoGuards()
     CHECK(sourceLacks(worker,"*p=updated"));
     CHECK(sourceLacks(worker,"DownloadItem updated"));
     // Stale partial bytes are removed atomically in the same critical
-    // section as the apply; the deferred pass only writes manifests+index.
+    // section as the apply; the deferred pass only writes the touched
+    // manifests (no index: the id set is unchanged by reconcile).
     CHECK(sourceCount(worker,"removePartialBytes")==1);
     const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
     CHECK(!manager.empty());
@@ -994,34 +997,96 @@ static void testTransferFinishDecision()
 static void testWorkerPersistMatchesLiveState()
 {
     std::printf("[test] worker persist matches live state\n");
-    // Behavioural (D): a pause() racing the worker's enqueue persist must not
-    // be lost on disk.  Either order converges once the worker writes under
-    // the same lock acquisition as its snapshot: worker-first means the
-    // pause's own persist is last, pause-first means the worker copies Paused.
-    for(int round=0;round<8;++round){
-        const std::string root="/tmp/miyoofin-persist-race-"+std::to_string((long long)getpid())+"-"+std::to_string(round);
-        DownloadManager manager({},root);
-        manager.setPlaybackActive(true); // worker never dequeues; persist-only passes race pause()
-        DownloadItem item=restartFixture("race-item");
-        manager.enqueue(item);
-        manager.pause("race-item");
-        DownloadStore store(root);
-        bool match=false;
-        for(unsigned n=0;n<200;++n){
-            DownloadItem manifest;
-            if(store.loadManifest("anonymous","race-item",manifest,nullptr)&&manifest.state==DownloadState::Paused){match=true;break;}
-            usleep(5000);
+    // Deterministic final-state test (replaces the old transient poll, which
+    // succeeded the moment it observed Paused even when a later stale write
+    // reverted it).  With playback held the worker runs only id-set persist
+    // passes and never dequeues.  The bulk enqueue stretches the worker's
+    // pass across milliseconds; pausing/erasing the tail item once the pass
+    // is in flight lands the racing transition mid-pass.  The assertions
+    // below read the FINAL on-disk state after settling, so a stale
+    // whole-library write landing last (the old unlocked design) fails.
+    for(int round=0;round<3;++round){
+        const std::string base="/tmp/miyoofin-persist-race-"+std::to_string((long long)getpid())+"-"+std::to_string(round);
+        // pause() must survive on disk.
+        {
+            DownloadManager manager({},base+"-p");
+            manager.setPlaybackActive(true);
+            DownloadStore store(base+"-p");
+            std::vector<DownloadItem> items;
+            for(int k=0;k<64;++k)items.push_back(restartFixture("bulk-"+std::to_string(k)));
+            items.push_back(restartFixture("race-item"));
+            manager.enqueue(items);
+            // Wait until the pass is in flight (head persisted, tail not yet).
+            for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
+            manager.pause("race-item");
+            usleep(200000); // settle: any in-flight worker write has landed
+            DownloadItem manifest;CHECK(store.loadManifest("anonymous","race-item",manifest,nullptr));
+            CHECK(manifest.state==DownloadState::Paused);
+            bool livePaused=false;
+            for(const auto&i:manager.snapshot().items)if(i.itemId=="race-item")livePaused=(i.state==DownloadState::Paused);
+            CHECK(livePaused);
         }
-        CHECK(match);
+        // erase() must not resurrect on disk (no ghost manifest or index entry).
+        {
+            DownloadManager manager({},base+"-e");
+            manager.setPlaybackActive(true);
+            DownloadStore store(base+"-e");
+            std::vector<DownloadItem> items;
+            for(int k=0;k<64;++k)items.push_back(restartFixture("bulk-"+std::to_string(k)));
+            items.push_back(restartFixture("race-item"));
+            manager.enqueue(items);
+            for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
+            CHECK(manager.erase("race-item"));
+            usleep(200000);
+            DownloadItem ghost;CHECK(!store.loadManifest("anonymous","race-item",ghost,nullptr));
+            std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
+            for(const auto&i:idx)CHECK(i.itemId!="race-item");
+        }
     }
-    // Structural: the dequeue snapshot must be written under the same lock
-    // acquisition (no second acquire just to clear the flag).  A
-    // deterministic threaded repro of the lost update would be timing-flaky,
-    // so the shape is pinned by scan alongside the behavioural invariant.
+    // Structural: every persist reads live state and writes under the SAME
+    // lock acquisition — no stale snapshot crosses the boundary, and no
+    // write runs unlocked after the scope closes.  The threaded interleaving
+    // above is timing-sensitive by nature, so the shape is pinned by scan
+    // alongside the final-state invariant.  No test hook gates the worker's
+    // persist pass: one would add test-only branches/sleeps to the hot
+    // worker path, so the probabilistic interleaving plus these structural
+    // pins deliberately carry the coverage instead.
     const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
     CHECK(!transfer.empty());
-    CHECK(sourceContains(transfer,"saveIndex(scope,snapshot"));
-    CHECK(sourceLacks(transfer,"if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);"));
+    const std::string::size_type w0=transfer.find("void DownloadManager::worker()");
+    const std::string::size_type w1=transfer.find("bool DownloadManager::transfer(");
+    CHECK(w0!=std::string::npos&&w1!=std::string::npos&&w1>w0);
+    const std::string worker=transfer.substr(w0,w1-w0);
+    // Id-set pass persists only the pending ids (read live) plus the live
+    // index; the dequeue path persists only its own manifest.
+    CHECK(sourceContains(worker,"pending.swap(m_persistPendingIds)"));
+    CHECK(sourceContains(worker,"saveManifest(scope,*q"));
+    // The index is built from the durable-manifest set, never raw m_items:
+    // an id joins only after its manifest write succeeded.
+    CHECK(sourceContains(worker,"m_indexedIds.insert(id)"));
+    CHECK(sourceContains(worker,"saveIndexLocked()"));
+    CHECK(sourceLacks(worker,"saveIndex(scope,m_items"));
+    CHECK(sourceContains(worker,"persistItemLocked(work.itemId)"));
+    CHECK(sourceCount(worker,"saveIndexLocked()")==1);
+    // No stale copies, no revision-gated convergence hack, and no manifest
+    // or index write after the lock scope closes (before transfer starts).
+    CHECK(sourceLacks(worker,"snapshot"));
+    CHECK(sourceLacks(worker,"persistRevision"));
+    const std::string::size_type tail=worker.find("if(persistOnly)continue");
+    CHECK(tail!=std::string::npos);
+    const std::string afterLock=worker.substr(tail);
+    CHECK(sourceLacks(afterLock,"saveManifest"));
+    CHECK(sourceLacks(afterLock,"saveIndex"));
+    // Whole-library persistLocked() survives only at the rare lifecycle
+    // sites (destructor + configure x2); every steady-state transition is
+    // per-item or index-only.
+    const std::string managerSrc=readTestBytes("src/download/DownloadManager.cpp");
+    CHECK(!managerSrc.empty());
+    CHECK(sourceCount(managerSrc,"persistLocked();")==3);
+    const std::string reconcile=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
+    CHECK(!reconcile.empty());
+    CHECK(sourceLacks(reconcile,"persistLocked"));
+    CHECK(sourceLacks(reconcile,"saveIndex"));
     std::printf("[test] worker persist matches live state OK\n");
 }
 
@@ -1054,8 +1119,9 @@ static void testStalePlaylistDiscoverySuppressed()
     CHECK(!transfer.empty());
     CHECK(sourceCount(transfer,"transferSourceChanged(")>=5);
     CHECK(sourceContains(transfer,"DownloadState::Paused&&i.state!=DownloadState::PausedForPlayback"));
-    // The discovery guard must precede the OLD-identity reconcile: the early
-    // return keeps reconcile(scope,item) from rewriting the stale identity.
+    // The discovery guard must precede the LIVE-item reconcile: the early
+    // return keeps reconcile(scope,i) from rewriting a reset live item, and
+    // no reconcile of the stale worker-local copy may remain.
     // (Anchors are a comment and an identifier, which reformatting cannot
     // alter; the code patterns inside the region match tolerantly.)
     const std::string::size_type d0=transfer.find("Persist discovery before fetching segment zero");
@@ -1063,7 +1129,8 @@ static void testStalePlaylistDiscoverySuppressed()
     CHECK(d0!=std::string::npos&&d1!=std::string::npos&&d1>d0);
     const std::string discovery=transfer.substr(d0,d1-d0);
     CHECK(sourceContains(discovery,"transferSourceChanged(i,transferSourceId,transferEtag))return false"));
-    CHECK(discovery.find("return false")<discovery.find("m_store.reconcile(scope,item"));
+    CHECK(discovery.find("return false")<discovery.find("m_store.reconcile(scope,i"));
+    CHECK(sourceLacks(transfer,"m_store.reconcile(scope,item"));
     std::printf("[test] stale playlist-discovery publish suppressed OK\n");
 }
 
@@ -1137,9 +1204,229 @@ static void testDequeuePersistIsPerItem()
     const std::string worker=transfer.substr(w0,w1-w0);
     // The dequeue transition persists only its own manifest; the index (an
     // id list, unchanged by a state flip) is written solely by the
-    // id-changing persist-only pass.
+    // id-changing persist pass, which itself covers only the pending ids.
     CHECK(sourceContains(worker,"persistItemLocked(work.itemId)"));
-    CHECK(sourceCount(worker,"saveIndex")==1);
-    CHECK(sourceContains(worker,"if(persistOnly){for"));
+    CHECK(sourceCount(worker,"saveIndexLocked()")==1);
+    CHECK(sourceContains(worker,"pending.swap(m_persistPendingIds)"));
+    // The id-set pass must not hold the mutex across all N writes: the
+    // pending set is swapped, the lock released, and each live item written
+    // under its own short acquisition.  Fsync latency is only observable via
+    // call ordering/profiling on device, so this bound is pinned
+    // structurally (unlock -> per-item write -> relock ordering), not timed.
+    CHECK(sourceContains(worker,"l.unlock()"));
+    CHECK(worker.find("l.unlock()")<worker.find("saveManifest(scope,*q"));
+    CHECK(worker.find("saveManifest(scope,*q")<worker.find("l.lock()"));
     std::printf("[test] dequeue persist is per-item OK\n");
+}
+
+static std::string manifestIdentity(DownloadStore&store,const std::string&scope,const std::string&id)
+{
+    // Atomic rename always mints a new inode, so an untouched manifest keeps
+    // its identity even on filesystems with coarse mtime granularity.
+    struct stat st{};
+    if(::stat(store.manifestPath(scope,id).c_str(),&st))return {};
+    return std::to_string((unsigned long long)st.st_ino)+":"+std::to_string((long long)st.st_mtime)+":"+std::to_string((long long)st.st_size);
+}
+
+static void testPersistTouchesOnlyAffectedItem()
+{
+    std::printf("[test] persist touches only the affected item\n");
+    const std::string root="/tmp/miyoofin-peritem-"+std::to_string((long long)getpid());
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true); // worker runs persist passes only, never dequeues
+    DownloadStore store(root);
+    manager.enqueue({restartFixture("item-a"),restartFixture("item-b"),restartFixture("item-c")});
+    // Quiesce: the worker's id-set pass finished (index lists all three).
+    for(unsigned n=0;n<400;++n){std::vector<DownloadItem> idx;if(store.loadIndex("anonymous",idx,nullptr)&&idx.size()==3)break;usleep(5000);}
+    const std::string bBefore=manifestIdentity(store,"anonymous","item-b"), cBefore=manifestIdentity(store,"anonymous","item-c");
+    CHECK(!bBefore.empty()&&!cBefore.empty());
+    const std::string aContentBefore=readFixture(store.manifestPath("anonymous","item-a"));
+    const std::string bContentBefore=readFixture(store.manifestPath("anonymous","item-b"));
+    // pause() rewrites only item-a's manifest.
+    manager.pause("item-a");
+    DownloadItem a;CHECK(store.loadManifest("anonymous","item-a",a,nullptr));CHECK(a.state==DownloadState::Paused);
+    CHECK(readFixture(store.manifestPath("anonymous","item-a"))!=aContentBefore);
+    CHECK(manifestIdentity(store,"anonymous","item-b")==bBefore);
+    CHECK(manifestIdentity(store,"anonymous","item-c")==cBefore);
+    CHECK(readFixture(store.manifestPath("anonymous","item-b"))==bContentBefore);
+    // erase() removes only item-c (plus the index rewrite); the survivors'
+    // manifests are untouched.
+    const std::string aBefore=manifestIdentity(store,"anonymous","item-a"), bBefore2=manifestIdentity(store,"anonymous","item-b");
+    CHECK(manager.erase("item-c"));
+    CHECK(::access(store.manifestPath("anonymous","item-c").c_str(),F_OK)!=0);
+    std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));CHECK(idx.size()==2);
+    CHECK(manifestIdentity(store,"anonymous","item-a")==aBefore);
+    CHECK(manifestIdentity(store,"anonymous","item-b")==bBefore2);
+    std::printf("[test] persist touches only the affected item OK\n");
+}
+
+static void testPersistPendingCrashDurabilityAndTmpSweep()
+{
+    std::printf("[test] pending-index durability and tmp sweep\n");
+    // Behavioural: pausing an item the worker's id-set pass has not indexed
+    // yet still lands it in the index (final-state either way: the pass
+    // converging first changes nothing, so no timing gate is needed).
+    {
+        const std::string root="/tmp/miyoofin-pending-idx-"+std::to_string((long long)getpid());
+        DownloadManager manager({},root);
+        manager.setPlaybackActive(true); // worker runs persist passes only, never dequeues
+        DownloadStore store(root);
+        manager.enqueue(restartFixture("pending-one"));
+        manager.pause("pending-one");
+        usleep(200000); // settle: any in-flight worker write has landed
+        std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
+        bool listed=false;for(const auto&i:idx)if(i.itemId=="pending-one")listed=true;
+        CHECK(listed);
+        DownloadItem m;CHECK(store.loadManifest("anonymous","pending-one",m,nullptr));
+        CHECK(m.state==DownloadState::Paused);
+    }
+    // Behavioural: a stale unique temp never pins the item directory.
+    {
+        const std::string root="/tmp/miyoofin-tmp-sweep-"+std::to_string((long long)getpid());
+        DownloadStore store(root);
+        CHECK(store.saveManifest("anonymous",restartFixture("tmp-item"),nullptr));
+        const std::string stale=store.itemPath("anonymous","tmp-item")+"/manifest.v2.tmp.12345.678";
+        {FILE*f=std::fopen(stale.c_str(),"wb");CHECK(f);CHECK(std::fputs("stale",f)>=0);CHECK(std::fclose(f)==0);}
+        CHECK(store.removeItem("anonymous","tmp-item",nullptr));
+        CHECK(::access(store.itemPath("anonymous","tmp-item").c_str(),F_OK)!=0);
+    }
+    // Behavioural: legacy p+".tmp" leftovers are swept too (they used to pin
+    // removeItem's final rmdir and survive rebuildIndex).
+    {
+        const std::string root="/tmp/miyoofin-tmp-legacy-"+std::to_string((long long)getpid());
+        DownloadStore store(root);
+        CHECK(store.saveManifest("anonymous",restartFixture("legacy-item"),nullptr));
+        const std::string legacy=store.itemPath("anonymous","legacy-item")+"/manifest.v2.tmp";
+        {FILE*f=std::fopen(legacy.c_str(),"wb");CHECK(f);CHECK(std::fputs("stale",f)>=0);CHECK(std::fclose(f)==0);}
+        CHECK(store.removeItem("anonymous","legacy-item",nullptr));
+        CHECK(::access(store.itemPath("anonymous","legacy-item").c_str(),F_OK)!=0);
+        // rebuildIndex sweeps the scope dir: a legacy index.v1.tmp must not
+        // survive it.
+        CHECK(store.saveManifest("anonymous",restartFixture("kept"),nullptr));
+        const std::string scopeTmp=store.scopePath("anonymous")+"/index.v1.tmp";
+        {FILE*f=std::fopen(scopeTmp.c_str(),"wb");CHECK(f);CHECK(std::fputs("stale",f)>=0);CHECK(std::fclose(f)==0);}
+        std::vector<DownloadItem> rebuilt;CHECK(store.rebuildIndex("anonymous",rebuilt,nullptr));
+        CHECK(::access(scopeTmp.c_str(),F_OK)!=0);
+        bool kept=false;for(const auto&i:rebuilt)if(i.itemId=="kept")kept=true;
+        CHECK(kept);
+    }
+    // Structural: configure() drops the old scope's pending ids and reseeds
+    // the durable-manifest set; every index write goes through the
+    // durable-manifest helper (never raw m_items); stale temps are swept
+    // where orphaned manifests (removeItem) and indexes (rebuildIndex)
+    // would otherwise strand them.
+    const std::string managerSrc=readTestBytes("src/download/DownloadManager.cpp");
+    CHECK(!managerSrc.empty());
+    CHECK(sourceContains(managerSrc,"m_persistPendingIds.clear()"));
+    CHECK(sourceContains(managerSrc,"m_indexedIds.clear()"));
+    CHECK(sourceContains(managerSrc,"m_indexedIds.insert"));
+    CHECK(sourceContains(managerSrc,"saveIndexLocked()"));
+    CHECK(sourceLacks(managerSrc,"saveIndex(m_scope,m_items"));
+    const std::string storeSrc=readTestBytes("src/download/DownloadStore.cpp");
+    CHECK(!storeSrc.empty());
+    CHECK(sourceContains(storeSrc,"sweepTmpFiles(itemPath"));
+    CHECK(sourceContains(storeSrc,"sweepTmpFiles(scopePath"));
+    CHECK(sourceContains(storeSrc,"rfind(\".tmp\")"));
+    std::printf("[test] pending-index durability and tmp sweep OK\n");}
+
+static void testIndexNeverNamesMissingManifest()
+{
+    std::printf("[test] index never names a missing manifest\n");
+    // Regression pin for the crash-consistency inversion: the index used to
+    // be written from raw m_items, so an id enqueued after the pass's
+    // pending-swap (or a still-pending id named by pause/resume) could reach
+    // the index before its manifest existed.  A crash in that window made
+    // loadIndex fail for ALL readers.  The invariant is behavioural: every
+    // id in the on-disk index has a readable manifest, and loadIndex itself
+    // succeeds — after a bulk enqueue racing the pass and after pause/resume
+    // racing it.
+    const std::string root="/tmp/miyoofin-index-invariant-"+std::to_string((long long)getpid());
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true); // worker runs persist passes only, never dequeues
+    DownloadStore store(root);
+    auto indexIds=[](const std::string&raw){
+        std::vector<std::string> ids;size_t p=raw.find('\n');
+        if(p==std::string::npos)return ids;
+        p+=1;
+        while(p<raw.size()){size_t z=raw.find('\n',p);std::string id=raw.substr(p,z-p);if(!id.empty())ids.push_back(id);if(z==std::string::npos)break;p=z+1;}
+        return ids;};
+    auto checkInvariant=[&](const char*stage){
+        const std::string raw=readFixture(store.scopePath("anonymous")+"/index.v1");
+        CHECK(!raw.empty());
+        if(raw.empty())return std::vector<std::string>{};
+        CHECK(raw.rfind("MFDI=1\n",0)==0);
+        const std::vector<std::string> ids=indexIds(raw);
+        CHECK(!ids.empty());
+        for(const auto&id:ids){DownloadItem m;CHECK(store.loadManifest("anonymous",id,m,nullptr));}
+        std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
+        (void)stage;return ids;};
+    std::vector<DownloadItem> items;
+    for(int k=0;k<64;++k)items.push_back(restartFixture("bulk-"+std::to_string(k)));
+    items.push_back(restartFixture("race-item"));
+    manager.enqueue(items);
+    // Pause/resume land mid-pass (head persisted, tail not yet): the racing
+    // transitions used to be exactly the window that indexed manifestless
+    // ids or orphaned durable manifests.
+    for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
+    manager.pause("race-item");
+    manager.resume("bulk-1");
+    usleep(300000); // settle: any in-flight worker write has landed
+    const std::vector<std::string> ids=checkInvariant("bulk race");
+    bool raceListed=false, bulkListed=false;
+    for(const auto&id:ids){if(id=="race-item")raceListed=true;if(id=="bulk-1")bulkListed=true;}
+    CHECK(raceListed);CHECK(bulkListed);
+    DownloadItem race;CHECK(store.loadManifest("anonymous","race-item",race,nullptr));
+    CHECK(race.state==DownloadState::Paused);
+    // A late enqueue followed by an immediate pause/resume must keep the
+    // same invariant: the paused id is durable AND listed, never one without
+    // the other.
+    manager.enqueue(restartFixture("late-one"));
+    manager.pause("late-one");
+    usleep(300000);
+    const std::vector<std::string> ids2=checkInvariant("late pause");
+    bool lateListed=false;for(const auto&id:ids2)if(id=="late-one")lateListed=true;
+    CHECK(lateListed);
+    DownloadItem late;CHECK(store.loadManifest("anonymous","late-one",late,nullptr));
+    CHECK(late.state==DownloadState::Paused);
+    std::printf("[test] index never names a missing manifest OK\n");
+}
+
+static void testPlaybackToggleTouchesOnlyAffectedItems()
+{
+    std::printf("[test] playback toggle touches only affected items\n");
+    const std::string root="/tmp/miyoofin-peritem-pb-"+std::to_string((long long)getpid());
+    DownloadManager manager({},root);
+    DownloadStore store(root);
+    // One item reaches Downloading without network: the invalid session makes
+    // transfer() return immediately, leaving the dequeued item Downloading.
+    manager.enqueue(restartFixture("dl-x"));
+    for(unsigned n=0;n<400;++n){bool downloading=false;for(const auto&i:manager.snapshot().items)if(i.itemId=="dl-x"&&i.state==DownloadState::Downloading)downloading=true;if(downloading)break;usleep(5000);}
+    manager.setPlaybackActive(true); // interrupts only dl-x
+    DownloadItem x;CHECK(store.loadManifest("anonymous","dl-x",x,nullptr));CHECK(x.state==DownloadState::PausedForPlayback);
+    // A later enqueue stays Queued (playback held); pausing it makes it
+    // undequeueable, so the release path below can never touch it — the
+    // "unrelated item untouched" assertions are then timing-independent
+    // (previously they raced the worker dequeuing both Queued items the
+    // moment playback was released).
+    manager.enqueue(restartFixture("idle-y"));
+    for(unsigned n=0;n<400;++n){std::vector<DownloadItem> items;if(store.loadIndex("anonymous",items,nullptr)&&items.size()==2)break;usleep(5000);}
+    manager.pause("idle-y");
+    DownloadItem yPaused;CHECK(store.loadManifest("anonymous","idle-y",yPaused,nullptr));CHECK(yPaused.state==DownloadState::Paused);
+    const std::string yBefore=manifestIdentity(store,"anonymous","idle-y");
+    CHECK(!yBefore.empty());
+    const std::string yContentBefore=readFixture(store.manifestPath("anonymous","idle-y"));
+    manager.setPlaybackActive(false);
+    // dl-x leaves PausedForPlayback for Queued and is dequeued to Downloading
+    // (invalid session: transfer() returns immediately, so the state sticks);
+    // idle-y stays Paused in memory and its manifest is never rewritten by
+    // the release path or the worker.
+    for(unsigned n=0;n<400;++n){bool done=false;for(const auto&i:manager.snapshot().items)if(i.itemId=="dl-x"&&i.state==DownloadState::Downloading)done=true;if(done)break;usleep(5000);}
+    bool xDownloading=false,yPausedLive=false;
+    for(const auto&i:manager.snapshot().items){if(i.itemId=="dl-x")xDownloading=(i.state==DownloadState::Downloading);if(i.itemId=="idle-y")yPausedLive=(i.state==DownloadState::Paused);}
+    CHECK(xDownloading);
+    CHECK(yPausedLive);
+    DownloadItem back;CHECK(store.loadManifest("anonymous","dl-x",back,nullptr));CHECK(back.state!=DownloadState::PausedForPlayback);
+    CHECK(manifestIdentity(store,"anonymous","idle-y")==yBefore);
+    CHECK(readFixture(store.manifestPath("anonymous","idle-y"))==yContentBefore);
+    std::printf("[test] playback toggle touches only affected items OK\n");
 }

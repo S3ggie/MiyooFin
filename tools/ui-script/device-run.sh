@@ -477,6 +477,17 @@ case "$NAME" in
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
         ;;
+    ota)
+        # The updater logs nothing, so the meaningful assertion here is that
+        # the script reached the UPDATES row and the screenshots rendered; the
+        # real verification (installed file modes / mtimes) is done post-run.
+        want='[HomeScreen] Library loaded'
+        # The install rewrites the app; asserting on the (proven rendered)
+        # "checked" screen keeps this check meaningful, and the install itself
+        # is verified post-run from the installed file modes.
+        SHOT="$OUT/shots/updates-checked.bmp"
+        CHECKS="rendered"
+        ;;
     *) fail "no expectations defined for script '$NAME'" ;;
 esac
 

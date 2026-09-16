@@ -203,7 +203,9 @@ bool MovieDetailsScreen::handleAction(Action action)
 
     // Confirm
     case Action::Confirm:
-        if (m_confirmDownload) { if (m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready&&m_planSnapshot.plan.canFit) m_downloads->enqueue(m_planSnapshot.plan.items); m_confirmDownload=false; return true; }
+        if (m_confirmDownload) { if (m_downloads && m_planId && m_planSnapshot.state==DownloadPlanState::Ready&&m_planSnapshot.plan.canFit) m_downloads->enqueue(m_planSnapshot.plan.items);
+            m_confirmDownload=false;
+            return true; }
         if (m_actionBtn == ActionButton::Play) {
             printf("[MovieDetailsScreen] Play selected: %s\n",
                    m_movie.title.c_str());

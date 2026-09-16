@@ -107,10 +107,17 @@ void HomeScreen::hierarchyWorker()
         std::vector<MediaItem> shows;
         std::uint64_t generation=0;
         std::shared_ptr<std::atomic_bool> catalogCancellation;
-        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();}); if(m_stopHierarchyWorker)return; shows.swap(m_pendingHierarchyShows); generation=m_pendingHierarchyGeneration; catalogCancellation=m_catalogGenerationCancellation; performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
+        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();});
+                if(m_stopHierarchyWorker)return;
+                shows.swap(m_pendingHierarchyShows);
+                generation=m_pendingHierarchyGeneration;
+                catalogCancellation=m_catalogGenerationCancellation;
+                performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
         for (std::size_t showIndex=0; showIndex<shows.size(); ++showIndex) {
             const auto &series=shows[showIndex];
-            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
+            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry();
+                        telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false);
+                        telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
             std::vector<MediaItem> cachedSeasons;
             if (m_libraryQuery) {
                 const auto cached=m_libraryQuery->seasons(
@@ -152,7 +159,9 @@ void HomeScreen::hierarchyWorker()
             queuePosterJobs(planSeasonPosterJobs(seasons));
             bool complete=true;
             for (const auto &season : seasons) {
-                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry(); telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false); telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
+                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry();
+                            telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false);
+                            telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
                 if (season.id.empty()) { complete=false; break; }
                 const auto episodeRefresh=m_librarySync->refreshEpisodes(
                     series,season,catalogCancellation).get();
@@ -234,7 +243,9 @@ void HomeScreen::posterWorker()
         } else {
             BinaryHttpResponse response; std::string error;
             TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster);
-            if(RouteRequest(m_session).run([&](const std::string &base){return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),response,error,512*1024)&&response.ok();},error)&&!response.data.empty())
+            if(RouteRequest(m_session).run([&](const std::string &base){
+                    return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),
+                    response,error,512*1024)&&response.ok();},error)&&!response.data.empty())
                 complete=ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size());
         }
         if (complete) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster);

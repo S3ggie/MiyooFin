@@ -25,7 +25,27 @@ void publishDownloadGauges(const std::vector<DownloadItem> &items,
 }
 }
 
-DownloadPlan DownloadManager::makePlan(const std::vector<DownloadItem>&in)const{DownloadPlan p;p.filesystemFreeBytes=freeBytes();p.usableFreeBytes=p.filesystemFreeBytes>DOWNLOAD_SAFETY_RESERVE?p.filesystemFreeBytes-DOWNLOAD_SAFETY_RESERVE:0;auto s=snapshot();std::map<std::string,bool>seen;p.sizeKnown=true;for(auto i:in)if(seen.emplace(i.itemId,true).second){auto old=std::find_if(s.items.begin(),s.items.end(),[&](const DownloadItem&x){return x.itemId==i.itemId;});if(old!=s.items.end()){i.downloadedBytes=old->downloadedBytes;if(!i.hlsStorage&&old->expectedSize)i.expectedSize=old->expectedSize;}std::uint64_t planned=0;if(!plannedDownloadBytes(i,planned)){p.sizeKnown=false;p.items.push_back(i);continue;}i.expectedSize=planned;p.items.push_back(i);p.totalSourceBytes=saturatingAdd(p.totalSourceBytes,planned);p.alreadyPresentBytes=saturatingAdd(p.alreadyPresentBytes,std::min(i.downloadedBytes,planned));if(old==s.items.end())p.additionalRequiredBytes=saturatingAdd(p.additionalRequiredBytes,i.downloadedBytes>=planned?0:planned-i.downloadedBytes);}p.alreadyReservedBytes=s.reservedBytes;p.usableFreeBytes=p.usableFreeBytes>s.reservedBytes?p.usableFreeBytes-s.reservedBytes:0;p.canFit=p.sizeKnown&&p.additionalRequiredBytes<=p.usableFreeBytes;if(!p.sizeKnown)p.error="Estimated HLS size unavailable";else if(!p.canFit)p.error="Not enough space";return p;}
+DownloadPlan DownloadManager::makePlan(const std::vector<DownloadItem>&in)const{DownloadPlan p;
+    p.filesystemFreeBytes=freeBytes();
+    p.usableFreeBytes=p.filesystemFreeBytes>DOWNLOAD_SAFETY_RESERVE?p.filesystemFreeBytes-DOWNLOAD_SAFETY_RESERVE:0;
+    auto s=snapshot();
+    std::map<std::string,bool>seen;
+    p.sizeKnown=true;
+    for(auto i:in)if(seen.emplace(i.itemId,true).second){auto old=std::find_if(s.items.begin(),s.items.end(),[&](const DownloadItem&x){return x.itemId==i.itemId;});
+        if(old!=s.items.end()){i.downloadedBytes=old->downloadedBytes;if(!i.hlsStorage&&old->expectedSize)i.expectedSize=old->expectedSize;}
+        std::uint64_t planned=0;
+        if(!plannedDownloadBytes(i,planned)){p.sizeKnown=false;p.items.push_back(i);continue;}
+        i.expectedSize=planned;
+        p.items.push_back(i);
+        p.totalSourceBytes=saturatingAdd(p.totalSourceBytes,planned);
+        p.alreadyPresentBytes=saturatingAdd(p.alreadyPresentBytes,std::min(i.downloadedBytes,planned));
+        if(old==s.items.end())p.additionalRequiredBytes=saturatingAdd(p.additionalRequiredBytes,i.downloadedBytes>=planned?0:planned-i.downloadedBytes);}
+    p.alreadyReservedBytes=s.reservedBytes;
+    p.usableFreeBytes=p.usableFreeBytes>s.reservedBytes?p.usableFreeBytes-s.reservedBytes:0;
+    p.canFit=p.sizeKnown&&p.additionalRequiredBytes<=p.usableFreeBytes;
+    if(!p.sizeKnown)p.error="Estimated HLS size unavailable";
+    else if(!p.canFit)p.error="Not enough space";
+    return p;}
 std::uint64_t DownloadManager::requestPlan(const std::vector<MediaItem>&items){
     std::vector<DownloadItem> provisional;
     for(const auto&m:items){DownloadItem i;i.itemId=m.id;i.itemType=m.type;i.title=m.title;i.runtimeTicks=m.runTimeTicks;i.hlsStorage=true;provisional.push_back(i);}
@@ -39,10 +59,25 @@ std::uint64_t DownloadManager::requestPlan(const std::vector<MediaItem>&items){
         UiDiagnostics::Scope scope("DownloadManager::requestPlan mutex wait",false);
         l.lock();
     }
-    std::uint64_t id=m_nextPlanId++;DownloadPlanSnapshot s;s.id=id;s.state=DownloadPlanState::Planning;s.itemCount=items.size();s.plan=estimate;m_plans[id]=s;m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}, {}, {}, std::make_shared<std::atomic_bool>(false)});performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));publishDownloadGauges(m_items,m_planJobs.size());m_planWake.notify_one();return id;
+    std::uint64_t id=m_nextPlanId++;
+    DownloadPlanSnapshot s;
+    s.id=id;
+    s.state=DownloadPlanState::Planning;
+    s.itemCount=items.size();
+    s.plan=estimate;
+    m_plans[id]=s;
+    m_planJobs.push_back({id,m_generation,m_session,items,"","",{}, {}, {}, {}, std::make_shared<std::atomic_bool>(false)});
+    performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,static_cast<std::uint32_t>(m_planJobs.size()));
+    publishDownloadGauges(m_items,m_planJobs.size());
+    m_planWake.notify_one();
+    return id;
 }
 std::uint64_t DownloadManager::requestSeriesPlan(const std::string&seriesId){MediaItem series;series.id=seriesId;return requestSeriesPlan(series);}
-std::uint64_t DownloadManager::requestSeasonPlan(const std::string&seriesId,const std::string&seasonId){MediaItem series,season;series.id=seriesId;season.id=seasonId;season.seriesId=seriesId;return requestSeasonPlan(series,season);}
+std::uint64_t DownloadManager::requestSeasonPlan(const std::string&seriesId,const std::string&seasonId){MediaItem series,season;
+    series.id=seriesId;
+    season.id=seasonId;
+    season.seriesId=seriesId;
+    return requestSeasonPlan(series,season);}
 std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
 {
     std::shared_ptr<library::LibraryQuery> libraryQuery;
@@ -92,8 +127,15 @@ std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
     m_planWake.notify_one();
     return id;
 }
-DownloadPlanSnapshot DownloadManager::planSnapshot(std::uint64_t id)const{UiDiagnostics::Scope scope("DownloadManager::planSnapshot mutex wait");std::lock_guard<std::mutex>l(m_mutex);auto it=m_plans.find(id);return it==m_plans.end()?DownloadPlanSnapshot{}:it->second;}
-bool DownloadManager::tryPlanSnapshot(std::uint64_t id,DownloadPlanSnapshot&snapshot)const{std::unique_lock<std::mutex>l(m_mutex,std::try_to_lock);if(!l.owns_lock())return false;auto it=m_plans.find(id);snapshot=it==m_plans.end()?DownloadPlanSnapshot{}:it->second;return true;}
+DownloadPlanSnapshot DownloadManager::planSnapshot(std::uint64_t id)const{UiDiagnostics::Scope scope("DownloadManager::planSnapshot mutex wait");
+    std::lock_guard<std::mutex>l(m_mutex);
+    auto it=m_plans.find(id);
+    return it==m_plans.end()?DownloadPlanSnapshot{}:it->second;}
+bool DownloadManager::tryPlanSnapshot(std::uint64_t id,DownloadPlanSnapshot&snapshot)const{std::unique_lock<std::mutex>l(m_mutex,std::try_to_lock);
+    if(!l.owns_lock())return false;
+    auto it=m_plans.find(id);
+    snapshot=it==m_plans.end()?DownloadPlanSnapshot{}:it->second;
+    return true;}
 
 void DownloadManager::planner()
 {

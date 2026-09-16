@@ -1148,3 +1148,97 @@ static void testParseTarListingLinePathWithDatetimeSubstring()
 
     std::printf("[test] parseTarListingLine path with datetime substring OK\n");
 }
+
+// ===================================================================
+// Executable install-mode coverage (OTA reporter regression)
+// ===================================================================
+
+/// Every whitelisted executable artifact must map to an executable install
+/// mode.  Regression guard: miyoofin-playback-reporter was whitelisted for
+/// install but missing from the mode list, so OTA updates landed it 0644
+/// and playback_runner.sh could not execute it.
+static void testExecutableInstallPathsCoverWhitelist()
+{
+    std::printf("[test] executable install paths cover whitelist\n");
+
+    // Shipped native binaries — all executable, including the reporter.
+    CHECK(isExecutableInstallPath("miyoofin"));
+    CHECK(isExecutableInstallPath("miyoofin-https-bridge"));
+    CHECK(isExecutableInstallPath("miyoofin-playback-reporter"));
+    CHECK(isExecutableInstallPath("miyoofin-perf-reporter"));
+    // Prefix rule: a future miyoofin-* helper is executable without a
+    // further code change, so the whitelist cannot drift again.
+    CHECK(isExecutableInstallPath("miyoofin-future-helper"));
+
+    // Shipped scripts — executable.
+    CHECK(isExecutableInstallPath("launch.sh"));
+    CHECK(isExecutableInstallPath("playback_runner.sh"));
+
+    // Data / docs / libraries — never executable.
+    CHECK(!isExecutableInstallPath("cacert.pem"));
+    CHECK(!isExecutableInstallPath("config.json"));
+    CHECK(!isExecutableInstallPath("icon.png"));
+    CHECK(!isExecutableInstallPath("LICENSE"));
+    CHECK(!isExecutableInstallPath("THIRD_PARTY_NOTICES.md"));
+    CHECK(!isExecutableInstallPath("assets/placeholder.png"));
+    CHECK(!isExecutableInstallPath("lib/libSDL2-2.0.so.0.18.2"));
+    CHECK(!isExecutableInstallPath("lib/libfoo.so"));
+
+    // Cross-check: every whitelisted binary-named entry resolves executable.
+    static const char *binaries[] = {
+        "miyoofin",
+        "miyoofin-https-bridge",
+        "miyoofin-playback-reporter",
+        "miyoofin-perf-reporter",
+    };
+    for (auto *b : binaries) {
+        CHECK(isWhitelistedAppPath(b));
+        CHECK(isExecutableInstallPath(b));
+    }
+
+    std::printf("[test] executable install paths cover whitelist OK\n");
+}
+
+/// End-to-end: an OTA archive containing the playback reporter and the
+/// playback runner must install both with 0755 (not 0644).
+static void testInstallUpdateReporterExecutable()
+{
+    std::printf("[test] installUpdate reporter executable\n");
+
+    std::string appDir = createFakeAppDir();
+
+    // Build an archive with the reporter + runner alongside miyoofin.
+    std::string staging = appDir + "/archive-staging-reporter";
+    testMkdirp(staging + "/MiyooFin");
+    createElfStub(staging + "/MiyooFin/miyoofin");
+    {
+        std::ofstream ofs(staging + "/MiyooFin/miyoofin-playback-reporter");
+        ofs << "reporter binary";
+    }
+    {
+        std::ofstream ofs(staging + "/MiyooFin/playback_runner.sh");
+        ofs << "#!/bin/sh\necho runner\n";
+    }
+    std::string tarPath = appDir + "/test-reporter.tar.gz";
+    {
+        std::string cmd = "cd " + staging + " && tar czf " + tarPath +
+                          " MiyooFin/";
+        CHECK(::system(cmd.c_str()) == 0);
+    }
+    testRmrf(staging);
+
+    std::string error;
+    bool ok = installUpdate(appDir, tarPath, "99.0.1", error);
+    if (!ok) std::printf("  installUpdate error: %s\n", error.c_str());
+    CHECK(ok);
+
+    struct stat st {};
+    CHECK(::stat((appDir + "/miyoofin-playback-reporter").c_str(), &st) == 0);
+    CHECK((st.st_mode & 0777) == 0755);
+    CHECK(::stat((appDir + "/playback_runner.sh").c_str(), &st) == 0);
+    CHECK((st.st_mode & 0777) == 0755);
+
+    testRmrf(appDir);
+    ::unlink(tarPath.c_str());
+    std::printf("[test] installUpdate reporter executable OK\n");
+}

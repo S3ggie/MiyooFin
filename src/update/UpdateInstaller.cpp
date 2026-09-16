@@ -496,19 +496,13 @@ static bool fsyncDir(const std::string &filePath)
     return true;
 }
 
-/// Get the mode for a path based on extension/name (0755 for binaries/sh, 0644 otherwise).
+/// Get the mode for a path (0755 for executables, 0644 otherwise).
+/// Delegates to isExecutableInstallPath() — the single source of truth
+/// shared with the install plan — so whitelisted binaries/scripts cannot
+/// drift out of the executable set unnoticed.
 static mode_t installMode(const std::string &rel)
 {
-    // Binaries
-    if (rel == "miyoofin" || rel == "miyoofin-https-bridge" ||
-        rel == "miyoofin-perf-reporter")
-        return 0755;
-
-    // Shell scripts
-    if (rel.size() >= 3 && rel.compare(rel.size() - 3, 3, ".sh") == 0)
-        return 0755;
-
-    return 0644;
+    return isExecutableInstallPath(rel) ? 0755 : 0644;
 }
 
 // -------------------------------------------------------------------

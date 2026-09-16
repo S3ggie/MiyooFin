@@ -82,6 +82,10 @@ int main()
     testParseTarListingLineUnparseable();
     testParseTarListingLinePathWithDatetimeSubstring();
 
+    // Executable install modes (OTA reporter regression)
+    testExecutableInstallPathsCoverWhitelist();
+    testInstallUpdateReporterExecutable();
+
     // UpdateManager
     testUpdateStatusText();
     testUpdateManagerInitialState();

@@ -119,16 +119,33 @@ bool DownloadManager::waitForHlsSegmentRetry(const std::string&id,const std::str
 }
 void DownloadManager::worker(){for(;;){DownloadItem work;Session session;std::string scope;std::uint64_t generation=0,persistRevision=0;std::vector<DownloadItem> snapshot;bool persistOnly=false;{std::unique_lock<std::mutex>l(m_mutex);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);m_wake.wait(l,[&]{if(m_stop||m_persistRequested)return true;if(!m_playback)for(const auto&i:m_items)if(i.state==DownloadState::Queued)return true;return false;});if(m_stop)return;
         if(m_persistRequested){snapshot=m_items;scope=m_scope;generation=m_generation;persistRevision=m_persistRevision;persistOnly=true;}
-        else {auto p=std::find_if(m_items.begin(),m_items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;});if(p==m_items.end())continue;p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;snapshot=m_items;publishDownloadGauges(m_items,m_planJobs.size());performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,true);}}
-    // All snapshots are written manifest-first, then as one index.  This runs
-    // only on the worker, so enqueue never performs removable-storage I/O.
-    for(const auto&i:snapshot){if(i.hlsStorage)m_store.ensureHlsDirectories(scope,i.itemId);m_store.saveManifest(scope,i,nullptr);}m_store.saveIndex(scope,snapshot,nullptr);
-    if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}
+        else {auto p=std::find_if(m_items.begin(),m_items.end(),[](const DownloadItem&i){return i.state==DownloadState::Queued;});if(p==m_items.end())continue;p->state=DownloadState::Downloading;p->recentBytesPerSec=0;m_progressSamples.erase(p->itemId);work=*p;session=m_session;scope=m_scope;generation=m_generation;snapshot=m_items;publishDownloadGauges(m_items,m_planJobs.size());performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,true);}
+    // Persists stay under the SAME lock acquisition as the snapshot/state
+    // change above (never split copy/write/re-acquire: a concurrent
+    // pause()/resume()/erase() persist landing between would be overwritten
+    // with stale bytes).  The dequeue flip changes no ids — the on-disk
+    // index already lists this id (it is rewritten whenever the id set
+    // changes: enqueue persist pass, erase, configure), so only the dequeued
+    // item's manifest is rewritten instead of fsyncing the whole library on
+    // every download start; the id-changing persist-only pass still writes
+    // manifests plus the index.  Bounded local metadata I/O only: never
+    // network I/O, and no lock order changes (m_mutex alone, as every other
+    // persistLocked() call site).
+    if(persistOnly){for(const auto&i:snapshot){if(i.hlsStorage)m_store.ensureHlsDirectories(scope,i.itemId);m_store.saveManifest(scope,i,nullptr);}m_store.saveIndex(scope,snapshot,nullptr);}
+    else{if(work.hlsStorage)m_store.ensureHlsDirectories(scope,work.itemId);persistItemLocked(work.itemId);}
+    if(persistOnly){if(generation==m_generation&&scope==m_scope&&persistRevision==m_persistRevision)m_persistRequested=false;continue;}}
+    // Enqueue never performs removable-storage I/O: the worker above persists
+    // before any transfer starts, so UI-thread enqueue stays in-memory only.
     transfer(work,session,scope,generation);performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer,false);}}
 bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std::string&scope,std::uint64_t generation){
     const std::uint32_t telemetryJobSequence = static_cast<std::uint32_t>(
         performanceTelemetry().nextEphemeralId());
     if(!session.valid()) return false;
+    // Source identity this transfer is working on (A): captured once after
+    // the dequeue.  Every publish point below rechecks the live item under
+    // the lock and aborts instead of republishing when the reconciler has
+    // since reset the item to a new source.
+    const std::string transferSourceId=item.mediaSourceId, transferEtag=item.sourceEtag;
     // A v1 payload is only retained when it is already complete.  New work is
     // always HLS and must never issue the original /Download request.
     if(!item.hlsStorage){
@@ -139,20 +156,37 @@ bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std
     }
     std::vector<std::string> urls; std::string error; JellyfinApi::HlsFailure failure;
     if(!RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getHlsSegmentUrls(base,session.accessToken,session.deviceId,item.itemId,item.mediaSourceId,urls,error,&failure);},error)){
-        std::lock_guard<std::mutex> l(m_mutex); for(auto &i:m_items)if(i.itemId==item.itemId){i.state=failure==JellyfinApi::HlsFailure::Network?DownloadState::WaitingForNetwork:(failure==JellyfinApi::HlsFailure::Unauthorized?DownloadState::Unauthorized:DownloadState::Failed);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);i.lastError=error;m_store.saveManifest(scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());} return false;
+        std::lock_guard<std::mutex> l(m_mutex); for(auto &i:m_items)if(i.itemId==item.itemId){// A reconciler reset to a new source during discovery leaves Queued: it must not take this stale failure state.  Preserve a pause/playback interrupt that landed during playlist discovery: only a still-active item takes the failure state.
+            if(transferSourceChanged(i,transferSourceId,transferEtag))return false;
+            if(i.state!=DownloadState::Paused&&i.state!=DownloadState::PausedForPlayback)i.state=failure==JellyfinApi::HlsFailure::Network?DownloadState::WaitingForNetwork:(failure==JellyfinApi::HlsFailure::Unauthorized?DownloadState::Unauthorized:DownloadState::Failed);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);i.lastError=error;m_store.saveManifest(scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());} return false;
     }
     item.hlsSegmentCount=urls.size(); m_store.ensureHlsDirectories(scope,item.itemId);
     // Persist discovery before fetching segment zero: first-segment transcodes
     // may take a while, but the manifest must retain the discovered playlist.
-    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i.hlsSegmentCount=item.hlsSegmentCount;i.hlsStorage=true;m_store.saveManifest(scope,i,nullptr);persistLocked();break;}}
+    // A reconciler reset to a new source during discovery suppresses this
+    // stale publish (same class as the guarded failure path above); the early
+    // return also keeps the OLD-identity reconcile below from running, so it
+    // can never write the stale identity back over the reset live item.  The
+    // id set is unchanged by discovery, so only this item's manifest is
+    // persisted (the index already lists this id).
+    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){if(transferSourceChanged(i,transferSourceId,transferEtag))return false;i.hlsSegmentCount=item.hlsSegmentCount;i.hlsStorage=true;persistItemLocked(i.itemId);break;}}
     m_store.reconcile(scope,item,nullptr);
-    item.hlsCompletedSegments=m_store.firstIncompleteSegment(scope,item);
+    // Recovery scan runs once per transfer; the resume offset is reused below
+    // instead of scanning the segment directory a second time.
+    const std::uint64_t resumeFrom=m_store.firstIncompleteSegment(scope,item);
+    item.hlsCompletedSegments=resumeFrom;
     item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0;
     item.hlsActivePercent=downloadPercent(item);
-    item.state=DownloadState::Downloading;
-    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i=item;m_store.saveManifest(scope,i,nullptr);persistLocked();break;}}
-    for(std::uint64_t k=m_store.firstIncompleteSegment(scope,item);k<urls.size();++k){
-        if(shouldAbort(item.itemId,scope,generation)) return false;
+    // Publish only transfer-owned progress onto the LIVE item: a pause or
+    // playback interrupt that landed after the dequeue must survive instead
+    // of being reverted to Downloading by a stale whole-item assignment.
+    {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){if(transferSourceChanged(i,transferSourceId,transferEtag))return false;publishTransferProgress(i,item);persistItemLocked(i.itemId);break;}}
+    for(std::uint64_t k=resumeFrom;k<urls.size();++k){
+        // Consume an abandoned delete flag exactly like the segment-failure
+        // path: a delete requested then left pending must remove now instead
+        // of surviving to silently delete a later re-enqueue of this id.
+        // Delete still wins over pause/playback/generation aborts.
+        if(shouldAbort(item.itemId,scope,generation)){std::lock_guard<std::mutex>l(m_mutex);if(m_deleteRequested.erase(item.itemId)){auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p!=m_items.end()){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);}persistLocked();publishDownloadGauges(m_items,m_planJobs.size());}return false;}
         std::string part=m_store.segmentPath(scope,item.itemId,k,true), done=m_store.segmentPath(scope,item.itemId,k);
         CURLcode rc=CURLE_OK; long code=0; std::uint64_t bytes=0; bool good=false, primaryGood=false, fallbackGood=false; std::uint64_t primaryDuration=0, primaryBytes=0, fallbackDuration=0, fallbackBytes=0; long primaryCode=0, fallbackCode=0; CURLcode primaryRc=CURLE_OK, fallbackRc=CURLE_OK; bool primaryMeasured=false, fallbackMeasured=false, fallbackAttempted=false;
         for(unsigned attempt=1;attempt<=HLS_SEGMENT_ATTEMPTS;++attempt){
@@ -181,10 +215,42 @@ bool DownloadManager::transfer(DownloadItem&item,const Session&session,const std
             if(willRetry)performanceTelemetry().addDownloadSegmentRetries();
             if(!willRetry) break;
         }
-        if(!good){std::string detail="segment="+std::to_string(k)+" curl="+std::to_string((int)rc)+" "+curl_easy_strerror(rc)+" HTTP="+std::to_string(code);std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p==m_items.end())return false;if(m_deleteRequested.erase(item.itemId)){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}if(rc==CURLE_ABORTED_BY_CALLBACK){p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}p->state=hlsSegmentFailureState(code,(int)rc);p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);p->lastError=detail;m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}
+        if(!good){std::string detail="segment="+std::to_string(k)+" curl="+std::to_string((int)rc)+" "+curl_easy_strerror(rc)+" HTTP="+std::to_string(code);std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;});if(p==m_items.end())return false;if(m_deleteRequested.erase(item.itemId)){m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}if(rc==CURLE_ABORTED_BY_CALLBACK){p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}if(p->state!=DownloadState::Paused&&p->state!=DownloadState::PausedForPlayback)p->state=hlsSegmentFailureState(code,(int)rc);p->recentBytesPerSec=0;m_progressSamples.erase(item.itemId);p->lastError=detail;m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;}
         if(std::rename(part.c_str(),done.c_str())) return false;
         performanceTelemetry().addDownloadSegmentCompleted();
-        m_store.reconcile(scope,item,nullptr); item.hlsCompletedSegments=k+1; item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0; item.hlsActivePercent=downloadPercent(item); item.state=DownloadState::Downloading; {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){i=item;m_store.saveManifest(scope,i,nullptr);persistLocked();}}
+        // The segment file just renamed to its final name is the source of
+        // truth: account for its bytes incrementally instead of rescanning
+        // every segment from disk, and persist only this item's manifest.
+        // The index (item ids) is unchanged by segment progress, and a crash
+        // between segments still recovers: startup reconcile rebuilds the
+        // counters from the segment files on disk.
+        applyHlsSegmentCompleted(item,k,bytes); item.hlsCurrentSegmentBytes=item.hlsCurrentSegmentSize=0; item.hlsActivePercent=downloadPercent(item); {std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==item.itemId){
+        // The reconciler already wiped this source's segment files when it
+        // reset the identity above; drop the just-renamed stale file inside
+        // this same critical section (never after unlock, never twice) so a
+        // concurrently restarted new-source transfer cannot rename a valid
+        // segment onto this path in between, then stop cleanly.
+        if(transferSourceChanged(i,transferSourceId,transferEtag)){std::remove(done.c_str());return false;}publishTransferProgress(i,item);persistItemLocked(i.itemId);break;}}
     }
-    std::lock_guard<std::mutex>l(m_mutex); auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;}); if(p==m_items.end()||!m_store.validateCompletedDownload(scope,item,nullptr))return false; m_store.reconcile(scope,item,nullptr); item.state=DownloadState::Complete; item.recentBytesPerSec=0; item.lastError.clear(); *p=item; m_progressSamples.erase(item.itemId);m_store.saveManifest(scope,item,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return true;
+    std::lock_guard<std::mutex>l(m_mutex); auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==item.itemId;}); if(p==m_items.end())return false;
+    // The delete flag is consumed here as on the failure path: a delete
+    // requested during the final segment removes instead of completing (B).
+    const bool deleteRequested=m_deleteRequested.erase(item.itemId)!=0;
+    // Identity this transfer ran under vs the live item (A); validation only
+    // runs when neither delete nor a source change already decided it (C).
+    const bool sourceChanged=!deleteRequested&&transferSourceChanged(*p,transferSourceId,transferEtag);
+    std::string validationError; const bool validated=!deleteRequested&&!sourceChanged&&m_store.validateCompletedDownload(scope,item,&validationError);
+    switch(decideTransferFinish(deleteRequested,sourceChanged,validated)){
+    case TransferFinish::Removed:
+        m_store.removeItem(scope,item.itemId,nullptr);m_items.erase(p);m_progressSamples.erase(item.itemId);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;
+    case TransferFinish::StaleAborted:
+        return false;
+    case TransferFinish::RetryFailed:
+        applyTransferValidationFailure(*p,validationError);m_progressSamples.erase(p->itemId);m_store.reconcile(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return false;
+    case TransferFinish::Complete:
+        break;
+    }
+    m_store.reconcile(scope,item,nullptr); item.state=DownloadState::Complete; item.recentBytesPerSec=0; item.lastError.clear();
+    // Disk-validated completion is terminal truth, so Complete is published even over an interrupt; still field-wise, never a stale whole-item copy.
+    p->hlsStorage=item.hlsStorage; p->hlsSegmentCount=item.hlsSegmentCount; p->hlsProfile=item.hlsProfile; p->expectedSize=item.expectedSize; p->downloadedBytes=item.downloadedBytes; p->hlsCompletedSegments=item.hlsCompletedSegments; p->hlsCurrentSegmentBytes=0; p->hlsCurrentSegmentSize=0; p->hlsActivePercent=item.hlsActivePercent; p->state=DownloadState::Complete; p->recentBytesPerSec=0; p->lastError.clear(); m_progressSamples.erase(p->itemId);m_store.saveManifest(scope,*p,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return true;
 }}

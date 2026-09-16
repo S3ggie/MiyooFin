@@ -1,6 +1,7 @@
 #include "DownloadManager.hpp"
 #include "DownloadSupport.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
+#include "../diagnostics/TelemetryClock.hpp"
 #include <sys/statvfs.h>
 #include <algorithm>
 namespace miyoofin {
@@ -36,6 +37,12 @@ void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_
     for(auto&i:loaded)m_store.reconcile(m_scope,i,nullptr);
     m_items.swap(loaded); persistLocked();if(s.valid()){m_reconcileRequested=true;m_startupReconcile=true;}publishDownloadGauges(m_items,m_planJobs.size());if(s.valid())performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile,1);m_wake.notify_all();m_reconcileWake.notify_one();}
 void DownloadManager::persistLocked(){for(const auto&i:m_items)m_store.saveManifest(m_scope,i,nullptr);m_store.saveIndex(m_scope,m_items,nullptr);}
+// Segment completions only touch one item's bytes, and the index lists item
+// ids (unchanged by segment progress), so the per-segment path persists just
+// that item's manifest instead of rewriting the whole library.  The manifest
+// stays crash-safe via atomic write+fsync; segment files on disk remain the
+// source of truth that startup reconcile rebuilds from.
+void DownloadManager::persistItemLocked(const std::string&id){for(const auto&i:m_items)if(i.itemId==id){m_store.saveManifest(m_scope,i,nullptr);break;}}
 void DownloadManager::setPlaybackActive(bool v){{std::lock_guard<std::mutex>l(m_mutex);m_playback=v;for(auto&i:m_items)if(v&&i.state==DownloadState::Downloading){i.state=stateAfterInterrupt(DownloadInterrupt::Playback);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);}else if(!v&&i.state==DownloadState::PausedForPlayback)i.state=DownloadState::Queued;persistLocked();publishDownloadGauges(m_items,m_planJobs.size());}m_wake.notify_all();}
 void DownloadManager::enqueue(const DownloadItem&item){enqueue(std::vector<DownloadItem>{item});}
 void DownloadManager::enqueue(const std::vector<DownloadItem>&incoming){
@@ -68,14 +75,35 @@ void DownloadManager::pause(const std::string&id){std::lock_guard<std::mutex>l(m
 void DownloadManager::resume(const std::string&id){std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==id&&i.state!=DownloadState::Complete)i.state=DownloadState::Queued;persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();}
 void DownloadManager::retry(const std::string&id){resume(id);}
 bool DownloadManager::redownload(const std::string&id){std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==id&&i.state==DownloadState::UpdateAvailable&&!i.availableMediaSourceId.empty()&&(i.hlsStorage||i.availableSize)){if(!m_store.removePartialBytes(m_scope,id,nullptr))return false;i.mediaSourceId=i.availableMediaSourceId;i.sourceEtag=i.availableSourceEtag;if(i.hlsStorage)estimateHlsBytes(i.runtimeTicks,i.expectedSize);else i.expectedSize=i.availableSize;i.availableMediaSourceId.clear();i.availableSourceEtag.clear();i.availableSize=0;i.downloadedBytes=0;i.recentBytesPerSec=0;m_progressSamples.erase(id);i.state=DownloadState::Queued;i.updateAvailable=false;i.localOnly=false;m_store.saveManifest(m_scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();return true;}return false;}
-bool DownloadManager::erase(const std::string&id,std::string*e){std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==id;});if(p==m_items.end())return false;if(p->state==DownloadState::Downloading){m_deleteRequested.insert(id);p->state=DownloadState::Paused;p->recentBytesPerSec=0;m_progressSamples.erase(id);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_all();return true;}bool ok=m_store.removeItem(m_scope,id,e);if(ok){m_items.erase(p);m_progressSamples.erase(id);}persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return ok;}
-std::uint64_t DownloadManager::freeBytes()const{struct statvfs s{};std::string path=m_store.scopePath(m_scope);while(!path.empty()){if(!statvfs(path.c_str(),&s))return (std::uint64_t)s.f_bavail*(std::uint64_t)s.f_frsize;size_t slash=path.find_last_of('/');if(slash==std::string::npos)break;path.resize(slash);}return 0;}
-DownloadSnapshot DownloadManager::snapshot()const{std::lock_guard<std::mutex>l(m_mutex);DownloadSnapshot x;x.items=m_items;x.freeBytes=freeBytes();x.playbackActive=m_playback;for(auto&i:x.items){if(i.state!=DownloadState::Complete&&i.state!=DownloadState::LocalOnly&&i.state!=DownloadState::UpdateAvailable){x.reservedBytes=saturatingAdd(x.reservedBytes,queueRemainingBytes(i));}else x.localBytes=saturatingAdd(x.localBytes,i.hlsStorage?i.downloadedBytes:(i.expectedSize?i.expectedSize:i.downloadedBytes));}return x;}
+bool DownloadManager::erase(const std::string&id,std::string*e){std::lock_guard<std::mutex>l(m_mutex);auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==id;});if(p==m_items.end())return false;if(p->state==DownloadState::Downloading){m_deleteRequested.insert(id);p->state=DownloadState::Paused;p->recentBytesPerSec=0;m_progressSamples.erase(id);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_all();return true;}m_deleteRequested.erase(id);bool ok=m_store.removeItem(m_scope,id,e);if(ok){m_items.erase(p);m_progressSamples.erase(id);}persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return ok;}
+bool DownloadManager::statvfsFreeBytes(const DownloadStore&store,const std::string&scope,std::uint64_t&out){struct statvfs s{};std::string path=store.scopePath(scope);while(!path.empty()){if(!statvfs(path.c_str(),&s)){out=(std::uint64_t)s.f_bavail*(std::uint64_t)s.f_frsize;return true;}size_t slash=path.find_last_of('/');if(slash==std::string::npos)break;path.resize(slash);}return false;}
+std::uint64_t DownloadManager::freeBytes()const{
+    const std::uint64_t nowMs=TelemetryClock::monotonicUs()/1000;
+    std::string scope; std::uint64_t cached=0, cachedAt=0;
+    {std::lock_guard<std::mutex>l(m_mutex);scope=m_scope;cached=m_freeBytesCached;cachedAt=m_freeBytesCachedAtMs;
+     if(!freeSpaceCacheExpired(nowMs,cachedAt))return cached;}
+    // statvfs (with its parent-dir walk) runs without the mutex held.
+    std::uint64_t fresh=0;
+    const bool probeOk=statvfsFreeBytes(m_store,scope,fresh);
+    // Substitute the cached value ONLY on probe failure; a successful zero
+    // (genuinely full card) is cached and returned as zero so makePlan()
+    // still reports "Not enough space".
+    const std::uint64_t selected=selectCachedFreeBytes(cached,fresh,probeOk);
+    // Cache the decision even when it reuses the old value, so a persistently
+    // failing statvfs still only retries after the TTL instead of every poll.
+    {std::lock_guard<std::mutex>l(m_mutex);m_freeBytesCached=selected;m_freeBytesCachedAtMs=TelemetryClock::monotonicUs()/1000;}
+    return selected;
+}
+DownloadSnapshot DownloadManager::snapshot()const{std::vector<DownloadItem> items;bool playback=false;{std::lock_guard<std::mutex>l(m_mutex);items=m_items;playback=m_playback;}DownloadSnapshot x;x.items=std::move(items);x.freeBytes=freeBytes();x.playbackActive=playback;for(auto&i:x.items){if(i.state!=DownloadState::Complete&&i.state!=DownloadState::LocalOnly&&i.state!=DownloadState::UpdateAvailable){x.reservedBytes=saturatingAdd(x.reservedBytes,queueRemainingBytes(i));}else x.localBytes=saturatingAdd(x.localBytes,i.hlsStorage?i.downloadedBytes:(i.expectedSize?i.expectedSize:i.downloadedBytes));}return x;}
 bool DownloadManager::updateRecentSpeed(RecentSpeedSample &sample,std::uint64_t downloaded,std::uint64_t now,std::uint64_t &bytesPerSec){
     static constexpr std::uint64_t WINDOW_MS=1500;
+    // HLS inter-segment gaps (server-side transcoding) are normal and can
+    // last several seconds.  Only zero the displayed rate when the gap is
+    // long enough to indicate a real stall.
+    static constexpr std::uint64_t STALL_GAP_MS=5000;
     if(sample.samples.empty()||downloaded<sample.downloadedBytes||now<sample.samples.back().first){sample={};sample.downloadedBytes=downloaded;sample.lastReceivedMs=now;sample.samples.push_back({now,downloaded});return false;}
     if(downloaded==sample.downloadedBytes){
-        if(now>=sample.lastReceivedMs+WINDOW_MS && bytesPerSec){bytesPerSec=0;return true;}
+        if(now>=sample.lastReceivedMs+STALL_GAP_MS && bytesPerSec){bytesPerSec=0;return true;}
         return false;
     }
     sample.downloadedBytes=downloaded; sample.lastReceivedMs=now; sample.samples.push_back({now,downloaded});

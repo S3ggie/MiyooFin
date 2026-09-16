@@ -12,6 +12,17 @@ bool reconcileSource(DownloadItem &item, SourceCheck result, const DownloadMedia
 inline bool startupReconcileShouldSkip(const DownloadItem &item) {
     return item.state == DownloadState::Complete;
 }
+// Single apply step shared by the reconciler worker and unit tests.  It
+// operates on the LIVE item under the lock: the timestamp and the source
+// merge run against *p directly, so a pause/playback transition that landed
+// between the pass-start snapshot and the apply survives a Transient (no-op)
+// reconcile.  Never assign a pass-start snapshot over the live element here.
+inline bool applyReconciledSource(DownloadItem &live, SourceCheck result,
+                                  const DownloadMediaSource *source,
+                                  std::uint64_t nowMs) {
+    live.lastVerifiedMs = nowMs;
+    return reconcileSource(live, result, source);
+}
 
 // Session-level dedup constant: Complete items verified within this window
 // are skipped during manual reconcile to avoid hammering the server on every

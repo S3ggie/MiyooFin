@@ -25,14 +25,20 @@ DownloadManager::DownloadManager(const Session&s,const std::string&r):m_store(r)
         m_planThread=std::thread(&DownloadManager::planner,this);m_reconcileThread=std::thread(&DownloadManager::reconciler,this);}
 DownloadManager::~DownloadManager(){{std::lock_guard<std::mutex>l(m_mutex);m_stop=true;if(m_activePlanCancellation)m_activePlanCancellation->store(true);
             for(auto &job:m_planJobs)if(job.cancellation)job.cancellation->store(true);
+            // Whole-library write justified: rare lifecycle event (shutdown);
+            // every steady-state transition already persisted per-item/index
+            // above, so this only converges any last in-memory state.
             persistLocked();}m_wake.notify_all();m_planWake.notify_all();m_reconcileWake.notify_all();
         if(m_thread.joinable())m_thread.join();
         if(m_planThread.joinable())m_planThread.join();
         if(m_reconcileThread.joinable())m_reconcileThread.join();}
+// configure() switches scope and rebuilds the id set from disk, so both
+// persistLocked() calls below stay whole-library (rare lifecycle event;
+// see persistLocked()).  Steady-state transitions never take this path.
 void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_mutex);if(m_activePlanCancellation)m_activePlanCancellation->store(true);
         for(auto &job:m_planJobs)if(job.cancellation)job.cancellation->store(true);
         persistLocked();++m_generation;m_session=s;
-        m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_deleteRequested.clear();m_progressSamples.clear();m_persistRequested=false;
+        m_scope=s.valid()?DownloadStore::scopeKey(s.serverUrl,s.userId):"anonymous";m_deleteRequested.clear();m_progressSamples.clear();m_persistRequested=false;m_persistPendingIds.clear();
     // Never let a failed index load leak its partial result into a rebuild.
     // Both paths use independent vectors, then publish one complete result.
     std::vector<DownloadItem> loaded;
@@ -44,19 +50,40 @@ void DownloadManager::configure(const Session&s){std::lock_guard<std::mutex>l(m_
     std::set<std::string> seen;
     loaded.erase(std::remove_if(loaded.begin(),loaded.end(),[&](const DownloadItem&i){return !seen.insert(i.itemId).second;}),loaded.end());
     for(auto&i:loaded)m_store.reconcile(m_scope,i,nullptr);
-    m_items.swap(loaded); persistLocked();if(s.valid()){m_reconcileRequested=true;m_startupReconcile=true;}publishDownloadGauges(m_items,m_planJobs.size());
+    m_items.swap(loaded);
+    // Seed the durable-manifest set from the successful load/rebuild: every
+    // id here has a readable manifest on disk.  persistLocked() below only
+    // ever adds (a failed re-save leaves the old manifest in place), so the
+    // set stays consistent even if a rewrite fails.
+    m_indexedIds.clear();for(const auto&i:m_items)m_indexedIds.insert(i.itemId);
+    persistLocked();if(s.valid()){m_reconcileRequested=true;m_startupReconcile=true;}publishDownloadGauges(m_items,m_planJobs.size());
         if(s.valid())performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile,1);
         m_wake.notify_all();m_reconcileWake.notify_one();}
-void DownloadManager::persistLocked(){for(const auto&i:m_items)m_store.saveManifest(m_scope,i,nullptr);m_store.saveIndex(m_scope,m_items,nullptr);}
+void DownloadManager::saveIndexLocked(){std::vector<DownloadItem> indexed;indexed.reserve(m_items.size());
+        for(const auto&i:m_items)if(m_indexedIds.count(i.itemId))indexed.push_back(i);m_store.saveIndex(m_scope,indexed,nullptr);}
+void DownloadManager::persistLocked(){for(const auto&i:m_items)if(m_store.saveManifest(m_scope,i,nullptr))m_indexedIds.insert(i.itemId);saveIndexLocked();}
+// persistLocked() rewrites the whole library (every manifest + the index,
+// each fsync).  It stays ONLY for rare lifecycle events that rebuild the id
+// set or shut down: configure() (scope/load) and the destructor.  Every
+// steady-state transition below uses persistItemLocked() (one small atomic
+// manifest write, milliseconds under the mutex) or a single saveIndex() when
+// the id set itself changed, so SDL-thread callers never block on slow
+// whole-library SD writes and no stale whole-library pass can revert a
+// newer per-item state.
 // Segment completions only touch one item's bytes, and the index lists item
 // ids (unchanged by segment progress), so the per-segment path persists just
 // that item's manifest instead of rewriting the whole library.  The manifest
 // stays crash-safe via atomic write+fsync; segment files on disk remain the
 // source of truth that startup reconcile rebuilds from.
-void DownloadManager::persistItemLocked(const std::string&id){for(const auto&i:m_items)if(i.itemId==id){m_store.saveManifest(m_scope,i,nullptr);break;}}
+void DownloadManager::persistItemLocked(const std::string&id){for(const auto&i:m_items)if(i.itemId==id){if(m_store.saveManifest(m_scope,i,nullptr))m_indexedIds.insert(id);break;}}
 void DownloadManager::setPlaybackActive(bool v){{std::lock_guard<std::mutex>l(m_mutex);m_playback=v;
+            // Multi-item transition, but still per-item: each affected item's
+            // manifest is written individually under the lock (never the whole
+            // library), so an unrelated item's on-disk state is untouched.
             for(auto&i:m_items)if(v&&i.state==DownloadState::Downloading){i.state=stateAfterInterrupt(DownloadInterrupt::Playback);i.recentBytesPerSec=0;m_progressSamples.erase(i.itemId);
-                }else if(!v&&i.state==DownloadState::PausedForPlayback)i.state=DownloadState::Queued;persistLocked();publishDownloadGauges(m_items,m_planJobs.size());}m_wake.notify_all();}
+                if(m_store.saveManifest(m_scope,i,nullptr))m_indexedIds.insert(i.itemId);
+                }else if(!v&&i.state==DownloadState::PausedForPlayback){i.state=DownloadState::Queued;if(m_store.saveManifest(m_scope,i,nullptr))m_indexedIds.insert(i.itemId);}
+            publishDownloadGauges(m_items,m_planJobs.size());}m_wake.notify_all();}
 void DownloadManager::enqueue(const DownloadItem&item){enqueue(std::vector<DownloadItem>{item});}
 void DownloadManager::enqueue(const std::vector<DownloadItem>&incoming){
     // This is called directly by screen input handling.  Keep it strictly
@@ -75,7 +102,7 @@ void DownloadManager::enqueue(const std::vector<DownloadItem>&incoming){
             m_progressSamples.erase(i.itemId);
             m_items.push_back(std::move(i));
             m_persistRequested=true;
-            ++m_persistRevision;
+            m_persistPendingIds.insert(m_items.back().itemId);
         }
         m_reconcileRequested=true;
         performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile,1);
@@ -86,9 +113,24 @@ void DownloadManager::enqueue(const std::vector<DownloadItem>&incoming){
 }
 void DownloadManager::pause(const std::string&id){std::lock_guard<std::mutex>l(m_mutex);
         for(auto&i:m_items)if(i.itemId==id&&i.state!=DownloadState::Complete){i.state=stateAfterInterrupt(DownloadInterrupt::UserPause);i.recentBytesPerSec=0;m_progressSamples.erase(id);
-            }persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_all();}
+            }persistItemLocked(id);
+            // Crash durability (uniform with the worker pass via
+            // m_indexedIds/saveIndexLocked): the pausing transition durably
+            // wrote this manifest above, so its index write travels with it.
+            // Unconditional on purpose: between the pass's pending-swap and
+            // its final index write the id is no longer "pending", yet the
+            // pass's index is not durable — skipping here would still orphan
+            // the manifest on a crash in that window.
+            saveIndexLocked();
+            publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_all();}
 void DownloadManager::resume(const std::string&id){std::lock_guard<std::mutex>l(m_mutex);for(auto&i:m_items)if(i.itemId==id&&i.state!=DownloadState::Complete)i.state=DownloadState::Queued;
-        persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();}
+        persistItemLocked(id);
+        // Same crash-durability argument as pause() above: a durably written
+        // manifest always carries its index write, so no pending-set check
+        // can leave a manifest orphaned by a crash before the worker's pass
+        // index lands.
+        saveIndexLocked();
+        publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();}
 void DownloadManager::retry(const std::string&id){resume(id);}
 bool DownloadManager::redownload(const std::string&id){std::lock_guard<std::mutex>l(m_mutex);
         for(auto&i:m_items)if(i.itemId==id&&i.state==DownloadState::UpdateAvailable&&!i.availableMediaSourceId.empty()&&(i.hlsStorage||i.availableSize)){
@@ -96,12 +138,16 @@ bool DownloadManager::redownload(const std::string&id){std::lock_guard<std::mute
             i.mediaSourceId=i.availableMediaSourceId;i.sourceEtag=i.availableSourceEtag;
             if(i.hlsStorage)estimateHlsBytes(i.runtimeTicks,i.expectedSize);else i.expectedSize=i.availableSize;i.availableMediaSourceId.clear();i.availableSourceEtag.clear();
             i.availableSize=0;i.downloadedBytes=0;i.recentBytesPerSec=0;m_progressSamples.erase(id);i.state=DownloadState::Queued;i.updateAvailable=false;i.localOnly=false;
-            m_store.saveManifest(m_scope,i,nullptr);persistLocked();publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();return true;}return false;}
+            persistItemLocked(i.itemId);publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_one();return true;}return false;}
 bool DownloadManager::erase(const std::string&id,std::string*e){std::lock_guard<std::mutex>l(m_mutex);
         auto p=std::find_if(m_items.begin(),m_items.end(),[&](const DownloadItem&i){return i.itemId==id;});if(p==m_items.end())return false;
-        if(p->state==DownloadState::Downloading){m_deleteRequested.insert(id);p->state=DownloadState::Paused;p->recentBytesPerSec=0;m_progressSamples.erase(id);persistLocked();
+        if(p->state==DownloadState::Downloading){m_deleteRequested.insert(id);p->state=DownloadState::Paused;p->recentBytesPerSec=0;m_progressSamples.erase(id);persistItemLocked(id);
             publishDownloadGauges(m_items,m_planJobs.size());m_wake.notify_all();return true;}m_deleteRequested.erase(id);bool ok=m_store.removeItem(m_scope,id,e);if(ok){m_items.erase(p);
-            m_progressSamples.erase(id);}persistLocked();publishDownloadGauges(m_items,m_planJobs.size());return ok;}
+            m_progressSamples.erase(id);m_indexedIds.erase(id);m_persistPendingIds.erase(id);}// Id set changed: only the index is rewritten (the removed
+            // manifest is already gone via removeItem); unrelated manifests
+            // are untouched.  The index is rebuilt from the durable-manifest
+            // set, so it can never retain the removed id.
+            saveIndexLocked();publishDownloadGauges(m_items,m_planJobs.size());return ok;}
 bool DownloadManager::statvfsFreeBytes(const DownloadStore&store,const std::string&scope,std::uint64_t&out){struct statvfs s{};std::string path=store.scopePath(scope);
         while(!path.empty()){if(!statvfs(path.c_str(),&s)){out=(std::uint64_t)s.f_bavail*(std::uint64_t)s.f_frsize;return true;}size_t slash=path.find_last_of('/');
             if(slash==std::string::npos)break;

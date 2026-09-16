@@ -1,5 +1,6 @@
 #include "DownloadStore.hpp"
 #include "../cache/LibraryCache.hpp"
+#include <atomic>
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
@@ -19,7 +20,23 @@ std::string enc(const std::string&s){static const char*x="0123456789ABCDEF";std:
 int hx(char c){return c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:c>='a'&&c<='f'?c-'a'+10:-1;}
 std::string dec(const std::string&s){std::string o;for(size_t i=0;i<s.size();++i)if(s[i]=='%'&&i+2<s.size()&&hx(s[i+1])>=0&&hx(s[i+2])>=0){o+=(char)(hx(s[i+1])*16+hx(s[i+2]));i+=2;
             }else o+=s[i];return o;}
-bool atomic(const std::string&p,const std::string&body){auto q=p.find_last_of('/');if(q!=std::string::npos&&!mkdirs(p.substr(0,q)))return false;std::string t=p+".tmp";
+// Stale temps (manifest.v2.tmp.<pid>.<n>, index.v1.tmp.<pid>.<n>, plus the
+// legacy manifest.v2.tmp / index.v1.tmp naming) are left behind only by a
+// crash between temp fsync and rename.  Temps are unique per call and every
+// manifest/index write runs under DownloadManager::m_mutex, so no live
+// writer can own one of these paths when the holder of that same mutex
+// sweeps.  Only *.tmp* names are removed: manifest.v2, index.v1, segments
+// (*.bin/*.part) and chunks (chunk-*.bin/*.part) never match.
+void sweepTmpFiles(const std::string&dir){DIR*d=opendir(dir.c_str());if(!d)return;dirent*x;while((x=readdir(d))){std::string n=x->d_name;
+            if(n.find(".tmp.")!=std::string::npos||(n.size()>=4&&n.rfind(".tmp")==n.size()-4))std::remove((dir+"/"+n).c_str());}closedir(d);}
+bool atomic(const std::string&p,const std::string&body){auto q=p.find_last_of('/');if(q!=std::string::npos&&!mkdirs(p.substr(0,q)))return false;
+// Unique temp per call (pid + monotonic counter): two writers can never
+// share a temp path, so concurrent whole-file writes cannot interleave,
+// rename over each other mid-flush, or remove each other's temp.  All
+// manifest/index writes here are issued under DownloadManager::m_mutex;
+// this is defence in depth if a future path ever forgets the lock.
+static std::atomic<unsigned long long> s_tmpCounter{0};
+const std::string t=p+".tmp."+std::to_string((long long)::getpid())+"."+std::to_string(s_tmpCounter.fetch_add(1));
         FILE*f=std::fopen(t.c_str(),"wb");if(!f)return false;bool ok=std::fwrite(body.data(),1,body.size(),f)==body.size()&&std::fflush(f)==0&&::fsync(fileno(f))==0&&std::fclose(f)==0;
         if(!ok||std::rename(t.c_str(),p.c_str())){std::remove(t.c_str());return false;}return true;}
 std::string get(const std::string&b,const char*k){std::string p=std::string(k)+"=";size_t i=b.find(p);if(i==std::string::npos|| (i&&b[i-1]!='\n'))return {};i+=p.size();
@@ -75,7 +92,7 @@ bool DownloadStore::saveIndex(const std::string&s,const std::vector<DownloadItem
 bool DownloadStore::loadCompleteMetadata(const std::string&s, std::vector<DownloadItem>&v, std::string*e)const{std::vector<DownloadItem> loaded; if(!loadIndex(s,loaded,e))return false;
         for(const auto&i:loaded)if(i.state==DownloadState::Complete||i.state==DownloadState::LocalOnly||i.state==DownloadState::UpdateAvailable)v.push_back(i);
         return true;}
-bool DownloadStore::rebuildIndex(const std::string&s,std::vector<DownloadItem>&v,std::string*e)const{DIR*d=opendir((scopePath(s)+"/items").c_str());if(!d){if(e)*e="no items";return false;
+bool DownloadStore::rebuildIndex(const std::string&s,std::vector<DownloadItem>&v,std::string*e)const{sweepTmpFiles(scopePath(s));DIR*d=opendir((scopePath(s)+"/items").c_str());if(!d){if(e)*e="no items";return false;
             }std::vector<DownloadItem> rebuilt;std::set<std::string> seen;dirent*x;while((x=readdir(d))){if(x->d_name[0]=='.'||!seen.insert(x->d_name).second)continue;DownloadItem i;
             if(loadManifest(s,x->d_name,i,nullptr))rebuilt.push_back(std::move(i));}closedir(d);if(!saveIndex(s,rebuilt,e))return false;v.insert(v.end(),rebuilt.begin(),rebuilt.end());
         return true;} bool DownloadStore::validateCompletedDownload(const std::string&s,const DownloadItem&i,std::string*e)const{if(i.hlsStorage){if(!i.hlsSegmentCount)return false;
@@ -101,5 +118,6 @@ bool DownloadStore::removePartialBytes(const std::string&s,const std::string&id,
 bool DownloadStore::removeItem(const std::string&s,const std::string&id,std::string*e)const{if(!safeId(s)||!safeId(id)){if(e)*e="unsafe id";return false;}DownloadItem i;
         loadManifest(s,id,i,nullptr);for(std::uint64_t k=0;k<chunkCount(i.expectedSize,i.chunkSize);++k){std::remove(chunkPath(s,id,k).c_str());std::remove(chunkPath(s,id,k,true).c_str());
             }for(std::uint64_t k=0;k<i.hlsSegmentCount;k++){std::remove(segmentPath(s,id,k).c_str());std::remove(segmentPath(s,id,k,true).c_str());}std::remove(manifestPath(s,id).c_str());
+        sweepTmpFiles(itemPath(s,id));
         ::rmdir((itemPath(s,id)+"/chunks").c_str());::rmdir((itemPath(s,id)+"/segments").c_str());::rmdir(itemPath(s,id).c_str());return true;}
 }

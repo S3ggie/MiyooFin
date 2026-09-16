@@ -477,6 +477,22 @@ case "$NAME" in
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
         ;;
+    dlview)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/downloads-tab.bmp"
+        CHECKS="rendered"
+        ;;
+    download)
+        # No screenshot steps: the download store on disk is the verification.
+        want='[HomeScreen] Library loaded'
+        SHOT=""
+        CHECKS=""
+        ;;
+    movies)
+        want='[MovieDetailsScreen]'
+        SHOT="$OUT/shots/movie-details-download.bmp"
+        CHECKS="rendered"
+        ;;
     ota)
         # The updater logs nothing, so the meaningful assertion here is that
         # the script reached the UPDATES row and the screenshots rendered; the
@@ -495,8 +511,12 @@ grep -Fq "$want" "$OUT/app.log" \
     || fail "expected screen marker missing from log: $want"
 echo "device-run: log marker OK: $want"
 
-[ -f "$SHOT" ] || fail "expected screenshot missing: $SHOT"
-python3 "$SCRIPT_DIR/assert_shots.py" --shot "$SHOT" --checks "$CHECKS" \
-    || fail "screenshot assertions failed for $SHOT"
+if [ -n "$SHOT" ]; then
+    [ -f "$SHOT" ] || fail "expected screenshot missing: $SHOT"
+    python3 "$SCRIPT_DIR/assert_shots.py" --shot "$SHOT" --checks "$CHECKS" \
+        || fail "screenshot assertions failed for $SHOT"
+else
+    echo "device-run: no screenshot assertion for this script (by design)"
+fi
 
 echo "device-run($NAME): PASS (shots in $OUT/shots, log in $OUT/app.log)"

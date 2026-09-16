@@ -1,0 +1,14 @@
+# Navigate: Home -> Movies -> open the highlighted movie -> select Download.
+# Deliberately does NOT confirm, so it cannot start playback or a download yet.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+KEY NextTab 3
+SETTLE 4000
+SCREENSHOT movies-tab
+KEY Confirm 3 4000
+SETTLE 6000
+SCREENSHOT movie-details
+KEY Right 3 2000
+SETTLE 5000
+SCREENSHOT movie-details-download
+QUIT

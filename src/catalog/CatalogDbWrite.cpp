@@ -213,7 +213,8 @@ std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
     (void)injection;
 #endif // MIYOOFIN_TEST_BUILD
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_stopping || m_pendingJobs >= kMaxPendingJobs) { CatalogDbMediaPageUpsertResult r; r.error=CatalogDbErrorCategory::ScopeNotReady; r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full"; command->result.set_value(std::move(r)); return future; }
+    if (m_stopping || m_pendingJobs >= kMaxPendingJobs) { CatalogDbMediaPageUpsertResult r; r.error=CatalogDbErrorCategory::ScopeNotReady;
+            r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full"; command->result.set_value(std::move(r)); return future; }
     command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
     command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
     m_mediaPageUpsertCommands.push_back(command); ++m_pendingJobs;
@@ -597,7 +598,10 @@ bool CatalogDb::prepareMediaPageItemStatements(sqlite3_stmt **upsert,
                                               CatalogDbMediaPageUpsertResult &result)
 {
     const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id,art_r=excluded.art_r,art_g=excluded.art_g,art_b=excluded.art_b";
-    const bool prepared=sqlite3_prepare_v2(m_db,sql,-1,upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,deleteGenres,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,insertGenre,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,deleteImageTags,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,insertImageTag,nullptr)==SQLITE_OK;
+    const bool prepared=sqlite3_prepare_v2(m_db,sql,-1,upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,deleteGenres,
+        nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,insertGenre,
+        nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,deleteImageTags,
+        nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,insertImageTag,nullptr)==SQLITE_OK;
     if (!prepared) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); return false; }
     return true;
 }
@@ -614,7 +618,9 @@ bool CatalogDb::prepareMediaPageViewRow(
     return command->page.viewId.empty() ||
         (sqlite3_prepare_v2(m_db,viewSql,-1,view,nullptr)==SQLITE_OK &&
          (!staged || sqlite3_bind_int64(*view,1,static_cast<sqlite3_int64>(command->page.syncGeneration))==SQLITE_OK) &&
-         sqlite3_bind_text(*view,staged?2:1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(*view,staged?3:2,command->page.viewName.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(*view,staged?4:3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(*view,staged?5:4,command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(*view)==SQLITE_DONE &&
+         sqlite3_bind_text(*view,staged?2:1,command->page.viewId.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(*view,staged?3:2,command->page.viewName.c_str(),-1,
+             SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(*view,staged?4:3,command->page.collectionType.c_str(),-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_int(*view,staged?5:4,
+             command->page.viewOrdinal)==SQLITE_OK && sqlite3_step(*view)==SQLITE_DONE &&
          sqlite3_prepare_v2(m_db,membershipSql,-1,membership,nullptr)==SQLITE_OK);
 }
 CatalogDb::MediaPageItemLoopOutcome CatalogDb::writeMediaPageItemRows(
@@ -750,14 +756,20 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
         return MediaPageAttemptOutcome::Retry;
     }
     if (result.error==CatalogDbErrorCategory::None && mediaPageUpsertStillValid(command, result)) {
-        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit"); std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten; m_populationStatus.state=command->page.finalPage ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty) : CatalogDbPopulationState::Populating; command->result.set_value(std::move(result)); return MediaPageAttemptOutcome::Complete; }
+        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit");
+                std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten;
+                m_populationStatus.state=command->page.finalPage
+                    ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty)
+                    : CatalogDbPopulationState::Populating;
+                command->result.set_value(std::move(result)); return MediaPageAttemptOutcome::Complete; }
         const int commitRc = sqlite3_errcode(m_db);
         if (pageTransactionShouldRetry(commitRc, attempt, kPageTransactionMaxAttempts)) {
             catalogDiagnostic("page_transaction_retry_commit sqlite_rc=" + std::to_string(commitRc));
             sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr);
             return MediaPageAttemptOutcome::Retry;
         }
-        result.error=CatalogDbErrorCategory::SqliteError; catalogDiagnostic("page_transaction_rollback reason=commit_failed sqlite_rc=" + std::to_string(commitRc)); sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Failed;
+        result.error=CatalogDbErrorCategory::SqliteError; catalogDiagnostic("page_transaction_rollback reason=commit_failed sqlite_rc=" + std::to_string(commitRc));
+            sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr); std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state=CatalogDbPopulationState::Failed;
     } else {
         if (result.error == CatalogDbErrorCategory::None) {
             logMediaPageRollback(command, "population state", result.rowsWritten, nullptr);
@@ -774,7 +786,9 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
 void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command)
 {
     CatalogDbMediaPageUpsertResult result; result.workerOwned=true;
-    if (!mediaPageUpsertStillValid(command, result)) { result.error=CatalogDbErrorCategory::Superseded; catalogDiagnostic(result.cancelled ? "page_submit_rejected reason=cancelled" : "page_submit_rejected reason=stale_or_not_ready"); command->result.set_value(std::move(result)); return; }
+    if (!mediaPageUpsertStillValid(command, result)) { result.error=CatalogDbErrorCategory::Superseded;
+            catalogDiagnostic(result.cancelled ? "page_submit_rejected reason=cancelled" : "page_submit_rejected reason=stale_or_not_ready"); command->result.set_value(std::move(result));
+            return; }
     catalogDiagnostic("page_submit_dequeued");
     const bool staged = command->page.syncGeneration != 0;
     if (staged) {

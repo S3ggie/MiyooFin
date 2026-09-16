@@ -412,8 +412,10 @@ void CatalogDb::processTopLevelSync(
             result.message = "top-level sync generation is not active";
             command->result.set_value(std::move(result)); return;
         }
-        const std::string copyViews = "INSERT INTO library_views(id,name,collection_type,ordinal) SELECT id,name,collection_type,ordinal FROM top_level_sync_views WHERE generation=" + std::to_string(command->generation) + " ORDER BY ordinal,id;";
-        const std::string copyMembership = "INSERT INTO library_membership(view_id,item_id,ordinal) SELECT view_id,item_id,ordinal FROM top_level_sync_membership WHERE generation=" + std::to_string(command->generation) + " ORDER BY view_id,ordinal,item_id;";
+        const std::string copyViews = "INSERT INTO library_views(id,name,collection_type,ordinal) SELECT id,name,collection_type,ordinal FROM top_level_sync_views WHERE generation="
+            + std::to_string(command->generation) + " ORDER BY ordinal,id;";
+        const std::string copyMembership = "INSERT INTO library_membership(view_id,item_id,ordinal) SELECT view_id,item_id,ordinal FROM top_level_sync_membership WHERE generation="
+            + std::to_string(command->generation) + " ORDER BY view_id,ordinal,item_id;";
         if (!exec(m_db, "BEGIN IMMEDIATE;", error)
             || !exec(m_db, "DELETE FROM library_membership; DELETE FROM library_views;", error)
             || !exec(m_db, copyViews.c_str(), error)
@@ -446,7 +448,8 @@ void CatalogDb::processLibrarySeed(
     auto stale = [&] { std::lock_guard<std::mutex> lock(m_mutex); return
         command->metadata.generation != m_generation ||
         (command->metadata.scopeEpoch != 0 && (command->metadata.scopeEpoch != m_requestedEpoch || !m_scopeConfigured || !m_scopeReady)); };
-    if (command->metadata.cancellation && command->metadata.cancellation->load()) { result.cancelled=true; result.error=CatalogDbErrorCategory::Superseded; result.message="library seed cancelled"; command->result.set_value(std::move(result)); return; }
+    if (command->metadata.cancellation && command->metadata.cancellation->load()) { result.cancelled=true; result.error=CatalogDbErrorCategory::Superseded;
+            result.message="library seed cancelled"; command->result.set_value(std::move(result)); return; }
     if (stale()) { result.superseded=true; result.error=CatalogDbErrorCategory::Superseded; result.message="library seed superseded"; command->result.set_value(std::move(result)); return; }
     std::map<std::string, MediaItem> canonical;
     std::vector<MediaItem> items;
@@ -458,10 +461,17 @@ void CatalogDb::processLibrarySeed(
             else { canonical.emplace(item.id, item); items.push_back(item); }
         } return true;
     };
-    if (!collect(command->request.snapshot.movies) || !collect(command->request.snapshot.shows)) { result.error=CatalogDbErrorCategory::CorruptOrIo; result.message="invalid library snapshot"; command->result.set_value(std::move(result)); return; }
-    auto collectHome = [&](const std::vector<MediaItem> &row) { for (const auto &item : row) { if(item.id.empty() || (item.type!="movie"&&item.type!="show"&&item.type!="episode")) return false; auto found=canonical.find(item.id); if(found!=canonical.end()){if(!mediaItemsEquivalentForCatalog(found->second,item))return false;} else {canonical.emplace(item.id,item);items.push_back(item);} } return true; };
-    if(!collectHome(command->request.snapshot.continueWatching)||!collectHome(command->request.snapshot.recentlyAdded)){result.error=CatalogDbErrorCategory::CorruptOrIo;result.message="invalid Home snapshot";command->result.set_value(std::move(result));return;}
-    auto execSeed = [&](const std::string &sql) { char *err=nullptr; int rc=sqlite3_exec(m_db,sql.c_str(),nullptr,nullptr,&err); if(rc!=SQLITE_OK){result.message=err?err:sqlite3_errmsg(m_db); sqlite3_free(err); return false;} return true; };
+    if (!collect(command->request.snapshot.movies) || !collect(command->request.snapshot.shows)) { result.error=CatalogDbErrorCategory::CorruptOrIo;
+            result.message="invalid library snapshot"; command->result.set_value(std::move(result)); return; }
+    auto collectHome = [&](const std::vector<MediaItem> &row) { for (const auto &item : row) {
+                if(item.id.empty() || (item.type!="movie"&&item.type!="show"&&item.type!="episode")) return false;
+                auto found=canonical.find(item.id);
+                if(found!=canonical.end()){if(!mediaItemsEquivalentForCatalog(found->second,item))return false;} else {canonical.emplace(item.id,item);items.push_back(item);
+                    } } return true; };
+    if(!collectHome(command->request.snapshot.continueWatching)||!collectHome(command->request.snapshot.recentlyAdded)){result.error=CatalogDbErrorCategory::CorruptOrIo;
+            result.message="invalid Home snapshot";command->result.set_value(std::move(result));return;}
+    auto execSeed = [&](const std::string &sql) { char *err=nullptr; int rc=sqlite3_exec(m_db,sql.c_str(),nullptr,nullptr,&err);
+            if(rc!=SQLITE_OK){result.message=err?err:sqlite3_errmsg(m_db); sqlite3_free(err); return false;} return true; };
     if (!execSeed("BEGIN IMMEDIATE;")) { result.error=CatalogDbErrorCategory::SqliteError; command->result.set_value(std::move(result)); return; }
     auto rollback = [&] { char *e=nullptr; sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,&e); sqlite3_free(e); };
     sqlite3_stmt *upsert=nullptr;
@@ -471,19 +481,39 @@ void CatalogDb::processLibrarySeed(
         || sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,&deleteGenres,nullptr)!=SQLITE_OK
         || sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,&insertGenre,nullptr)!=SQLITE_OK
         || sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,&deleteTags,nullptr)!=SQLITE_OK
-        || sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&insertTag,nullptr)!=SQLITE_OK) { result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); rollback(); command->result.set_value(std::move(result)); return; }
+        || sqlite3_prepare_v2(m_db,"INSERT INTO item_image_tags(item_id,image_type,tag) VALUES(?,?,?)",-1,&insertTag,nullptr)!=SQLITE_OK) {
+                result.error=CatalogDbErrorCategory::SqliteError; result.message=sqlite3_errmsg(m_db); rollback(); command->result.set_value(std::move(result)); return; }
     const MediaItemCollectionStatements collections{deleteGenres,insertGenre,deleteTags,insertTag};
     int writes=0;
-    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert); if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted; if(command->failureSpec().failAfterWrites>=0&&++writes>=command->failureSpec().failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
+    for (const auto &item : items) { MediaItemSqlError e=MediaItemSqlError::None; sqlite3_reset(upsert); sqlite3_clear_bindings(upsert);
+            if(!bindMediaItemScalars(upsert,item,e)||sqlite3_step(upsert)!=SQLITE_DONE||!maintainOrganizationalSortKey(m_db,item,result.message)||!replaceMediaItemCollections(collections,item,
+            e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);
+                sqlite3_finalize(deleteTags);sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} ++result.itemsUpserted;
+            if(command->failureSpec().failAfterWrites>=0&&++writes>=command->failureSpec().failAfterWrites){result.error=CatalogDbErrorCategory::SqliteError;
+                result.message="injected library seed failure";sqlite3_finalize(upsert);sqlite3_finalize(deleteGenres);sqlite3_finalize(insertGenre);sqlite3_finalize(deleteTags);
+                sqlite3_finalize(insertTag);rollback();command->result.set_value(std::move(result));return;} }
     sqlite3_finalize(upsert); sqlite3_finalize(deleteGenres); sqlite3_finalize(insertGenre); sqlite3_finalize(deleteTags); sqlite3_finalize(insertTag);
     // This is the compatibility-only writer for legacy home_items.
     // Normal top-level synchronization never enters this path.
-    if (!execSeed("DELETE FROM library_membership; DELETE FROM library_views; DELETE FROM home_items;")) { result.error=CatalogDbErrorCategory::SqliteError; rollback(); command->result.set_value(std::move(result)); return; }
-    auto addView = [&](const CachedLibraryView &v, int ordinal) { sqlite3_stmt *s=nullptr; if(sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?)",-1,&s,nullptr)!=SQLITE_OK)return false; sqlite3_bind_text(s,1,v.id.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,2,v.name.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,3,v.collectionType.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_int(s,4,ordinal);bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);if(!ok)return false; for(size_t i=0;i<v.items.size();++i){if(!execSeed("INSERT INTO library_membership(view_id,item_id,ordinal) VALUES('"+v.id+"','"+v.items[i].id+"',"+std::to_string(i)+")"))return false;} ++result.viewsWritten;return true; };
-    for(size_t i=0;i<command->request.snapshot.movies.size();++i) if(!addView(command->request.snapshot.movies[i],i)){result.error=CatalogDbErrorCategory::SqliteError;rollback();command->result.set_value(std::move(result));return;}
-    for(size_t i=0;i<command->request.snapshot.shows.size();++i) if(!addView(command->request.snapshot.shows[i],i+command->request.snapshot.movies.size())){result.error=CatalogDbErrorCategory::SqliteError;rollback();command->result.set_value(std::move(result));return;}
-    auto addHome=[&](const char *kind,const std::vector<MediaItem>&v){for(size_t i=0;i<v.size();++i)if(!execSeed("INSERT INTO home_items(row_kind,item_id,ordinal) VALUES('"+std::string(kind)+"','"+v[i].id+"',"+std::to_string(i)+")"))return false;result.homeItemsWritten+=v.size();return true;};
-    if(!addHome("continue_watching",command->request.snapshot.continueWatching)||!addHome("recently_added",command->request.snapshot.recentlyAdded)||stale()||!execSeed("COMMIT;")){result.error=CatalogDbErrorCategory::Superseded;rollback();command->result.set_value(std::move(result));return;}
+    if (!execSeed("DELETE FROM library_membership; DELETE FROM library_views; DELETE FROM home_items;")) { result.error=CatalogDbErrorCategory::SqliteError; rollback();
+            command->result.set_value(std::move(result)); return; }
+    auto addView = [&](const CachedLibraryView &v, int ordinal) { sqlite3_stmt *s=nullptr;
+            if(sqlite3_prepare_v2(m_db,"INSERT INTO library_views(id,name,collection_type,ordinal) VALUES(?,?,?,?)",-1,&s,nullptr)!=SQLITE_OK)return false;
+            sqlite3_bind_text(s,1,v.id.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,2,v.name.c_str(),-1,SQLITE_TRANSIENT);
+            sqlite3_bind_text(s,3,v.collectionType.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_int(s,4,ordinal);bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);if(!ok)return false;
+            for(size_t i=0;i<v.items.size();
+            ++i){if(!execSeed("INSERT INTO library_membership(view_id,item_id,ordinal) VALUES('"+v.id+"','"+v.items[i].id+"',"+std::to_string(i)+")"))return false;} ++result.viewsWritten;
+            return true; };
+    for(size_t i=0;i<command->request.snapshot.movies.size();++i) if(!addView(command->request.snapshot.movies[i],i)){result.error=CatalogDbErrorCategory::SqliteError;rollback();
+            command->result.set_value(std::move(result));return;}
+    for(size_t i=0;i<command->request.snapshot.shows.size();
+        ++i) if(!addView(command->request.snapshot.shows[i],i+command->request.snapshot.movies.size())){result.error=CatalogDbErrorCategory::SqliteError;rollback();
+            command->result.set_value(std::move(result));return;}
+    auto addHome=[&](const char *kind,const std::vector<MediaItem>&v){for(size_t i=0;i<v.size();
+            ++i)if(!execSeed("INSERT INTO home_items(row_kind,item_id,ordinal) VALUES('"+std::string(kind)+"','"+v[i].id+"',"+std::to_string(i)+")"))return false;
+            result.homeItemsWritten+=v.size();return true;};
+    if(!addHome("continue_watching",command->request.snapshot.continueWatching)||!addHome("recently_added",command->request.snapshot.recentlyAdded)||stale()||!execSeed("COMMIT;")){
+            result.error=CatalogDbErrorCategory::Superseded;rollback();command->result.set_value(std::move(result));return;}
     result.success=true; command->result.set_value(std::move(result));
 }
 } // namespace miyoofin

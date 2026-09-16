@@ -1,0 +1,55 @@
+# Test-only: cross-compile the ui-script LD_PRELOAD shim for ARM.
+#
+# Builds tools/ui-script/shim.cpp for arm-linux-gnueabihf inside the same
+# miyoofin-toolchain container the ARM app build uses, producing
+# output/ui-script/shim-arm.so for the device harness
+# (tools/ui-script/device-run.sh, docs/ui-script-harness.md).
+#
+# The shim needs only libc/libdl plus SDL2 *headers* (it interposes the
+# dynamically-linked SDL_PollEvent symbol); no device blobs are required.
+#
+# Deliberately NOT wired into Makefile.cross, sources.mk, the ARM app
+# link, or any release/package target: test-only tooling, never shipped.
+#
+# Usage:
+#   make -f tools/ui-script/Makefile.arm          # build the ARM shim
+#   make -f tools/ui-script/Makefile.arm verify   # readelf/nm evidence
+#   make -f tools/ui-script/Makefile.arm clean
+
+DOCKER_TAG := miyoofin-toolchain
+DOCKER_USER := $(shell id -u):$(shell id -g)
+
+SRC := tools/ui-script/shim.cpp
+OUT := output/ui-script/shim-arm.so
+
+.PHONY: all verify clean
+
+all: $(OUT)
+
+$(OUT): $(SRC)
+	mkdir -p output/ui-script
+	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
+	    arm-linux-gnueabihf-g++ -shared -fPIC -O1 -Wall -Wextra \
+	        -I/usr/arm-linux-gnueabihf/include/SDL2 \
+	        -D_GNU_SOURCE=1 -D_REENTRANT \
+	        -o $(OUT) $(SRC)
+	@echo "  [UI-SHIM-ARM] $(OUT)"
+
+# Evidence that the .so interposes SDL_PollEvent and carries no
+# device-blob dependencies (runs inside the same container).
+verify: $(OUT)
+	@echo "--- readelf -d (NEEDED) ---"
+	@docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
+	    arm-linux-gnueabihf-readelf -d $(OUT) | grep -E 'NEEDED|SONAME' \
+	    || docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
+	        arm-linux-gnueabihf-readelf -d $(OUT)
+	@echo "--- nm -D (SDL_PollEvent interposition) ---"
+	@docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
+	    arm-linux-gnueabihf-nm -D $(OUT) | grep -E 'SDL_PollEvent|dlsym' \
+	    || { echo "FAIL: SDL_PollEvent interposition symbols missing"; exit 1; }
+	@echo "--- readelf -h (ARM arch) ---"
+	@docker run --rm -v $(PWD):/build $(DOCKER_TAG) \
+	    arm-linux-gnueabihf-readelf -h $(OUT) | grep -E 'Class|Machine'
+
+clean:
+	rm -f $(OUT)

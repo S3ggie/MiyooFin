@@ -1,0 +1,15 @@
+# Series: from Home, tab over to Shows, open the stub series "Testville",
+# assert its seasons screen renders with seasons listed, exit.
+# Tab order is Home, Movies, Shows, Downloads, Settings.
+WAIT_LOG [HomeScreen] Library loaded 30000
+KEY NextTab 80 500
+KEY NextTab 80 500
+# Shows tab starts on the alphabet rail; step into the grid first.
+KEY Right 80 500
+KEY Confirm 80 800
+WAIT_LOG [SeriesScreen] enter series=Testville 15000
+# Seasons arrive via a worker thread that emits no log marker, so this one
+# spot uses a bounded settle; the screenshot assertion below is the verdict.
+SETTLE 2500
+SCREENSHOT series-seasons
+QUIT

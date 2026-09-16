@@ -1,0 +1,22 @@
+# Start a movie download, then pause it from the Downloads tab.
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 12000
+KEY NextTab 3
+SETTLE 10000
+KEY Confirm 3 4000
+SETTLE 10000
+KEY Right 3 2000
+SETTLE 8000
+KEY Confirm 3 4000
+SETTLE 8000
+KEY Confirm 3 4000
+SETTLE 20000
+SCREENSHOT dl-starting
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+SCREENSHOT dl-before-pause
+KEY Confirm 3 4000
+SETTLE 8000
+SCREENSHOT dl-paused
+QUIT

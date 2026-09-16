@@ -548,6 +548,11 @@ case "$NAME" in
         SHOT=""
         CHECKS=""
         ;;
+    movies-preview)
+        want='[MovieDetailsScreen]'
+        SHOT="$OUT/shots/movie-preview.bmp"
+        CHECKS="rendered"
+        ;;
     movies)
         want='[MovieDetailsScreen]'
         SHOT="$OUT/shots/movie-details-download.bmp"

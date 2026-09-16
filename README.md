@@ -30,13 +30,21 @@ Built with C++17, SDL2, libcurl, and json-c.
 
 ## Screenshots
 
-| Home | Seasons |
+| Home | Movies |
 |---|---|
-| ![Home rails](docs/screenshots/home.png) | ![Season list](docs/screenshots/seasons.png) |
+| ![Home rails](docs/screenshots/home.png) | ![Movies grid with alphabet rail](docs/screenshots/movies.png) |
 
-| Downloads | Shows |
+| Movie preview | Episode list |
 |---|---|
-| ![Downloads with live progress](docs/screenshots/downloads.png) | ![Shows grid](docs/screenshots/shows.png) |
+| ![Movie details with synopsis and download size](docs/screenshots/movie-preview.png) | ![Episode list for a season](docs/screenshots/episodes.png) |
+
+| Shows | Seasons |
+|---|---|
+| ![Shows grid with a separate Anime section](docs/screenshots/shows.png) | ![Season list](docs/screenshots/seasons.png) |
+
+| Downloads | |
+|---|---|
+| ![Downloads with live progress and pause/resume](docs/screenshots/downloads.png) | |
 
 ## Known limitations
 

@@ -168,12 +168,16 @@ std::future<CatalogDbMediaPageResult> CatalogDb::enqueueMediaPage(
     const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata,
     CatalogDbMediaPageFilter filter)
 {
-    auto command=std::make_shared<MediaPageCommand>(); command->type=type; command->letter=alphabetLetter; command->limit=std::min<std::size_t>(limit, 64); command->filter=filter; command->after=after; command->metadata=metadata;
+    auto command=std::make_shared<MediaPageCommand>(); command->type=type; command->letter=alphabetLetter; command->limit=std::min<std::size_t>(limit, 64); command->filter=filter;
+        command->after=after; command->metadata=metadata;
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
     if(m_stopping){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::ScopeNotReady;r.message="CatalogDb is stopping";command->result.set_value(std::move(r));return future;}
-    if(command->limit==0 || (type!="movie" && type!="show")){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::SqliteError;r.message="invalid media page request";command->result.set_value(std::move(r));return future;}
-    if(m_pendingJobs>=kMaxPendingJobs){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb page queue is full";command->result.set_value(std::move(r));return future;}
-    command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation; command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
+    if(command->limit==0 || (type!="movie" && type!="show")){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::SqliteError;r.message="invalid media page request";
+            command->result.set_value(std::move(r));return future;}
+    if(m_pendingJobs>=kMaxPendingJobs){CatalogDbMediaPageResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb page queue is full";
+            command->result.set_value(std::move(r));return future;}
+    command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
+        command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     m_mediaPageCommands.push_back(command); ++m_pendingJobs;
     performanceTelemetry().setCatalogDbQueueDepth(
@@ -186,7 +190,8 @@ std::future<CatalogCompatibilityReadResult> CatalogDb::enqueueLibraryRead(
     auto command=std::make_shared<LibraryReadCommand>(); command->metadata=metadata;
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
     if(m_stopping){CatalogCompatibilityReadResult r;r.error=CatalogDbErrorCategory::ScopeNotReady;r.message="CatalogDb is stopping";command->result.set_value(std::move(r));return future;}
-    if(m_pendingJobs>=kMaxPendingJobs){CatalogCompatibilityReadResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb library read queue is full";command->result.set_value(std::move(r));return future;}
+    if(m_pendingJobs>=kMaxPendingJobs){CatalogCompatibilityReadResult r;r.error=CatalogDbErrorCategory::OpenFailed;r.message="CatalogDb library read queue is full";
+            command->result.set_value(std::move(r));return future;}
     command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
     command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
     m_libraryReadCommands.push_back(command);++m_pendingJobs; m_wake.notify_one(); return future;
@@ -681,28 +686,47 @@ void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &co
     // normal Home flow renders bounded library pages and receives ephemeral
     // rail responses from Jellyfin; it must not depend on home_items.
     CatalogCompatibilityReadResult result; result.workerOwned=true;
-    { std::lock_guard<std::mutex> lock(m_mutex); if(command->metadata.generation!=m_generation || (command->metadata.scopeEpoch && (command->metadata.scopeEpoch!=m_requestedEpoch||!m_scopeConfigured||!m_scopeReady))){result.superseded=true;result.error=CatalogDbErrorCategory::Superseded;command->result.set_value(std::move(result));return;} }
+    { std::lock_guard<std::mutex> lock(m_mutex);
+            if(command->metadata.generation!=m_generation || (command->metadata.scopeEpoch && (command->metadata.scopeEpoch!=m_requestedEpoch||!m_scopeConfigured||!m_scopeReady))){
+                result.superseded=true;result.error=CatalogDbErrorCategory::Superseded;command->result.set_value(std::move(result));return;} }
     sqlite3_stmt *views=nullptr,*items=nullptr,*home=nullptr,*sg=nullptr,*st=nullptr;
     const char *cols="id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b";
-    if(sqlite3_prepare_v2(m_db,"SELECT id,name,collection_type FROM library_views ORDER BY ordinal,id",-1,&views,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+" FROM media_items JOIN library_membership ON media_items.id=library_membership.item_id WHERE view_id=? ORDER BY library_membership.ordinal,library_membership.item_id").c_str(),-1,&items,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,(std::string("SELECT ")+cols+",row_kind FROM media_items JOIN home_items ON media_items.id=home_items.item_id ORDER BY row_kind,ordinal,item_id").c_str(),-1,&home,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT ordinal,genre FROM item_genres WHERE item_id=? ORDER BY ordinal",-1,&sg,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT image_type,tag FROM item_image_tags WHERE item_id=? ORDER BY image_type",-1,&st,nullptr)!=SQLITE_OK){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}
+    if(sqlite3_prepare_v2(m_db,"SELECT id,name,collection_type FROM library_views ORDER BY ordinal,id",-1,&views,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,
+        (std::string("SELECT ")+cols
+            +" FROM media_items JOIN library_membership ON media_items.id=library_membership.item_id WHERE view_id=? ORDER BY library_membership.ordinal,library_membership.item_id").c_str(),
+        -1,&items,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,
+        (std::string("SELECT ")+cols+",row_kind FROM media_items JOIN home_items ON media_items.id=home_items.item_id ORDER BY row_kind,ordinal,item_id").c_str(),-1,&home,
+        nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT ordinal,genre FROM item_genres WHERE item_id=? ORDER BY ordinal",-1,&sg,
+        nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,"SELECT image_type,tag FROM item_image_tags WHERE item_id=? ORDER BY image_type",-1,&st,nullptr)!=SQLITE_OK){
+            result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);
+            sqlite3_finalize(st);command->result.set_value(std::move(result));return;}
     const MediaItemCollectionStatements collections{nullptr,nullptr,nullptr,nullptr,sg,st};
     auto cancelled = [&] { return command->metadata.cancellation
         && command->metadata.cancellation->load(); };
     while(sqlite3_step(views)==SQLITE_ROW){
         if (cancelled()) { result.cancelled=true; break; }
-        CachedLibraryView view;view.id=(const char*)sqlite3_column_text(views,0);view.name=(const char*)sqlite3_column_text(views,1);view.collectionType=(const char*)sqlite3_column_text(views,2);sqlite3_reset(items);sqlite3_clear_bindings(items);sqlite3_bind_text(items,1,view.id.c_str(),-1,SQLITE_TRANSIENT);
+        CachedLibraryView view;view.id=(const char*)sqlite3_column_text(views,0);view.name=(const char*)sqlite3_column_text(views,1);
+            view.collectionType=(const char*)sqlite3_column_text(views,2);sqlite3_reset(items);sqlite3_clear_bindings(items);sqlite3_bind_text(items,1,view.id.c_str(),-1,SQLITE_TRANSIENT);
         while(sqlite3_step(items)==SQLITE_ROW){
             if (cancelled()) { result.cancelled=true; break; }
-            MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(items,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}view.items.push_back(std::move(item));
+            MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;
+                if(!readMediaItemScalars(items,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);
+                    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;
+                    }view.items.push_back(std::move(item));
         }
         if (result.cancelled) break;
         if(view.collectionType=="tvshows")result.snapshot.shows.push_back(std::move(view));else result.snapshot.movies.push_back(std::move(view));
     }
     if (!result.cancelled) while(sqlite3_step(home)==SQLITE_ROW){
         if (cancelled()) { result.cancelled=true; break; }
-        const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;}if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));else if(kind&&std::string(kind)=="recently_added")result.snapshot.recentlyAdded.push_back(std::move(item));
+        const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;
+            if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);
+                sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;
+                }if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));
+            else if(kind&&std::string(kind)=="recently_added")result.snapshot.recentlyAdded.push_back(std::move(item));
     }
     if (cancelled()) result.cancelled=true;
-    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);if(!result.cancelled)result.success=true;command->result.set_value(std::move(result));
+    sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);if(!result.cancelled)result.success=true;
+        command->result.set_value(std::move(result));
 }
 } // namespace miyoofin

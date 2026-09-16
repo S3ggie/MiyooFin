@@ -173,16 +173,9 @@ public:
                                     std::string &error,
                                     HttpClient &client,
                                     const std::atomic<bool> *cancelled = nullptr);
-    /// Changed hierarchy relationships since a durable UTC checkpoint.  The
-    /// result retains only ID, normalized type, and SeriesId; DateLastSaved
-    /// still includes metadata and per-user UserData changes.
-    static bool getChangedHierarchyItems(const std::string &baseUrl, const std::string &accessToken,
-                                         const std::string &userId, const std::string &deviceId,
-                                         std::int64_t sinceMs, std::vector<MediaItem> &items, std::string &error,
-                                         const std::atomic<bool> *cancelled = nullptr);
 
     /// Fetch bounded full metadata for changed Movie and Series items.  This
-    /// is separate from getChangedHierarchyItems(), whose lightweight
+    /// is separate from the hierarchy lightweight projection, whose
     /// affected-series projection is used by hierarchy refresh policy.
     static bool getChangedCatalogItems(const std::string &baseUrl,
                                        const std::string &accessToken,

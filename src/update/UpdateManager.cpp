@@ -9,6 +9,8 @@
 
 #include <cstdio>
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -59,6 +61,52 @@ std::string updateCheckErrorMessage(long httpCode,
     if (!transportError.empty())
         return "network error: " + transportError;
     return "network unreachable";
+}
+
+// -------------------------------------------------------------------
+// Dev-override helpers (pure, testable without I/O)
+// -------------------------------------------------------------------
+
+ManifestSource resolveManifestSource(const std::string &envValue,
+                                     const std::string &devFileContents,
+                                     const std::string &defaultUrl)
+{
+    // Priority 1: MIYOOFIN_UPDATE_URL env var (non-empty)
+    if (!envValue.empty())
+        return {envValue, true};
+
+    // Priority 2: first non-empty, non-comment line from update-dev-url.txt
+    if (!devFileContents.empty()) {
+        std::istringstream ss(devFileContents);
+        std::string line;
+        while (std::getline(ss, line)) {
+            // Trim leading/trailing whitespace
+            auto start = line.find_first_not_of(" \t\r\n");
+            if (start == std::string::npos) continue;
+            auto end = line.find_last_not_of(" \t\r\n");
+            std::string trimmed = line.substr(start, end - start + 1);
+            if (trimmed.empty() || trimmed[0] == '#') continue;
+            return {trimmed, true};
+        }
+    }
+
+    // Priority 3: production URL
+    return {defaultUrl, false};
+}
+
+bool isLocalAsset(const std::string &url)
+{
+    if (url.empty()) return false;
+    if (url.compare(0, 7, "file://") == 0) return true;
+    // Plain absolute path
+    return url[0] == '/';
+}
+
+std::string localAssetPath(const std::string &url)
+{
+    if (url.compare(0, 7, "file://") == 0)
+        return url.substr(7);
+    return url;
 }
 
 // -------------------------------------------------------------------
@@ -189,26 +237,63 @@ void UpdateManager::workerRun()
     } guard{m_workerRunning, m_done};
 
     // ---------------------------------------------------------------
+    // Step 0: Resolve manifest source (env / dev file / production)
+    // ---------------------------------------------------------------
+    std::string envUrl;
+    {
+        const char *v = std::getenv("MIYOOFIN_UPDATE_URL");
+        if (v) envUrl = v;
+    }
+
+    std::string devFileContents;
+    if (!m_appDir.empty()) {
+        std::string devPath = m_appDir + "/update-dev-url.txt";
+        std::ifstream ifs(devPath);
+        if (ifs.is_open()) {
+            devFileContents.assign(
+                (std::istreambuf_iterator<char>(ifs)),
+                std::istreambuf_iterator<char>());
+        }
+    }
+
+    ManifestSource src = resolveManifestSource(
+        envUrl, devFileContents, MANIFEST_URL);
+    m_devOverride = src.devOverride;
+
+    // ---------------------------------------------------------------
     // Step 1: Fetch and parse manifest
     // ---------------------------------------------------------------
     setStage(UpdateStage::Checking);
 
     if (isCancelled()) { setError("cancelled"); return; }
 
-    HttpClient client;
-    client.setTimeoutSec(10);
-    client.setConnectTimeoutSec(10);
     std::string body;
-    long httpCode = 0;
-    std::string error;
 
-    if (!client.get(MANIFEST_URL, body, httpCode, error)) {
-        setError(updateCheckErrorMessage(httpCode, error));
-        return;
+    if (isLocalAsset(src.url)) {
+        // Local file: read directly, no HTTP.
+        std::string path = localAssetPath(src.url);
+        std::ifstream ifs(path);
+        if (!ifs.is_open()) {
+            setError("manifest not found");
+            return;
+        }
+        body.assign((std::istreambuf_iterator<char>(ifs)),
+                     std::istreambuf_iterator<char>());
+    } else {
+        HttpClient client;
+        client.setTimeoutSec(10);
+        client.setConnectTimeoutSec(10);
+        long httpCode = 0;
+        std::string error;
+
+        if (!client.get(src.url, body, httpCode, error)) {
+            setError(updateCheckErrorMessage(httpCode, error));
+            return;
+        }
     }
 
     UpdateManifest manifest;
-    if (!parseUpdateManifest(body, manifest)) {
+    if (!parseUpdateManifest(body, manifest, m_devOverride)) {
         setError("invalid manifest");
         return;
     }
@@ -291,7 +376,31 @@ void UpdateManager::workerRun()
     }
 
     bool downloaded = skipDownload;
-    if (!skipDownload) {
+
+    // Dev-override local asset: copy file instead of HTTP download.
+    if (!downloaded && m_devOverride && isLocalAsset(manifest.tarGz.url)) {
+        std::string srcPath = localAssetPath(manifest.tarGz.url);
+        std::ifstream srcFile(srcPath, std::ios::binary);
+        if (!srcFile.is_open()) {
+            setError("local tarball not found");
+            return;
+        }
+        std::ofstream dstFile(partPath, std::ios::binary | std::ios::trunc);
+        if (!dstFile.is_open()) {
+            setError("cannot write update file");
+            return;
+        }
+        dstFile << srcFile.rdbuf();
+        if (!srcFile.good() || !dstFile.good()) {
+            setError("local copy failed");
+            std::remove(partPath.c_str());
+            return;
+        }
+        dstFile.close();
+        downloaded = true;
+    }
+
+    if (!downloaded) {
         // Up to 3 attempts with cancellable 1s/2s/4s backoff.
         for (int attempt = 0; attempt < 3; ++attempt) {
             if (isCancelled()) { setError("cancelled"); return; }

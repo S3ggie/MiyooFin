@@ -575,13 +575,29 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         sqlite3_stmt *deleteItem = nullptr;
         if (!prepareNamed(
                 "media_item_scalar_insert",
-                "INSERT OR REPLACE INTO media_items("
+                "INSERT INTO media_items("
                 "id, kind, title, overview, production_year, community_rating,"
                 "etag, played, progress, playback_position_ticks, index_number,"
                 "parent_index_number, runtime_ticks, series_name, series_id,"
                 "season_id, art_r, art_g, art_b) "
                 "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
-                "?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                "?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "kind=excluded.kind, title=excluded.title, "
+                "overview=excluded.overview, "
+                "production_year=excluded.production_year, "
+                "community_rating=excluded.community_rating, "
+                "etag=excluded.etag, played=excluded.played, "
+                "progress=excluded.progress, "
+                "playback_position_ticks=excluded.playback_position_ticks, "
+                "index_number=excluded.index_number, "
+                "parent_index_number=excluded.parent_index_number, "
+                "runtime_ticks=excluded.runtime_ticks, "
+                "series_name=excluded.series_name, "
+                "series_id=excluded.series_id, "
+                "season_id=excluded.season_id, "
+                "art_r=excluded.art_r, art_g=excluded.art_g, "
+                "art_b=excluded.art_b",
                 insert)
             || !prepareNamed(
                 "media_item_scalar_select",
@@ -692,16 +708,73 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         MediaItem updated = item;
         updated.genres = {"Updated"};
         updated.genre = updated.genres.front();
-        updated.imageTags.clear();
+        updated.imageTags = {{"Logo", "logo-new"},
+                             {"Primary", "primary-new"}};
         result.collectionsUpdateRemoval = insertAndRead(updated);
         if (result.collectionsUpdateRemoval) {
-            result.collectionsUpdateRemoval = updated.imageTags.empty()
-                && updated.genres.size() == 1
+            result.collectionsUpdateRemoval = updated.genres.size() == 1
                 && updated.genre == updated.genres.front();
         }
 
+        // Empty imageTags must preserve previously stored tags rather than
+        // wiping them.  A transient server payload returning "ImageTags": {}
+        // must not destroy artwork metadata.
+        MediaItem emptyTags = updated;
+        emptyTags.imageTags.clear();
+        if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)) {
+            result.collectionsEmptyTagPreserve = false;
+        } else {
+            MediaItemSqlError error = MediaItemSqlError::None;
+            reset(insert);
+            if (!bindMediaItemScalars(insert, emptyTags, error)
+                || sqlite3_step(insert) != SQLITE_DONE) {
+                result.message = sqlite3_errmsg(m_db);
+                reset(insert);
+                rollback();
+                result.collectionsEmptyTagPreserve = false;
+            } else {
+                reset(insert);
+                if (!replaceMediaItemCollections(collections, emptyTags,
+                                                 error)) {
+                    result.message =
+                        "MediaItem collection replacement failed (empty)";
+                    rollback();
+                    result.collectionsEmptyTagPreserve = false;
+                } else if (!exec(m_db, "COMMIT;", result.message)) {
+                    rollback();
+                    result.collectionsEmptyTagPreserve = false;
+                } else {
+                    reset(select);
+                    const bool bound = sqlite3_bind_text(
+                        select, 1, emptyTags.id.c_str(), -1,
+                        SQLITE_TRANSIENT) == SQLITE_OK;
+                    const bool row = bound
+                        && sqlite3_step(select) == SQLITE_ROW;
+                    MediaItem readBack;
+                    MediaItemSqlError readErr = MediaItemSqlError::None;
+                    const bool readOk = row
+                        && readMediaItemScalars(select, readBack, readErr);
+                    const bool collOk = readOk
+                        && readMediaItemCollections(collections, readBack,
+                                                    readErr);
+                    reset(select);
+                    // After the fix, empty imageTags must leave the existing
+                    // tags intact: the two tags from the previous write above.
+                    result.collectionsEmptyTagPreserve = collOk
+                        && readBack.imageTags.size() == 2
+                        && readBack.imageTags.count("Logo")
+                        && readBack.imageTags.at("Logo") == "logo-new"
+                        && readBack.imageTags.count("Primary")
+                        && readBack.imageTags.at("Primary") == "primary-new"
+                        && readBack.genres.size() == 1
+                        && readBack.genres[0] == "Updated";
+                }
+            }
+        }
+
         result.collectionsParity = result.collectionsZero
-            && result.collectionsMultiple && result.collectionsUpdateRemoval;
+            && result.collectionsMultiple && result.collectionsUpdateRemoval
+            && result.collectionsEmptyTagPreserve;
 
         if (!exec(m_db, "BEGIN IMMEDIATE;", result.message)) {
             result.collectionsDeleteCascade = false;

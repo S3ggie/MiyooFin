@@ -246,6 +246,79 @@ constexpr unsigned char kMediaItemCollectionsOperation = 12;
 constexpr unsigned char kSeedHierarchyQueryOperation = 13;
 constexpr unsigned char kClearHierarchyQueryOperation = 14;
 constexpr unsigned char kMediaPageQueryPlanOperation = 15;
+/// Maximum number of attempts for a page transaction that encounters a
+/// transient SQLite error (SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL).
+constexpr std::size_t kPageTransactionMaxAttempts = 3;
+
+/// Pure helper: decide whether a failed page transaction should be retried.
+/// Returns true when @p sqliteRc is a transient error and the attempt count
+/// has not yet been exhausted.
+inline bool pageTransactionShouldRetry(int sqliteRc, std::size_t attempt,
+                                       std::size_t maxAttempts)
+{
+    if (attempt >= maxAttempts)
+        return false;
+    return sqliteRc == SQLITE_BUSY || sqliteRc == SQLITE_LOCKED
+        || sqliteRc == SQLITE_FULL;
+}
+
+/// RAII owner for a single `sqlite3_stmt*`. Finalizes the statement in the
+/// destructor (null-safe) so multi-exit write paths cannot leak prepared
+/// statements. Movable but non-copyable; exactly one guard owns the
+/// statement at any time, so double-finalize is impossible by construction.
+///
+/// Typical use with `sqlite3_prepare_v2`:
+/// @code
+/// ScopedSqliteStmt statement;
+/// if (sqlite3_prepare_v2(db, sql, -1, statement.receive(), nullptr)
+///     != SQLITE_OK) { ... }
+/// sqlite3_bind_text(statement.get(), 1, ...);
+/// @endcode
+class ScopedSqliteStmt {
+public:
+    ScopedSqliteStmt() noexcept = default;
+    ~ScopedSqliteStmt() { finalize(); }
+
+    ScopedSqliteStmt(const ScopedSqliteStmt &) = delete;
+    ScopedSqliteStmt &operator=(const ScopedSqliteStmt &) = delete;
+
+    ScopedSqliteStmt(ScopedSqliteStmt &&other) noexcept
+        : m_statement(other.m_statement)
+    {
+        other.m_statement = nullptr;
+    }
+    ScopedSqliteStmt &operator=(ScopedSqliteStmt &&other) noexcept
+    {
+        if (this != &other) {
+            finalize();
+            m_statement = other.m_statement;
+            other.m_statement = nullptr;
+        }
+        return *this;
+    }
+
+    /// Borrow the raw pointer for the existing `bind*`/`step` helpers.
+    sqlite3_stmt *get() const noexcept { return m_statement; }
+
+    /// Slot for `sqlite3_prepare_v2`. Releases any currently held statement
+    /// first so a repeated prepare cannot leak or double-finalize.
+    sqlite3_stmt **receive() noexcept
+    {
+        finalize();
+        m_statement = nullptr;
+        return &m_statement;
+    }
+
+private:
+    void finalize() noexcept
+    {
+        if (m_statement != nullptr)
+            sqlite3_finalize(m_statement);
+    }
+
+    sqlite3_stmt *m_statement = nullptr;
+};
+
 constexpr std::size_t kMaxHierarchyQueryRows = 128;
 constexpr std::size_t kMaxMetadataByIdRows = 64;
 constexpr std::size_t kMaxReconcileSeries = 4096;

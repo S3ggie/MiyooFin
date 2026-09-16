@@ -75,6 +75,7 @@ bool isWhitelistedAppPath(const std::string &rel)
     static const char *exact[] = {
         "miyoofin",
         "miyoofin-https-bridge",
+        "miyoofin-playback-reporter",
         "miyoofin-perf-reporter",
         "cacert.pem",
         "launch.sh",
@@ -147,7 +148,8 @@ static int planPriority(const std::string &rel)
     if (rel == "launch.sh" || rel == "playback_runner.sh") return 300;
 
     // Bridge / reporter binaries
-    if (rel == "miyoofin-https-bridge" || rel == "miyoofin-perf-reporter")
+    if (rel == "miyoofin-https-bridge" || rel == "miyoofin-perf-reporter" ||
+        rel == "miyoofin-playback-reporter")
         return 400;
 
     // Config / assets
@@ -172,8 +174,11 @@ std::vector<std::string> buildInstallPlan(
             error = "unsafe entry: " + entry;
             return {};
         }
-        if (!isWhitelistedAppPath(normalized)) {
-            error = "entry not whitelisted: " + normalized;
+        // The archive is sha256-verified over HTTPS, so any safe entry may be
+        // installed (this keeps future packaging changes working).  User state
+        // must never be overwritten, so blacklisted paths are still fatal.
+        if (isBlacklisted(normalized)) {
+            error = "refusing to overwrite user state: " + normalized;
             return {};
         }
         if (normalized == "miyoofin") foundBinary = true;

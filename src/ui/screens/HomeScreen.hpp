@@ -69,6 +69,11 @@ public:
     const char *diagnosticTabName() const;
 
     static constexpr int kPosterThreads = 3;
+    /// Maximum decode attempts for a cached JPEG before it receives a
+    /// permanent RowArtworkStatus::Failed tombstone.  The per-key counter
+    /// is reset on success and is naturally fresh when the key changes
+    /// (new imageTag).  Defined here so tests can reference the bound.
+    static constexpr int kMaxDecodeAttempts = 3;
     static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
     static SettingsRowAction settingsRowAction(int row);
     static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
@@ -150,6 +155,27 @@ public:
     /// reconcile because no usable sync checkpoint exists.
     static bool liveChangeNeedsFullReconcile(
         std::int64_t checkpointMs, bool catchUpRequired);
+
+    // --- Offline snapshot cache (public for testing) -----------------------
+    struct OfflineSnapshotSignature {
+        std::size_t availableItemCount = 0;
+        std::uint64_t totalDownloadedBytes = 0;
+        std::uint64_t localBytes = 0;
+        std::uint64_t reservedBytes = 0;
+        std::set<std::string> availableItemIds;
+        bool operator==(const OfflineSnapshotSignature &o) const {
+            return availableItemCount == o.availableItemCount
+                && totalDownloadedBytes == o.totalDownloadedBytes
+                && localBytes == o.localBytes
+                && reservedBytes == o.reservedBytes
+                && availableItemIds == o.availableItemIds;
+        }
+        bool operator!=(const OfflineSnapshotSignature &o) const {
+            return !(*this == o);
+        }
+    };
+    static OfflineSnapshotSignature computeOfflineSignature(
+        const DownloadSnapshot &downloads);
 
 private:
     enum class LoadState { Loading, Ready, Error };
@@ -255,6 +281,18 @@ private:
     std::vector<MediaItem> m_fetchOfflineMovies;
     LibrarySnapshot m_fetchOfflineSnapshot;
     bool m_haveCachedSnapshot = false;
+    /// Set when the user toggles offline mode while a fetch is in-flight.
+    /// finishFetch() re-fetches to synchronize the tabs with the new mode.
+    bool m_offlineModeFetchPending = false;
+
+    /// Try to instantly apply a cached offline snapshot when downloads
+    /// haven't changed since the last offline build.  Returns true on
+    /// success (tabs already applied); false if cache is stale.
+    bool tryApplyCachedOfflineSnapshot();
+    OfflineSnapshotSignature m_offlineSignature;
+    bool m_haveOfflineSignature = false;
+    LibrarySnapshot m_offlineSnapshotCache;
+    bool m_haveOfflineSnapshotCache = false;
     SyncState m_syncState;
     bool m_forceHierarchyReconcile = false;
     LibrarySyncSchedule m_syncSchedule;
@@ -276,6 +314,8 @@ private:
     std::deque<PosterJob> m_highPriorityPosterJobs;
     std::deque<PosterJob> m_lowPriorityPosterJobs;
     std::set<std::string> m_artworkProgressKeys;
+    /// Per-key decode-failure attempt counter (see kMaxDecodeAttempts).
+    std::map<std::string, int> m_rowArtworkAttempts;
     // Session-level guard for bounded season-poster prefetch: each series is
     // prefetched at most once per process lifetime so repeat home fetches are
     // free.
@@ -307,7 +347,9 @@ private:
     std::set<std::string> m_activeShowsDecodeKeys;
     bool m_stopDecodeWorker = false;
 
-    void startFetch();
+    /// Start a background library fetch.  Returns true if a new fetch was
+    /// actually started; false if a previous fetch is still in-flight.
+    bool startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
     void applyPresentationProjection();
@@ -317,8 +359,6 @@ private:
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
     void posterWorker();
-    void startHierarchyCache(const LibrarySnapshot &snapshot, const LibrarySnapshot &previous,
-                             const std::set<std::string> &changedSeries={});
     void hierarchyWorker();
     bool publishHierarchyCheckpoint(std::uint64_t generation);
     std::string syncStatusText() const;

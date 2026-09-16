@@ -2,6 +2,7 @@
 #define MIYOOFIN_TEST_SUPPORT_HPP
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -76,6 +77,134 @@ inline std::string readTestBytes(const std::string &path)
             std::istreambuf_iterator<char>()};
 }
 
+// Whitespace-insensitive production-source matcher for structural tests.
+// Reformatting (reindent, line-split, spacing) must not break a structural
+// assertion, so every matcher below compares with ALL whitespace stripped
+// from both haystack and needle. Single-token needles behave exactly like
+// std::string::find; multi-token needles additionally survive reflow.
+// NOTE: stripped positions from sourcePos/sourceRPos live in token space —
+// use them only for ordering comparisons, never as offsets into the raw
+// string. Region slicing must anchor on whitespace-free tokens (function
+// signatures, comments, identifiers), which reformatting cannot alter.
+inline std::string sourceTokenString(const std::string &text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text)
+        if (!std::isspace(static_cast<unsigned char>(c)))
+            out.push_back(c);
+    return out;
+}
+
+inline bool sourceContains(const std::string &haystack,
+                           const std::string &needle)
+{
+    if (haystack.empty() || needle.empty())
+        return false;
+    const std::string token = sourceTokenString(needle);
+    if (token.empty())
+        return false;
+    return sourceTokenString(haystack).find(token) != std::string::npos;
+}
+
+inline bool sourceLacks(const std::string &haystack, const std::string &needle)
+{
+    // Fail-safe: an empty/unreadable source must never satisfy an absence
+    // check (otherwise the check passes vacuously when the file is missing).
+    if (haystack.empty())
+        return false;
+    if (needle.empty())
+        return true;
+    return !sourceContains(haystack, needle);
+}
+
+inline std::size_t sourceCount(const std::string &haystack,
+                               const std::string &needle)
+{
+    if (haystack.empty() || needle.empty())
+        return 0;
+    const std::string hay = sourceTokenString(haystack);
+    const std::string token = sourceTokenString(needle);
+    if (token.empty())
+        return 0;
+    std::size_t count = 0, pos = 0;
+    while ((pos = hay.find(token, pos)) != std::string::npos) {
+        ++count;
+        pos += token.size();
+    }
+    return count;
+}
+
+inline std::size_t sourcePos(const std::string &haystack,
+                             const std::string &needle)
+{
+    if (haystack.empty() || needle.empty())
+        return std::string::npos;
+    const std::string token = sourceTokenString(needle);
+    if (token.empty())
+        return std::string::npos;
+    return sourceTokenString(haystack).find(token);
+}
+
+inline std::size_t sourceRPos(const std::string &haystack,
+                              const std::string &needle)
+{
+    if (haystack.empty() || needle.empty())
+        return std::string::npos;
+    const std::string token = sourceTokenString(needle);
+    if (token.empty())
+        return std::string::npos;
+    return sourceTokenString(haystack).rfind(token);
+}
+
+// Raw slice of the function starting at `signature` (a whitespace-free
+// anchor such as "void HomeScreen::finishFetch("), ending at the next
+// top-level function/namespace boundary. Lets a structural check pin one
+// function instead of searching the whole translation unit.
+inline std::string sourceFunction(const std::string &haystack,
+                                  const std::string &signature)
+{
+    const std::size_t begin = haystack.find(signature);
+    if (begin == std::string::npos)
+        return {};
+    static const char *const kEndMarkers[] = {
+        "\nvoid ", "\nbool ", "\nint ", "\nstatic ",
+        "\nHomeScreen::", "\nDownloadManager::", "\nCatalogDb::",
+        "\n} // namespace",
+    };
+    std::size_t end = std::string::npos;
+    for (const char *marker : kEndMarkers) {
+        const std::size_t pos = haystack.find(marker, begin + 1);
+        if (pos != std::string::npos && (end == std::string::npos || pos < end))
+            end = pos;
+    }
+    if (end == std::string::npos)
+        end = std::min(haystack.size(), begin + 6000);
+    return haystack.substr(begin, end - begin);
+}
+
+// Token-space slice between the first `startNeedle` and the first
+// `endNeedle` after it (empty when either anchor is missing). For pinning
+// ordered regions (handler bodies, publish windows) without fixed char
+// windows that reformatting would shift.
+inline std::string sourceBetween(const std::string &haystack,
+                                 const std::string &startNeedle,
+                                 const std::string &endNeedle)
+{
+    const std::string hay = sourceTokenString(haystack);
+    const std::string start = sourceTokenString(startNeedle);
+    const std::string end = sourceTokenString(endNeedle);
+    if (hay.empty() || start.empty() || end.empty())
+        return {};
+    const std::size_t begin = hay.find(start);
+    if (begin == std::string::npos)
+        return {};
+    const std::size_t stop = hay.find(end, begin + start.size());
+    if (stop == std::string::npos)
+        return {};
+    return hay.substr(begin + start.size(), stop - begin - start.size());
+}
+
 inline int finish(const char *group)
 {
     if (failures == 0) {
@@ -89,6 +218,14 @@ inline int finish(const char *group)
 } // namespace miyoofin_test
 
 using miyoofin_test::readTestBytes;
+using miyoofin_test::sourceTokenString;
+using miyoofin_test::sourceContains;
+using miyoofin_test::sourceLacks;
+using miyoofin_test::sourceCount;
+using miyoofin_test::sourcePos;
+using miyoofin_test::sourceRPos;
+using miyoofin_test::sourceFunction;
+using miyoofin_test::sourceBetween;
 
 #define CHECK(cond) \
     do { \

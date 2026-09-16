@@ -1,5 +1,6 @@
 #include "../../src/library/LibraryQuery.hpp"
 #include "../../src/library/LibrarySync.hpp"
+#include "../../src/net/TlsConfig.hpp"
 
 static void testDownloadInterruptStates()
 {
@@ -292,10 +293,11 @@ static void testHlsFailureClassification()
     // A short HLS segment gap retains the rolling rate.
     CHECK(!DownloadManager::updateRecentSpeed(speed,600,2900,bytesPerSec));
     CHECK(bytesPerSec==1000);
-    CHECK(DownloadManager::updateRecentSpeed(speed,600,3001,bytesPerSec));
+    // A gap > STALL_GAP_MS (5s) zeros the displayed rate.
+    CHECK(DownloadManager::updateRecentSpeed(speed,600,7001,bytesPerSec));
     CHECK(bytesPerSec==0);
     // A new download (a lower byte count) resets rather than carrying speed.
-    CHECK(!DownloadManager::updateRecentSpeed(speed,0,3100,bytesPerSec));
+    CHECK(!DownloadManager::updateRecentSpeed(speed,0,7100,bytesPerSec));
     CHECK(bytesPerSec==0);
     std::printf("[test] recent transfer speed OK\n");
 
@@ -430,6 +432,156 @@ static void testReconcileShouldSkip()
     std::printf("[test] reconcileShouldSkip truth table OK\n");
 }
 
+static void testReconcilerPreservesLiveState()
+{
+    std::printf("[test] reconciler preserves concurrent live state\n");
+    // The reconciler must apply through the real worker apply step
+    // (applyReconciledSource), which merges into the LIVE item under the
+    // lock and never assigns a pass-start snapshot over it.  A regression
+    // that reintroduces a snapshot/whole-item assignment fails below: the
+    // paused/playback state set after the snapshot would be reverted.
+    const std::uint64_t nowMs=987654321ULL;
+    DownloadItem live; live.itemId="live"; live.mediaSourceId="s"; live.sourceEtag="e";
+    live.expectedSize=100; live.downloadedBytes=40; live.state=DownloadState::Queued;
+    DownloadItem passStart=live; // worker's pass-start snapshot: apply must not copy this back
+    (void)passStart;
+    // Concurrent user pause lands between the snapshot and the apply.
+    live.state=stateAfterInterrupt(DownloadInterrupt::UserPause);
+    CHECK(live.state==DownloadState::Paused);
+    CHECK(!applyReconciledSource(live,SourceCheck::Transient,nullptr,nowMs));
+    CHECK(live.state==DownloadState::Paused); // pause not clobbered by the snapshot
+    CHECK(live.downloadedBytes==40);
+    CHECK(live.lastVerifiedMs==nowMs);
+    // Playback interrupts are equally sticky: worker() only dequeues Queued,
+    // so reverting a PausedForPlayback item to the snapshot state could
+    // strand it in Downloading or restart it spuriously.
+    live.state=DownloadState::Downloading;
+    live.state=stateAfterInterrupt(DownloadInterrupt::Playback);
+    CHECK(live.state==DownloadState::PausedForPlayback);
+    CHECK(!applyReconciledSource(live,SourceCheck::Transient,nullptr,nowMs));
+    CHECK(live.state==DownloadState::PausedForPlayback);
+    CHECK(live.lastVerifiedMs==nowMs);
+    // A changed source still resets an incomplete item (discard=true) even
+    // when the live state moved since the snapshot was taken.
+    DownloadMediaSource changed; changed.id="s2"; changed.etag="e2"; changed.size=120;
+    live.state=DownloadState::Paused; live.downloadedBytes=40; live.expectedSize=100;
+    live.mediaSourceId="s"; live.sourceEtag="e";
+    CHECK(applyReconciledSource(live,SourceCheck::Same,&changed,nowMs));
+    CHECK(live.state==DownloadState::Queued);
+    CHECK(live.downloadedBytes==0);
+    CHECK(live.expectedSize==120);
+    CHECK(live.lastVerifiedMs==nowMs);
+    // The worker must route through the shared apply step; a pass-start
+    // snapshot carried over the live element regresses the cases above.
+    const std::string worker=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
+    CHECK(!worker.empty());
+    // Structural: the worker must route through the shared apply step (a
+    // pass-start snapshot carried over the live element regresses the cases
+    // above). The race itself needs live threads, so the call site is pinned
+    // by scan while the merge is covered behaviourally.
+    CHECK(sourceContains(worker,"applyReconciledSource(*p"));
+    CHECK(sourceLacks(worker,"*p=updated"));
+    CHECK(sourceLacks(worker,"DownloadItem updated"));
+    std::printf("[test] reconciler preserves concurrent live state OK\n");
+}
+
+static void testTransferPreservesLiveState()
+{
+    std::printf("[test] transfer preserves concurrent live state\n");
+    // Segment progress published by the transfer: the live item is one
+    // segment behind, as after a real rename-then-lock window.
+    DownloadItem progress; progress.itemId="x"; progress.hlsStorage=true;
+    progress.hlsProfile="test"; progress.hlsSegmentCount=4; progress.expectedSize=400;
+    progress.hlsCompletedSegments=3; progress.downloadedBytes=300;
+    progress.hlsCurrentSegmentBytes=0; progress.hlsCurrentSegmentSize=0;
+    progress.hlsActivePercent=75; progress.state=DownloadState::Downloading;
+    // A user pause landing between the rename and the lock acquisition must
+    // survive the publish: progress fields advance, state stays Paused, and
+    // the worker/UI abort predicate (state != Downloading) still fires.
+    DownloadItem live=progress; live.state=DownloadState::Paused;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200; live.hlsActivePercent=50;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::Paused);
+    CHECK(live.hlsCompletedSegments==3);
+    CHECK(live.downloadedBytes==300);
+    CHECK(live.hlsSegmentCount==4);
+    CHECK(live.hlsStorage);
+    CHECK(live.state!=DownloadState::Downloading); // abort-on-pause still observable
+    // A playback interrupt is equally sticky: reverting it to Downloading
+    // would strand the item, since setPlaybackActive(false) only restores
+    // PausedForPlayback items.
+    live=progress; live.state=DownloadState::PausedForPlayback;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200; live.hlsActivePercent=50;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::PausedForPlayback);
+    CHECK(live.hlsCompletedSegments==3);
+    CHECK(live.downloadedBytes==300);
+    // Terminal failure states are never forced back to Downloading either,
+    // while progress fields still advance.
+    live=progress; live.state=DownloadState::WaitingForNetwork;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::WaitingForNetwork);
+    CHECK(live.hlsCompletedSegments==3);
+    CHECK(live.downloadedBytes==300);
+    live=progress; live.state=DownloadState::Failed;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::Failed);
+    CHECK(live.downloadedBytes==300);
+    // The active path is unchanged: Queued/Downloading still reads as
+    // Downloading while transferring.
+    live=progress; live.state=DownloadState::Queued;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::Downloading);
+    CHECK(live.hlsCompletedSegments==3);
+    CHECK(live.downloadedBytes==300);
+    live=progress; live.state=DownloadState::Downloading;
+    live.hlsCompletedSegments=2; live.downloadedBytes=200;
+    publishTransferProgress(live,progress);
+    CHECK(live.state==DownloadState::Downloading);
+    CHECK(live.downloadedBytes==300);
+    // The transfer path must publish through the shared helper: a stale
+    // whole-item snapshot assignment over the live element regresses the
+    // interrupt cases above.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    // Structural: the transfer path must publish through the shared helper
+    // (a stale whole-item snapshot assignment over the live element
+    // regresses the interrupt cases above). The race needs live transfers,
+    // so the call site is pinned by scan while the publish is covered
+    // behaviourally.
+    CHECK(sourceContains(transfer,"publishTransferProgress(i,item)"));
+    CHECK(sourceLacks(transfer,"i=item"));
+    CHECK(sourceLacks(transfer,"*p=item"));
+    std::printf("[test] transfer preserves concurrent live state OK\n");
+}
+
+static void testDownloadPlanFullCardRejection()
+{
+    std::printf("[test] download plan full-card rejection\n");
+    // A request that cannot fit must report canFit=false with "Not enough
+    // space".  An astronomically large plain item exceeds any real free
+    // space without touching the filesystem beyond the manager's root.
+    char rootTemplate[]="/tmp/miyoofin-download-full-XXXXXX";
+    char *rootPath=::mkdtemp(rootTemplate);
+    CHECK(rootPath!=nullptr);
+    if (!rootPath) return;
+    DownloadManager d({},rootPath);
+    d.setPlaybackActive(true); // no transfers run; makePlan stays pure
+    const std::uint64_t huge=100ULL*1024*1024*1024*1024; // 100 TiB
+    auto rejected=d.makePlan({planItem("huge",huge)});
+    CHECK(rejected.sizeKnown);
+    CHECK(!rejected.canFit);
+    CHECK(rejected.error=="Not enough space");
+    CHECK(rejected.additionalRequiredBytes==huge);
+    // A zero-byte request still fits: only genuine shortage rejects.
+    auto empty=d.makePlan({planItem("empty",0)});
+    CHECK(!empty.sizeKnown);
+    std::printf("[test] download plan full-card rejection OK\n");
+}
+
 static void testCatalogDbHierarchyPlanning()
 {
     std::printf("[test] DownloadManager shared hierarchy policy\n");
@@ -459,4 +611,535 @@ static void testCatalogDbHierarchyPlanning()
     CHECK(epoch==catalog->scopeState().requestedEpoch);
     CHECK(catalog->getEpisodes(season.id).get().items.size()==(size_t)3);
     std::printf("[test] DownloadManager shared hierarchy policy OK\n");
+}
+
+static void testPredictedDownloadTotalBytes()
+{
+    std::printf("[test] predictedDownloadTotalBytes\n");
+    // Complete item -> exact downloadedBytes.
+    DownloadItem complete; complete.state=DownloadState::Complete;
+    complete.downloadedBytes=5000; complete.expectedSize=8000;
+    CHECK(predictedDownloadTotalBytes(complete)==5000);
+    // LocalOnly -> exact downloadedBytes.
+    DownloadItem local; local.state=DownloadState::LocalOnly;
+    local.downloadedBytes=3000; local.expectedSize=6000;
+    CHECK(predictedDownloadTotalBytes(local)==3000);
+    // UpdateAvailable -> exact downloadedBytes.
+    DownloadItem update; update.state=DownloadState::UpdateAvailable;
+    update.downloadedBytes=1000; update.expectedSize=4000;
+    CHECK(predictedDownloadTotalBytes(update)==1000);
+    // Non-HLS -> expectedSize (or downloadedBytes if larger).
+    DownloadItem plain; plain.state=DownloadState::Downloading;
+    plain.expectedSize=2000; plain.downloadedBytes=500;
+    CHECK(predictedDownloadTotalBytes(plain)==2000);
+    plain.downloadedBytes=3000;
+    CHECK(predictedDownloadTotalBytes(plain)==3000); // downloadedBytes exceeds expected
+    // HLS, 0 completed segments -> expectedSize.
+    DownloadItem hls0; hls0.state=DownloadState::Downloading;
+    hls0.hlsStorage=true; hls0.hlsSegmentCount=10;
+    hls0.expectedSize=50000; hls0.downloadedBytes=0;
+    hls0.hlsCompletedSegments=0;
+    CHECK(predictedDownloadTotalBytes(hls0)==50000);
+    // HLS, N completed segments -> measured avg * segmentCount, never below downloadedBytes.
+    DownloadItem hls; hls.state=DownloadState::Downloading;
+    hls.hlsStorage=true; hls.hlsSegmentCount=10;
+    hls.expectedSize=100000; // preflight estimate, should not be used for prediction
+    hls.downloadedBytes=5000; // total bytes on disk
+    hls.hlsCompletedSegments=3; // 3 segments fully written
+    hls.hlsCurrentSegmentBytes=0; hls.hlsCurrentSegmentSize=0;
+    // completedBytes = 5000 - 0 = 5000, avg = 5000/3 = 1666, predicted = 1666*10 = 16666
+    const std::uint64_t pred3 = predictedDownloadTotalBytes(hls);
+    CHECK(pred3 == (5000/3)*10);
+    CHECK(pred3 >= hls.downloadedBytes); // never below downloadedBytes
+    // Degenerate: segmentCount=0, completed=0 -> falls back to expectedSize.
+    DownloadItem deg; deg.state=DownloadState::Downloading;
+    deg.hlsStorage=true; deg.hlsSegmentCount=0;
+    deg.expectedSize=7777; deg.downloadedBytes=100;
+    deg.hlsCompletedSegments=0;
+    CHECK(predictedDownloadTotalBytes(deg)==7777);
+    // HLS with current segment in progress: completedBytes excludes current bytes.
+    DownloadItem hlsCur; hlsCur.state=DownloadState::Downloading;
+    hlsCur.hlsStorage=true; hlsCur.hlsSegmentCount=5;
+    hlsCur.expectedSize=20000;
+    hlsCur.downloadedBytes=4000; // 2000 complete + 2000 current
+    hlsCur.hlsCompletedSegments=2;
+    hlsCur.hlsCurrentSegmentBytes=2000; hlsCur.hlsCurrentSegmentSize=2000;
+    // completedBytes = 4000 - 2000 = 2000, avg = 1000, predicted = 5000
+    CHECK(predictedDownloadTotalBytes(hlsCur)==(2000/2)*5);
+    CHECK(predictedDownloadTotalBytes(hlsCur) >= hlsCur.downloadedBytes);
+    // All-zero degenerate: no crash, returns expectedSize.
+    DownloadItem empty;
+    CHECK(predictedDownloadTotalBytes(empty)==0);
+    // HLS, 0 completed segments but bytes already written (everything so far
+    // belongs to the in-progress segment): the fallback must never drop
+    // below downloadedBytes.
+    DownloadItem hlsStall; hlsStall.state=DownloadState::Downloading;
+    hlsStall.hlsStorage=true; hlsStall.hlsSegmentCount=8;
+    hlsStall.expectedSize=1000; hlsStall.downloadedBytes=5000;
+    hlsStall.hlsCompletedSegments=0;
+    CHECK(predictedDownloadTotalBytes(hlsStall)==5000);
+    // HLS where every written byte belongs to the current segment, so
+    // completedBytes==0 and avg==0: the same floor applies.
+    DownloadItem hlsCurAll; hlsCurAll.state=DownloadState::Downloading;
+    hlsCurAll.hlsStorage=true; hlsCurAll.hlsSegmentCount=8;
+    hlsCurAll.expectedSize=1000; hlsCurAll.downloadedBytes=9000;
+    hlsCurAll.hlsCompletedSegments=2;
+    hlsCurAll.hlsCurrentSegmentBytes=9000; hlsCurAll.hlsCurrentSegmentSize=9000;
+    CHECK(predictedDownloadTotalBytes(hlsCurAll)==9000);
+    std::printf("[test] predictedDownloadTotalBytes OK\n");
+}
+
+static void testSpeedStallGap()
+{
+    std::printf("[test] speed stall gap threshold\n");
+    RecentSpeedSample sample;
+    std::uint64_t bps=0;
+    // Initial: bytes arrive, rate computed (0 -> nonzero returns true).
+    CHECK(!DownloadManager::updateRecentSpeed(sample,100,1000,bps));
+    CHECK(DownloadManager::updateRecentSpeed(sample,200,2000,bps));
+    CHECK(bps==100); // (200-100)*1000/(2000-1000) = 100 B/s
+    // Short gap (3s < STALL_GAP_MS): rate should NOT zero.
+    CHECK(!DownloadManager::updateRecentSpeed(sample,200,5000,bps));
+    CHECK(bps==100); // still 100, not zeroed
+    // Long gap (>5s): rate should zero.
+    CHECK(DownloadManager::updateRecentSpeed(sample,200,7500,bps));
+    CHECK(bps==0);
+    // After resume, rate resumes (0 -> nonzero returns true).
+    CHECK(DownloadManager::updateRecentSpeed(sample,300,8000,bps));
+    CHECK(bps!=0); // nonzero rate restored
+    std::printf("[test] speed stall gap threshold OK\n");
+}
+
+static void testHlsSegmentCompletedIncremental()
+{
+    std::printf("[test] incremental HLS segment accounting\n");
+    DownloadItem item; item.hlsStorage=true; item.hlsSegmentCount=4;
+    applyHlsSegmentCompleted(item,0,100);
+    CHECK(item.hlsCompletedSegments==1); CHECK(item.downloadedBytes==100);
+    applyHlsSegmentCompleted(item,1,200);
+    CHECK(item.hlsCompletedSegments==2); CHECK(item.downloadedBytes==300);
+    // A repeated completion for an already-accounted ordinal (retry path)
+    // must not double-count bytes.
+    applyHlsSegmentCompleted(item,1,200);
+    CHECK(item.hlsCompletedSegments==2); CHECK(item.downloadedBytes==300);
+    applyHlsSegmentCompleted(item,0,100);
+    CHECK(item.downloadedBytes==300);
+    // Completed ordinals never run past the discovered playlist length.
+    applyHlsSegmentCompleted(item,9,50);
+    CHECK(item.hlsCompletedSegments==4); CHECK(item.downloadedBytes==350);
+    // Saturating add: near-overflow stays clamped, never wraps.
+    DownloadItem big; big.hlsStorage=true; big.hlsSegmentCount=2;
+    big.downloadedBytes=(std::numeric_limits<std::uint64_t>::max)()-10;
+    applyHlsSegmentCompleted(big,0,100);
+    CHECK(big.downloadedBytes==(std::numeric_limits<std::uint64_t>::max)());
+    CHECK(big.hlsCompletedSegments==1);
+    // Unknown segment count (undiscovered playlist) still tracks progress.
+    DownloadItem unknown; unknown.hlsStorage=true; unknown.hlsSegmentCount=0;
+    applyHlsSegmentCompleted(unknown,0,7);
+    CHECK(unknown.hlsCompletedSegments==1); CHECK(unknown.downloadedBytes==7);
+    std::printf("[test] incremental HLS segment accounting OK\n");
+}
+
+static void testSegmentRecoveryMatchesIncremental()
+{
+    std::printf("[test] crash recovery matches incremental accounting\n");
+    const std::string root="/tmp/miyoofin-seginc-"+std::to_string((long long)getpid());
+    DownloadStore store(root);
+    DownloadItem item; item.itemId="seginc"; item.mediaSourceId="s";
+    item.hlsStorage=true; item.hlsSegmentCount=3; item.hlsProfile="test";
+    item.state=DownloadState::Downloading;
+    CHECK(store.ensureHlsDirectories("scope",item.itemId));
+    CHECK(store.saveManifest("scope",item));
+    writeFixture(store.segmentPath("scope",item.itemId,0),"01234567",8);
+    writeFixture(store.segmentPath("scope",item.itemId,1),"0123456789abcdef",16);
+    writeFixture(store.segmentPath("scope",item.itemId,2,true),"partial",7);
+    // Kill mid-download: relaunch rebuilds counters from segment files only.
+    DownloadItem recovered;
+    CHECK(store.loadManifest("scope",item.itemId,recovered));
+    CHECK(store.reconcile("scope",recovered));
+    CHECK(recovered.downloadedBytes==24);
+    CHECK(store.firstIncompleteSegment("scope",recovered)==2);
+    // The per-segment incremental path must agree exactly with the scan.
+    DownloadItem incremental; incremental.itemId="seginc"; incremental.hlsStorage=true; incremental.hlsSegmentCount=3;
+    applyHlsSegmentCompleted(incremental,0,8);
+    applyHlsSegmentCompleted(incremental,1,16);
+    CHECK(incremental.downloadedBytes==recovered.downloadedBytes);
+    CHECK(incremental.hlsCompletedSegments==store.firstIncompleteSegment("scope",recovered));
+    // downloadedBytes is durable in the manifest (crash between segments keeps
+    // the last completed total, never a torn estimate).
+    CHECK(store.saveManifest("scope",incremental));
+    DownloadItem reloaded;
+    CHECK(store.loadManifest("scope",incremental.itemId,reloaded));
+    CHECK(reloaded.downloadedBytes==24);
+    CHECK(store.removeItem("scope",item.itemId,nullptr));
+    std::printf("[test] crash recovery matches incremental accounting OK\n");
+}
+
+static void testFreeSpaceCachePolicy()
+{
+    std::printf("[test] free-space cache policy\n");
+    CHECK(kFreeSpaceCacheTtlMs>=1000 && kFreeSpaceCacheTtlMs<=10000);
+    CHECK(freeSpaceCacheExpired(5000,0)); // no sample yet: refresh
+    CHECK(freeSpaceCacheExpired(100,5000)); // clock regressed: refresh
+    CHECK(freeSpaceCacheExpired(3000,0));
+    CHECK(!freeSpaceCacheExpired(3999,1000)); // 2999ms < 3000ms TTL: reuse
+    CHECK(freeSpaceCacheExpired(4000,1000)); // exactly TTL: refresh
+    CHECK(freeSpaceCacheExpired(4001,1000));
+    CHECK(freeSpaceCacheExpired(10000,1000,0)); // zero TTL: always refresh
+    // The cached value is substituted ONLY on probe failure.  A successful
+    // zero (genuinely full card) is authoritative: it must be cached and
+    // returned as zero so makePlan() still rejects with "Not enough space".
+    CHECK(selectCachedFreeBytes(8000,7000,true)==7000);
+    CHECK(selectCachedFreeBytes(8000,0,true)==0); // successful 0: full card, not a failure
+    CHECK(selectCachedFreeBytes(8000,1234,false)==8000); // failed probe: keep stale value
+    CHECK(selectCachedFreeBytes(8000,0,false)==8000); // failed probe reads back as 0: keep stale value
+    CHECK(selectCachedFreeBytes(0,0,false)==0); // first sample, probe failed: report as-is
+    CHECK(selectCachedFreeBytes(0,1234,true)==1234);
+    CHECK(selectCachedFreeBytes(0,0,true)==0); // first sample, genuinely full: report 0
+    std::printf("[test] free-space cache policy OK\n");
+}
+
+static void testTlsCaBundleCache()
+{
+    std::printf("[test] TLS CA bundle cache\n");
+    // Setup failures must abort before any file is created: CHECK does not
+    // stop the test, so continuing after a failed mkdtemp/chdir would run
+    // the body in the repo root and truncate the real tracked cacert.pem.
+    char cwd[4096];
+    if (::getcwd(cwd,sizeof(cwd))==nullptr) { CHECK(false); return; }
+    char tmpl[]="/tmp/miyoofin-tls-XXXXXX";
+    if (::mkdtemp(tmpl)==nullptr) { CHECK(false); return; }
+    if (::chdir(tmpl)!=0) { CHECK(false); return; }
+    const std::string bundlePath=std::string(tmpl)+"/cacert.pem";
+    tls_detail::resetCaBundleCacheForTest();
+    CHECK(!tlsCaBundleReady()); // genuinely missing: still a failure
+    std::string error;
+    CURL *curl=curl_easy_init(); CHECK(curl!=nullptr);
+    if (curl==nullptr) { CHECK(::chdir(cwd)==0); return; }
+    CHECK(!configureTls(curl,"https://example.invalid",&error));
+    CHECK(!error.empty());
+    CHECK(configureTls(curl,"http://192.168.1.2:8096")); // LAN HTTP needs no CA
+    // Bundle appears, but the cached verdict is reused without re-probing.
+    FILE *bundle=std::fopen(bundlePath.c_str(),"wb");
+    CHECK(bundle!=nullptr);
+    if(bundle){std::fwrite("x",1,1,bundle);std::fclose(bundle);}
+    CHECK(!tlsCaBundleReady());
+    CHECK(!configureTls(curl,"https://example.invalid",&error));
+    // After a reset the new file is picked up and handles configure fully.
+    tls_detail::resetCaBundleCacheForTest();
+    CHECK(tlsCaBundleReady());
+    CHECK(configureTls(curl,"https://example.invalid",&error));
+    // ...and a later removal does not flip the cached verdict mid-run.
+    CHECK(std::remove(bundlePath.c_str())==0);
+    CHECK(tlsCaBundleReady());
+    curl_easy_cleanup(curl);
+    tls_detail::resetCaBundleCacheForTest();
+    CHECK(::chdir(cwd)==0);
+    CHECK(::rmdir(tmpl)==0);
+    std::printf("[test] TLS CA bundle cache OK\n");
+}
+
+static void testDownloadPipelineIoGuards()
+{
+    std::printf("[test] download pipeline I/O guards\n");
+    // Structural throughout: fsync/syscall cost and persist shapes are only
+    // observable via call ordering on device, so the call sites are pinned
+    // by whitespace-insensitive scan while the decisions they serve
+    // (segment accounting, source identity, finish policy) are covered
+    // behaviourally in the neighbouring tests.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    // Per-segment completion persists one manifest, never the whole library.
+    CHECK(sourceContains(transfer,"persistItemLocked("));
+    // Segment accounting reuses the already-verified size from
+    // nonemptyFile(part,bytes); no second stat of the renamed file may
+    // zero the byte count while hlsCompletedSegments still advances.
+    CHECK(sourceContains(transfer,"applyHlsSegmentCompleted(item,k,bytes)"));
+    CHECK(sourceLacks(transfer,"nonemptyFile(done"));
+    CHECK(sourceLacks(transfer,"m_store.reconcile(scope,item,nullptr); item.hlsCompletedSegments=k+1"));
+    // The resume offset is scanned once and reused for the segment loop.
+    CHECK(sourceCount(transfer,"firstIncompleteSegment")==1);
+    CHECK(sourceContains(transfer,"for(std::uint64_t k=resumeFrom;k<urls.size();++k)"));
+    // Completion still validates against disk before marking Complete.
+    CHECK(sourceContains(transfer,"validateCompletedDownload"));
+    const std::string worker=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
+    CHECK(!worker.empty());
+    // Reconciler persists once per pass, not once per item.
+    CHECK(sourceLacks(worker,"persistLocked"));
+    CHECK(sourceCount(worker,"saveIndex")==1);
+    CHECK(sourceContains(worker,"saveManifest"));
+    // The apply step operates on the LIVE item under the lock: the shared
+    // helper merges into *p, and only {id,discard} is recorded for the
+    // deferred persist.  No whole-item snapshot may be carried over the
+    // live element (that reverts pause/retry/playback/completion races).
+    CHECK(sourceContains(worker,"applyReconciledSource(*p"));
+    CHECK(sourceLacks(worker,"*p=updated"));
+    CHECK(sourceLacks(worker,"DownloadItem updated"));
+    // Stale partial bytes are removed atomically in the same critical
+    // section as the apply; the deferred pass only writes manifests+index.
+    CHECK(sourceCount(worker,"removePartialBytes")==1);
+    const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
+    CHECK(!manager.empty());
+    CHECK(sourceContains(manager,"persistItemLocked"));
+    CHECK(sourceContains(manager,"freeSpaceCacheExpired"));
+    CHECK(sourceContains(manager,"m_freeBytesCached"));
+    // The probe reports success separately; the cached value substitutes
+    // ONLY on probe failure so a genuine full card (successful 0) is kept.
+    // This pins the call-site shape: the cached value must flow through the
+    // probe-gated selector, never an unconditional overwrite.
+    CHECK(sourceContains(manager,"statvfsFreeBytes"));
+    CHECK(sourceContains(manager,"selectCachedFreeBytes(cached"));
+    CHECK(sourceContains(manager,"probeOk"));
+    const std::string tls=readTestBytes("src/net/TlsConfig.hpp");
+    CHECK(!tls.empty());
+    CHECK(sourceContains(tls,"tlsCaBundleReady"));
+    CHECK(sourceContains(tls,"caBundleCache"));
+    std::printf("[test] download pipeline I/O guards OK\n");
+}
+
+static void testTransferSourceIdentityGuard()
+{
+    std::printf("[test] transfer source-identity guard\n");
+    // Behavioural: the guard decision itself.  A live item the reconciler
+    // reset to a new source must read as changed against the old transfer's
+    // captured identity, in either field; an unchanged item must not.
+    DownloadItem live; live.itemId="x"; live.mediaSourceId="new"; live.sourceEtag="etag-new";
+    live.state=DownloadState::Queued; live.downloadedBytes=0;
+    CHECK(transferSourceChanged(live,"old","etag-old")); // both changed
+    CHECK(transferSourceChanged(live,"new","etag-old")); // etag changed
+    CHECK(transferSourceChanged(live,"old","etag-new")); // id changed
+    CHECK(!transferSourceChanged(live,"new","etag-new")); // same source: proceed
+    DownloadItem empty; empty.itemId="y";
+    CHECK(!transferSourceChanged(empty,"","")); // both empty: same
+    CHECK(transferSourceChanged(empty,"s",""));
+    // Behavioural: why the guard matters.  Stale progress from the old source
+    // applied to the reset live item would force Queued->Downloading and copy
+    // old-source counters under the NEW identity (mislabelled completion).
+    DownloadItem stale; stale.itemId="x"; stale.mediaSourceId="old"; stale.sourceEtag="etag-old";
+    stale.state=DownloadState::Downloading; stale.hlsStorage=true; stale.hlsSegmentCount=4;
+    stale.hlsCompletedSegments=3; stale.downloadedBytes=300; stale.hlsActivePercent=75;
+    CHECK(transferSourceChanged(live,stale.mediaSourceId,stale.sourceEtag)); // abort, do not publish
+    DownloadItem unguarded=live;
+    publishTransferProgress(unguarded,stale);
+    CHECK(unguarded.state==DownloadState::Downloading); // the hazard the guard prevents
+    CHECK(unguarded.downloadedBytes==300);
+    CHECK(unguarded.mediaSourceId=="new"); // counters now disagree with the preserved identity
+    // Guarded path: the live item keeps the reconciler's reset untouched.
+    CHECK(live.state==DownloadState::Queued);
+    CHECK(live.downloadedBytes==0);
+    CHECK(live.mediaSourceId=="new"&&live.sourceEtag=="etag-new");
+    // Structural: the guard must sit at all three transfer publish points
+    // (start-of-transfer, per-segment, completion).  The live interleaving
+    // (in-flight curl vs reconciler thread) needs real network to reproduce
+    // deterministically, so the call sites are pinned by scan while the
+    // decision above is covered behaviourally.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    CHECK(sourceCount(transfer,"transferSourceChanged(")>=3);
+    CHECK(sourceContains(transfer,"transferSourceId=item.mediaSourceId"));
+    CHECK(sourceContains(transfer,"std::remove(done.c_str())")); // stale rename dropped
+    std::printf("[test] transfer source-identity guard OK\n");
+}
+
+static void testTransferFinishDecision()
+{
+    std::printf("[test] transfer completion decision\n");
+    using TF=TransferFinish;
+    // Behavioural: delete requested during the final segment wins over every
+    // other outcome (B) — removal, never Complete.
+    CHECK(decideTransferFinish(true,false,false)==TF::Removed);
+    CHECK(decideTransferFinish(true,false,true)==TF::Removed);
+    CHECK(decideTransferFinish(true,true,false)==TF::Removed);
+    CHECK(decideTransferFinish(true,true,true)==TF::Removed);
+    // Behavioural: a source change aborts the stale transfer (A).
+    CHECK(decideTransferFinish(false,true,false)==TF::StaleAborted);
+    CHECK(decideTransferFinish(false,true,true)==TF::StaleAborted);
+    // Behavioural: validation failure retries as a recoverable failure (C),
+    // never Complete and never stranded in Downloading.
+    CHECK(decideTransferFinish(false,false,false)==TF::RetryFailed);
+    CHECK(decideTransferFinish(false,false,true)==TF::Complete);
+    // Behavioural: the validation-failure transition itself.
+    DownloadItem live; live.itemId="v"; live.state=DownloadState::Downloading;
+    live.recentBytesPerSec=999; live.lastError.clear();
+    applyTransferValidationFailure(live,"missing or empty segment");
+    CHECK(live.state==DownloadState::Failed);
+    CHECK(live.state!=DownloadState::Downloading); // worker() only dequeues Queued
+    CHECK(live.recentBytesPerSec==0);
+    CHECK(!live.lastError.empty());
+    CHECK(live.lastError=="missing or empty segment");
+    DownloadItem noDetail; noDetail.itemId="w"; noDetail.state=DownloadState::Downloading;
+    applyTransferValidationFailure(noDetail,"");
+    CHECK(noDetail.state==DownloadState::Failed);
+    CHECK(!noDetail.lastError.empty());
+    // Interrupts that landed during final validation survive, as on the
+    // segment-failure path.
+    live.state=DownloadState::Paused; live.lastError.clear();
+    applyTransferValidationFailure(live,"x");
+    CHECK(live.state==DownloadState::Paused);
+    live.state=DownloadState::PausedForPlayback;
+    applyTransferValidationFailure(live,"x");
+    CHECK(live.state==DownloadState::PausedForPlayback);
+    // Structural: the completion path must consume the delete flag (as the
+    // failure path does) and route through the decision helper.  Driving the
+    // real completion path needs live network, so the call site is pinned by
+    // scan while the decision above is covered behaviourally.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    CHECK(sourceCount(transfer,"m_deleteRequested.erase(item.itemId)")>=2); // failure + completion
+    CHECK(sourceContains(transfer,"decideTransferFinish(deleteRequested,sourceChanged,validated)"));
+    CHECK(sourceContains(transfer,"applyTransferValidationFailure(*p,validationError)"));
+    std::printf("[test] transfer completion decision OK\n");
+}
+
+static void testWorkerPersistMatchesLiveState()
+{
+    std::printf("[test] worker persist matches live state\n");
+    // Behavioural (D): a pause() racing the worker's enqueue persist must not
+    // be lost on disk.  Either order converges once the worker writes under
+    // the same lock acquisition as its snapshot: worker-first means the
+    // pause's own persist is last, pause-first means the worker copies Paused.
+    for(int round=0;round<8;++round){
+        const std::string root="/tmp/miyoofin-persist-race-"+std::to_string((long long)getpid())+"-"+std::to_string(round);
+        DownloadManager manager({},root);
+        manager.setPlaybackActive(true); // worker never dequeues; persist-only passes race pause()
+        DownloadItem item=restartFixture("race-item");
+        manager.enqueue(item);
+        manager.pause("race-item");
+        DownloadStore store(root);
+        bool match=false;
+        for(unsigned n=0;n<200;++n){
+            DownloadItem manifest;
+            if(store.loadManifest("anonymous","race-item",manifest,nullptr)&&manifest.state==DownloadState::Paused){match=true;break;}
+            usleep(5000);
+        }
+        CHECK(match);
+    }
+    // Structural: the dequeue snapshot must be written under the same lock
+    // acquisition (no second acquire just to clear the flag).  A
+    // deterministic threaded repro of the lost update would be timing-flaky,
+    // so the shape is pinned by scan alongside the behavioural invariant.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    CHECK(sourceContains(transfer,"saveIndex(scope,snapshot"));
+    CHECK(sourceLacks(transfer,"if(persistOnly){std::lock_guard<std::mutex>l(m_mutex);"));
+    std::printf("[test] worker persist matches live state OK\n");
+}
+
+static void testStalePlaylistDiscoverySuppressed()
+{
+    std::printf("[test] stale playlist-discovery publish suppressed\n");
+    // Behavioural: the guard decision for the discovery window.  The
+    // reconciler reset the live item to Queued under a NEW source while the
+    // old transfer was still fetching the playlist.
+    DownloadItem live; live.itemId="d"; live.mediaSourceId="new"; live.sourceEtag="etag-new";
+    live.state=DownloadState::Queued; live.downloadedBytes=0; live.hlsSegmentCount=0;
+    CHECK(transferSourceChanged(live,"old","etag-old")); // stale: suppress failure + discovery publish
+    DownloadItem same; same.itemId="d"; same.mediaSourceId="old"; same.sourceEtag="etag-old";
+    same.state=DownloadState::Downloading;
+    CHECK(!transferSourceChanged(same,"old","etag-old")); // unchanged: discovery proceeds
+    // The guard must not swallow pause handling: a paused same-source item
+    // still reads as unchanged, so the existing Paused check after it stays
+    // responsible for preserving the interrupt.
+    DownloadItem paused=same; paused.state=DownloadState::Paused;
+    CHECK(!transferSourceChanged(paused,"old","etag-old"));
+    paused.state=DownloadState::PausedForPlayback;
+    CHECK(!transferSourceChanged(paused,"old","etag-old"));
+    // Structural: the guard must now sit at all five transfer publish points
+    // (playlist failure, discovery, start-of-transfer, per-segment,
+    // completion).  The live interleaving (in-flight playlist HTTP vs
+    // reconciler thread) needs real network to reproduce deterministically,
+    // so the call sites are pinned by scan while the decision above is
+    // covered behaviourally.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    CHECK(sourceCount(transfer,"transferSourceChanged(")>=5);
+    CHECK(sourceContains(transfer,"DownloadState::Paused&&i.state!=DownloadState::PausedForPlayback"));
+    // The discovery guard must precede the OLD-identity reconcile: the early
+    // return keeps reconcile(scope,item) from rewriting the stale identity.
+    // (Anchors are a comment and an identifier, which reformatting cannot
+    // alter; the code patterns inside the region match tolerantly.)
+    const std::string::size_type d0=transfer.find("Persist discovery before fetching segment zero");
+    const std::string::size_type d1=transfer.find("firstIncompleteSegment");
+    CHECK(d0!=std::string::npos&&d1!=std::string::npos&&d1>d0);
+    const std::string discovery=transfer.substr(d0,d1-d0);
+    CHECK(sourceContains(discovery,"transferSourceChanged(i,transferSourceId,transferEtag))return false"));
+    CHECK(discovery.find("return false")<discovery.find("m_store.reconcile(scope,item"));
+    std::printf("[test] stale playlist-discovery publish suppressed OK\n");
+}
+
+static void testAbandonedDeleteFlagConsumed()
+{
+    std::printf("[test] abandoned delete flag consumed\n");
+    // Structural: both stale-flag windows are only observable via call
+    // ordering (a live transfer racing erase), so the consume sites are
+    // pinned by scan.  Delete-wins priority itself is covered behaviourally
+    // by testTransferFinishDecision.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    // Loop-top abort consumes the flag exactly like the segment-failure
+    // path: erase + removeItem + drop from m_items, then stop.
+    // (Region anchors are a stable call signature; matching inside the
+    // region is whitespace-insensitive.)
+    const std::string::size_type abort=transfer.find("if(shouldAbort(item.itemId,scope,generation))");
+    CHECK(abort!=std::string::npos);
+    const std::string loopTop=transfer.substr(abort,900);
+    CHECK(sourceContains(loopTop,"m_deleteRequested.erase(item.itemId)"));
+    CHECK(sourceContains(loopTop,"removeItem(scope,item.itemId"));
+    CHECK(sourceContains(loopTop,"m_items.erase(p)"));
+    const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
+    CHECK(!manager.empty());
+    // Immediate-erase path clears any abandoned flag before removing, so a
+    // later re-enqueue of the same id starts without a pending delete.
+    const std::string::size_type erase=manager.find("bool DownloadManager::erase");
+    CHECK(erase!=std::string::npos);
+    const std::string eraseBody=manager.substr(erase,700);
+    CHECK(sourceContains(eraseBody,"m_deleteRequested.erase(id)"));
+    CHECK(eraseBody.find("m_deleteRequested.erase(id)")<eraseBody.find("removeItem(m_scope,id"));
+    std::printf("[test] abandoned delete flag consumed OK\n");
+}
+
+static void testStaleSegmentRemovalUnderLock()
+{
+    std::printf("[test] stale segment removal under lock\n");
+    // Structural: the rename-then-remove race is only observable via call
+    // ordering (stale transfer vs restarted new-source transfer), so the
+    // shape is pinned by scan.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    // No deferred flag: the removal happens in the same critical section as
+    // the source check, exactly once (never double-removed).
+    CHECK(sourceLacks(transfer,"staleSource"));
+    CHECK(sourceCount(transfer,"std::remove(done.c_str())")==1);
+    // Ordering: within the per-segment publish region the removal precedes
+    // the progress publish, i.e. it runs while the mutex is still held.
+    // (Anchors are stable call signatures; matching is tolerant.)
+    const std::string::size_type s0=transfer.find("applyHlsSegmentCompleted(item,k,bytes)");
+    const std::string::size_type s1=transfer.find("validateCompletedDownload(scope,item,&validationError)");
+    CHECK(s0!=std::string::npos&&s1!=std::string::npos&&s1>s0);
+    const std::string segment=transfer.substr(s0,s1-s0);
+    CHECK(sourceContains(segment,"std::remove(done.c_str())"));
+    CHECK(segment.find("std::remove(done.c_str())")<segment.find("publishTransferProgress(i,item)"));
+    std::printf("[test] stale segment removal under lock OK\n");
+}
+
+static void testDequeuePersistIsPerItem()
+{
+    std::printf("[test] dequeue persist is per-item\n");
+    // Structural: fsync cost is only observable via call ordering/profiling
+    // on device, so the persist shape is pinned by scan.  Behavioural
+    // convergence (pause racing the worker persist) stays covered by
+    // testWorkerPersistMatchesLiveState.
+    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
+    CHECK(!transfer.empty());
+    const std::string::size_type w0=transfer.find("void DownloadManager::worker()");
+    const std::string::size_type w1=transfer.find("bool DownloadManager::transfer(");
+    CHECK(w0!=std::string::npos&&w1!=std::string::npos&&w1>w0);
+    const std::string worker=transfer.substr(w0,w1-w0);
+    // The dequeue transition persists only its own manifest; the index (an
+    // id list, unchanged by a state flip) is written solely by the
+    // id-changing persist-only pass.
+    CHECK(sourceContains(worker,"persistItemLocked(work.itemId)"));
+    CHECK(sourceCount(worker,"saveIndex")==1);
+    CHECK(sourceContains(worker,"if(persistOnly){for"));
+    std::printf("[test] dequeue persist is per-item OK\n");
 }

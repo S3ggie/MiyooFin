@@ -40,7 +40,7 @@ bool AuthCheckScreen::handleAction(Action action)
     return false;  // Exit handled by App
 }
 
-void AuthCheckScreen::update(Uint32 dt)
+void AuthCheckScreen::update(Uint32 /*dt*/)
 {
     if (m_finished) return;
 

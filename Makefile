@@ -12,8 +12,20 @@
 CXX         := g++
 CC          := gcc
 PERF_TELEMETRY ?= 1
+RELEASE     ?= 0
+# Opt-in sanitizer switch for host builds only (never forwarded to
+# Makefile.cross, so the ARM build is unaffected).
+#   SANITIZE=1 make test   — or the `test-sanitize` convenience target below.
+# Default (SANITIZE=0) leaves CXXFLAGS/LDFLAGS exactly as before.
+SANITIZE    ?= 0
 CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
+ifeq ($(SANITIZE),1)
+SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g
+CXXFLAGS    += $(SANITIZE_FLAGS)
+LDFLAGS     += -fsanitize=address,undefined
+SQLITE_CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g
+endif
 INCLUDES    := -I. -Iinclude
 SQLITE_DIR  := vendor/sqlite
 SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
@@ -68,6 +80,12 @@ output/build/%.o: src/%.cpp | $(OUT_DIRS)
 	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
 	@echo "  [CC]   $@"
 
+# Vendored third-party stb_image triggers -Wunused-parameter under -Wall
+# -Wextra. Suppress only that warning for only this translation unit so our
+# own unused parameters are still diagnosed. Third-party source is not edited.
+output/build/image/stb_image_impl.o: CXXFLAGS += -Wno-unused-parameter
+output/test/objects/image/stb_image_impl.o: TEST_CXXFLAGS += -Wno-unused-parameter
+
 $(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build/sqlite
 	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"
@@ -109,7 +127,7 @@ TEST_PROD_DEPS := $(TEST_PROD_OBJS:.o=.d)
 TEST_PROD_LIB := output/test/libmiyoofin-test.a
 -include $(TEST_PROD_DEPS)
 
-.PHONY: test
+.PHONY: test test-sanitize
 test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@$(TEST_TARGET)
 	@$(SQLITE_TEST_TARGET)
@@ -119,12 +137,17 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@sh $(ONION_REMOTE_LAUNCH_TEST)
 	@python3 $(TELEMETRY_DECODER_TEST)
 
+# Convenience entry point for the sanitizer run: rebuilds and runs the host
+# test suite with AddressSanitizer + UndefinedBehaviorSanitizer.
+test-sanitize:
+	@$(MAKE) SANITIZE=1 test
+
 .PHONY: refactor-check
 refactor-check:
 	@sh tools/refactor-check.sh
 
 $(TEST_GROUP_TARGETS): output/test/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(CURL_LIBS) $(SDL_LIBS)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
@@ -164,11 +187,11 @@ $(TEST_TARGET): tests/test_runner.sh $(TEST_GROUP_TARGETS) | output/test
 	chmod +x $@
 
 $(SQLITE_TEST_TARGET): $(SQLITE_TEST_SRC) $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS)
 	@echo "  [LINK] $@"
 
 $(CATALOG_BENCHMARK_TARGET): $(CATALOG_BENCHMARK_TEST_SRC) $(CATALOG_BENCHMARK_SRC) src/catalog/MediaItemSql.cpp $(SQLITE_HOST_OBJ) | output/test
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ -lpthread
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -I$(SQLITE_DIR) -o $@ $^ $(LDFLAGS) -lpthread
 	@echo "  [LINK] $@"
 
 .PHONY: catalog-journal-benchmark-test catalog-journal-benchmark
@@ -215,7 +238,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) all bridge reporter benchmark
+	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image
@@ -294,6 +317,14 @@ package: onionos check-ca-bundle check-miyoo-libs
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libstdc++.so.6.0.25 /out/ && \
 	    cp -aP /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1 /out/ && \
 	    echo "  Libraries bundled successfully"'
+	@echo "  Stripping packaged binaries..."
+	@docker run --rm --user $(DOCKER_USER) -v $(PWD)/$(PACKAGE_DIR):/pkg miyoofin-toolchain \
+	    bash -c '\
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-https-bridge && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-playback-reporter && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/lib/libSDL2-2.0.so.0.18.2 && \
+	    echo "  Packaged binaries stripped successfully"'
 	@echo "  Verifying package binary architecture..."
 	@file $(PACKAGE_DIR)/miyoofin | grep -qi 'ARM' || \
 	    { echo "ERROR: $(PACKAGE_DIR)/miyoofin is NOT ARM!"; exit 1; }
@@ -384,11 +415,13 @@ help:
 	@echo "MiyooFin Makefile"
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
+	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1)"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make desktop-run — Run the host desktop development runtime"
 	@echo "  make desktop-test — Check desktop runtime wiring"
 	@echo "  make onionos    — Cross-compile for Miyoo via Docker"
+	@echo "  make onionos RELEASE=1 — Cross-compile slim release for Miyoo"
 	@echo "  make verify-arm — Verify ARM binary architecture"
 	@echo "  make package    — Stage OnionOS package (uses ARMarch binary)"
 	@echo "  make import-miyoo-libs — Import Miyoo build libraries from device"

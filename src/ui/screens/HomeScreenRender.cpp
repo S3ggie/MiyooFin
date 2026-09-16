@@ -402,7 +402,8 @@ void HomeScreen::drawMoviePreview(SDL_Surface *fb)
             SDL_Rect dst = {px + (64 - cs->w) / 2, py + (96 - cs->h) / 2, cs->w, cs->h};
             SDL_BlitSurface(cs, nullptr, fb, &dst);
         } else {
-            SDL_Surface *image = SDL_CreateRGBSurfaceFrom((void *)m_selectedArtwork.pixels.data(), m_selectedArtwork.width, m_selectedArtwork.height, 32, m_selectedArtwork.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+            SDL_Surface *image = SDL_CreateRGBSurfaceFrom((void *)m_selectedArtwork.pixels.data(), m_selectedArtwork.width, m_selectedArtwork.height, 32,
+                m_selectedArtwork.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
             if (image) {
                 SDL_Rect src={0,0,m_selectedArtwork.width,m_selectedArtwork.height}, dst={px,py,64,96};
                 SDL_BlitScaled(image,&src,fb,&dst);
@@ -428,13 +429,39 @@ void HomeScreen::drawMoviePreview(SDL_Surface *fb)
 
 void HomeScreen::drawShowsAlphabetRail(SDL_Surface *fb) {
     BitmapFont::fillRect(fb,0,25,SHOWS_RAIL_W,437,24,24,32,255); BitmapFont::fillRect(fb,35,25,1,437,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,90);
-    for(int i=0;i<26;++i){int y=27+i*16;bool f=m_showsFocus==ShowsFocus::AlphabetRail&&i==m_showsAlphabetFocus,a=i==m_showsActiveLetter;if(f)BitmapFont::fillRect(fb,2,y-1,31,BitmapFont::GLYPH_H+2,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,120);char c[2]={char('A'+i),0};BitmapFont::drawString(fb,14,y,c,a?Theme::HIGHLIGHT_R:f?Theme::BG_R:Theme::TEXT_R,a?Theme::HIGHLIGHT_G:f?Theme::BG_G:Theme::TEXT_G,a?Theme::HIGHLIGHT_B:f?Theme::BG_B:Theme::TEXT_B,f?Theme::ACCENT_R:24,f?Theme::ACCENT_G:24,f?Theme::ACCENT_B:32);}
+    for(int i=0;i<26;++i){int y=27+i*16;bool f=m_showsFocus==ShowsFocus::AlphabetRail&&i==m_showsAlphabetFocus,a=i==m_showsActiveLetter;
+            if(f)BitmapFont::fillRect(fb,2,y-1,31,BitmapFont::GLYPH_H+2,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,120);
+            char c[2]={char('A'+i),0};
+            BitmapFont::drawString(fb,14,y,c,a?Theme::HIGHLIGHT_R:f?Theme::BG_R:Theme::TEXT_R,a?Theme::HIGHLIGHT_G:f?Theme::BG_G:Theme::TEXT_G,a?Theme::HIGHLIGHT_B:f?Theme::BG_B:Theme::TEXT_B,
+            f?Theme::ACCENT_R:24,f?Theme::ACCENT_G:24,f?Theme::ACCENT_B:32);}
 }
 void HomeScreen::drawShowsPreview(SDL_Surface *fb) {
-    BitmapFont::fillRect(fb,36,25,604,SHOWS_PREVIEW_H,24,24,32,255); BitmapFont::fillRect(fb,36,129,604,1,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70); const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;BitmapFont::fillRect(fb,px,py,64,96,item->artR,item->artG,item->artB,255); std::string key=rowArtworkKey(*item);auto it=m_rowArtwork.find(key);const DecodedImage*imgPtr=nullptr;bool fromRowArtwork=false;if(it!=m_rowArtwork.end()&&it->second.status==RowArtworkStatus::Loaded&&it->second.image){imgPtr=it->second.image.get();fromRowArtwork=true;}else if(!m_selectedArtwork.empty())imgPtr=&m_selectedArtwork;if(imgPtr&&!imgPtr->empty()){char ckBuf[512];std::snprintf(ckBuf,sizeof(ckBuf),"%s:64x96",key.empty()?m_selectedArtworkId.c_str():key.c_str());std::string ck(ckBuf);auto cached=m_cardSurfaceCache.find(ck);if(cached!=m_cardSurfaceCache.end()&&cached->second){SDL_Surface*cs=cached->second;SDL_Rect dst={px+(64-cs->w)/2,py+(96-cs->h)/2,cs->w,cs->h};SDL_BlitSurface(cs,nullptr,fb,&dst);}else{blitDecoded(fb,*imgPtr,px,py,64,96);if(!key.empty()&&fromRowArtwork)prepareCardSurface(ck,*imgPtr,64,96);}}BitmapFont::drawRect(fb,px,py,64,96,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);BitmapFont::drawString(fb,114,33,item->title.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);char meta[96]={};int n=0;if(item->year)n+=std::snprintf(meta+n,sizeof(meta)-n,"%d",item->year);if(item->rating>0)std::snprintf(meta+n,sizeof(meta)-n,"%s%.1f",n?" * ":"",(double)item->rating);BitmapFont::drawString(fb,114,51,meta,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);char state[96];std::snprintf(state,sizeof(state),"%s%s",item->genre.c_str(),item->played?" * Watched":item->progress>0?" * In progress":"");BitmapFont::drawString(fb,114,69,state,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
+    BitmapFont::fillRect(fb,36,25,604,SHOWS_PREVIEW_H,24,24,32,255); BitmapFont::fillRect(fb,36,129,604,1,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70);
+        const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;BitmapFont::fillRect(fb,px,py,64,96,item->artR,item->artG,item->artB,255);
+        std::string key=rowArtworkKey(*item);auto it=m_rowArtwork.find(key);const DecodedImage*imgPtr=nullptr;bool fromRowArtwork=false;
+        if(it!=m_rowArtwork.end()&&it->second.status==RowArtworkStatus::Loaded&&it->second.image){imgPtr=it->second.image.get();fromRowArtwork=true;
+            }else if(!m_selectedArtwork.empty())imgPtr=&m_selectedArtwork;if(imgPtr&&!imgPtr->empty()){char ckBuf[512];
+            std::snprintf(ckBuf,sizeof(ckBuf),"%s:64x96",key.empty()?m_selectedArtworkId.c_str():key.c_str());std::string ck(ckBuf);auto cached=m_cardSurfaceCache.find(ck);
+            if(cached!=m_cardSurfaceCache.end()&&cached->second){SDL_Surface*cs=cached->second;SDL_Rect dst={px+(64-cs->w)/2,py+(96-cs->h)/2,cs->w,cs->h};SDL_BlitSurface(cs,nullptr,fb,&dst);
+                }else{blitDecoded(fb,*imgPtr,px,py,64,96);if(!key.empty()&&fromRowArtwork)prepareCardSurface(ck,*imgPtr,64,96);
+                }}BitmapFont::drawRect(fb,px,py,64,96,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B);
+        BitmapFont::drawString(fb,114,33,item->title.c_str(),Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,24,24,32);char meta[96]={};int n=0;
+        if(item->year)n+=std::snprintf(meta+n,sizeof(meta)-n,"%d",item->year);
+        if(item->rating>0)std::snprintf(meta+n,sizeof(meta)-n,"%s%.1f",n?" * ":"",(double)item->rating);
+        BitmapFont::drawString(fb,114,51,meta,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);char state[96];
+        std::snprintf(state,sizeof(state),"%s%s",item->genre.c_str(),item->played?" * Watched":item->progress>0?" * In progress":"");
+        BitmapFont::drawString(fb,114,69,state,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,24,24,32);
 }
 void HomeScreen::drawShowsGrid(SDL_Surface *fb) {
-    BitmapFont::drawString(fb,44,137,"SHOWS",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);BitmapFont::drawString(fb,346,137,"ANIME",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);BitmapFont::fillRect(fb,337,135,1,327,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,100);auto draw=[&](const std::vector<MediaItem>&v,int scroll,int sel,bool focused,int base){for(int i=0;i<(int)v.size();++i){int r=i/4;if(r<scroll||r>=scroll+3)continue;drawCard(fb,base+14+(i%4)*70,SHOWS_GRID_TOP+(r-scroll)*102,64,96,v[i],focused&&i==sel);}};draw(m_filteredShows,m_showScroll,m_showSelected,m_showsFocus==ShowsFocus::ShowsGrid,SHOWS_LEFT_X);draw(m_filteredAnime,m_animeScroll,m_animeSelected,m_showsFocus==ShowsFocus::AnimeGrid,SHOWS_RIGHT_X);if(m_filteredShows.empty()&&m_filteredAnime.empty()){char b[64];if(m_showsActiveLetter>=0)std::snprintf(b,sizeof(b),"No shows or anime starting with %c",'A'+m_showsActiveLetter);else std::snprintf(b,sizeof(b),"No shows on this server");BitmapFont::drawString(fb,48,230,b,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);}
+    BitmapFont::drawString(fb,44,137,"SHOWS",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+        BitmapFont::drawString(fb,346,137,"ANIME",Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);
+        BitmapFont::fillRect(fb,337,135,1,327,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,100);
+        auto draw=[&](const std::vector<MediaItem>&v,int scroll,int sel,bool focused,int base){for(int i=0;i<(int)v.size();++i){int r=i/4;if(r<scroll||r>=scroll+3)continue;
+                drawCard(fb,base+14+(i%4)*70,SHOWS_GRID_TOP+(r-scroll)*102,64,96,v[i],focused&&i==sel);}};
+        draw(m_filteredShows,m_showScroll,m_showSelected,m_showsFocus==ShowsFocus::ShowsGrid,SHOWS_LEFT_X);
+        draw(m_filteredAnime,m_animeScroll,m_animeSelected,m_showsFocus==ShowsFocus::AnimeGrid,SHOWS_RIGHT_X);if(m_filteredShows.empty()&&m_filteredAnime.empty()){char b[64];
+            if(m_showsActiveLetter>=0)std::snprintf(b,sizeof(b),"No shows or anime starting with %c",'A'+m_showsActiveLetter);else std::snprintf(b,sizeof(b),"No shows on this server");
+            BitmapFont::drawString(fb,48,230,b,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R,Theme::BG_G,Theme::BG_B);}
 }
 
 void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
@@ -568,7 +595,12 @@ void HomeScreen::drawDownloadsTab(SDL_Surface *fb)
         if(item->itemType=="episode") detail=episodeDownloadLabel(*item);
         else detail=std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
         if(item->state==DownloadState::Downloading) {
-            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s/s",downloadPercent(*item),formatBytes(item->recentBytesPerSec).c_str()); detail=active;
+            const std::uint64_t total=predictedDownloadTotalBytes(*item);
+            const bool approxTotal=item->hlsStorage&&!completedHls;
+            char active[96]; std::snprintf(active,sizeof(active),"Downloading %u%% | %s / %s%s | %s/s",
+                downloadPercent(*item),formatBytes(item->downloadedBytes).c_str(),
+                approxTotal?"~":"",formatBytes(total).c_str(),
+                formatBytes(item->recentBytesPerSec).c_str()); detail=active;
         } else if(item->itemType=="episode") detail += " | "+std::string(downloadStateLabel(item->state))+" | "+sizeLabel;
         if(!item->lastError.empty() && (item->state==DownloadState::Failed || item->state==DownloadState::WaitingForNetwork || item->state==DownloadState::Unauthorized))
             detail=std::string(downloadStateLabel(item->state))+" | "+item->lastError;
@@ -628,7 +660,8 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
                     const DownloadItem &item=*selectedItem;
                     std::snprintf(confirm,sizeof(confirm),"Press Y again to %s %s",downloadRemoveIsDelete(item)?"delete":"cancel",formatBytes(displayDownloadBytes(item)).c_str());
                 } else {
-                    std::snprintf(confirm,sizeof(confirm),"Press Y again to delete %s (%u local)",selectedRow->kind==DownloadHierarchyRowKind::Season?"Season":"entire Series",(unsigned)m_downloadConfirmItemIds.size());
+                    std::snprintf(confirm,sizeof(confirm),"Press Y again to delete %s (%u local)",selectedRow->kind==DownloadHierarchyRowKind::Season?"Season":"entire Series",
+                        (unsigned)m_downloadConfirmItemIds.size());
                 }
                 BitmapFont::drawString(fb,8,y+2,confirm,Theme::HIGHLIGHT_R,Theme::HIGHLIGHT_G,Theme::HIGHLIGHT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
                 return;
@@ -638,7 +671,13 @@ void HomeScreen::drawBottomHints(SDL_Surface *fb)
             bool update=selectedItem && selectedItem->state==DownloadState::UpdateAvailable;
             if(selectedRow && !selectedItem) primary=selectedRow->expanded?"Collapse":"Expand";
             const bool parent=selectedRow && !selectedItem;
-            char downloadHints[96]; std::snprintf(downloadHints,sizeof(downloadHints),update?"A=Play  X=Update  Y=Delete  B=Back":(parent?"A=%s  Y=Delete all  B=Back":(!m_missingJournalEntries.empty()?"A=%s  X=Discard missing progress  Y=Cancel/Delete":"A=%s  Y=Cancel/Delete  B=Back")),primary[0]?primary:"Select"); hints=downloadHints;
+            char downloadHints[96];
+                std::snprintf(downloadHints,sizeof(downloadHints),
+                update?"A=Play  X=Update  Y=Delete  B=Back":
+                (parent?"A=%s  Y=Delete all  B=Back":
+                (!m_missingJournalEntries.empty()?"A=%s  X=Discard missing progress  Y=Cancel/Delete":
+                "A=%s  Y=Cancel/Delete  B=Back")),
+                primary[0]?primary:"Select"); hints=downloadHints;
             BitmapFont::drawString(fb,8,y+2,hints,Theme::TEXT_R,Theme::TEXT_G,Theme::TEXT_B,Theme::BG_R*2/3,Theme::BG_G*2/3,Theme::BG_B*2/3);
             return;
         }

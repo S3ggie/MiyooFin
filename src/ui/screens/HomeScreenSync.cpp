@@ -302,7 +302,7 @@ void HomeScreen::startSafetyReconcile()
         });
 }
 
-void HomeScreen::startFetch()
+bool HomeScreen::startFetch()
 {
     if (m_fetchThread.joinable()) {
         // If the previous fetch completed, join its thread to reclaim it.
@@ -310,7 +310,7 @@ void HomeScreen::startFetch()
         if (m_fetchComplete.load() || m_fetchDone.load())
             m_fetchThread.join();
         else
-            return;
+            return false;
     }
     m_metadataCompleted.store(0);
     m_metadataTotal.store(0);
@@ -399,6 +399,13 @@ void HomeScreen::startFetch()
             m_cachedSnapshot = OfflineLibraryQuery::build(
                 downloads, metadataItems);
             m_haveCachedSnapshot = true;
+            // Cache the offline snapshot + its signature for instant
+            // reuse when the user toggles offline mode again without
+            // download changes.
+            m_offlineSnapshotCache = m_cachedSnapshot;
+            m_haveOfflineSnapshotCache = true;
+            m_offlineSignature = computeOfflineSignature(downloads);
+            m_haveOfflineSignature = true;
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
             m_fetchCacheSaved = true;
@@ -841,6 +848,7 @@ void HomeScreen::startFetch()
         m_fetchReady.store(true);
         m_fetchDone=true;
     });
+    return true;
 }
 void HomeScreen::requestFetch(Uint32 now){if(m_syncSchedule.request(now))startFetch();}
 }

@@ -13,6 +13,12 @@
 #include <unistd.h>
 
 namespace miyoofin { std::string LibraryCache::scopeKey(const std::string&,const std::string&){ return "unused"; } }
+// Bridge binary under test: passed in from the Makefile (-DMIYOOFIN_BRIDGE_BIN)
+// so sanitizer builds exec the matching instrumented bridge instead of a
+// hardcoded non-sanitized path.  An explicit argv[1] still overrides it.
+#ifndef MIYOOFIN_BRIDGE_BIN
+#define MIYOOFIN_BRIDGE_BIN "output/build/miyoofin-https-bridge"
+#endif
 static int fails=0;
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %d: %s\n",__LINE__,#x); ++fails; } } while(0)
 static std::string request(int port,const std::string &text) {
@@ -22,12 +28,12 @@ static std::string request(int port,const std::string &text) {
 }
 static std::string body(const std::string &response) { size_t p=response.find("\r\n\r\n"); return p==std::string::npos?"":response.substr(p+4); }
 static bool has(const std::string&s,const std::string&part){ return s.find(part)!=std::string::npos; }
-int main(){
-    using namespace miyoofin; const int port=24000+(getpid()%10000); std::string root="/tmp/miyoofin-bridge-local-"+std::to_string((long long)getpid());
+int main(int argc,char**argv){
+    using namespace miyoofin; const char* bridgeBin=argc>1?argv[1]:MIYOOFIN_BRIDGE_BIN; const int port=24000+(getpid()%10000); std::string root="/tmp/miyoofin-bridge-local-"+std::to_string((long long)getpid());
     DownloadStore store(root); DownloadItem item; item.itemId="fixture"; item.expectedSize=11; item.chunkSize=4; item.downloadedBytes=11; item.state=DownloadState::Complete;
     CHECK(store.saveManifest("scope",item)); std::string chunks=store.itemPath("scope",item.itemId)+"/chunks"; CHECK(mkdir(chunks.c_str(),0755)==0);
     const char *parts[]={"ABCD","EFGH","IJK"}; for(int i=0;i<3;i++){ FILE*f=fopen(store.chunkPath("scope",item.itemId,i).c_str(),"wb"); CHECK(f); if(f){CHECK(fwrite(parts[i],1,strlen(parts[i]),f)==strlen(parts[i])); fclose(f);} }
-    pid_t child=fork(); CHECK(child>=0); if(child==0){ execl("output/build/miyoofin-https-bridge","output/build/miyoofin-https-bridge","--local-manifest",store.manifestPath("scope",item.itemId).c_str(),std::to_string(port).c_str(),(char*)nullptr); _exit(127); }
+    pid_t child=fork(); CHECK(child>=0); if(child==0){ execl(bridgeBin,bridgeBin,"--local-manifest",store.manifestPath("scope",item.itemId).c_str(),std::to_string(port).c_str(),(char*)nullptr); _exit(127); }
     std::string ready; for(int i=0;i<50&&ready.empty();++i){ usleep(20000); ready=request(port,"HEAD /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"); } CHECK(!ready.empty());
     CHECK(has(ready,"HTTP/1.1 200 OK")&&has(ready,"Content-Length: 11")&&body(ready).empty());
     std::string full=request(port,"GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"); CHECK(has(full,"HTTP/1.1 200 OK")&&body(full)=="ABCDEFGHIJK");
@@ -40,7 +46,7 @@ int main(){
     DownloadItem hls; hls.itemId="hls"; hls.hlsStorage=true; hls.hlsSegmentCount=3; hls.chunkSize=1; hls.state=DownloadState::Complete;
     CHECK(store.saveManifest("scope",hls)); CHECK(store.ensureHlsDirectories("scope",hls.itemId));
     const char *segments[]={"ONE","TW"}; for(int i=0;i<2;i++){ FILE*f=fopen(store.segmentPath("scope",hls.itemId,i).c_str(),"wb"); CHECK(f); if(f){CHECK(fwrite(segments[i],1,strlen(segments[i]),f)==strlen(segments[i])); fclose(f);} }
-    child=fork(); CHECK(child>=0); if(child==0){ execl("output/build/miyoofin-https-bridge","output/build/miyoofin-https-bridge","--local-manifest",store.manifestPath("scope",hls.itemId).c_str(),std::to_string(port).c_str(),(char*)nullptr); _exit(127); }
+    child=fork(); CHECK(child>=0); if(child==0){ execl(bridgeBin,bridgeBin,"--local-manifest",store.manifestPath("scope",hls.itemId).c_str(),std::to_string(port).c_str(),(char*)nullptr); _exit(127); }
     ready.clear(); for(int i=0;i<50&&ready.empty();++i){ usleep(20000); ready=request(port,"HEAD /local.m3u8 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"); } CHECK(has(ready,"HTTP/1.1 200 OK")&&has(ready,"Content-Length:"));
     std::string playlist=request(port,"GET /local.m3u8 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"); CHECK(has(playlist,"HTTP/1.1 200 OK")&&has(body(playlist),"#EXTM3U\n")&&has(body(playlist),"/segments/000000\n")&&has(body(playlist),"/segments/000001\n")&&has(body(playlist),"/segments/000002\n"));
     std::string first=request(port,"GET /segments/000000 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"); CHECK(has(first,"HTTP/1.1 200 OK")&&has(first,"Content-Length: 3")&&body(first)=="ONE");

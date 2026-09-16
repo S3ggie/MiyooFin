@@ -369,7 +369,13 @@ void App::pollScreenshotRequest()
     // Flag file present — consume it and capture the current framebuffer.
     std::remove(flagPath);
     if (!m_fb) return;
-    static const char *outPath = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+    // Test-only hook for the headless host UI harness (docs/ui-script-harness.md):
+    // when MIYOOFIN_SCREENSHOT_PATH is set, the framebuffer BMP is written
+    // there instead of the device screenshot path. Opt-in via environment
+    // only; unset (always, on device) preserves production behaviour exactly.
+    static const char *devicePath = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+    const char *envPath = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
+    const char *outPath = (envPath && envPath[0] != '\0') ? envPath : devicePath;
     if (SDL_SaveBMP(m_fb, outPath) == 0)
         printf("[App] Screenshot saved: %s\n", outPath);
     else

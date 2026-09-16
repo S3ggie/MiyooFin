@@ -1,9 +1,18 @@
 # Desktop development targets are separate from the core build and test graph.
 
-.PHONY: desktop-run desktop-test
+.PHONY: desktop-run desktop-test ui-script-test
 
 desktop-run: all bridge reporter
 	@sh tools/desktop-run.sh
 
 desktop-test:
 	@sh tests/test_desktop_runtime.sh
+
+# Headless scripted-input UI harness (host/desktop only, test-only tooling).
+# Drives the running app with a scripted key timeline via an LD_PRELOAD shim
+# against a loopback stub Jellyfin server; needs no Miyoo and no real server.
+# Screenshots + logs land in output/ui-script/<name>/. See
+# docs/ui-script-harness.md.
+ui-script-test:
+	@sh tools/ui-script/run.sh smoke
+	@sh tools/ui-script/run.sh series

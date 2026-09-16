@@ -30,6 +30,27 @@ jobs:
         # xvfb provides a display for the SDL-backed host tests on the runner.
         run: xvfb-run -a sh tools/refactor-check.sh
 
+  ui-script:
+    # Headless scripted-input UI harness (docs/ui-script-harness.md):
+    # drives the host build with a scripted key timeline via an LD_PRELOAD
+    # shim against a loopback stub Jellyfin server. Needs no Miyoo, no
+    # GHCR image, and no network beyond loopback.
+    name: Scripted UI flows (stub server, no hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libsdl2-dev libsdl2-ttf-dev \
+            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+
+      - name: Scripted UI flows
+        # Sequential on purpose: flows share the /tmp screenshot flag file.
+        run: xvfb-run -a make ui-script-test
+
   sanitizers:
     # Runs the host test suite under AddressSanitizer + UndefinedBehaviorSanitizer
     # to catch memory errors, UB, and leaks in first-party code. A ThreadSanitizer

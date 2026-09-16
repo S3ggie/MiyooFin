@@ -1,0 +1,9 @@
+# Smoke: boot against the loopback stub server, reach a rendered Home with
+# rails populated, capture it, exit. All waiting is log-poll based
+# (WAIT_LOG); nothing proceeds on a fixed sleep.
+# NOTE: only stdout markers are pollable here ("[HomeScreen] Library
+# loaded" is a printf; the loading_state_cleared line goes to the
+# diagnostics log, not stdout, so it must not be used).
+WAIT_LOG [HomeScreen] Library loaded 30000
+SCREENSHOT home
+QUIT

@@ -17,7 +17,8 @@ HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<CatalogDb> catalogDb,
                        std::uint64_t catalogScopeEpoch,
                        std::shared_ptr<library::LibrarySync> librarySync,
-                       std::shared_ptr<library::LibraryQuery> libraryQuery)
+                       std::shared_ptr<library::LibraryQuery> libraryQuery,
+                       std::shared_ptr<library::LibraryCoordinator> libraryCoordinator)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_session(session)
@@ -25,6 +26,7 @@ HomeScreen::HomeScreen(const Session &session,
     , m_catalogDb(std::move(catalogDb))
     , m_librarySync(std::move(librarySync))
     , m_libraryQuery(std::move(libraryQuery))
+    , m_libraryCoordinator(std::move(libraryCoordinator))
     , m_catalogMetadata()
     , m_userName(session.userName)
 {
@@ -61,6 +63,7 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
     if (m_animePage.cancellation) m_animePage.cancellation->store(true);
     if (m_fetchCancellation) m_fetchCancellation->store(true);
+    if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
     if (m_liveChangeCancellation)
         m_liveChangeCancellation->store(true);
     if (m_safetyReconcileCancellation)

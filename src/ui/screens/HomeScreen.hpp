@@ -14,6 +14,7 @@
 #include "../../catalog/CatalogDb.hpp"
 #include "../../library/LibrarySync.hpp"
 #include "../../library/LibraryQuery.hpp"
+#include "../../library/LibraryCoordinator.hpp"
 #include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
@@ -52,9 +53,10 @@ public:
     explicit HomeScreen(const Session &session,
                         std::shared_ptr<DownloadManager> downloads={},
                         std::shared_ptr<CatalogDb> catalogDb={},
-                        std::uint64_t catalogScopeEpoch=0,
-                        std::shared_ptr<library::LibrarySync> librarySync={},
-                        std::shared_ptr<library::LibraryQuery> libraryQuery={});
+                         std::uint64_t catalogScopeEpoch=0,
+                         std::shared_ptr<library::LibrarySync> librarySync={},
+                         std::shared_ptr<library::LibraryQuery> libraryQuery={},
+                         std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={});
     ~HomeScreen() override;
 
     void enter() override;
@@ -224,6 +226,7 @@ private:
     std::shared_ptr<CatalogDb> m_catalogDb;
     std::shared_ptr<library::LibrarySync> m_librarySync;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
+    std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     CatalogDbJobMetadata m_catalogMetadata;
     // Top-level catalog epoch: seeded from the persisted committed
     // generation and bumped at each point a top-level sync commits catalog

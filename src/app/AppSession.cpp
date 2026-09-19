@@ -78,7 +78,7 @@ void App::configureCatalogScopeForSession()
         uiDiagnostics().log("[App] catalog scope request identity=valid");
         m_catalogScopeEpoch =
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
-        m_libraryCoordinator = std::make_unique<library::LibraryCoordinator>(
+        m_libraryCoordinator = std::make_shared<library::LibraryCoordinator>(
             m_session, m_catalogDb, m_catalogScopeEpoch);
         m_libraryCoordinator->start();
         if (m_downloadManager)
@@ -120,12 +120,11 @@ void App::goToHome()
     }
     m_stack.push(std::make_unique<HomeScreen>(
         m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch,
-        // Compatibility boundary for the first coordinator phase: Home still
-        // consumes shared primitive services, but App owns their session
-        // lifecycle. The next seam can pass a narrower Home-facing service
-        // view without moving Home's sync policy in this phase.
-        m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr,
-        m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr));
+         // The coordinator owns the shared services and startup sync policy;
+         // Home consumes its startup result and retains the population walk.
+         m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr,
+         m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr,
+         m_libraryCoordinator));
 }
 
 void App::goToLogin(const std::string &initialMessage)

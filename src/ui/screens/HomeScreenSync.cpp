@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include <chrono>
 #include "../../library/OfflineLibraryQuery.hpp"
 #include "../../playback/OfflineLibraryProjection.hpp"
 #include "../../net/JellyfinApi.hpp"
@@ -444,6 +445,8 @@ bool HomeScreen::startFetch()
         bool coldFirstPagePublished = false;
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
+        bool coordinatorStartupStarted = false;
+        library::StartupSyncResult startupSyncResult;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
         // Probe the committed catalog before starting any network refresh. These
         // are bounded reads on the CatalogDb worker; the SDL thread only sees
@@ -489,44 +492,18 @@ bool HomeScreen::startFetch()
                 m_fetchReady.store(true);
             }
         }
-        // Seed sync state from CatalogDb before branching so the startup
-        // decision uses the latest persisted checkpoint.
-        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
-            auto dbSyncState = m_catalogDb->readSyncState(
-                false, 0, 0, metadata).get();
-            if (dbSyncState.success) {
-                const auto gen = dbSyncState.committedGeneration;
-                if (gen > 0) {
-                    m_librarySync->seedGeneration(gen);
-                    // Monotonic max via CAS: a plain load-then-store can lose
-                    // a concurrent increment from a live-change rail refresh.
-                    {
-                        auto cur = m_topLevelSyncGeneration.load();
-                        while (gen > cur
-                            && !m_topLevelSyncGeneration.compare_exchange_weak(
-                                cur, gen)) {
-                        }
-                    }
-                    {
-                        auto hierCur = m_hierarchyGeneration.load();
-                        while (gen > hierCur
-                            && !m_hierarchyGeneration.compare_exchange_weak(
-                                hierCur, gen)) {
-                        }
-                    }
-                }
-                if (dbSyncState.lastSuccessfulMs > 0) {
-                    m_syncState.lastSuccessfulMs =
-                        dbSyncState.lastSuccessfulMs;
-                    m_syncState.lastReconcileMs =
-                        dbSyncState.lastReconcileMs;
-                }
-            }
-        }
         // Block live-change rail refreshes until the startup population
         // walk commits so a queued UserDataChanged cannot start a
-        // competing rail refresh during the startup window.
+        // competing rail refresh during the startup window. This atomic must
+        // be published before the coordinator can launch its worker: the UI
+        // thread may process a library event concurrently with this worker.
         m_initialPopulationInProgress = true;
+        // The coordinator reads the persisted checkpoint and owns the startup
+        // policy. Home waits for that result before deciding whether to retain
+        // the old full-population walk, so no two top-level syncs overlap.
+        if (m_libraryCoordinator)
+            coordinatorStartupStarted = m_libraryCoordinator->startStartupSync(
+                initialPagePublished);
         // Fetch home rails (Continue Watching / Recently Added) immediately
         // after the warm CatalogDb probe so they can be published
         // incrementally before the full population walk completes.
@@ -553,14 +530,36 @@ bool HomeScreen::startFetch()
         }
         m_homeRailsReady.store(true);
         queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
-        // Decide startup sync strategy using the persisted checkpoint.
-        const bool hasCatalogRows = initialPagePublished;
-        const HomeStartupSync syncDecision = decideHomeStartupSync(
-            wallClockMs(), m_syncState.lastSuccessfulMs,
-            m_syncState.lastReconcileMs,
-            m_catalogDb && m_catalogMetadata.scopeEpoch != 0
-                ? m_topLevelSyncGeneration.load() : std::uint64_t(0),
-            m_catalogDb && m_catalogMetadata.scopeEpoch != 0, hasCatalogRows);
+        if (coordinatorStartupStarted) {
+            for (;;) {
+                if (cancellation->load())
+                    m_libraryCoordinator->cancelStartupSync();
+                if (m_libraryCoordinator->takeStartupSyncResult(
+                        startupSyncResult))
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        } else {
+            // Compatibility construction without a coordinator retains the
+            // existing safe fallback: only the full population path runs.
+            startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
+        }
+        if (startupSyncResult.generation > 0) {
+            auto topLevel = m_topLevelSyncGeneration.load();
+            while (startupSyncResult.generation > topLevel
+                && !m_topLevelSyncGeneration.compare_exchange_weak(
+                    topLevel, startupSyncResult.generation)) {
+            }
+            auto hierarchy = m_hierarchyGeneration.load();
+            while (startupSyncResult.generation > hierarchy
+                && !m_hierarchyGeneration.compare_exchange_weak(
+                    hierarchy, startupSyncResult.generation)) {
+            }
+        }
+        if (startupSyncResult.lastSuccessfulMs > 0) {
+            m_syncState.lastSuccessfulMs = startupSyncResult.lastSuccessfulMs;
+            m_syncState.lastReconcileMs = startupSyncResult.lastReconcileMs;
+        }
         // Accumulate fetched items per collection type so the
         // post-finalize rebuild can populate Home tab items.
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
@@ -570,25 +569,27 @@ bool HomeScreen::startFetch()
         // preventing a permanent low-priority artwork stall.
         try {
         bool deltaCatchUpSucceeded = false;
-        if (syncDecision == HomeStartupSync::SkipFresh) {
+        if (startupSyncResult.mode == library::StartupSyncMode::SkipFresh) {
             // Catalog is within the FRESH_MS window — skip the walk entirely.
             if (cwOk) m_remoteSnapshot.continueWatching = cw;
             if (raOk) m_remoteSnapshot.recentlyAdded = ra;
-        } else if (syncDecision == HomeStartupSync::DeltaCatchUp) {
-            // Bounded delta catch-up: fetch only items changed since the
-            // last successful checkpoint.
+        } else if (startupSyncResult.mode
+                   == library::StartupSyncMode::DeltaCatchUp) {
+            // The coordinator already performed the bounded delta catch-up.
             uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_started");
-            const auto catchUp = m_librarySync->catchUpChangedCatalog(
-                m_syncState.lastSuccessfulMs, cancellation).get();
-            if (catchUp.success && !catchUp.cancelled && !catchUp.superseded) {
-                m_syncState.lastSuccessfulMs = catchUp.checkpointMs;
+            if (startupSyncResult.success && !startupSyncResult.cancelled
+                && !startupSyncResult.superseded) {
+                if (startupSyncResult.checkpointMs > 0)
+                    m_syncState.lastSuccessfulMs =
+                        startupSyncResult.checkpointMs;
                 // Delta catch-up committed catalog metadata: advance the
                 // epoch so a cached offline snapshot is rebuilt, not reused.
                 ++m_topLevelSyncGeneration;
                 if (cwOk) m_remoteSnapshot.continueWatching = cw;
                 if (raOk) m_remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
-            } else if (catchUp.cancelled || catchUp.superseded) {
+            } else if (startupSyncResult.cancelled
+                       || startupSyncResult.superseded) {
                 // Cancellation or superseded — treat as SkipFresh: rails +
                 // warm catalog already available, no full walk, no error.
                 if (cwOk) m_remoteSnapshot.continueWatching = cw;
@@ -599,8 +600,8 @@ bool HomeScreen::startFetch()
             }
             uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_finished");
         }
-        if (syncDecision == HomeStartupSync::FullReconcile
-            || (syncDecision == HomeStartupSync::DeltaCatchUp
+        if (startupSyncResult.mode == library::StartupSyncMode::FullReconcile
+            || (startupSyncResult.mode == library::StartupSyncMode::DeltaCatchUp
                 && !deltaCatchUpSucceeded)) {
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");

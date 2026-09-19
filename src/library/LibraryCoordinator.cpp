@@ -1,4 +1,7 @@
 #include "LibraryCoordinator.hpp"
+#include "../net/HttpClient.hpp"
+#include "../net/JellyfinApi.hpp"
+#include "../net/RouteRequest.hpp"
 #include <ctime>
 
 namespace {
@@ -20,8 +23,9 @@ namespace library {
 LibraryCoordinator::LibraryCoordinator(Session session,
                                        std::shared_ptr<CatalogDb> db,
                                        std::uint64_t scopeEpoch)
-    : m_sync(std::make_shared<LibrarySync>(std::move(session), db,
-                                             scopeEpoch))
+    : m_session(session)
+    , m_sync(std::make_shared<LibrarySync>(std::move(session), db,
+                                              scopeEpoch))
     , m_query(std::make_shared<LibraryQuery>(db, scopeEpoch))
     , m_db(std::move(db))
     , m_scopeEpoch(scopeEpoch)
@@ -195,6 +199,100 @@ void LibraryCoordinator::finishFullSync() noexcept
     m_fullSyncInFlight = false;
 }
 
+bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
+{
+    std::thread priorThread;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_stopped || !m_running || m_session.manualOfflineMode
+            || m_homeRailInFlight || m_homeRailResultReady)
+            return false;
+        if (m_homeRailThread.joinable())
+            priorThread = std::move(m_homeRailThread);
+        m_homeRailInFlight = true;
+        m_homeRailCancellation = std::make_shared<std::atomic_bool>(false);
+        request = ++m_homeRailRequest;
+    }
+    if (priorThread.joinable())
+        priorThread.join();
+
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_stopped || !m_running) {
+            m_homeRailInFlight = false;
+            return false;
+        }
+        const auto cancellation = m_homeRailCancellation;
+        const Session session = m_session;
+        const std::uint64_t requestId = request;
+        m_homeRailResult = {};
+        m_homeRailResultReady = false;
+        m_homeRailThread = std::thread(
+            [this, session, cancellation, requestId] {
+            HomeRailResult result;
+            result.request = requestId;
+            HttpClient railClient;
+            std::string continueError;
+            std::string recentError;
+            const bool continueOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getResumeItems(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, 12, result.continueWatching,
+                        continueError, railClient, cancellation.get());
+                }, continueError);
+            const bool recentOk = RouteRequest(session).run(
+                [&](const std::string &base) {
+                    return JellyfinApi::getLatestItems(
+                        base, session.accessToken, session.userId,
+                        session.deviceId, 16, result.recentlyAdded,
+                        recentError, railClient, cancellation.get());
+                }, recentError);
+            result.cancelled = cancellation && cancellation->load();
+            result.continueValid = continueOk && !result.cancelled;
+            result.recentlyAddedValid = recentOk && !result.cancelled;
+            result.success = result.continueValid || result.recentlyAddedValid;
+            if (!continueOk)
+                result.error = continueError;
+            else if (!recentOk)
+                result.error = recentError;
+
+            {
+                std::lock_guard<std::mutex> lock(m_startupMutex);
+                // A Home startup worker may be waiting on this publication
+                // while teardown stops the coordinator.  Publish the
+                // cancelled result even after stop; otherwise that worker's
+                // wait loop has no completion signal and teardown deadlocks.
+                if (requestId == m_homeRailRequest) {
+                    m_homeRailResult = std::move(result);
+                    m_homeRailResultReady = true;
+                }
+                m_homeRailInFlight = false;
+            }
+        });
+    }
+    return true;
+}
+
+bool LibraryCoordinator::takeHomeRailResult(
+    std::uint64_t request, HomeRailResult &result)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (!m_homeRailResultReady || m_homeRailInFlight
+        || request == 0 || m_homeRailResult.request != request)
+        return false;
+    result = std::move(m_homeRailResult);
+    m_homeRailResultReady = false;
+    return true;
+}
+
+void LibraryCoordinator::cancelHomeRailRefresh() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_homeRailCancellation)
+        m_homeRailCancellation->store(true);
+}
+
 bool LibraryCoordinator::requestLiveChange(
     const JellyfinLibraryChangeBatch &batch)
 {
@@ -276,6 +374,7 @@ void LibraryCoordinator::cancelStartupSync() noexcept
 void LibraryCoordinator::stop() noexcept
 {
     std::thread startupThread;
+    std::thread homeRailThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (m_stopped)
@@ -284,15 +383,22 @@ void LibraryCoordinator::stop() noexcept
         m_stopped = true;
         if (m_startupCancellation)
             m_startupCancellation->store(true);
+        if (m_homeRailCancellation)
+            m_homeRailCancellation->store(true);
+        m_homeRailInFlight = false;
         m_liveChangeResult.reset();
         m_liveChangeActive.reset();
         if (m_startupThread.joinable())
             startupThread = std::move(m_startupThread);
+        if (m_homeRailThread.joinable())
+            homeRailThread = std::move(m_homeRailThread);
     }
     // The startup worker publishes through m_startupMutex, so never join it
     // while holding that mutex.
     if (startupThread.joinable())
         startupThread.join();
+    if (homeRailThread.joinable())
+        homeRailThread.join();
     if (m_sync)
         m_sync->stop();
 }

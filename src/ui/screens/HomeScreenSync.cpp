@@ -255,9 +255,13 @@ void HomeScreen::startHomeRailRefresh()
         m_homeRailRefreshPending = true;
         return;
     }
-    if (m_homeRailRefreshThread.joinable())
-        m_homeRailRefreshThread.join();
+    if (!m_libraryCoordinator)
+        return;
     m_homeRailRefreshDone.store(false);
+    std::uint64_t request = 0;
+    if (!m_libraryCoordinator->requestHomeRailRefresh(request))
+        return;
+    m_homeRailRefreshRequest = request;
     m_homeRailRefreshInFlight = true;
     m_homeRailRefreshSucceeded = false;
     m_lastHomeRailRefreshAttemptMs = wallClockMs();
@@ -266,43 +270,6 @@ void HomeScreen::startHomeRailRefresh()
     m_homeRailContinueWatching.clear();
     m_homeRailRecentlyAdded.clear();
     m_homeRailRefreshError.clear();
-    m_homeRailRefreshCancellation = std::make_shared<std::atomic_bool>(false);
-    const Session session = m_session;
-    const auto cancellation = m_homeRailRefreshCancellation;
-    m_homeRailRefreshThread = std::thread(
-        [this, session, cancellation] {
-            HttpClient railClient;  // persistent connection for rail refresh
-            std::vector<MediaItem> continueWatching;
-            std::vector<MediaItem> recentlyAdded;
-            std::string continueError;
-            std::string recentError;
-            const bool continueOk = RouteRequest(session).run(
-                [&](const std::string &base) {
-                    return JellyfinApi::getResumeItems(
-                        base, session.accessToken, session.userId,
-                        session.deviceId, 12, continueWatching, continueError,
-                        railClient, cancellation.get());
-                }, continueError);
-            const bool recentOk = RouteRequest(session).run(
-                [&](const std::string &base) {
-                    return JellyfinApi::getLatestItems(
-                        base, session.accessToken, session.userId,
-                        session.deviceId, 16, recentlyAdded, recentError,
-                        railClient, cancellation.get());
-                }, recentError);
-            if (continueOk) {
-                m_homeRailContinueWatching = std::move(continueWatching);
-                m_homeRailContinueValid = true;
-            }
-            if (recentOk) {
-                m_homeRailRecentlyAdded = std::move(recentlyAdded);
-                m_homeRailRecentValid = true;
-            }
-            m_homeRailRefreshSucceeded = continueOk || recentOk;
-            if (!continueOk) m_homeRailRefreshError = continueError;
-            else if (!recentOk) m_homeRailRefreshError = recentError;
-            m_homeRailRefreshDone.store(true);
-        });
 }
 
 void HomeScreen::startSafetyReconcile()
@@ -529,22 +496,56 @@ bool HomeScreen::startFetch()
         if (m_libraryCoordinator)
             coordinatorStartupStarted = m_libraryCoordinator->startStartupSync(
                 initialPagePublished);
-        // Fetch home rails (Continue Watching / Recently Added) immediately
-        // after the warm CatalogDb probe so they can be published
-        // incrementally before the full population walk completes.
+        // Ask the coordinator-owned rail worker for Continue Watching /
+        // Recently Added immediately after the warm CatalogDb probe.  Home
+        // consumes the immutable publication but never performs these
+        // network requests itself.
         std::vector<MediaItem> cw; std::string cwErr;
         std::vector<MediaItem> ra; std::string raErr;
-        bool cwOk = false;
-        bool raOk = false;
+        bool cwOk = m_haveCachedSnapshot;
+        bool raOk = m_haveCachedSnapshot;
+        if (m_haveCachedSnapshot) {
+            cw = m_cachedSnapshot.continueWatching;
+            ra = m_cachedSnapshot.recentlyAdded;
+            m_remoteSnapshot = m_cachedSnapshot;
+        }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
-        ++requestCount;
-        cwOk = RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12, cw, cwErr, fetchClient, cancellation.get());},cwErr);
-        if (!cwOk) { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
+        std::uint64_t railRequest = 0;
+        const bool railStarted = m_libraryCoordinator
+            && m_libraryCoordinator->requestHomeRailRefresh(railRequest);
+        library::HomeRailResult railResult;
+        if (railStarted) {
+            ++requestCount;
+            ++requestCount;
+            for (;;) {
+                if (cancellation->load())
+                    m_libraryCoordinator->cancelHomeRailRefresh();
+                if (m_libraryCoordinator->takeHomeRailResult(
+                        railRequest, railResult))
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            if (railResult.continueValid) {
+                cwOk = true;
+                cw = railResult.continueWatching;
+            } else {
+                optionalRailFailed = true;
+                cwErr = railResult.error;
+            }
+            if (railResult.recentlyAddedValid) {
+                raOk = true;
+                ra = railResult.recentlyAdded;
+            } else {
+                optionalRailFailed = true;
+                raErr = railResult.error;
+            }
+        }
+        if (!railStarted || !cwOk)
+            { optionalRailFailed=true; printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
-        ++requestCount;
-        raOk = RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getLatestItems(base, token, uid, devId, 16, ra, raErr, fetchClient, cancellation.get());},raErr);
-        if (!raOk) { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
+        if (!railStarted || !raOk)
+            { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
         {
             std::lock_guard<std::mutex> lock(m_fetchMutex);

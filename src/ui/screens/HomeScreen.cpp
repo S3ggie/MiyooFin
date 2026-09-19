@@ -70,8 +70,8 @@ void HomeScreen::requestStopAllWorkers() noexcept
         m_liveChangeCancellation->store(true);
     if (m_safetyReconcileCancellation)
         m_safetyReconcileCancellation->store(true);
-    if (m_homeRailRefreshCancellation)
-        m_homeRailRefreshCancellation->store(true);
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelHomeRailRefresh();
     m_updateManager.cancel();
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
@@ -98,8 +98,6 @@ void HomeScreen::joinAllWorkers()
         m_liveChangeThread.join();
     if (m_safetyReconcileThread.joinable())
         m_safetyReconcileThread.join();
-    if (m_homeRailRefreshThread.joinable())
-        m_homeRailRefreshThread.join();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     for (auto &thread : m_posterThreads)
         if (thread.joinable()) thread.join();
@@ -263,6 +261,22 @@ void HomeScreen::update(Uint32 dt)
     if (m_loadState == LoadState::Ready) {
         if (m_liveChangeDone.load()) finishLiveChangeApply();
         updateLiveLibraryChanges();
+        if (m_homeRailRefreshInFlight && m_libraryCoordinator) {
+            library::HomeRailResult railResult;
+            if (m_libraryCoordinator->takeHomeRailResult(
+                    m_homeRailRefreshRequest, railResult)
+                && railResult.request == m_homeRailRefreshRequest) {
+                m_homeRailContinueValid = railResult.continueValid;
+                m_homeRailRecentValid = railResult.recentlyAddedValid;
+                if (m_homeRailContinueValid)
+                    m_homeRailContinueWatching = railResult.continueWatching;
+                if (m_homeRailRecentValid)
+                    m_homeRailRecentlyAdded = railResult.recentlyAdded;
+                m_homeRailRefreshSucceeded = railResult.success;
+                m_homeRailRefreshError = railResult.error;
+                m_homeRailRefreshDone.store(true);
+            }
+        }
         if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
         if (m_safetyReconcileDone.load()) finishSafetyReconcile();
         if (!m_session.manualOfflineMode && m_lastSafetyReconcileMs > 0

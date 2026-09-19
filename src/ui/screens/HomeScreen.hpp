@@ -429,14 +429,13 @@ private:
     std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     bool m_homeSyncActive = false;
     std::string m_safetyReconcileError;
-    std::thread m_homeRailRefreshThread;
     std::atomic<bool> m_homeRailRefreshDone{false};
     bool m_homeRailRefreshInFlight = false;
     bool m_homeRailRefreshPending = false;
+    std::uint64_t m_homeRailRefreshRequest = 0;
     bool m_homeRailRefreshSucceeded = false;
     bool m_homeRailContinueValid = false;
     bool m_homeRailRecentValid = false;
-    std::shared_ptr<std::atomic_bool> m_homeRailRefreshCancellation;
     std::vector<MediaItem> m_homeRailContinueWatching;
     std::vector<MediaItem> m_homeRailRecentlyAdded;
     std::string m_homeRailRefreshError;

@@ -283,8 +283,6 @@ void HomeScreen::finishLiveChangeApply()
 }
 void HomeScreen::finishHomeRailRefresh()
 {
-    if (!m_homeRailRefreshThread.joinable()) return;
-    // Thread join deferred to next startHomeRailRefresh() or joinAllWorkers().
     m_homeRailRefreshDone.store(false);
     m_homeRailRefreshInFlight = false;
     if (m_homeRailRefreshSucceeded) {
@@ -305,9 +303,9 @@ void HomeScreen::finishHomeRailRefresh()
         std::printf("[HomeScreen] live Home rail refresh failed: %s\n",
                     m_homeRailRefreshError.c_str());
     }
-    m_homeRailRefreshCancellation.reset();
     m_homeSyncActive = false;
-    clampNavigation();
+    if (m_homeRailRefreshSucceeded)
+        clampNavigation();
     if (m_homeRailRefreshPending) {
         m_homeRailRefreshPending = false;
         startHomeRailRefresh();

@@ -60,7 +60,7 @@ private:
     ScreenStack     m_stack;
     InputManager    m_input;
     std::shared_ptr<CatalogDb> m_catalogDb;
-    std::unique_ptr<library::LibraryCoordinator> m_libraryCoordinator;
+    std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::uint64_t m_catalogScopeEpoch = 0;
 
     bool            m_running;

@@ -21,6 +21,7 @@ test_catalog_parity_query
 test_catalog_parity_hierarchy
 test_imagecache
 test_update
+test_library_coordinator
 '
 pids=
 

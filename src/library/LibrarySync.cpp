@@ -38,8 +38,7 @@ library::LibrarySync::LibrarySync(Session session, std::shared_ptr<CatalogDb> db
 }
 library::LibrarySync::~LibrarySync()
 {
-    cancel();
-    if (m_liveEventThread.joinable()) m_liveEventThread.join();
+    stop();
 }
 std::uint64_t library::LibrarySync::nextGeneration() { return ++m_generation; }
 void library::LibrarySync::seedGeneration(std::uint64_t gen) {
@@ -396,5 +395,12 @@ void library::LibrarySync::cancel() noexcept
     std::lock_guard<std::mutex> lock(m_offlineMutex);
     if (m_offlineCancellation)
         m_offlineCancellation->store(true);
+}
+
+void library::LibrarySync::stop() noexcept
+{
+    cancel();
+    if (m_liveEventThread.joinable())
+        m_liveEventThread.join();
 }
 }

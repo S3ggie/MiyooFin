@@ -65,6 +65,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/library/LibrarySyncIncremental.cpp \
     $(SRC_DIR)/library/LibrarySyncEvents.cpp \
     $(SRC_DIR)/library/LibraryQuery.cpp \
+    $(SRC_DIR)/library/LibraryCoordinator.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \

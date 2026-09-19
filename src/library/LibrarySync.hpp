@@ -128,6 +128,10 @@ public:
     std::future<OfflineRebuildResult> reconstructOfflineDownloads(
         const std::string &downloadRoot = "downloads");
     Status status() const;
+    /// Cancel service work and join the long-lived live-event receiver.
+    /// Operation futures owned by consumers observe the same cancellation
+    /// token and remain the responsibility of those consumers to join.
+    void stop() noexcept;
     void cancel() noexcept;
 
 private:

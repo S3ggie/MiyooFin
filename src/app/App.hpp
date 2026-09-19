@@ -14,8 +14,7 @@
 #include "../net/JellyfinApi.hpp"
 #include "../net/Session.hpp"
 #include "../download/DownloadManager.hpp"
-#include "../library/LibrarySync.hpp"
-#include "../library/LibraryQuery.hpp"
+#include "../library/LibraryCoordinator.hpp"
 
 namespace miyoofin {
 
@@ -61,8 +60,7 @@ private:
     ScreenStack     m_stack;
     InputManager    m_input;
     std::shared_ptr<CatalogDb> m_catalogDb;
-    std::shared_ptr<library::LibrarySync> m_librarySync;
-    std::shared_ptr<library::LibraryQuery> m_libraryQuery;
+    std::unique_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::uint64_t m_catalogScopeEpoch = 0;
 
     bool            m_running;

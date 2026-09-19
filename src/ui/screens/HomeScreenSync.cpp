@@ -118,29 +118,40 @@ void HomeScreen::updateLiveLibraryChanges()
     if (m_initialPopulationInProgress)
         return;
     JellyfinLibraryChangeBatch batch;
-    if (m_librarySync->takeLiveChange(batch)) {
-        if (liveChangeIsEmpty(batch))
-            return;
-        const bool hasItemChanges = !batch.itemsAdded.empty()
-            || !batch.itemsRemoved.empty()
-            || !batch.itemsUpdated.empty()
-            || batch.catchUpRequired;
-        if (hasItemChanges)
-            startLiveChangeApply(batch);
-        if (batch.userDataChanged) {
-            const std::int64_t nowMs = wallClockMs();
-            if (!homeRailRefreshDebounced(nowMs,
-                                          m_lastHomeRailRefreshCompletedMs)
-                && !homeRailRefreshDebounced(nowMs,
-                                             m_lastHomeRailRefreshAttemptMs)) {
-                m_homeSyncActive = true;
-                startHomeRailRefresh();
-            }
+    library::LiveChangeIdentity identity;
+    const bool haveBatch = m_libraryCoordinator
+        ? m_libraryCoordinator->takeLiveChangeRequest(batch, identity)
+        : m_librarySync->takeLiveChange(batch);
+    if (!haveBatch)
+        return;
+    if (liveChangeIsEmpty(batch)) {
+        if (m_libraryCoordinator)
+            m_libraryCoordinator->discardLiveChangeResults();
+        return;
+    }
+    const bool hasItemChanges = !batch.itemsAdded.empty()
+        || !batch.itemsRemoved.empty()
+        || !batch.itemsUpdated.empty()
+        || batch.catchUpRequired;
+    if (hasItemChanges)
+        startLiveChangeApply(batch, identity);
+    else if (m_libraryCoordinator)
+        m_libraryCoordinator->discardLiveChangeResults();
+    if (batch.userDataChanged) {
+        const std::int64_t nowMs = wallClockMs();
+        if (!homeRailRefreshDebounced(nowMs,
+                                      m_lastHomeRailRefreshCompletedMs)
+            && !homeRailRefreshDebounced(nowMs,
+                                         m_lastHomeRailRefreshAttemptMs)) {
+            m_homeSyncActive = true;
+            startHomeRailRefresh();
         }
     }
 }
 
-void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
+void HomeScreen::startLiveChangeApply(
+    const JellyfinLibraryChangeBatch &batch,
+    const library::LiveChangeIdentity &identity)
 {
     if (m_liveChangeThread.joinable()) {
         // Join if the previous live-change completed (Done set) or if
@@ -151,16 +162,32 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
             return;  // previous live-change still running
     }
     m_liveChangeBatch = batch;
+    m_liveChangeIdentity = identity;
     m_liveChangeResult = {};
     m_liveChangeDone.store(false);
     m_liveChangeInFlight = true;
     m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
     const auto sync = m_librarySync;
+    const auto coordinator = m_libraryCoordinator;
     const auto cancellation = m_liveChangeCancellation;
     const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
     m_liveChangeThread = std::thread(
-        [this, sync, batch, cancellation, checkpointMs] {
+        [this, sync, batch, cancellation, checkpointMs, coordinator, identity] {
             library::LiveLibraryChangeResult result;
+            const auto publishResult = [this, coordinator, identity](
+                                           library::LiveLibraryChangeResult result) {
+                if (coordinator) {
+                    // Stop/discard may invalidate the identity while this
+                    // worker is winding down.  Rejection still means the
+                    // worker has completed; Home must not wait forever for a
+                    // result that the coordinator intentionally discarded.
+                    (void)coordinator->publishLiveChangeResult(
+                        identity, std::move(result));
+                } else {
+                    m_liveChangeResult = std::move(result);
+                }
+                m_liveChangeDone.store(true);
+            };
             // Any commit below (bounded catch-up, full reconcile) advances
             // the epoch immediately, so a later apply failure cannot leave a
             // stale cached offline snapshot in place.
@@ -179,8 +206,7 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                         result.message = catchUp.message;
                         result.catchUpRequired = !catchUp.cancelled
                             && !catchUp.superseded;
-                        m_liveChangeResult = std::move(result);
-                        m_liveChangeDone.store(true);
+                        publishResult(std::move(result));
                         return;
                     }
                     catalogCommitted = true;
@@ -196,8 +222,7 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
                         result.message = reconciled.message;
                         result.catchUpRequired = !reconciled.cancelled
                             && !reconciled.superseded;
-                        m_liveChangeResult = std::move(result);
-                        m_liveChangeDone.store(true);
+                        publishResult(std::move(result));
                         return;
                     }
                     // Successful full reconcile — write checkpoint so the next
@@ -220,8 +245,7 @@ void HomeScreen::startLiveChangeApply(const JellyfinLibraryChangeBatch &batch)
             // An earlier commit in this same run (catch-up or full reconcile)
             // counts even when the apply itself failed.
             if (result.success || catalogCommitted) ++m_topLevelSyncGeneration;
-            m_liveChangeResult = std::move(result);
-            m_liveChangeDone.store(true);
+            publishResult(std::move(result));
         });
 }
 
@@ -446,6 +470,7 @@ bool HomeScreen::startFetch()
         bool firstBoundedRequestLogged = false;
         bool firstPagePersistedLogged = false;
         bool coordinatorStartupStarted = false;
+        bool coordinatorFullSyncStarted = false;
         library::StartupSyncResult startupSyncResult;
         uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
         // Probe the committed catalog before starting any network refresh. These
@@ -603,6 +628,14 @@ bool HomeScreen::startFetch()
         if (startupSyncResult.mode == library::StartupSyncMode::FullReconcile
             || (startupSyncResult.mode == library::StartupSyncMode::DeltaCatchUp
                 && !deltaCatchUpSucceeded)) {
+        if (m_libraryCoordinator) {
+            coordinatorFullSyncStarted = m_libraryCoordinator->beginFullSync();
+            if (!coordinatorFullSyncStarted) {
+                catalogRefreshFailed = true;
+                m_fetchError = "Library sync already in flight";
+            }
+        }
+        if (!catalogRefreshFailed) {
         std::string viewsErr;
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
@@ -780,12 +813,15 @@ bool HomeScreen::startFetch()
         } else if (topLevelSyncStarted) {
             m_librarySync->abort(syncGeneration).get();
         }
+        }
         } // FullReconcile scope
         } catch (...) {
             // FIX 2: On exception, guarantee the deferral flag is
             // cleared and poster workers are woken so the low-priority
             // artwork backlog can drain.
             m_initialPopulationInProgress = false;
+            if (coordinatorFullSyncStarted)
+                m_libraryCoordinator->finishFullSync();
             { std::lock_guard<std::mutex> lock(m_posterMutex); }
             m_posterWake.notify_all();
             throw;
@@ -798,6 +834,8 @@ bool HomeScreen::startFetch()
             std::lock_guard<std::mutex> lock(m_posterMutex);
             m_initialPopulationInProgress = false;
         }
+        if (coordinatorFullSyncStarted)
+            m_libraryCoordinator->finishFullSync();
         // Wake poster workers so they begin draining any deferred
         // low-priority artwork jobs that were held back during the
         // population walk.

@@ -55,7 +55,8 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || m_startupInFlight)
+        if (m_stopped || !m_running || !m_sync || m_startupInFlight
+            || m_fullSyncInFlight || m_liveChangeActive)
             return false;
         if (m_startupThread.joinable())
             priorThread = std::move(m_startupThread);
@@ -178,6 +179,93 @@ bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult &result)
     return true;
 }
 
+bool LibraryCoordinator::beginFullSync()
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_stopped || !m_running || m_startupInFlight || m_startupResultReady
+        || m_fullSyncInFlight || m_liveChangeActive)
+        return false;
+    m_fullSyncInFlight = true;
+    return true;
+}
+
+void LibraryCoordinator::finishFullSync() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    m_fullSyncInFlight = false;
+}
+
+bool LibraryCoordinator::requestLiveChange(
+    const JellyfinLibraryChangeBatch &batch)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_stopped || !m_running || !m_sync)
+        return false;
+    return m_liveChangeRequests.push(batch);
+}
+
+bool LibraryCoordinator::takeLiveChangeRequest(
+    JellyfinLibraryChangeBatch &batch, LiveChangeIdentity &identity)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+
+    // LibraryCoordinator is the only consumer of the event queue. Drain the
+    // LibrarySync queue before applying the serialized-sync gate so events
+    // cannot be popped by Home and then lost when the gate is closed.
+    if (m_sync) {
+        JellyfinLibraryChangeBatch incoming;
+        while (m_sync->takeLiveChange(incoming))
+            (void)m_liveChangeRequests.push(incoming);
+    }
+    // Keep the queued batch intact until the serialized consumer has
+    // released its previous live-change slot.  Home may still have a worker
+    // thread active even though the coordinator's startup/full-sync gates are
+    // open.
+    if (m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
+        || m_liveChangeActive)
+        return false;
+    if (!m_liveChangeRequests.pop(batch))
+        return false;
+
+    const auto syncStatus = m_sync ? m_sync->status() : LibrarySync::Status{};
+    identity.worker = ++m_liveChangeWorker;
+    identity.generation = syncStatus.generation;
+    identity.request = ++m_liveChangeRequest;
+    m_liveChangeActive = identity;
+    return true;
+}
+
+bool LibraryCoordinator::publishLiveChangeResult(
+    const LiveChangeIdentity &identity, LiveLibraryChangeResult result)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_stopped || !m_liveChangeActive
+        || !(*m_liveChangeActive == identity) || m_liveChangeResult)
+        return false;
+    m_liveChangeResult = std::move(result);
+    return true;
+}
+
+bool LibraryCoordinator::takeLiveChangeResult(
+    const LiveChangeIdentity &identity, LiveLibraryChangeResult &result)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (!m_liveChangeResult || !m_liveChangeActive
+        || !(*m_liveChangeActive == identity))
+        return false;
+    result = std::move(*m_liveChangeResult);
+    m_liveChangeResult.reset();
+    m_liveChangeActive.reset();
+    return true;
+}
+
+void LibraryCoordinator::discardLiveChangeResults() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    m_liveChangeResult.reset();
+    m_liveChangeActive.reset();
+}
+
 void LibraryCoordinator::cancelStartupSync() noexcept
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
@@ -196,6 +284,8 @@ void LibraryCoordinator::stop() noexcept
         m_stopped = true;
         if (m_startupCancellation)
             m_startupCancellation->store(true);
+        m_liveChangeResult.reset();
+        m_liveChangeActive.reset();
         if (m_startupThread.joinable())
             startupThread = std::move(m_startupThread);
     }
@@ -218,9 +308,11 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     }
     std::lock_guard<std::mutex> lock(m_startupMutex);
     status.startupInFlight = m_startupInFlight;
+    status.fullSyncInFlight = m_fullSyncInFlight;
     status.cancelRequested = m_startupCancellation
         && m_startupCancellation->load();
-    status.inFlight = status.inFlight || status.startupInFlight;
+    status.inFlight = status.inFlight || status.startupInFlight
+        || status.fullSyncInFlight;
     return status;
 }
 

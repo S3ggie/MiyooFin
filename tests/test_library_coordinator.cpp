@@ -107,11 +107,95 @@ void testStopRacingStartupIsSafe()
     std::printf("[test] LibraryCoordinator stop vs startup OK\n");
 }
 
+void testLiveChangesWaitForSerializedSyncSlots()
+{
+    std::printf("[test] LibraryCoordinator live-change seam\n");
+    auto coordinator = makeCoordinator();
+    coordinator.start();
+
+    CHECK(coordinator.startStartupSync(false));
+    JellyfinLibraryChangeBatch batch;
+    batch.itemsUpdated.push_back("item-1");
+    CHECK(coordinator.requestLiveChange(batch));
+    library::LiveChangeIdentity identity;
+    CHECK(!coordinator.takeLiveChangeRequest(batch, identity));
+
+    library::StartupSyncResult startupResult;
+    for (int i = 0; i < 200 && !coordinator.takeStartupSyncResult(startupResult);
+         ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(coordinator.takeLiveChangeRequest(batch, identity));
+    CHECK(batch.itemsUpdated.size() == 1);
+
+    // A live result keeps the serialized slot until Home consumes it. A
+    // queued event must survive both top-level sync rejections unchanged.
+    JellyfinLibraryChangeBatch queuedDuringLive;
+    queuedDuringLive.itemsUpdated.push_back("queued-item");
+    CHECK(coordinator.requestLiveChange(queuedDuringLive));
+    library::LiveChangeIdentity queuedIdentity;
+    library::LiveLibraryChangeResult liveResult;
+    liveResult.success = true;
+    CHECK(coordinator.publishLiveChangeResult(identity, liveResult));
+    CHECK(!coordinator.startStartupSync(false));
+    CHECK(!coordinator.beginFullSync());
+    CHECK(!coordinator.takeLiveChangeRequest(queuedDuringLive,
+                                             queuedIdentity));
+    CHECK(coordinator.takeLiveChangeResult(identity, liveResult));
+    CHECK(coordinator.takeLiveChangeRequest(queuedDuringLive, queuedIdentity));
+    CHECK(queuedDuringLive.itemsUpdated.size() == 1);
+    liveResult.success = true;
+    CHECK(coordinator.publishLiveChangeResult(queuedIdentity, liveResult));
+    CHECK(coordinator.takeLiveChangeResult(queuedIdentity, liveResult));
+
+    CHECK(coordinator.beginFullSync());
+    CHECK(coordinator.status().inFlight);
+    CHECK(coordinator.requestLiveChange(batch));
+    CHECK(!coordinator.takeLiveChangeRequest(batch, identity));
+    coordinator.finishFullSync();
+    CHECK(coordinator.takeLiveChangeRequest(batch, identity));
+    CHECK(batch.itemsUpdated.size() == 1);
+
+    // A queued batch must survive while Home's previous live worker still
+    // owns the serialized consumer slot.
+    JellyfinLibraryChangeBatch nextBatch;
+    nextBatch.itemsUpdated.push_back("item-2");
+    CHECK(coordinator.requestLiveChange(nextBatch));
+    library::LiveChangeIdentity nextIdentity;
+    CHECK(!coordinator.takeLiveChangeRequest(nextBatch, nextIdentity));
+
+    liveResult.success = true;
+    library::LiveChangeIdentity stale = identity;
+    ++stale.request;
+    CHECK(!coordinator.publishLiveChangeResult(stale, liveResult));
+    CHECK(coordinator.publishLiveChangeResult(identity, std::move(liveResult)));
+    CHECK(coordinator.takeLiveChangeResult(identity, liveResult));
+    CHECK(liveResult.success);
+    CHECK(coordinator.takeLiveChangeRequest(nextBatch, nextIdentity));
+    CHECK(nextBatch.itemsUpdated.size() == 1);
+    coordinator.discardLiveChangeResults();
+    CHECK(!coordinator.publishLiveChangeResult(identity, std::move(liveResult)));
+    coordinator.stop();
+
+    // A rejected publication is the completion path for Home's worker when
+    // stop/discard clears the active identity; keep the Home-side signal in
+    // place so this regression cannot become a silent wait again.
+    const auto homeSync = miyoofin_test::readTestBytes(
+        "src/ui/screens/HomeScreenSync.cpp");
+    const auto rejectedPublish = miyoofin_test::sourcePos(
+        homeSync, "publishLiveChangeResult(");
+    const auto doneSignal = miyoofin_test::sourcePos(
+        homeSync, "m_liveChangeDone.store(true);");
+    CHECK(rejectedPublish != std::string::npos);
+    CHECK(doneSignal != std::string::npos);
+    std::printf("[test] LibraryCoordinator live-change seam OK\n");
+}
+
 } // namespace
 
 int main()
 {
     testLibraryCoordinatorIsTheSingleStartupDriver();
     testStopRacingStartupIsSafe();
+    testLiveChangesWaitForSerializedSyncSlots();
     return miyoofin_test::finish("library_coordinator");
 }

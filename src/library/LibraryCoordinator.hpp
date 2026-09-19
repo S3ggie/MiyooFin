@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -29,6 +30,18 @@ struct StartupSyncResult {
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
+};
+
+struct LiveChangeIdentity {
+    std::uint64_t worker = 0;
+    std::uint64_t generation = 0;
+    std::uint64_t request = 0;
+
+    bool operator==(const LiveChangeIdentity &other) const
+    {
+        return worker == other.worker && generation == other.generation
+            && request == other.request;
+    }
 };
 
 /// The coordinator owns the lifecycle of LibrarySync and LibraryQuery and the
@@ -53,6 +66,22 @@ public:
     /// Cancel and join the startup operation without stopping session scope.
     void cancelStartupSync() noexcept;
 
+    /// Reserve the full population slot. Live changes remain queued until the
+    /// slot is released and startup has published its result.
+    bool beginFullSync();
+    void finishFullSync() noexcept;
+
+    /// Queue a live change for the next serialized consumer. Requests made
+    /// during startup or full sync are retained rather than applied.
+    bool requestLiveChange(const JellyfinLibraryChangeBatch &batch);
+    bool takeLiveChangeRequest(JellyfinLibraryChangeBatch &batch,
+                               LiveChangeIdentity &identity);
+    bool publishLiveChangeResult(const LiveChangeIdentity &identity,
+                                 LiveLibraryChangeResult result);
+    bool takeLiveChangeResult(const LiveChangeIdentity &identity,
+                              LiveLibraryChangeResult &result);
+    void discardLiveChangeResults() noexcept;
+
     /// Cancel and join coordinator-owned work. Safe to call more than once.
     void stop() noexcept;
 
@@ -72,6 +101,7 @@ public:
     struct Status {
         bool inFlight = false;
         bool startupInFlight = false;
+        bool fullSyncInFlight = false;
         bool cancelRequested = false;
         bool success = false;
         std::uint64_t generation = 0;
@@ -93,6 +123,12 @@ private:
     StartupSyncResult m_startupResult;
     bool m_startupResultReady = false;
     bool m_startupInFlight = false;
+    bool m_fullSyncInFlight = false;
+    JellyfinLibraryEventQueue m_liveChangeRequests;
+    std::optional<LiveLibraryChangeResult> m_liveChangeResult;
+    std::optional<LiveChangeIdentity> m_liveChangeActive;
+    std::uint64_t m_liveChangeWorker = 0;
+    std::uint64_t m_liveChangeRequest = 0;
 };
 
 } // namespace library

@@ -247,6 +247,20 @@ void HomeScreen::publishLiveCatalogItems(
 void HomeScreen::finishLiveChangeApply()
 {
     if (!m_liveChangeThread.joinable()) return;
+    if (m_libraryCoordinator
+        && !m_libraryCoordinator->takeLiveChangeResult(
+            m_liveChangeIdentity, m_liveChangeResult)) {
+        // The worker can finish after coordinator stop/discard invalidates its
+        // identity.  There is then no result to apply, but the completed
+        // worker must still release Home's in-flight state.  Its thread is
+        // joined by the next update (or by teardown) after this cleanup.
+        if (!m_liveChangeDone.load()) return;
+        m_liveChangeDone.store(false);
+        m_liveChangeInFlight = false;
+        m_liveChangeCancellation.reset();
+        m_liveChangeResult = {};
+        return;
+    }
     // Thread join deferred to next startLiveChangeApply() or joinAllWorkers().
     // The Done atomic guarantees all result writes are visible.
     m_liveChangeDone.store(false);

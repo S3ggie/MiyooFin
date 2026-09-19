@@ -420,6 +420,7 @@ private:
     std::mutex m_liveChangeMutex;
     std::shared_ptr<std::atomic_bool> m_liveChangeCancellation;
     JellyfinLibraryChangeBatch m_liveChangeBatch;
+    library::LiveChangeIdentity m_liveChangeIdentity;
     library::LiveLibraryChangeResult m_liveChangeResult;
     std::int64_t m_lastSafetyReconcileMs = 0;
     std::thread m_safetyReconcileThread;
@@ -457,7 +458,8 @@ private:
     bool m_startupRailRAValid = false;
 
     void updateLiveLibraryChanges();
-    void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch);
+    void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch,
+                              const library::LiveChangeIdentity &identity);
     void finishLiveChangeApply();
     bool liveChangeAffectsHome(
         const JellyfinLibraryChangeBatch &batch,

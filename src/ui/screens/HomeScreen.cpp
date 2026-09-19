@@ -54,6 +54,8 @@ HomeScreen::~HomeScreen()
 {
     requestStopAllWorkers();
     joinAllWorkers();
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->discardLiveChangeResults();
     freeAllCardSurfaces();
 }
 

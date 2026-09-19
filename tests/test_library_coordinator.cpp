@@ -190,6 +190,35 @@ void testLiveChangesWaitForSerializedSyncSlots()
     std::printf("[test] LibraryCoordinator live-change seam OK\n");
 }
 
+void testHomeRailStopPublishesCompletion()
+{
+    std::printf("[test] LibraryCoordinator Home rail lifecycle\n");
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    auto coordinator = library::LibraryCoordinator(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator.start();
+
+    std::uint64_t request = 0;
+    CHECK(coordinator.requestHomeRailRefresh(request));
+    coordinator.stop();
+
+    // stop() may race the transport worker.  Either way, the worker must
+    // publish a terminal (possibly cancelled) result for Home's wait loop.
+    library::HomeRailResult result;
+    CHECK(coordinator.takeHomeRailResult(request, result));
+    CHECK(result.request == request);
+
+    const auto source = miyoofin_test::readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
+    const auto publish = miyoofin_test::sourcePos(
+        source, "if (requestId == m_homeRailRequest)");
+    CHECK(publish != std::string::npos);
+    CHECK(miyoofin_test::sourceContains(
+        source, "m_homeRailResultReady = true;"));
+    std::printf("[test] LibraryCoordinator Home rail lifecycle OK\n");
+}
+
 } // namespace
 
 int main()
@@ -197,5 +226,6 @@ int main()
     testLibraryCoordinatorIsTheSingleStartupDriver();
     testStopRacingStartupIsSafe();
     testLiveChangesWaitForSerializedSyncSlots();
+    testHomeRailStopPublishesCompletion();
     return miyoofin_test::finish("library_coordinator");
 }

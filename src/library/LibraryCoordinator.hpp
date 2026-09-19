@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace miyoofin {
 namespace library {
@@ -30,6 +31,20 @@ struct StartupSyncResult {
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
+};
+
+/// Immutable publication from the coordinator-owned Home rail worker.  A
+/// failed optional rail leaves its valid flag clear; consumers must retain
+/// their previous value for that rail.
+struct HomeRailResult {
+    std::uint64_t request = 0;
+    bool success = false;
+    bool cancelled = false;
+    bool continueValid = false;
+    bool recentlyAddedValid = false;
+    std::vector<MediaItem> continueWatching;
+    std::vector<MediaItem> recentlyAdded;
+    std::string error;
 };
 
 struct LiveChangeIdentity {
@@ -71,6 +86,13 @@ public:
     bool beginFullSync();
     void finishFullSync() noexcept;
 
+    /// Start one coordinator-owned Continue Watching/Recently Added refresh.
+    /// The result is published atomically for the SDL thread to take later;
+    /// a refresh never mutates HomeScreen state directly.
+    bool requestHomeRailRefresh(std::uint64_t &request);
+    bool takeHomeRailResult(std::uint64_t request, HomeRailResult &result);
+    void cancelHomeRailRefresh() noexcept;
+
     /// Queue a live change for the next serialized consumer. Requests made
     /// during startup or full sync are retained rather than applied.
     bool requestLiveChange(const JellyfinLibraryChangeBatch &batch);
@@ -109,6 +131,7 @@ public:
     Status status() const;
 
 private:
+    Session m_session;
     std::shared_ptr<LibrarySync> m_sync;
     std::shared_ptr<LibraryQuery> m_query;
     std::shared_ptr<CatalogDb> m_db;
@@ -129,6 +152,12 @@ private:
     std::optional<LiveChangeIdentity> m_liveChangeActive;
     std::uint64_t m_liveChangeWorker = 0;
     std::uint64_t m_liveChangeRequest = 0;
+    std::thread m_homeRailThread;
+    std::shared_ptr<std::atomic_bool> m_homeRailCancellation;
+    HomeRailResult m_homeRailResult;
+    bool m_homeRailResultReady = false;
+    bool m_homeRailInFlight = false;
+    std::uint64_t m_homeRailRequest = 0;
 };
 
 } // namespace library

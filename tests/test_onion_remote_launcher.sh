@@ -112,8 +112,8 @@ grep -q 'm_fetchCancellation.*store' "$ROOT/src/ui/screens/HomeScreen.cpp" || fa
 grep -q 'cancelled' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home library fetch does not propagate cancellation'
 if grep -q 'readLibrarySnapshot' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still uses full CatalogDb snapshot read'; fi
 if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still waits on full CatalogDb seed'; fi
-grep -q 'getResumeItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Continue Watching request'
-grep -q 'getLatestItems' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home startup lost bounded Recently Added request'
+grep -q 'getResumeItems' "$ROOT/src/library/LibraryCoordinator.cpp" || fail 'Coordinator lost bounded Continue Watching request'
+grep -q 'getLatestItems' "$ROOT/src/library/LibraryCoordinator.cpp" || fail 'Coordinator lost bounded Recently Added request'
 grep -q 'readMediaPage' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
 grep -q 'configureCatalogScopeForSession();' "$ROOT/src/app/App.cpp" || fail 'online startup does not configure CatalogDb scope for the session'
 if ! awk '

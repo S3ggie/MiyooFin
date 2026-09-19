@@ -335,7 +335,10 @@ static void testPersistentHttpClientPatterns()
     CHECK(sourceContains(sync, "HttpClient fetchClient;"));
     CHECK(sourceContains(sync, "JellyfinApi::getViews(base, token, uid, devId, views, viewsErr, fetchClient, cancellation.get())"));
     CHECK(sourcePos(sync, "HttpClient fetchClient;") < sourcePos(sync, "fetchClient, cancellation.get()"));
-    CHECK(sourceContains(sync, "HttpClient railClient;"));
+    const std::string coordinator=readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
+    CHECK(!coordinator.empty());
+    CHECK(sourceContains(coordinator, "HttpClient railClient;"));
     // LibrarySync reconcile reuses one client across views + pages loop
     const std::string inc=readTestBytes("src/library/LibrarySyncIncremental.cpp");
     CHECK(!inc.empty());
@@ -630,12 +633,13 @@ static void testHomeStartupSyncSourceOrder()
     // unit (thread interleaving), so the call-site order is pinned by scan
     // in whitespace-free token space (positions, unlike raw offsets, are
     // unaffected by reformatting).
-    // Rails fetch (getResumeItems) must appear before begin(
-    const auto resumePos = sourcePos(sync, "getResumeItems");
+    // The coordinator-owned rails request must appear before begin(
+    const auto railsRequestPos = sourcePos(
+        sync, "requestHomeRailRefresh(railRequest)");
     const auto beginPos = sourcePos(sync, "m_librarySync->begin(");
-    CHECK(resumePos != std::string::npos);
+    CHECK(railsRequestPos != std::string::npos);
     CHECK(beginPos != std::string::npos);
-    CHECK(resumePos < beginPos);
+    CHECK(railsRequestPos < beginPos);
     // ImageCache::runJanitor and season prefetch must appear before the
     // main m_fetchComplete.store(true) (after the population walk) so they
     // don't block the UI thread.  Use rfind to skip the early-offline
@@ -664,9 +668,8 @@ static void testHomeStartupSyncSourceOrder()
     // fetch so a queued UserDataChanged cannot start a competing rail
     // refresh during the startup window.
     const auto initPopPos = sourcePos(sync, "m_initialPopulationInProgress = true");
-    // Use a fetch-worker-specific pattern (local token variable) to skip
-    // the refresh thread's own getResumeItems call.
-    const auto railsFetchPos = sourcePos(sync, "getResumeItems(base, token");
+    const auto railsFetchPos = sourcePos(
+        sync, "requestHomeRailRefresh(railRequest)");
     CHECK(initPopPos != std::string::npos);
     CHECK(railsFetchPos != std::string::npos);
     CHECK(initPopPos < railsFetchPos);
@@ -900,12 +903,11 @@ static void testNonBlockingFinishPolicy()
     CHECK(!liveChangeBody.empty());
     CHECK(sourceLacks(liveChangeBody, ".join()"));
     CHECK(sourceContains(liveChangeBody, "Thread join deferred"));
-    // finishHomeRailRefresh should not join
+    // finishHomeRailRefresh should not join; the coordinator owns its worker.
     CHECK(sourceContains(syncApply, "finishHomeRailRefresh"));
     const std::string homeRailBody = sourceFunction(syncApply, "void HomeScreen::finishHomeRailRefresh(");
     CHECK(!homeRailBody.empty());
     CHECK(sourceLacks(homeRailBody, ".join()"));
-    CHECK(sourceContains(homeRailBody, "Thread join deferred"));
     // finishSafetyReconcile should not join
     CHECK(sourceContains(syncApply, "finishSafetyReconcile"));
     const std::string safetyBody = sourceFunction(syncApply, "void HomeScreen::finishSafetyReconcile(");

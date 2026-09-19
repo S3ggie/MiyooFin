@@ -135,13 +135,22 @@ App::~App()
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_journalStop = true; m_journalWake = true; }
     m_journalCv.notify_one();
     if (m_journalSyncThread.joinable()) m_journalSyncThread.join();
+    if (m_libraryCoordinator) {
+        m_libraryCoordinator->stop();
+    }
     if (m_downloadManager) {
+        m_downloadManager->setLibraryServices({}, {});
         printf("[App] Stopping download manager\n");
+    }
+    if (m_catalogDb)
+        m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
+    m_libraryCoordinator.reset();
+    m_session.clear();
+    if (m_downloadManager) {
         m_downloadManager.reset();
         printf("[App] Download manager stopped\n");
     }
     m_catalogDb.reset();
-    m_librarySync.reset();
     if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
     if (m_fb)     SDL_FreeSurface(m_fb);
     if (m_renderer) SDL_DestroyRenderer(m_renderer);

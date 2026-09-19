@@ -68,26 +68,32 @@ void App::loadSavedUrl()
 void App::configureCatalogScopeForSession()
 {
     if (m_catalogDb && m_session.valid()) {
+        if (m_libraryCoordinator) {
+            m_libraryCoordinator->stop();
+        }
+        if (m_downloadManager)
+            m_downloadManager->setLibraryServices({}, {});
+        m_libraryCoordinator.reset();
         uiDiagnostics().log("[App] startup stage=catalog_scope_start");
         uiDiagnostics().log("[App] catalog scope request identity=valid");
         m_catalogScopeEpoch =
             m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
-        m_librarySync = std::make_shared<library::LibrarySync>(
+        m_libraryCoordinator = std::make_unique<library::LibraryCoordinator>(
             m_session, m_catalogDb, m_catalogScopeEpoch);
-        m_librarySync->startLiveEvents();
-        m_libraryQuery = std::make_shared<library::LibraryQuery>(
-            m_catalogDb, m_catalogScopeEpoch);
+        m_libraryCoordinator->start();
         if (m_downloadManager)
-            m_downloadManager->setLibraryServices(m_libraryQuery,
-                                                   m_librarySync);
+            m_downloadManager->setLibraryServices(
+                m_libraryCoordinator->query(), m_libraryCoordinator->sync());
         uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");
-        m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
-        m_librarySync.reset();
-        m_libraryQuery.reset();
+        if (m_libraryCoordinator) {
+            m_libraryCoordinator->stop();
+        }
         if (m_downloadManager)
             m_downloadManager->setLibraryServices({}, {});
+        m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
+        m_libraryCoordinator.reset();
     }
 }
 
@@ -114,7 +120,12 @@ void App::goToHome()
     }
     m_stack.push(std::make_unique<HomeScreen>(
         m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch,
-        m_librarySync, m_libraryQuery));
+        // Compatibility boundary for the first coordinator phase: Home still
+        // consumes shared primitive services, but App owns their session
+        // lifecycle. The next seam can pass a narrower Home-facing service
+        // view without moving Home's sync policy in this phase.
+        m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr,
+        m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr));
 }
 
 void App::goToLogin(const std::string &initialMessage)
@@ -127,13 +138,15 @@ void App::goToLogin(const std::string &initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
-    if (m_catalogDb) m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
+    if (m_libraryCoordinator) {
+        m_libraryCoordinator->stop();
+    }
     if (m_downloadManager) {
         m_downloadManager->setLibraryServices({}, {});
         m_downloadManager->configure(Session{});
     }
-    m_librarySync.reset();
-    m_libraryQuery.reset();
+    if (m_catalogDb) m_catalogScopeEpoch = m_catalogDb->deconfigureScope();
+    m_libraryCoordinator.reset();
     { std::lock_guard<std::mutex> lock(m_journalMutex); m_session.clear(); }
     Session::remove();
 }

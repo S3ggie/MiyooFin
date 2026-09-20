@@ -15,7 +15,6 @@
 
 namespace miyoofin {
 
-static constexpr std::int64_t HIERARCHY_RECONCILE_MS=24LL*60*60*1000;
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 void HomeScreen::requestMediaPage(MediaPageState &state)
 {
@@ -318,31 +317,18 @@ bool HomeScreen::startFetch()
     }
     m_fetchCancellation = std::make_shared<std::atomic<bool>>(false);
     const std::shared_ptr<std::atomic<bool>> cancellation = m_fetchCancellation;
-    Session session=m_session; std::string url=session.serverUrl; std::string uid=m_session.userId;
-    m_fetchThread = std::thread([this, session, url, uid, cancellation]() {
+        Session session=m_session;
+        m_fetchThread = std::thread([this, session, cancellation]() {
         PerformanceTelemetry &telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
-        const std::string scope=LibraryCache::scopeKey(url,uid);
         CatalogDbJobMetadata metadata;
         metadata.scopeEpoch = catalogScopeEpoch();
         metadata.cancellation=cancellation;
-        SyncState legacyState;
-        const bool legacyAvailable=SyncStateStore::load(
-            SyncStateStore::path("cache",scope),legacyState,nullptr);
         // Online Home readiness must not wait on CatalogDb, even for the
         // small sync checkpoint.  The checkpoint is advisory here; the
         // bounded Home reads below are the only startup data dependency.
         // Background sync/reconcile paths can refresh these fields later.
-        CatalogDbSyncState catalogState;
-        if (legacyAvailable) {
-            m_syncState=legacyState;
-            catalogState.success=true;
-            catalogState.lastSuccessfulMs=legacyState.lastSuccessfulMs;
-            catalogState.lastReconcileMs=legacyState.lastReconcileMs;
-        }
-        m_forceHierarchyReconcile=!catalogState.success
-            || !syncStateFresh(m_syncState,wallClockMs(),HIERARCHY_RECONCILE_MS);
         TelemetryTimer syncTimer;
         uint32_t requestCount = 0;
         uint32_t changedHierarchyCount = 0;
@@ -570,11 +556,6 @@ bool HomeScreen::startFetch()
                 && !m_topLevelSyncGeneration.compare_exchange_weak(
                     topLevel, startupSyncResult.generation)) {
             }
-            auto hierarchy = m_hierarchyGeneration.load();
-            while (startupSyncResult.generation > hierarchy
-                && !m_hierarchyGeneration.compare_exchange_weak(
-                    hierarchy, startupSyncResult.generation)) {
-            }
         }
         if (startupSyncResult.lastSuccessfulMs > 0) {
             m_syncState.lastSuccessfulMs = startupSyncResult.lastSuccessfulMs;
@@ -584,6 +565,8 @@ bool HomeScreen::startFetch()
         // post-finalize rebuild can populate Home tab items.
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
         std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
+        bool forceHierarchyReconcile =
+            startupSyncResult.mode == library::StartupSyncMode::FullReconcile;
         // FIX 2: guard so that if any exception escapes the population
         // walk the deferral flag is cleared and poster workers are woken,
         // preventing a permanent low-priority artwork stall.
@@ -617,6 +600,7 @@ bool HomeScreen::startFetch()
                 deltaCatchUpSucceeded = true;
             } else {
                 // Catch-up failed — fall through to full reconcile.
+                forceHierarchyReconcile = true;
             }
             uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_finished");
         }
@@ -728,11 +712,6 @@ bool HomeScreen::startFetch()
                             && !m_topLevelSyncGeneration.compare_exchange_weak(
                                 topLevel, update.generation)) {
                         }
-                        auto hierarchy = m_hierarchyGeneration.load();
-                        while (update.generation > hierarchy
-                            && !m_hierarchyGeneration.compare_exchange_weak(
-                                hierarchy, update.generation)) {
-                        }
                     }
                     if (update.lastSuccessfulMs > 0) {
                         m_syncState.lastSuccessfulMs = update.lastSuccessfulMs;
@@ -792,25 +771,14 @@ bool HomeScreen::startFetch()
         if (optionalRailFailed)
             std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
         completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
-        // Bounded season-poster prefetch: before signaling completion, fetch
-        // seasons for the highest-value series (from the already-fetched
-        // CW/RA rails, deduplicated and capped) and queue low-priority poster
-        // jobs so series screens have artwork ready.  Uses
-        // librarySync::refreshSeasons (the same API the hierarchy worker
-        // uses) and collectSeasonPosterJobs which applies the isCached filter
-        // for idempotency across restarts.
-        //
-        // Each series must be resolved to a FULL MediaItem (type=="show")
-        // from the catalog DB (all series rows after the population walk)
-        // via the same itemsByIds path the offline metadata path uses;
-        // a stub would fail validateHierarchyInput and corrupt catalog
-        // rows via writeItem upsert.  A session-level guard records each
-        // series after a successful prefetch, so repeat home fetches are
-        // free and transient failures retry.
+        // Bounded season-poster prefetch: resolve the highest-value series
+        // (from the already-fetched CW/RA rails, deduplicated and capped) to
+        // full catalog rows, then hand the hierarchy walk to the coordinator.
+        // Home consumes immutable per-series results on the SDL thread and
+        // retains the cache/artwork/progress state locally.
         if (!catalogRefreshFailed) {
             try {
                 const auto seriesIds = collectBoundedSeriesIds(cw, ra);
-                std::map<std::string, const MediaItem *> showMap;
                 std::vector<MediaItem> resolvedItems;
                 std::size_t resolvedCount = 0;
                 if (!seriesIds.empty() && m_libraryQuery) {
@@ -821,33 +789,15 @@ bool HomeScreen::startFetch()
                         resolvedItems = std::move(resolved.items);
                     }
                     for (const auto &item : resolvedItems)
-                        if (!item.id.empty() && item.type == "show") {
-                            showMap[item.id] = &item;
+                        if (!item.id.empty() && item.type == "show")
                             ++resolvedCount;
-                        }
                 }
                 std::printf("[HomeScreen] season prefetch: %zu candidates, %zu resolved\n",
                             seriesIds.size(), resolvedCount);
-                for (const auto &seriesId : seriesIds) {
-                    if (cancellation->load()) break;
-                    const auto sync = syncService();
-                    if (!sync) break;
-                    // Resolve the full series item; skip if not in catalog.
-                    const auto it = showMap.find(seriesId);
-                    if (it == showMap.end())
-                        continue;
-                    // Record only on success so transient failures retry on
-                    // a later fetch.
-                    if (m_seasonPrefetchedIds.count(seriesId))
-                        continue;
-                    const auto &series = *it->second;
-                    const auto result = sync->refreshSeasons(
-                        series, cancellation).get();
-                    if (result.success) {
-                        m_seasonPrefetchedIds.insert(seriesId);
-                        queuePosterJobs(collectSeasonPosterJobs(result.items));
-                    }
-                }
+                if (!cancellation->load() && m_libraryCoordinator)
+                    (void)requestHierarchy(
+                        resolvedItems, m_topLevelSyncGeneration.load(),
+                        forceHierarchyReconcile);
             } catch (...) {
                 std::printf("[HomeScreen] season prefetch skipped: exception\n");
             }

@@ -6,37 +6,101 @@
 #include "../../cache/ImageCache.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
-#include <ctime>
 
 namespace miyoofin {
 
-static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
-
-bool HomeScreen::publishHierarchyCheckpoint(std::uint64_t generation)
+bool HomeScreen::requestHierarchy(const std::vector<MediaItem> &shows,
+                                  std::uint64_t generation,
+                                  bool forceReconcile)
 {
-    const auto sync = syncService();
-    if (!sync || generation != m_hierarchyGeneration.load())
+    if (!m_libraryCoordinator)
         return false;
-    SyncState next=m_syncState;
-    next.lastSuccessfulMs=wallClockMs();
-    if (m_forceHierarchyReconcile)
-        next.lastReconcileMs=next.lastSuccessfulMs;
-    CatalogDbJobMetadata metadata;
-    metadata.scopeEpoch = catalogScopeEpoch();
-    {
-        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-        if (generation != m_hierarchyGeneration.load())
-            return false;
-        metadata.cancellation=m_catalogGenerationCancellation;
+
+    std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
+    if (m_hierarchySubmissionClosed || generation == 0
+        || m_hierarchyActive.load()
+        || (m_fetchCancellation && m_fetchCancellation->load()))
+        return false;
+    std::vector<MediaItem> pending;
+    for (const auto &show : shows) {
+        if (!show.id.empty() && show.type == "show"
+            && !m_seasonPrefetchedIds.count(show.id))
+            pending.push_back(show);
     }
-    const auto result=sync->writeSyncState(
-        next.lastSuccessfulMs,next.lastReconcileMs,generation,
-        metadata.cancellation).get();
-    if (!result.success || generation != m_hierarchyGeneration.load())
+
+    if (pending.empty())
         return false;
-    m_syncState=next;
-    m_forceHierarchyReconcile=false;
+
+    std::uint64_t request = 0;
+    if (!m_libraryCoordinator->requestHierarchy(
+            pending, generation, forceReconcile, request))
+        return false;
+
+    m_hierarchyRequest.store(request);
+    m_hierarchyCompleted.store(0);
+    m_hierarchyTotal.store(pending.size());
+    m_hierarchyOffline.store(false);
+    m_hierarchyActive.store(true);
+    m_hierarchyRequestReady.store(true);
     return true;
+}
+
+void HomeScreen::consumeHierarchyResults()
+{
+    if (!m_libraryCoordinator || !m_hierarchyRequestReady.load())
+        return;
+
+    const std::uint64_t request = m_hierarchyRequest.load();
+    library::HierarchyResult result;
+    while (m_libraryCoordinator->takeHierarchyResult(request, result)) {
+        if (result.request != request)
+            continue;
+
+        // A top-level catalog commit supersedes every hierarchy walk started
+        // against the previous catalog epoch.  Do not queue stale artwork or
+        // record a stale successful series as prefetched.  A stale terminal
+        // still closes the local request so the next fetch can submit work.
+        if (result.generation != m_topLevelSyncGeneration.load()) {
+            if (result.terminal) {
+                m_hierarchyActive.store(false);
+                m_hierarchyRequestReady.store(false);
+            }
+            continue;
+        }
+
+        // Cached seasons are published before the network refresh so the
+        // artwork queue remains cache-first even when the server is slow or
+        // temporarily unavailable.
+        if (!result.cachedSeasons.empty())
+            queuePosterJobs(collectSeasonPosterJobs(result.cachedSeasons));
+        if (!result.seasons.empty())
+            queuePosterJobs(collectSeasonPosterJobs(result.seasons));
+
+        if (!result.terminal) {
+            if (result.cacheOnly)
+                continue;
+            if (result.success) {
+                {
+                    std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
+                    m_seasonPrefetchedIds.insert(result.seriesId);
+                }
+                m_hierarchyCompleted.fetch_add(1);
+            } else if (!result.cancelled && !result.superseded) {
+                m_hierarchyOffline.store(true);
+            }
+            continue;
+        }
+
+        if (result.checkpointCommitted) {
+            m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
+            m_syncState.lastReconcileMs = result.lastReconcileMs;
+        } else if (!result.success && !result.cancelled
+                   && !result.superseded) {
+            m_hierarchyOffline.store(true);
+        }
+        m_hierarchyActive.store(false);
+        m_hierarchyRequestReady.store(false);
+    }
 }
 
 void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
@@ -101,107 +165,6 @@ std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std
         if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
             out.push_back(std::move(job));
     return out;
-}
-
-void HomeScreen::hierarchyWorker()
-{
-    for (;;) {
-        std::vector<MediaItem> shows;
-        std::uint64_t generation=0;
-        std::shared_ptr<std::atomic_bool> catalogCancellation;
-        { std::unique_lock<std::mutex> lock(m_hierarchyMutex); m_hierarchyWake.wait(lock,[&]{return m_stopHierarchyWorker||!m_pendingHierarchyShows.empty();});
-                if(m_stopHierarchyWorker)return;
-                shows.swap(m_pendingHierarchyShows);
-                generation=m_pendingHierarchyGeneration;
-                catalogCancellation=m_catalogGenerationCancellation;
-                performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, true); }
-        for (std::size_t showIndex=0; showIndex<shows.size(); ++showIndex) {
-            const auto &series=shows[showIndex];
-            { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry();
-                        telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false);
-                        telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
-            std::vector<MediaItem> cachedSeasons;
-            if (m_libraryQuery) {
-                const auto cached=m_libraryQuery->seasons(
-                    series.id,catalogCancellation).get();
-                if (cached.success) {
-                    cachedSeasons=std::move(cached.items);
-                    queuePosterJobs(planSeasonPosterJobs(cachedSeasons));
-                    for (const auto &season : cachedSeasons)
-                        (void)m_libraryQuery->episodes(
-                            season.id,catalogCancellation).get();
-                }
-            }
-            const auto sync = syncService();
-            if (!sync) {
-                if (generation==m_hierarchyGeneration.load()) {
-                    m_hierarchyOffline.store(true);
-                    performanceTelemetry().addWorkerFailed(
-                        WorkerId::HomeHierarchy);
-                } else {
-                    performanceTelemetry().addWorkerCancelled(
-                        WorkerId::HomeHierarchy);
-                }
-                continue;
-            }
-            const auto seasonRefresh=sync->refreshSeasons(
-                series,catalogCancellation).get();
-            if (!seasonRefresh.success) {
-                const bool current=generation==m_hierarchyGeneration.load();
-                if(current) m_hierarchyOffline.store(true);
-                if(current && !seasonRefresh.cancelled
-                   && !seasonRefresh.superseded)
-                    performanceTelemetry().addWorkerFailed(
-                        WorkerId::HomeHierarchy);
-                else
-                    performanceTelemetry().addWorkerCancelled(
-                        WorkerId::HomeHierarchy);
-                continue;
-            }
-            std::vector<MediaItem> seasons=std::move(seasonRefresh.items);
-            queuePosterJobs(planSeasonPosterJobs(seasons));
-            bool complete=true;
-            for (const auto &season : seasons) {
-                { std::lock_guard<std::mutex> lock(m_hierarchyMutex); if(m_stopHierarchyWorker){ PerformanceTelemetry &telemetry=performanceTelemetry();
-                            telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false);
-                            telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
-                if (season.id.empty()) { complete=false; break; }
-                const auto episodeRefresh=sync->refreshEpisodes(
-                    series,season,catalogCancellation).get();
-                if (!episodeRefresh.success) {
-                    complete=false;
-                    if(generation==m_hierarchyGeneration.load())
-                        m_hierarchyOffline.store(true);
-                    break;
-                }
-            }
-            if (complete) {
-                if (generation==m_hierarchyGeneration.load()) {
-                    m_hierarchyCompleted.fetch_add(1);
-                    performanceTelemetry().addWorkerCompleted(WorkerId::HomeHierarchy);
-                } else {
-                    performanceTelemetry().addWorkerCancelled(WorkerId::HomeHierarchy);
-                }
-            } else {
-                if (generation==m_hierarchyGeneration.load())
-                    performanceTelemetry().addWorkerFailed(WorkerId::HomeHierarchy);
-                else
-                    performanceTelemetry().addWorkerCancelled(WorkerId::HomeHierarchy);
-            }
-        }
-        if (generation==m_hierarchyGeneration.load()) {
-            m_hierarchyActive.store(false);
-            performanceTelemetry().setWorkerActive(WorkerId::HomeHierarchy, false);
-            performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeHierarchy, 0);
-            // A watermark means the requested hierarchy was fully committed,
-            // never merely that the metadata request happened.  Failures keep
-            // the old checkpoint so the next online attempt is conservative.
-            if (!m_hierarchyOffline.load() && m_hierarchyCompleted.load()==m_hierarchyTotal.load()) {
-                if (!publishHierarchyCheckpoint(generation))
-                    m_hierarchyOffline.store(true);
-            }
-        }
-    }
 }
 
 void HomeScreen::posterWorker()

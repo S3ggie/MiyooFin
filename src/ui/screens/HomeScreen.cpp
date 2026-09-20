@@ -32,7 +32,6 @@ HomeScreen::HomeScreen(const Session &session,
     m_tabs.push_back({"Settings", {{"", {}}}});
     for (int i = 0; i < kPosterThreads; ++i)
         m_posterThreads.emplace_back(&HomeScreen::posterWorker, this);
-    m_hierarchyThread = std::thread(&HomeScreen::hierarchyWorker, this);
     m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
 
     // Enable OTA updates if app directory can be resolved.
@@ -72,7 +71,17 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation) m_showPage.cancellation->store(true);
     if (m_animePage.cancellation) m_animePage.cancellation->store(true);
-    if (m_fetchCancellation) m_fetchCancellation->store(true);
+    // Close hierarchy submission before cancelling the fetch.  The fetch
+    // worker resolves its bounded series and submits the hierarchy request;
+    // this lock makes teardown and that final submission mutually exclusive.
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
+        m_hierarchySubmissionClosed = true;
+        m_hierarchyActive.store(false);
+        m_hierarchyRequestReady.store(false);
+        if (m_fetchCancellation)
+            m_fetchCancellation->store(true);
+    }
     if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
     if (m_libraryCoordinator) m_libraryCoordinator->cancelFullPopulation();
     if (m_liveChangeCancellation)
@@ -82,13 +91,8 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelHomeRailRefresh();
     m_updateManager.cancel();
-    {
-        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-        m_stopHierarchyWorker = true;
-        if (m_catalogGenerationCancellation)
-            m_catalogGenerationCancellation->store(true);
-    }
-    m_hierarchyWake.notify_one();
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelHierarchy();
     { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
     m_posterWake.notify_all();
     { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
@@ -105,7 +109,6 @@ void HomeScreen::joinAllWorkers()
         m_downloadRefreshThread.join();
     if (m_liveChangeThread.joinable())
         m_liveChangeThread.join();
-    if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     for (auto &thread : m_posterThreads)
         if (thread.joinable()) thread.join();
     if (m_decodeThread.joinable()) m_decodeThread.join();
@@ -227,7 +230,6 @@ void HomeScreen::enter()
             // The SQLite checkpoint is read by startFetch's worker before any
             // ChangedHierarchy request.  The first bounded page publishes the
             // minimum Home data; remaining population stays in the worker.
-            m_forceHierarchyReconcile=true;
             requestFetch(SDL_GetTicks());
         }
     }
@@ -255,6 +257,7 @@ void HomeScreen::update(Uint32 dt)
         else m_logoutTimer -= dt;
     }
     consumeCoordinatorHomeState();
+    consumeHierarchyResults();
     if (m_fetchReady.load()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();

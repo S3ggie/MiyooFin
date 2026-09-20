@@ -492,10 +492,10 @@ static void testTopLevelSyncEpochMaxIsAtomic()
     CHECK(!sync.empty());
     // Structural: the catalog-seed site runs on the fetch worker while
     // live-change rail refreshes increment the same epoch, so a
-    // load-then-store max can lose an increment — both epoch seeds must be
-    // CAS loops.  The interleaving needs two live workers, so the shape is
-    // pinned by scan (structural-only).
-    CHECK(sourceCount(sync,"compare_exchange_weak")==4);
+    // load-then-store max can lose an increment — both remaining top-level
+    // epoch seeds must be CAS loops.  Hierarchy generation is now owned by
+    // LibraryCoordinator, so its former two CAS loops are intentionally gone.
+    CHECK(sourceCount(sync,"compare_exchange_weak")==2);
     CHECK(sourceLacks(sync,"m_topLevelSyncGeneration = gen"));
     CHECK(sourceLacks(sync,"m_hierarchyGeneration.store(gen)"));
     std::printf("[test] top-level sync epoch max is atomic OK\n");

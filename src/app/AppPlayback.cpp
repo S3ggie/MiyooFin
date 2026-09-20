@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "RemoteExitSignal.hpp"
 #include "DisplaySizing.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
 #include "../playback/PlaybackRequest.hpp"
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <cerrno>
 #include <cstdlib>
 #include <thread>
@@ -51,6 +53,22 @@ void emitPlaybackEvent(PerformanceTelemetry &telemetry, uint32_t sequence,
     telemetry.emitRecord(record);
 }
 #endif
+
+bool reapPlaybackChildWithin(pid_t pid, int &status,
+                             std::chrono::milliseconds timeout) noexcept
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+        const pid_t result = waitpid(pid, &status, WNOHANG);
+        if (result == pid)
+            return true;
+        if (result < 0 && errno != EINTR)
+            return false;
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 }
 
 bool App::ingestPlaybackResult(bool removeAfterIngest)
@@ -170,7 +188,9 @@ void App::handleExternalPlayback()
         _exit(127);
     }
 
-    // 4. Parent waits for child to finish
+    // 4. Parent waits for child to finish.  A supported Onion exit can
+    // interrupt this wait while the runner is still waiting for FFplay.  Do
+    // not let that leave the runner (and its external children) orphaned.
     printf("[App] Waiting for playback child (PID=%d)\n", pid);
     int status = 0;
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
@@ -180,17 +200,53 @@ void App::handleExternalPlayback()
                                static_cast<uint32_t>(SamplingReason::ExternalPlayback), 0);
     TelemetryTimer childWaitTimer;
 #endif
-    const pid_t waitedPid = waitpid(pid, &status, 0);
+    pid_t waitedPid = -1;
+    bool exitRequested = false;
+    for (;;) {
+        if (consumeRemoteExitRequest()) {
+            exitRequested = true;
+            break;
+        }
+        waitedPid = waitpid(pid, &status, WNOHANG);
+        if (waitedPid == pid)
+            break;
+        if (waitedPid < 0 && errno != EINTR) {
+            fprintf(stderr, "[App] Playback child wait failed: %s\n", strerror(errno));
+            exitRequested = true;
+            break;
+        }
+        // Keep the wait interruptible: a remote exit request can arrive
+        // immediately after the check above, so never enter a blocking
+        // waitpid call here.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
-    if (WIFEXITED(status)) {
+    if (exitRequested) {
+        printf("[App] Terminating playback child after exit request (PID=%d)\n", pid);
+        if (kill(pid, SIGTERM) != 0 && errno != ESRCH)
+            fprintf(stderr, "[App] Failed to terminate playback child: %s\n", strerror(errno));
+        bool childReaped = reapPlaybackChildWithin(pid, status, std::chrono::seconds(8));
+        if (!childReaped) {
+            printf("[App] Playback child did not exit after TERM; sending KILL (PID=%d)\n", pid);
+            if (kill(pid, SIGKILL) != 0 && errno != ESRCH)
+                fprintf(stderr, "[App] Failed to kill playback child: %s\n", strerror(errno));
+            childReaped = reapPlaybackChildWithin(pid, status, std::chrono::seconds(2));
+            if (!childReaped)
+                fprintf(stderr, "[App] Playback child was not reaped after KILL (PID=%d)\n", pid);
+        }
+        waitedPid = childReaped ? pid : -1;
+        m_running = false;
+    }
+
+    if (waitedPid >= 0 && WIFEXITED(status)) {
         printf("[App] Playback child exited with status %d\n", WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
+    } else if (waitedPid >= 0 && WIFSIGNALED(status)) {
         printf("[App] Playback child killed by signal %d\n", WTERMSIG(status));
     }
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
     const uint8_t childExitKind = waitedPid < 0 ? 0
         : (WIFEXITED(status) ? 1 : (WIFSIGNALED(status) ? 2 : 0));
-    const int32_t childExitCode = WIFEXITED(status)
+    const int32_t childExitCode = waitedPid >= 0 && WIFEXITED(status)
         ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     emitPlaybackEvent(telemetry, m_playbackSequence,
                       PlaybackStage::ChildWait,

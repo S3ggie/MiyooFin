@@ -14,23 +14,16 @@ static std::int64_t homeWallClockMs()
 
 HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<DownloadManager> downloads,
-                       std::shared_ptr<CatalogDb> catalogDb,
-                       std::uint64_t catalogScopeEpoch,
-                       std::shared_ptr<library::LibrarySync> librarySync,
                        std::shared_ptr<library::LibraryQuery> libraryQuery,
                        std::shared_ptr<library::LibraryCoordinator> libraryCoordinator)
     : m_activeTab(0), m_activeRow(0), m_activeCard(0)
     , m_rowScroll(0), m_cardScroll(0)
     , m_session(session)
     , m_downloads(std::move(downloads))
-    , m_catalogDb(std::move(catalogDb))
-    , m_librarySync(std::move(librarySync))
     , m_libraryQuery(std::move(libraryQuery))
     , m_libraryCoordinator(std::move(libraryCoordinator))
-    , m_catalogMetadata()
     , m_userName(session.userName)
 {
-    m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
@@ -48,6 +41,21 @@ HomeScreen::HomeScreen(const Session &session,
         if (appDir(dir))
             m_updateManager.enable(std::move(dir));
     }
+}
+
+std::shared_ptr<library::LibrarySync> HomeScreen::syncService() const
+{
+    return m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr;
+}
+
+std::uint64_t HomeScreen::catalogScopeEpoch() const
+{
+    return m_libraryQuery ? m_libraryQuery->scopeEpoch() : 0;
+}
+
+bool HomeScreen::catalogScopeReady() const
+{
+    return m_libraryQuery && m_libraryQuery->scopeReady();
 }
 
 HomeScreen::~HomeScreen()
@@ -237,12 +245,9 @@ void HomeScreen::leave()
 
 void HomeScreen::update(Uint32 dt)
 {
-    if (!m_catalogScopeReadyLogged && m_catalogDb) {
-        const CatalogDbScopeState state = m_catalogDb->scopeState();
-        if (state.ready) {
-            m_catalogScopeReadyLogged = true;
-            uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready");
-        }
+    if (!m_catalogScopeReadyLogged && catalogScopeReady()) {
+        m_catalogScopeReadyLogged = true;
+        uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready");
     }
     if (m_logoutArmed && !m_logoutRequested) {
         if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }

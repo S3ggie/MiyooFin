@@ -52,9 +52,6 @@ public:
     using PosterJob = HomePosterJob;
     explicit HomeScreen(const Session &session,
                         std::shared_ptr<DownloadManager> downloads={},
-                        std::shared_ptr<CatalogDb> catalogDb={},
-                         std::uint64_t catalogScopeEpoch=0,
-                         std::shared_ptr<library::LibrarySync> librarySync={},
                          std::shared_ptr<library::LibraryQuery> libraryQuery={},
                          std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={});
     ~HomeScreen() override;
@@ -223,11 +220,8 @@ private:
     // Session info for API calls
     Session m_session;
     std::shared_ptr<DownloadManager> m_downloads;
-    std::shared_ptr<CatalogDb> m_catalogDb;
-    std::shared_ptr<library::LibrarySync> m_librarySync;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
-    CatalogDbJobMetadata m_catalogMetadata;
     // Top-level catalog epoch: seeded from the persisted committed
     // generation and bumped at each point a top-level sync commits catalog
     // metadata (startup full sync, delta catch-up, safety catch-up and
@@ -472,6 +466,10 @@ private:
     void finishHomeRailRefresh();
     void startSafetyReconcile();
     void finishSafetyReconcile();
+
+    std::shared_ptr<library::LibrarySync> syncService() const;
+    std::uint64_t catalogScopeEpoch() const;
+    bool catalogScopeReady() const;
 
     // Helpers
     const TabData &currentTab() const;

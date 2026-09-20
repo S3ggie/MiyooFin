@@ -16,7 +16,7 @@ void HomeScreen::publishCoordinatorHomeState(
     if (!m_libraryCoordinator)
         return;
     library::HomeState state;
-    state.scopeEpoch = m_catalogMetadata.scopeEpoch;
+    state.scopeEpoch = catalogScopeEpoch();
     state.catalogGeneration = m_topLevelSyncGeneration.load();
     state.offline = offline;
     state.stale = stale;

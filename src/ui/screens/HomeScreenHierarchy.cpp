@@ -14,20 +14,22 @@ static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 
 bool HomeScreen::publishHierarchyCheckpoint(std::uint64_t generation)
 {
-    if (!m_librarySync || generation != m_hierarchyGeneration.load())
+    const auto sync = syncService();
+    if (!sync || generation != m_hierarchyGeneration.load())
         return false;
     SyncState next=m_syncState;
     next.lastSuccessfulMs=wallClockMs();
     if (m_forceHierarchyReconcile)
         next.lastReconcileMs=next.lastSuccessfulMs;
-    CatalogDbJobMetadata metadata=m_catalogMetadata;
+    CatalogDbJobMetadata metadata;
+    metadata.scopeEpoch = catalogScopeEpoch();
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
         if (generation != m_hierarchyGeneration.load())
             return false;
         metadata.cancellation=m_catalogGenerationCancellation;
     }
-    const auto result=m_librarySync->writeSyncState(
+    const auto result=sync->writeSyncState(
         next.lastSuccessfulMs,next.lastReconcileMs,generation,
         metadata.cancellation).get();
     if (!result.success || generation != m_hierarchyGeneration.load())
@@ -130,7 +132,8 @@ void HomeScreen::hierarchyWorker()
                             season.id,catalogCancellation).get();
                 }
             }
-            if (!m_librarySync) {
+            const auto sync = syncService();
+            if (!sync) {
                 if (generation==m_hierarchyGeneration.load()) {
                     m_hierarchyOffline.store(true);
                     performanceTelemetry().addWorkerFailed(
@@ -141,7 +144,7 @@ void HomeScreen::hierarchyWorker()
                 }
                 continue;
             }
-            const auto seasonRefresh=m_librarySync->refreshSeasons(
+            const auto seasonRefresh=sync->refreshSeasons(
                 series,catalogCancellation).get();
             if (!seasonRefresh.success) {
                 const bool current=generation==m_hierarchyGeneration.load();
@@ -163,7 +166,7 @@ void HomeScreen::hierarchyWorker()
                             telemetry.addWorkerCancelled(WorkerId::HomeHierarchy, static_cast<uint32_t>(shows.size()-showIndex)); telemetry.setWorkerActive(WorkerId::HomeHierarchy, false);
                             telemetry.setWorkerQueueDepth(WorkerId::HomeHierarchy, 0); return; } }
                 if (season.id.empty()) { complete=false; break; }
-                const auto episodeRefresh=m_librarySync->refreshEpisodes(
+                const auto episodeRefresh=sync->refreshEpisodes(
                     series,season,catalogCancellation).get();
                 if (!episodeRefresh.success) {
                     complete=false;

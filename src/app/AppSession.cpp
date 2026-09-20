@@ -119,12 +119,9 @@ void App::goToHome()
         m_stack.pop();
     }
     m_stack.push(std::make_unique<HomeScreen>(
-        m_session, m_downloadManager, m_catalogDb, m_catalogScopeEpoch,
-         // The coordinator owns the shared services and startup sync policy;
-         // Home consumes its startup result and retains the population walk.
-         m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr,
-         m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr,
-         m_libraryCoordinator));
+        m_session, m_downloadManager,
+        m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr,
+        m_libraryCoordinator));
 }
 
 void App::goToLogin(const std::string &initialMessage)

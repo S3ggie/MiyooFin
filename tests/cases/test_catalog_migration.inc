@@ -216,6 +216,11 @@ static void testCatalogDbFreshAuthoritativeLibraryGeneration()
     const auto scope = db->scopeState();
     CHECK(scope.ready && scope.openState == CatalogDbOpenState::CreatedV3);
 
+    library::LibraryQuery query(db, epoch);
+    CHECK(query.scopeReady());
+    library::LibraryQuery staleQuery(db, epoch + 1);
+    CHECK(!staleQuery.scopeReady());
+
     Session session;
     session.serverUrl = url;
     session.userId = user;
@@ -251,13 +256,17 @@ static void testCatalogDbFreshAuthoritativeLibraryGeneration()
     const auto finalized = sync->finalize(generation).get();
     CHECK(finalized.success && finalized.workerOwned);
 
-    library::LibraryQuery query(db, epoch);
     const auto movies = query.movies(-1, 8).get();
     const auto shows = query.shows(-1, 8).get();
     CHECK(movies.success && movies.items.size() == 1
           && movies.items[0].id == "__task18_fresh_movie__");
     CHECK(shows.success && shows.items.size() == 1
           && shows.items[0].id == "__task18_fresh_show__");
+
+    const auto cancellation = std::make_shared<std::atomic_bool>(true);
+    const auto cancelledMovies = query.movies(-1, 8, {}, cancellation).get();
+    const auto cancelledShows = query.shows(-1, 8, {}, cancellation).get();
+    CHECK(cancelledMovies.cancelled && cancelledShows.cancelled);
 
     const auto sqlite = db->runSqliteDiagnosticsForTest();
     CHECK(sqlite.success && sqlite.foreignKeys == "1"
@@ -575,9 +584,11 @@ static void testHomeCatalogHierarchyIntegration()
     session.accessToken = "synthetic-token";
     session.userId = user;
     {
-        auto librarySync = std::make_shared<library::LibrarySync>(
-            session, db, epoch);
-        HomeScreen home(session, {}, db, epoch, librarySync);
+        auto libraryCoordinator =
+            std::make_shared<library::LibraryCoordinator>(session, db, epoch);
+        auto librarySync = libraryCoordinator->sync();
+        HomeScreen home(session, {}, libraryCoordinator->query(),
+                        libraryCoordinator);
 
         auto online = librarySync->stageSeriesHierarchy(
             series, {season}, episodes, 1, true).get();

@@ -272,9 +272,9 @@ void testLibraryCacheHomeParityHarness()
           != std::string::npos);
     CHECK(hierarchySource.find("m_libraryQuery->episodes")
           != std::string::npos);
-    CHECK(hierarchySource.find("m_librarySync->refreshSeasons")
+    CHECK(hierarchySource.find("sync->refreshSeasons")
           != std::string::npos);
-    CHECK(hierarchySource.find("m_librarySync->refreshEpisodes")
+    CHECK(hierarchySource.find("sync->refreshEpisodes")
           != std::string::npos);
     const std::string lifecycleSource =
         readTestBytes("src/ui/screens/HomeScreen.cpp");
@@ -317,7 +317,7 @@ static void testHomeSkipsUnsupportedLibraryViews()
     CHECK(source.find("library_view_skipped unsupported_collection") != std::string::npos);
     CHECK(source.find("views.erase(std::remove_if") != std::string::npos);
     CHECK(source.find("getLibraryItemsPage") != std::string::npos);
-    CHECK(source.find("m_librarySync->stage") != std::string::npos);
+    CHECK(source.find("sync->stage") != std::string::npos);
     CHECK(source.find("beginTopLevelSync") == std::string::npos);
     CHECK(source.find("finalizeTopLevelSync") == std::string::npos);
     CHECK(source.find("abortTopLevelSync") == std::string::npos);
@@ -596,7 +596,7 @@ static void testHomePublishesAfterFirstBoundedPage()
     CHECK(lifecycle.find("if (m_fetchReady.load())") != std::string::npos);
     CHECK(source.find("m_fetchDone.store(true);\n                    }")
           == std::string::npos);
-    CHECK(source.find("if (!movies.items.empty() || !shows.items.empty())")
+    CHECK(source.find("&& (!movies.items.empty() || !shows.items.empty())")
           != std::string::npos);
     CHECK(source.find("if (movies.success || shows.success)")
           == std::string::npos);
@@ -616,5 +616,3 @@ static void testHomePreservesAnimeMembershipDuringBoundedReads()
     CHECK(source.find("view.name") != std::string::npos);
     std::printf("[test] Home preserves Anime membership during bounded reads OK\n");
 }
-
-

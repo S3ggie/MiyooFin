@@ -1,7 +1,6 @@
 #include "EpisodeBrowserScreen.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../library/LibraryQuery.hpp"
-#include "../../library/LibrarySync.hpp"
 #include "../../net/JellyfinApi.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
@@ -33,12 +32,12 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
     const bool downloadedOnly=m_downloadedOnly;
     const bool loadCached=loadCachedEpisodes;
     const std::shared_ptr<library::LibraryQuery> libraryQuery=m_libraryQuery;
-    const std::shared_ptr<library::LibrarySync> librarySync=m_librarySync;
+    const std::shared_ptr<library::LibraryCoordinator> libraryCoordinator=m_libraryCoordinator;
     const std::shared_ptr<std::atomic_bool> cancellation=m_catalogCancellation;
     const std::shared_ptr<DownloadManager> downloads=m_downloads;
     m_fetchThread=std::thread([this,s,seriesItem,seasonItem,sid,season,
-                               networkOffline,downloadedOnly,loadCached,
-                               libraryQuery,librarySync,cancellation,downloads](){
+                                networkOffline,downloadedOnly,loadCached,
+                                libraryQuery,libraryCoordinator,cancellation,downloads](){
         PerformanceTelemetry &telemetry=performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::EpisodeFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::EpisodeFetch, 1);
@@ -163,15 +162,15 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
             return;
         }
         std::vector<MediaItem>v;std::string e;bool ok=false;
-        if (librarySync) {
+        if (libraryCoordinator) {
             const library::HierarchyRefreshResult refreshed =
-                librarySync->refreshEpisodes(seriesItem, seasonItem,
-                                              cancellation).get();
+                libraryCoordinator->refreshEpisodes(seriesItem, seasonItem,
+                                                    cancellation).get();
             ok = refreshed.success;
             v = refreshed.items;
             e = refreshed.message;
         } else {
-            e = "LibrarySync service unavailable";
+            e = "Library coordinator unavailable";
         }
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
             if (downloadedOnly)

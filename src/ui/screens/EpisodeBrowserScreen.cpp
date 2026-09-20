@@ -91,30 +91,22 @@ EpisodeBrowserScreen::EpisodeBrowserScreen(const Session &session,
                                            const MediaItem &series,
                                            const MediaItem &season,
                                            const std::string &initialEpisodeId,
-                                           std::shared_ptr<DownloadManager> downloads,
-                                           bool networkOffline, bool downloadedOnly,
-                                           std::shared_ptr<CatalogDb> catalogDb,
-                                           std::uint64_t catalogScopeEpoch,
-                                           std::shared_ptr<library::LibrarySync> librarySync,
-                                           std::shared_ptr<library::LibraryQuery> libraryQuery)
+                                            std::shared_ptr<DownloadManager> downloads,
+                                            bool networkOffline, bool downloadedOnly,
+                                            std::shared_ptr<library::LibraryCoordinator> libraryCoordinator,
+                                            std::shared_ptr<library::LibraryQuery> libraryQuery)
     : m_session(session)
     , m_series(series)
     , m_season(season)
     , m_initialEpisodeId(initialEpisodeId)
     , m_downloads(std::move(downloads))
-    , m_catalogDb(std::move(catalogDb))
-    , m_librarySync(std::move(librarySync))
+    , m_libraryCoordinator(std::move(libraryCoordinator))
     , m_libraryQuery(std::move(libraryQuery))
     , m_networkOffline(networkOffline)
     , m_downloadedOnly(downloadedOnly)
 {
-    m_catalogMetadata.scopeEpoch = catalogScopeEpoch;
-    if (m_catalogDb && !m_librarySync)
-        m_librarySync = std::make_shared<library::LibrarySync>(
-            m_session, m_catalogDb, catalogScopeEpoch);
-    if (m_catalogDb && !m_libraryQuery)
-        m_libraryQuery = std::make_shared<library::LibraryQuery>(
-            m_catalogDb, catalogScopeEpoch);
+    if (m_libraryCoordinator && !m_libraryQuery)
+        m_libraryQuery = m_libraryCoordinator->query();
 }
 
 // -------------------------------------------------------------------

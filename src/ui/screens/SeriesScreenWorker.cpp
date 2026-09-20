@@ -28,11 +28,11 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
     const bool networkOffline=m_networkOffline, downloadedOnly=m_downloadedOnly, loadCached=loadCachedSeasons;
     std::shared_ptr<DownloadManager> downloads=m_downloads;
     const std::shared_ptr<library::LibraryQuery> libraryQuery=m_libraryQuery;
-    const std::shared_ptr<library::LibrarySync> librarySync=m_librarySync;
+    const std::shared_ptr<library::LibraryCoordinator> libraryCoordinator=m_libraryCoordinator;
     const std::shared_ptr<std::atomic_bool> cancellation=m_catalogCancellation;
     const MediaItem series=m_series;
     m_fetchThread=std::thread([this,id,networkOffline,downloadedOnly,loadCached,downloads,
-                               libraryQuery,librarySync,cancellation,series](){
+                               libraryQuery,libraryCoordinator,cancellation,series](){
         if(loadCached) {
             if(m_fetchCancelled.load(std::memory_order_acquire)) return;
             std::vector<MediaItem> cached;
@@ -93,14 +93,14 @@ void SeriesScreen::fetchSeasons(bool loadCachedSeasons)
         }
         if(m_fetchCancelled.load(std::memory_order_acquire)) return;
         std::vector<MediaItem> v;std::string e;bool ok=false;
-        if (librarySync) {
+        if (libraryCoordinator) {
             const library::HierarchyRefreshResult refreshed =
-                librarySync->refreshSeasons(series, cancellation).get();
+                libraryCoordinator->refreshSeasons(series, cancellation).get();
             ok = refreshed.success;
             v = refreshed.items;
             e = refreshed.message;
         } else {
-            e = "LibrarySync service unavailable";
+            e = "Library coordinator unavailable";
         }
         if(ok&&!m_fetchCancelled.load(std::memory_order_acquire)) {
             if (downloadedOnly) {

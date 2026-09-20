@@ -83,7 +83,7 @@ void App::configureCatalogScopeForSession()
         m_libraryCoordinator->start();
         if (m_downloadManager)
             m_downloadManager->setLibraryServices(
-                m_libraryCoordinator->query(), m_libraryCoordinator->sync());
+                m_libraryCoordinator->query(), m_libraryCoordinator);
         uiDiagnostics().log("[App] startup stage=catalog_scope_requested");
     } else if (m_catalogDb) {
         uiDiagnostics().log("[App] catalog scope request identity=invalid");

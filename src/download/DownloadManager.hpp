@@ -14,7 +14,7 @@
 namespace miyoofin {
 namespace library {
 class LibraryQuery;
-class LibrarySync;
+class LibraryCoordinator;
 }
 // In-memory-only rolling transfer-rate samples.  Entries are recorded only
 // when bytes arrive, so short HLS gaps do not look like zero-speed transfers.
@@ -27,11 +27,11 @@ public:
     explicit DownloadManager(const Session &session={}, const std::string &root="downloads"); ~DownloadManager();
     void setLibraryServices(
         std::shared_ptr<library::LibraryQuery> libraryQuery,
-        std::shared_ptr<library::LibrarySync> librarySync)
+        std::shared_ptr<library::LibraryCoordinator> libraryCoordinator)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_libraryQuery = std::move(libraryQuery);
-        m_librarySync = std::move(librarySync);
+        m_libraryCoordinator = std::move(libraryCoordinator);
     }
     void configure(const Session &session); void setPlaybackActive(bool active); void enqueue(const DownloadItem &item); void enqueue(const std::vector<DownloadItem> &items);
     void pause(const std::string &itemId); void resume(const std::string &itemId); void retry(const std::string &itemId); void requestReconcile(); bool redownload(const std::string &itemId); bool erase(const std::string &itemId, std::string *error=nullptr);
@@ -81,9 +81,9 @@ private:
     // a syscall under the mutex on every call.  Guarded by m_mutex.
     mutable std::uint64_t m_freeBytesCached=0, m_freeBytesCachedAtMs=0;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
-    std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::shared_ptr<std::atomic_bool> m_activePlanCancellation;
-    struct PlanJob { std::uint64_t id, generation; Session session; std::vector<MediaItem> items; std::string seriesId, seasonId; MediaItem series, season; std::shared_ptr<library::LibraryQuery> libraryQuery; std::shared_ptr<library::LibrarySync> librarySync; std::shared_ptr<std::atomic_bool> cancellation; };
+    struct PlanJob { std::uint64_t id, generation; Session session; std::vector<MediaItem> items; std::string seriesId, seasonId; MediaItem series, season; std::shared_ptr<library::LibraryQuery> libraryQuery; std::shared_ptr<library::LibraryCoordinator> libraryCoordinator; std::shared_ptr<std::atomic_bool> cancellation; };
     std::deque<PlanJob> m_planJobs; std::map<std::uint64_t, DownloadPlanSnapshot> m_plans;
 };
 }

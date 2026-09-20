@@ -672,5 +672,19 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     return status;
 }
 
+std::future<HierarchyRefreshResult> LibraryCoordinator::refreshSeasons(
+    const MediaItem &series,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    return m_sync->refreshSeasons(series, cancellation);
+}
+
+std::future<HierarchyRefreshResult> LibraryCoordinator::refreshEpisodes(
+    const MediaItem &series, const MediaItem &season,
+    const std::shared_ptr<std::atomic_bool> &cancellation)
+{
+    return m_sync->refreshEpisodes(series, season, cancellation);
+}
+
 } // namespace library
 } // namespace miyoofin

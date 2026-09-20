@@ -100,8 +100,7 @@ bool SeriesScreen::handleAction(Action action)
                season.title.c_str(), season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
             m_session, m_series, season, "", m_downloads, m_networkOffline,
-            m_downloadedOnly, m_catalogDb, m_catalogMetadata.scopeEpoch,
-            m_librarySync, m_libraryQuery));
+            m_downloadedOnly, m_libraryCoordinator, m_libraryQuery));
         return true;
     }
 

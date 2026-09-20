@@ -39,7 +39,8 @@
 # path temporarily and gives it back.
 #
 # Usage: sh tools/ui-script/device-run.sh [--dry-run] [--desktop-keys]
-#            [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry>
+#            [--server-unavailable] [--timeout-s N]
+#            <smoke|series|home-reentry|offline-playback>
 #   --dry-run       print every host/remote action, do nothing (no SSH).
 #   --desktop-keys  do NOT set MIYOOFIN_UI_DEVICE_KEYS (shim sends WASD
 #                   codes; only useful with Raw: scancodes in the script).
@@ -100,7 +101,7 @@ while [ $# -gt 0 ]; do
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry|offline-playback>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
@@ -152,6 +153,16 @@ TARGET=$MIYOO_SSH_TARGET
 
 fail() { echo "device-run($NAME): $*" >&2; exit 1; }
 
+# The device scratch directory is intentionally shared so the privileged
+# Onion handoff can see it.  Remove the named screenshot before an
+# offline-playback launch; otherwise a prior interrupted run could leave an
+# artifact for the later scp/assertion path to mistake for current evidence.
+clear_offline_playback_screenshot() {
+    [ "$NAME" = offline-playback ] || return 0
+    miyoo_ssh "$TARGET" \
+        "rm -f '$SCRATCH/shots/offline-playback-downloads.bmp'"
+}
+
 # --- dry-run -------------------------------------------------------------
 # Prints every host/remote action, executes nothing (no SSH).
 if [ "$DRY_RUN" = 1 ]; then
@@ -165,12 +176,18 @@ if [ "$SERVER_UNAVAILABLE" = 1 ]; then
 else
     SERVER_MODE_LINE='ssh: use the real saved server/session (no configuration changes)'
 fi
+if [ "$NAME" = offline-playback ]; then
+    PLAYBACK_SHOT_CLEAN_LINE="dry-run: ssh $TARGET 'rm -f $SCRATCH/shots/offline-playback-downloads.bmp' (remove any pre-run screenshot artifact)"
+else
+    PLAYBACK_SHOT_CLEAN_LINE=''
+fi
     cat <<EOF
 dry-run: target=$TARGET appdir=$APP_DIR script=$SCRIPT timeout=${TIMEOUT_S}s
 dry-run: $SERVER_MODE_LINE
 dry-run: host: make -f tools/ui-script/Makefile.arm
 dry-run: ssh $TARGET 'test -x $APP_DIR/launch.sh, refuse if $BACKUP present (restore first), refuse if miyoofin running, require sole MainUI'
 dry-run: ssh $TARGET 'mkdir -p $SCRATCH $SCRATCH/shots'  (scp does not create parents)
+$PLAYBACK_SHOT_CLEAN_LINE
 dry-run: scp $SHIM_ARM -> $TARGET:$SCRATCH/shim-arm.so
 dry-run: scp $SCRIPT -> $TARGET:$SCRATCH/script.txt
 dry-run: ssh $TARGET 'plain cp (no -p) $APP_DIR/launch.sh $APP_DIR/$BACKUP, cmp backup vs original'  (refuse if backup already there)
@@ -220,6 +237,38 @@ RESTORE_ATTEMPTS=4
 count_remote() {
     case ${1:?} in *\'*) fail "bad process name" ;; esac
     miyoo_ssh "$TARGET" "n=0; for p in /proc/[0-9]*/comm; do c=\$(cat \"\$p\" 2>/dev/null || true); [ \"\$c\" = '$1' ] && n=\$((n+1)) || true; done; echo \$n" 2>/dev/null || echo -1
+}
+
+# A bounded offline-playback run can be ended by the supported Onion exit
+# before the device script reaches its final result write.  That is the only
+# path where an absent result is intentional; all SSH/SCP failures remain
+# fatal.
+result_absence_is_expected_bounded_exit() {
+    [ "$NAME" = offline-playback ] && [ "$VERDICT" = exited ]
+}
+
+pull_result_txt() {
+    if _result_state=$(miyoo_ssh "$TARGET" \
+        "if [ -e '$SCRATCH/result.txt' ]; then printf present; else printf absent; fi" \
+        2>/dev/null); then
+        :
+    else
+        fail "could not inspect remote result.txt (SSH/transport failure)"
+    fi
+    case "$_result_state" in
+        present)
+            miyoo_scp "$TARGET:$SCRATCH/result.txt" "$OUT/result.txt" \
+                || fail "pull result.txt failed"
+            ;;
+        absent)
+            result_absence_is_expected_bounded_exit \
+                || fail "remote result.txt is absent outside the expected bounded-exit path"
+            : > "$OUT/result.txt"
+            ;;
+        *)
+            fail "remote result.txt probe returned an unexpected state"
+            ;;
+    esac
 }
 
 # The exact shell command that recovers the launcher by hand. It uses only
@@ -428,6 +477,8 @@ EOF
 # Scratch must exist before the first scp (scp does not create parents).
 miyoo_ssh "$TARGET" "mkdir -p '$SCRATCH' '$SCRATCH/shots'" || fail "device mkdir failed"
 SCRATCH_PUSHED=1
+clear_offline_playback_screenshot \
+    || fail "could not clear the previous offline-playback screenshot"
 
 miyoo_scp "$SHIM_ARM" "$TARGET:$SCRATCH/shim-arm.so" || fail "scp shim failed"
 miyoo_scp "$DEVICE_SCRIPT" "$TARGET:$SCRATCH/script.txt" || fail "scp script failed"
@@ -570,7 +621,11 @@ sleep 2
 mkdir -p "$OUT/shots"
 miyoo_scp -r "$TARGET:$SCRATCH/shots/." "$OUT/shots/" || fail "pull shots failed"
 miyoo_scp "$TARGET:$SCRATCH/app.log" "$OUT/app.log" || fail "pull app.log failed"
-miyoo_scp "$TARGET:$SCRATCH/result.txt" "$OUT/result.txt" || fail "pull result.txt failed"
+pull_result_txt
+if [ "$NAME" = offline-playback ]; then
+    miyoo_scp "$TARGET:$APP_DIR/playback-launch.log" "$OUT/playback-launch.log" \
+        || fail "pull playback-launch.log failed"
+fi
 cp "$RUNDIR/launch.log" "$OUT/launch.log" 2>/dev/null || true
 
 restore_launcher || fail "launcher restore failed (see CRITICAL lines above for the manual recovery command)"
@@ -683,6 +738,14 @@ case "$NAME" in
         want='[HomeScreen] Library loaded'
         SHOT=""
         CHECKS=""
+        ;;
+    offline-playback)
+        # The remote scenario intentionally stops this flow through the
+        # supported Onion exit after its bounded observation interval.  The
+        # remote observer, not this runner, owns the player-process verdict.
+        want='[App] Starting external playback handoff'
+        SHOT="$OUT/shots/offline-playback-downloads.bmp"
+        CHECKS="rendered"
         ;;
     movies-preview)
         want='[MovieDetailsScreen]'

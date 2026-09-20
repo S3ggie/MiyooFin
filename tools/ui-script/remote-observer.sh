@@ -11,14 +11,19 @@ remote_observer_snapshot() {
     _mro_log=${3:-/tmp/miyoofin-ui-script/app.log}
     _mro_lines=${4:-40}
     _mro_download_root=${5:-}
+    _mro_playback_log=${6:-}
+    _mro_playback_offset=${7:-}
     _mro_tmp="${_mro_output}.tmp.$$"
 
     if ! miyoo_ssh "$_mro_target" sh -s -- \
-        "$_mro_log" "$_mro_lines" "$_mro_download_root" >"$_mro_tmp" <<'EOF'
+        "$_mro_log" "$_mro_lines" "$_mro_download_root" \
+        "$_mro_playback_log" "$_mro_playback_offset" >"$_mro_tmp" <<'EOF'
 set -u
 log_path=$1
 log_lines=$2
 download_root=${3:-}
+playback_log=${4:-}
+playback_offset=${5:-}
 
 comm_pids() {
     wanted=$1
@@ -55,9 +60,44 @@ describe_processes() {
         "$wanted" "$count" "${pids:-none}" "$rss" "$threads"
 }
 
+redacted_tail() {
+    path=$1
+    lines=$2
+    offset=${3:-}
+    if [ -n "$offset" ]; then
+        case "$offset" in
+            ''|*[!0-9]*) return 0 ;;
+        esac
+        tail -c "+$((offset + 1))" "$path" 2>/dev/null \
+            | tail -n "$lines"
+    else
+        tail -n "$lines" "$path" 2>/dev/null
+    fi \
+        | sed -r \
+            -e 's#https?://[^[:space:]]+#<url-redacted>#g' \
+            -e 's#(X-Emby-Token[[:space:]]*:?[[:space:]]+)[^[:space:]]+#\1<redacted>#Ig' \
+            -e 's#(X-Emby-Authorization[[:space:]]*:[[:space:]]*Token[[:space:]]+)[^[:space:]]+#\1<redacted>#Ig' \
+            -e 's#(Authorization[[:space:]]*:[[:space:]]*(Bearer|Token)[[:space:]]+)[^[:space:]]+#\1<redacted>#Ig' \
+            -e 's#(access_token|api_key|authorization|token)=([^[:space:]]+)#\1=<redacted>#Ig'
+}
+
+framebuffer_state() {
+    for framebuffer in /dev/fb0 /dev/mi/gfx; do
+        if [ -r "$framebuffer" ]; then
+            printf 'framebuffer path=%s readable=1\n' "$framebuffer"
+            return
+        fi
+    done
+    printf 'framebuffer path=none readable=0\n'
+}
+
 printf 'sample_epoch=%s\n' "$(date +%s)"
 describe_processes MainUI
 describe_processes miyoofin
+describe_processes ffplay
+describe_processes miyoofin-https-bridge
+describe_processes miyoofin-playback-reporter
+framebuffer_state
 if [ -n "$download_root" ]; then
     download_files=0
     download_parts=0
@@ -73,12 +113,18 @@ if [ -n "$download_root" ]; then
             downloaded=$(awk -F= '$1 == "downloaded" { print $2; exit }' "$manifest" 2>/dev/null || true)
             expected=$(awk -F= '$1 == "size" { print $2; exit }' "$manifest" 2>/dev/null || true)
             state=$(awk -F= '$1 == "state" { print $2; exit }' "$manifest" 2>/dev/null || true)
+            item_type=$(awk -F= '$1 == "type" { print $2; exit }' "$manifest" 2>/dev/null || true)
             case $downloaded in ''|*[!0-9]*) downloaded=0 ;; esac
             case $expected in ''|*[!0-9]*) expected=0 ;; esac
             case $state in ''|*[!0-9]*) state=-1 ;; esac
             download_bytes=$((download_bytes + downloaded))
             download_expected=$((download_expected + expected))
-            [ "$state" = 6 ] && download_complete=$((download_complete + 1))
+            if [ "$state" = 6 ]; then
+                download_complete=$((download_complete + 1))
+                item_path=${manifest%/manifest.v2}
+                item_id=${item_path##*/}
+                printf 'completed_download item_id=%s type=%s\n' "$item_id" "${item_type:-unknown}"
+            fi
             [ "$state" = 2 ] && download_active=$((download_active + 1))
         done
         for partial in "$download_root"/*/items/*/segments/*.part \
@@ -98,15 +144,19 @@ if [ -f "$log_path" ]; then
     printf 'log_tail_begin path=%s lines=%s\n' "$log_path" "$log_lines"
     # Redact all URLs, then redact common token-shaped values that may not be
     # embedded in a URL.  The observer must never become an access-token log.
-    tail -n "$log_lines" "$log_path" 2>/dev/null \
-        | sed -r \
-            -e 's#https?://[^[:space:]]+#<url-redacted>#g' \
-            -e 's#(X-Emby-Token[[:space:]]*:?[[:space:]]+)[^[:space:]]+#\1<redacted>#Ig' \
-            -e 's#(X-Emby-Authorization[[:space:]]*:[[:space:]]*Token[[:space:]]+)[^[:space:]]+#\1<redacted>#Ig' \
-            -e 's#(access_token|api_key|authorization|token)=([^[:space:]]+)#\1=<redacted>#Ig'
+    redacted_tail "$log_path" "$log_lines"
     printf 'log_tail_end\n'
 else
     printf 'log_tail_missing path=%s\n' "$log_path"
+fi
+if [ -n "$playback_log" ]; then
+    if [ -f "$playback_log" ]; then
+        printf 'playback_log_tail_begin path=%s lines=%s\n' "$playback_log" "$log_lines"
+        redacted_tail "$playback_log" "$log_lines" "$playback_offset"
+        printf 'playback_log_tail_end\n'
+    else
+        printf 'playback_log_tail_missing path=%s\n' "$playback_log"
+    fi
 fi
 EOF
     then
@@ -158,6 +208,9 @@ count_comm() {
 
 mainui=$(count_comm MainUI)
 app=$(count_comm miyoofin)
+ffplay=$(count_comm ffplay)
+bridge=$(count_comm miyoofin-https-bridge)
+reporter=$(count_comm miyoofin-playback-reporter)
 
 case "$condition" in
     app-running)
@@ -169,6 +222,18 @@ case "$condition" in
     restored|clean)
         [ "$app" -eq 0 ]
         [ "$mainui" -eq 1 ]
+        [ -x "$app_dir/launch.sh" ]
+        [ ! -e "$app_dir/$launcher_backup" ]
+        ! grep -qE 'MIYOOFIN_UI_|LD_PRELOAD=' "$app_dir/launch.sh"
+        [ -z "$server_backup" ] || [ ! -e "$app_dir/$server_backup" ]
+        [ -z "$session_backup" ] || [ ! -e "$app_dir/$session_backup" ]
+        ;;
+    offline-clean)
+        [ "$app" -eq 0 ]
+        [ "$mainui" -eq 1 ]
+        [ "$ffplay" -eq 0 ]
+        [ "$bridge" -eq 0 ]
+        [ "$reporter" -eq 0 ]
         [ -x "$app_dir/launch.sh" ]
         [ ! -e "$app_dir/$launcher_backup" ]
         ! grep -qE 'MIYOOFIN_UI_|LD_PRELOAD=' "$app_dir/launch.sh"

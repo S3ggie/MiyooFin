@@ -636,7 +636,7 @@ static void testHomeStartupSyncSourceOrder()
     // The coordinator-owned rails request must appear before begin(
     const auto railsRequestPos = sourcePos(
         sync, "requestHomeRailRefresh(railRequest)");
-    const auto beginPos = sourcePos(sync, "m_librarySync->begin(");
+    const auto beginPos = sourcePos(sync, "sync->begin(");
     CHECK(railsRequestPos != std::string::npos);
     CHECK(beginPos != std::string::npos);
     CHECK(railsRequestPos < beginPos);

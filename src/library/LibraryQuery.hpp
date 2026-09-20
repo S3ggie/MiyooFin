@@ -36,9 +36,11 @@ class LibraryQuery {
 public:
     LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);
     std::future<MediaPage> movies(int alphabetLetter, std::size_t limit,
-                                   const CatalogDbPageCursor &after = {});
+                                   const CatalogDbPageCursor &after = {},
+                                   const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<MediaPage> shows(int alphabetLetter, std::size_t limit,
-                                 const CatalogDbPageCursor &after = {});
+                                 const CatalogDbPageCursor &after = {},
+                                 const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<MediaPage> anime(int alphabetLetter, std::size_t limit,
                                  const CatalogDbPageCursor &after = {});
     std::future<HierarchyPage> seasons(
@@ -51,6 +53,7 @@ public:
         const std::vector<std::string> &itemIds,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::uint64_t scopeEpoch() const { return m_scopeEpoch; }
+    bool scopeReady() const;
 
 private:
     std::shared_ptr<CatalogDb> m_db;

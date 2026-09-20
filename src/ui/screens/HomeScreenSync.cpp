@@ -40,11 +40,13 @@ void HomeScreen::requestMediaPage(MediaPageState &state)
     if (!m_libraryQuery)
         return;
     if (state.type == "movie")
-        state.future = m_libraryQuery->movies(state.letter, 24, state.next);
+        state.future = m_libraryQuery->movies(state.letter, 24, state.next,
+                                              state.cancellation);
     else if (state.type == "anime")
         state.future = m_libraryQuery->anime(state.letter, 64, state.next);
     else
-        state.future = m_libraryQuery->shows(state.letter, 24, state.next);
+        state.future = m_libraryQuery->shows(state.letter, 24, state.next,
+                                             state.cancellation);
     state.inFlight = true;
     if (!m_firstMediaPageReadLogged) {
         m_firstMediaPageReadLogged = true;
@@ -105,7 +107,8 @@ bool HomeScreen::liveChangeNeedsFullReconcile(
 
 void HomeScreen::updateLiveLibraryChanges()
 {
-    if (!m_librarySync || presentationOffline()) return;
+    const auto sync = syncService();
+    if (!sync || presentationOffline()) return;
     if (m_liveChangeThread.joinable()) {
         if (m_liveChangeDone.load()) finishLiveChangeApply();
         else if (!m_liveChangeInFlight) m_liveChangeThread.join();
@@ -121,7 +124,7 @@ void HomeScreen::updateLiveLibraryChanges()
     library::LiveChangeIdentity identity;
     const bool haveBatch = m_libraryCoordinator
         ? m_libraryCoordinator->takeLiveChangeRequest(batch, identity)
-        : m_librarySync->takeLiveChange(batch);
+        : sync->takeLiveChange(batch);
     if (!haveBatch)
         return;
     if (liveChangeIsEmpty(batch)) {
@@ -167,7 +170,7 @@ void HomeScreen::startLiveChangeApply(
     m_liveChangeDone.store(false);
     m_liveChangeInFlight = true;
     m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
-    const auto sync = m_librarySync;
+    const auto sync = syncService();
     const auto coordinator = m_libraryCoordinator;
     const auto cancellation = m_liveChangeCancellation;
     const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
@@ -317,7 +320,8 @@ bool HomeScreen::startFetch()
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
         HttpClient fetchClient;  // persistent connection across all home fetch API calls
         const std::string scope=LibraryCache::scopeKey(url,uid);
-        CatalogDbJobMetadata metadata=m_catalogMetadata;
+        CatalogDbJobMetadata metadata;
+        metadata.scopeEpoch = catalogScopeEpoch();
         metadata.cancellation=cancellation;
         SyncState legacyState;
         const bool legacyAvailable=SyncStateStore::load(
@@ -418,14 +422,14 @@ bool HomeScreen::startFetch()
         // are bounded reads on the CatalogDb worker; the SDL thread only sees
         // the publication signal in update(). A genuinely empty catalog must
         // remain Loading until the authoritative network generation commits.
-        if (m_catalogDb && m_catalogMetadata.scopeEpoch != 0) {
-            auto warmMovies = m_catalogDb->readMediaPage(
-                "movie", -1, 24, {}, metadata);
-            auto warmShows = m_catalogDb->readMediaPage(
-                "show", -1, 24, {}, metadata);
+        if (m_libraryQuery && catalogScopeEpoch() != 0) {
+            auto warmMovies = m_libraryQuery->movies(-1, 24, {}, cancellation);
+            auto warmShows = m_libraryQuery->shows(-1, 24, {}, cancellation);
             const auto movies = warmMovies.get();
             const auto shows = warmShows.get();
-            if (!movies.items.empty() || !shows.items.empty()) {
+            if (!cancellation->load() && !movies.cancelled && !shows.cancelled
+                && !movies.superseded && !shows.superseded
+                && (!movies.items.empty() || !shows.items.empty())) {
                 std::vector<TabData> warmTabs;
                 warmTabs.push_back({"Home", {{"", {}}}});
                 if (!movies.items.empty())
@@ -629,8 +633,9 @@ bool HomeScreen::startFetch()
         uiDiagnostics().log("[HomeScreen] startup stage=views_started");
         const std::uint64_t syncGeneration = ++m_topLevelSyncGeneration;
         bool topLevelSyncStarted = false;
-        if (m_librarySync) {
-            auto begin = m_librarySync->begin(syncGeneration).get();
+        const auto sync = syncService();
+        if (sync) {
+            auto begin = sync->begin(syncGeneration).get();
             topLevelSyncStarted = begin.success;
             if (!topLevelSyncStarted) catalogRefreshFailed = true;
         } else {
@@ -698,7 +703,7 @@ bool HomeScreen::startFetch()
                     std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
                                 page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
                     queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0);
-                    if (m_catalogDb) {
+                    if (sync) {
                         CatalogDbMediaPageWrite writePage;
                         writePage.items = page.items;
                         writePage.viewId = view.id;
@@ -708,7 +713,7 @@ bool HomeScreen::startFetch()
                         writePage.viewOrdinal = static_cast<int>(&view - views.data());
                         writePage.syncGeneration = syncGeneration;
                         writePage.finalPage = !page.hasMore;
-                        auto write = m_librarySync->stage(writePage);
+                        auto write = sync->stage(writePage);
                         const CatalogDbMediaPageUpsertResult writeResult = write.get();
                     if (!writeResult.success) {
                             catalogRefreshFailed = true;
@@ -783,14 +788,14 @@ bool HomeScreen::startFetch()
             }
         }
         if (topLevelSyncStarted && !catalogRefreshFailed && !cancellation->load()) {
-            auto finalized = m_librarySync->finalize(syncGeneration).get();
+            auto finalized = sync->finalize(syncGeneration).get();
             if (!finalized.success) {
                 catalogRefreshFailed = true;
             } else {
                 // Record sync checkpoint so subsequent live changes take the
                 // bounded catch-up path instead of a full library walk.
                 const std::int64_t nowMs = wallClockMs();
-                auto cp = m_librarySync->writeSyncState(
+                auto cp = sync->writeSyncState(
                     nowMs, nowMs, syncGeneration).get();
                 if (cp.success) {
                     m_syncState.lastSuccessfulMs = cp.lastSuccessfulMs;
@@ -808,7 +813,7 @@ bool HomeScreen::startFetch()
                 }
             }
         } else if (topLevelSyncStarted) {
-            m_librarySync->abort(syncGeneration).get();
+            sync->abort(syncGeneration).get();
         }
         }
         } // FullReconcile scope
@@ -886,7 +891,8 @@ bool HomeScreen::startFetch()
                             seriesIds.size(), resolvedCount);
                 for (const auto &seriesId : seriesIds) {
                     if (cancellation->load()) break;
-                    if (!m_librarySync) break;
+                    const auto sync = syncService();
+                    if (!sync) break;
                     // Resolve the full series item; skip if not in catalog.
                     const auto it = showMap.find(seriesId);
                     if (it == showMap.end())
@@ -896,7 +902,7 @@ bool HomeScreen::startFetch()
                     if (m_seasonPrefetchedIds.count(seriesId))
                         continue;
                     const auto &series = *it->second;
-                    const auto result = m_librarySync->refreshSeasons(
+                    const auto result = sync->refreshSeasons(
                         series, cancellation).get();
                     if (result.success) {
                         m_seasonPrefetchedIds.insert(seriesId);

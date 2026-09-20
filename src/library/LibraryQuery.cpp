@@ -14,8 +14,10 @@ CatalogDbJobMetadata LibraryQuery::metadata(
 }
 
 std::future<MediaPage> LibraryQuery::movies(int letter, std::size_t limit,
-                                             const CatalogDbPageCursor &after) {
-    auto f = m_db->readMediaPage("movie", letter, limit, after, metadata());
+                                             const CatalogDbPageCursor &after,
+                                             const std::shared_ptr<std::atomic_bool> &cancellation) {
+    auto f = m_db->readMediaPage("movie", letter, limit, after,
+                                 metadata(cancellation));
     return std::async(std::launch::async, [f = std::move(f)]() mutable {
         auto r = f.get(); MediaPage out;
         out.success=r.success; out.cancelled=r.cancelled; out.superseded=r.superseded;
@@ -25,8 +27,10 @@ std::future<MediaPage> LibraryQuery::movies(int letter, std::size_t limit,
 }
 
 std::future<MediaPage> LibraryQuery::shows(int letter, std::size_t limit,
-                                            const CatalogDbPageCursor &after) {
-    auto f = m_db->readMediaPage("show", letter, limit, after, metadata(),
+                                            const CatalogDbPageCursor &after,
+                                            const std::shared_ptr<std::atomic_bool> &cancellation) {
+    auto f = m_db->readMediaPage("show", letter, limit, after,
+                                 metadata(cancellation),
                                  CatalogDbMediaPageFilter::Supported);
     return std::async(std::launch::async, [f = std::move(f)]() mutable {
         auto r = f.get(); MediaPage out;
@@ -34,6 +38,14 @@ std::future<MediaPage> LibraryQuery::shows(int letter, std::size_t limit,
         out.error=r.error; out.message=std::move(r.message); out.hasMore=r.hasMore;
         out.items=std::move(r.items); out.membershipsByItem=std::move(r.membershipsByItem); out.next=std::move(r.next); return out;
     });
+}
+
+bool LibraryQuery::scopeReady() const
+{
+    if (!m_db || m_scopeEpoch == 0)
+        return false;
+    const CatalogDbScopeState state = m_db->scopeState();
+    return state.requestedEpoch == m_scopeEpoch && state.ready;
 }
 
 std::future<MediaPage> LibraryQuery::anime(int letter, std::size_t limit,

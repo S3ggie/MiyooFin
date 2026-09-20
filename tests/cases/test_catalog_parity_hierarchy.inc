@@ -257,7 +257,7 @@ void testLibraryCacheHomeParityHarness()
         readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(syncSource.find("m_metadataActive.store(true)")
           != std::string::npos);
-    CHECK(syncSource.find("m_metadataCompleted.fetch_add")
+    CHECK(syncSource.find("m_metadataCompleted.store")
           != std::string::npos);
     const std::string episodeNavigationSource =
         readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
@@ -310,17 +310,19 @@ void testLibraryCacheHomeParityHarness()
 static void testHomeSkipsUnsupportedLibraryViews()
 {
     std::printf("[test] Home skips unsupported library views before persistence\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(source.find("supportedLibraryView") != std::string::npos);
+    const std::string source =
+        readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(source.find("coordinatorSupportedLibraryView") != std::string::npos);
     CHECK(source.find("view.collectionType == \"movies\"") != std::string::npos);
     CHECK(source.find("view.collectionType == \"tvshows\"") != std::string::npos);
-    CHECK(source.find("library_view_skipped unsupported_collection") != std::string::npos);
     CHECK(source.find("views.erase(std::remove_if") != std::string::npos);
     CHECK(source.find("getLibraryItemsPage") != std::string::npos);
     CHECK(source.find("sync->stage") != std::string::npos);
-    CHECK(source.find("beginTopLevelSync") == std::string::npos);
-    CHECK(source.find("finalizeTopLevelSync") == std::string::npos);
-    CHECK(source.find("abortTopLevelSync") == std::string::npos);
+    const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(homeSource.find("requestFullPopulation") != std::string::npos);
+    CHECK(homeSource.find("beginTopLevelSync") == std::string::npos);
+    CHECK(homeSource.find("finalizeTopLevelSync") == std::string::npos);
+    CHECK(homeSource.find("abortTopLevelSync") == std::string::npos);
     std::printf("[test] Home skips unsupported library views before persistence OK\n");
 }
 
@@ -332,7 +334,7 @@ static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
     CHECK(source.find("bool catalogRefreshFailed") != std::string::npos);
     CHECK(source.find("optionalRailFailed=true") != std::string::npos);
     CHECK(source.find("catalogRefreshFailed = true") != std::string::npos);
-    CHECK(source.find("if (catalogRefreshFailed) break;") != std::string::npos);
+    CHECK(source.find("if (!catalogRefreshFailed)") != std::string::npos);
     CHECK(source.find("completeTelemetry(catalogRefreshFailed ? Outcome::Failure")
           != std::string::npos);
     CHECK(source.find("if (optionalRailFailed) break") == std::string::npos);
@@ -600,10 +602,47 @@ static void testHomePublishesAfterFirstBoundedPage()
           != std::string::npos);
     CHECK(source.find("if (movies.success || shows.success)")
           == std::string::npos);
-    CHECK(source.find("m_fetchError = viewsErr.empty()") != std::string::npos);
-    CHECK(source.find("m_fetchError = pageErr.empty()") != std::string::npos);
-    CHECK(source.find("if (views.empty())") != std::string::npos);
+    CHECK(source.find("m_fetchError = \"Library coordinator unavailable\"")
+          != std::string::npos);
+    CHECK(source.find("m_fetchError = update.message.empty()")
+          != std::string::npos);
+    CHECK(source.find("if (!update.views.empty())") != std::string::npos);
     std::printf("[test] Home publishes after first bounded page OK\n");
+}
+
+static void testHomeDiscardsColdProvisionalFailure()
+{
+    std::printf("[test] Home discards cold provisional failure/cancel\n");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes(
+        "src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(!sync.empty() && !apply.empty());
+
+    const std::string finish = sourceFunction(
+        apply, "void HomeScreen::finishFetch(");
+    CHECK(!finish.empty());
+    // The first page is explicitly provisional, while both a failed terminal
+    // update and a cancelled/superseded update provide the failure message.
+    CHECK(sourceContains(sync,
+                         "firstPageTabs, firstPageSnapshot, false, false"));
+    CHECK(sourceContains(sync, "update.cancelled || update.superseded"));
+    // Cold-start failure handling must not be gated on prior valid content.
+    CHECK(sourceContains(finish,
+                         "if (m_fetchComplete.load() && !m_fetchCatalogCommitted.load()"));
+    CHECK(sourceContains(finish, "if (m_fetchPreviousContentValid)"));
+    CHECK(sourceContains(finish, "m_tabs = emptyHomeTabs();"));
+    CHECK(sourceContains(finish, "m_fetchResult.clear();"));
+    CHECK(sourceContains(finish, "m_homeRailsApplied = true;"));
+    CHECK(sourceContains(finish, "m_fetchPostFinalizeApplied = true;"));
+    CHECK(sourceContains(finish,
+                         "m_offlineModeFetchPending ? LoadState::Loading : LoadState::Error"));
+    // The post-finalize rail projection is after the terminal branch, so the
+    // branch must arm both guards before it can return to that code.
+    CHECK(sourcePos(finish, "m_homeRailsApplied = true;")
+          < sourcePos(finish, "if (m_homeRailsReady.load() && !m_homeRailsApplied)"));
+    CHECK(sourcePos(finish, "m_fetchPostFinalizeApplied = true;")
+          < sourcePos(finish, "if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied)"));
+    std::printf("[test] Home discards cold provisional failure/cancel OK\n");
 }
 
 static void testHomePreservesAnimeMembershipDuringBoundedReads()

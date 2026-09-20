@@ -4,9 +4,11 @@
 #include "LibraryQuery.hpp"
 #include "LibrarySync.hpp"
 #include "../cache/LibraryCache.hpp"
+#include "../net/JellyfinApi.hpp"
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +34,37 @@ struct StartupSyncResult {
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
+};
+
+/// Immutable incremental publication from the coordinator-owned full library
+/// population.  Page data is published only after its CatalogDb stage has
+/// committed, allowing Home to render the first bounded page while the worker
+/// continues the remaining walk.
+struct FullPopulationUpdate {
+    std::uint64_t request = 0;
+    std::uint64_t generation = 0;
+    bool terminal = false;
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    bool committed = false;
+    bool checkpointCommitted = false;
+    bool pageValid = false;
+    bool firstPage = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::int64_t checkpointMs = 0;
+    std::int64_t lastSuccessfulMs = 0;
+    std::int64_t lastReconcileMs = 0;
+    std::size_t metadataTotal = 0;
+    std::size_t metadataCompleted = 0;
+    std::size_t mediaCount = 0;
+    std::size_t requestCount = 0;
+    LibraryView view;
+    LibraryItemsPage page;
+    std::vector<LibraryView> views;
+    std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+    std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
 };
 
 /// Terminal publication from the coordinator-owned periodic authoritative
@@ -129,16 +162,30 @@ public:
     void start();
 
     /// Start the coordinator-owned persisted-checkpoint decision and bounded
-    /// startup catch-up. Full population remains HomeScreen-owned for now.
+    /// startup catch-up.
     bool startStartupSync(bool catalogHasRows);
     bool takeStartupSyncResult(StartupSyncResult &result);
     /// Cancel and join the startup operation without stopping session scope.
     void cancelStartupSync() noexcept;
 
-    /// Reserve the full population slot. Live changes remain queued until the
-    /// slot is released and startup has published its result.
+    /// Start one coordinator-owned full library population.  Incremental page
+    /// publications become available through takeFullPopulationUpdate(); the
+    /// terminal publication releases the serialized full-sync gate.
+    bool requestFullPopulation(std::uint64_t &request);
+    bool takeFullPopulationUpdate(std::uint64_t request,
+                                  FullPopulationUpdate &update);
+    void cancelFullPopulation() noexcept;
+
+    /// Reserve/release the legacy full population slot.  Kept for callers
+    /// which only need serialization without asking the coordinator to walk.
     bool beginFullSync();
     void finishFullSync() noexcept;
+
+    /// Checkpoint a serialized live-catalog commit without exposing the
+    /// LibrarySync transaction primitive to HomeScreen.
+    std::future<CatalogDbSyncState> checkpointLiveCatalog(
+        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+        std::uint64_t committedGeneration);
 
     /// Start one serialized safety catch-up/reconcile.  The coordinator owns
     /// the checkpoint decision, worker, committed-generation policy, and
@@ -226,6 +273,10 @@ private:
     bool m_startupResultReady = false;
     bool m_startupInFlight = false;
     bool m_fullSyncInFlight = false;
+    std::thread m_fullPopulationThread;
+    std::shared_ptr<std::atomic_bool> m_fullPopulationCancellation;
+    std::deque<FullPopulationUpdate> m_fullPopulationUpdates;
+    std::uint64_t m_fullPopulationRequest = 0;
     std::thread m_safetyReconcileThread;
     std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     SafetyReconcileResult m_safetyReconcileResult;

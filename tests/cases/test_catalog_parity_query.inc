@@ -275,9 +275,11 @@ static void testCatalogDbBoundedMediaPaging()
     CHECK(staleScopeFuture.get().superseded);
 
     const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(homeSource.find("readMediaPage") != std::string::npos);
+    CHECK(homeSource.find("m_libraryQuery->movies") != std::string::npos);
     CHECK(homeSource.find("std::thread([this") != std::string::npos);
-    CHECK(homeSource.find("getLibraryItemsPage") != std::string::npos);
+    const std::string coordinatorSource =
+        readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(coordinatorSource.find("getLibraryItemsPage") != std::string::npos);
     CHECK(homeSource.find("seedLibrarySnapshot") == std::string::npos);
     CHECK(homeSource.find("readLibrarySnapshot") == std::string::npos);
     CHECK(homeSource.find("home_items") == std::string::npos);
@@ -437,5 +439,4 @@ static void testHomeUsesCatalogBeforeNetworkRefresh()
     removeCatalogMigrationTestPaths(paths);
     std::printf("[test] Home uses CatalogDb before network refresh OK\n");
 }
-
 

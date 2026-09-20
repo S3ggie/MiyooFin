@@ -6,9 +6,8 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
-#include "../../catalog/CatalogDb.hpp"
+#include "../../library/LibraryCoordinator.hpp"
 #include "../../library/LibraryQuery.hpp"
-#include "../../library/LibrarySync.hpp"
 #include <memory>
 #include <map>
 #include <string>
@@ -25,10 +24,9 @@ namespace miyoofin {
 class SeriesScreen : public Screen {
 public:
     SeriesScreen(const Session &session, const MediaItem &series, std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
-                 std::vector<MediaItem> cachedSeasons={}, bool downloadedOnly=false,
-                 std::shared_ptr<CatalogDb> catalogDb={}, std::uint64_t catalogScopeEpoch=0,
-                 std::shared_ptr<library::LibrarySync> librarySync={},
-                 std::shared_ptr<library::LibraryQuery> libraryQuery={});
+                  std::vector<MediaItem> cachedSeasons={}, bool downloadedOnly=false,
+                  std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={},
+                  std::shared_ptr<library::LibraryQuery> libraryQuery={});
     ~SeriesScreen() override;
 
     void enter() override;
@@ -72,10 +70,8 @@ private:
     Session       m_session;
     MediaItem     m_series;
     std::shared_ptr<DownloadManager> m_downloads;
-    std::shared_ptr<CatalogDb> m_catalogDb;
-    std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
-    CatalogDbJobMetadata m_catalogMetadata;
     bool m_networkOffline=false, m_downloadedOnly=false;
     std::uint64_t m_planId = 0; bool m_confirmDownload = false; bool m_planWholeSeries = false;
     std::vector<MediaItem> m_seasons;

@@ -1,5 +1,5 @@
 #include "../../src/library/LibraryQuery.hpp"
-#include "../../src/library/LibrarySync.hpp"
+#include "../../src/library/LibraryCoordinator.hpp"
 #include "../../src/net/TlsConfig.hpp"
 
 static void testDownloadInterruptStates()
@@ -593,10 +593,9 @@ static void testCatalogDbHierarchyPlanning()
     const auto seeded=catalog->seedHierarchyQueryFixturesForTest();
     CHECK(seeded.success&&seeded.hierarchyFixture);
     DownloadManager manager(session,"output/test/catalog-plan-downloads-"+suffix);
-    auto libraryQuery = std::make_shared<library::LibraryQuery>(catalog, epoch);
-    auto librarySync = std::make_shared<library::LibrarySync>(session, catalog,
-                                                               epoch);
-    manager.setLibraryServices(libraryQuery, librarySync);
+    auto libraryCoordinator =
+        std::make_shared<library::LibraryCoordinator>(session, catalog, epoch);
+    manager.setLibraryServices(libraryCoordinator->query(), libraryCoordinator);
     MediaItem series; series.id="__task10_series__"; series.type="show";
     MediaItem season; season.id="__task10_season_a__"; season.type="season"; season.seriesId=series.id;
     const std::uint64_t planId=manager.requestSeasonPlan(series,season);

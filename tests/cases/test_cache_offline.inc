@@ -158,12 +158,12 @@ static void testSeriesCachedSeasonHandoff(){
     CHECK(seriesSource.find("catalogDb->getSeasons")==std::string::npos);
     CHECK(seriesSource.find("catalogDb->stageSeriesHierarchy")==std::string::npos);
     CHECK(seriesSource.find("m_libraryQuery")!=std::string::npos);
-    CHECK(seriesSource.find("m_librarySync")!=std::string::npos);
+    CHECK(seriesSource.find("m_libraryCoordinator")!=std::string::npos);
     CHECK(episodeSource.find("JellyfinApi::getEpisodes")==std::string::npos);
     CHECK(episodeSource.find("catalogDb->getEpisodes")==std::string::npos);
     CHECK(episodeSource.find("catalogDb->reconcileSeasonHierarchy")==std::string::npos);
     CHECK(episodeSource.find("m_libraryQuery")!=std::string::npos);
-    CHECK(episodeSource.find("m_librarySync")!=std::string::npos);
+    CHECK(episodeSource.find("m_libraryCoordinator")!=std::string::npos);
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
     // A nonempty RAM handoff is ready before enter(), so push has no catalog I/O.
     SeriesScreen warm(session,show,{},false,{cached}); CHECK(warm.diagnosticSeasonsReady()); CHECK(warm.diagnosticSeasons().size()==(size_t)1&&warm.diagnosticSeasons()[0].id==cached.id);
@@ -185,8 +185,12 @@ static void testSeriesCachedSeasonHandoff(){
     CHECK(catalogDb->waitForIdleForTest(std::chrono::seconds(2)));
     const auto seeded=catalogDb->seedHierarchyQueryFixturesForTest();
     CHECK(seeded.success&&seeded.hierarchyFixture);
+    auto libraryCoordinator =
+        std::make_shared<library::LibraryCoordinator>(catalogSession, catalogDb,
+                                                       epoch);
     MediaItem catalogSeries; catalogSeries.id="__task10_series__"; catalogSeries.type="show";
-    SeriesScreen catalogScreen(catalogSession,catalogSeries,{},true,{},false,catalogDb,epoch);
+    SeriesScreen catalogScreen(catalogSession,catalogSeries,{},true,{},false,
+                               libraryCoordinator);
     catalogScreen.enter();
     for(int i=0;i<100&&!catalogScreen.diagnosticSeasonsReady();++i){catalogScreen.update(16);usleep(1000);}
     CHECK(catalogScreen.diagnosticSeasonsReady()&&catalogScreen.diagnosticSeasons().size()==(size_t)3);
@@ -197,7 +201,7 @@ static void testSeriesCachedSeasonHandoff(){
     MediaItem catalogSeason; catalogSeason.id="__task10_season_a__"; catalogSeason.type="season";
     EpisodeBrowserScreen episodeScreen(catalogSession, catalogSeries,
                                        catalogSeason, "", {}, true, false,
-                                       catalogDb, epoch);
+                                       libraryCoordinator);
     episodeScreen.enter();
     for(int i=0;i<100&&!episodeScreen.diagnosticEpisodesReady();++i){episodeScreen.update(16);usleep(1000);}
     CHECK(episodeScreen.diagnosticEpisodesReady()

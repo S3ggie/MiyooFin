@@ -188,6 +188,16 @@ public:
 
     std::shared_ptr<LibrarySync> sync() const { return m_sync; }
     std::shared_ptr<LibraryQuery> query() const { return m_query; }
+    /// Refresh a series hierarchy through the coordinator-owned sync service.
+    /// Callers retain ownership of the returned future and may cancel through
+    /// the supplied token.
+    std::future<HierarchyRefreshResult> refreshSeasons(
+        const MediaItem &series,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+    /// Refresh a season hierarchy through the coordinator-owned sync service.
+    std::future<HierarchyRefreshResult> refreshEpisodes(
+        const MediaItem &series, const MediaItem &season,
+        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     struct Status {
         bool inFlight = false;
         bool startupInFlight = false;

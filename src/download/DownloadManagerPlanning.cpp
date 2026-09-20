@@ -2,7 +2,7 @@
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../library/LibraryQuery.hpp"
-#include "../library/LibrarySync.hpp"
+#include "../library/LibraryCoordinator.hpp"
 #include "DownloadSupport.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
@@ -81,11 +81,11 @@ std::uint64_t DownloadManager::requestSeasonPlan(const std::string&seriesId,cons
 std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
 {
     std::shared_ptr<library::LibraryQuery> libraryQuery;
-    std::shared_ptr<library::LibrarySync> librarySync;
+    std::shared_ptr<library::LibraryCoordinator> libraryCoordinator;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         libraryQuery = m_libraryQuery;
-        librarySync = m_librarySync;
+        libraryCoordinator = m_libraryCoordinator;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t id=m_nextPlanId++;
@@ -94,7 +94,7 @@ std::uint64_t DownloadManager::requestSeriesPlan(const MediaItem &series)
     snapshot.state=DownloadPlanState::Planning;
     m_plans[id]=snapshot;
     m_planJobs.push_back({id,m_generation,m_session,{},series.id,"",series,{},
-                          libraryQuery,librarySync,
+                           libraryQuery,libraryCoordinator,
                           std::make_shared<std::atomic_bool>(false)});
     performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
         static_cast<std::uint32_t>(m_planJobs.size()));
@@ -106,11 +106,11 @@ std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
                                                  const MediaItem &season)
 {
     std::shared_ptr<library::LibraryQuery> libraryQuery;
-    std::shared_ptr<library::LibrarySync> librarySync;
+    std::shared_ptr<library::LibraryCoordinator> libraryCoordinator;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         libraryQuery = m_libraryQuery;
-        librarySync = m_librarySync;
+        libraryCoordinator = m_libraryCoordinator;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t id=m_nextPlanId++;
@@ -119,7 +119,7 @@ std::uint64_t DownloadManager::requestSeasonPlan(const MediaItem &series,
     snapshot.state=DownloadPlanState::Planning;
     m_plans[id]=snapshot;
     m_planJobs.push_back({id,m_generation,m_session,{},series.id,season.id,
-                          series,season,libraryQuery,librarySync,
+                          series,season,libraryQuery,libraryCoordinator,
                           std::make_shared<std::atomic_bool>(false)});
     performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadPlanner,
         static_cast<std::uint32_t>(m_planJobs.size()));
@@ -208,13 +208,13 @@ void DownloadManager::planner()
         auto refreshEpisodes = [&](const MediaItem &series,
                                    const MediaItem &season,
                                    std::vector<MediaItem> &episodes) {
-            if (!job.librarySync) {
-                error = "LibrarySync service unavailable";
+            if (!job.libraryCoordinator) {
+                error = "Library coordinator unavailable";
                 return false;
             }
             const library::HierarchyRefreshResult result =
-                job.librarySync->refreshEpisodes(series, season,
-                                                 cancellation).get();
+                job.libraryCoordinator->refreshEpisodes(series, season,
+                                                        cancellation).get();
             if (result.superseded || result.cancelled) {
                 hierarchySuperseded = true;
                 return false;
@@ -230,12 +230,12 @@ void DownloadManager::planner()
 
         auto refreshSeasons = [&](const MediaItem &series,
                                   std::vector<MediaItem> &refreshed) {
-            if (!job.librarySync) {
-                error = "LibrarySync service unavailable";
+            if (!job.libraryCoordinator) {
+                error = "Library coordinator unavailable";
                 return false;
             }
             const library::HierarchyRefreshResult result =
-                job.librarySync->refreshSeasons(series, cancellation).get();
+                job.libraryCoordinator->refreshSeasons(series, cancellation).get();
             if (result.superseded || result.cancelled) {
                 hierarchySuperseded = true;
                 return false;

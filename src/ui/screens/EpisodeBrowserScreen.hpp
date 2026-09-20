@@ -6,9 +6,8 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
-#include "../../catalog/CatalogDb.hpp"
+#include "../../library/LibraryCoordinator.hpp"
 #include "../../library/LibraryQuery.hpp"
-#include "../../library/LibrarySync.hpp"
 #include <memory>
 #include <condition_variable>
 #include <cstdint>
@@ -30,9 +29,8 @@ public:
                          const MediaItem &series,
                          const MediaItem &season,
                          const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
-                         bool downloadedOnly=false, std::shared_ptr<CatalogDb> catalogDb={},
-                         std::uint64_t catalogScopeEpoch=0,
-                         std::shared_ptr<library::LibrarySync> librarySync={},
+                          bool downloadedOnly=false,
+                         std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={},
                          std::shared_ptr<library::LibraryQuery> libraryQuery={});
     ~EpisodeBrowserScreen() override;
 
@@ -140,10 +138,8 @@ private:
     std::string   m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
     std::shared_ptr<DownloadManager> m_downloads;
-    std::shared_ptr<CatalogDb> m_catalogDb;
-    std::shared_ptr<library::LibrarySync> m_librarySync;
+    std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
-    CatalogDbJobMetadata m_catalogMetadata;
     bool m_networkOffline=false, m_downloadedOnly=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
     LoadState     m_loadState = LoadState::Loading;
     std::string   m_error;

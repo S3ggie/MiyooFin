@@ -1,0 +1,15 @@
+# Home re-entry stability: repeatedly leave Home for Movies and return via
+# the existing tab events.  Physical playback and suspend are separate
+# unsupported scenarios; they must be reported UNRUN by remote-scenario.sh.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 5000
+KEY NextTab 80 700
+KEY PrevTab 80 700
+KEY NextTab 80 700
+KEY PrevTab 80 700
+KEY NextTab 80 700
+KEY PrevTab 80 700
+# The initial Home marker is emitted during the first library publication;
+# re-entry is represented by the bounded key events and the final frame.
+SCREENSHOT home-reentry
+QUIT

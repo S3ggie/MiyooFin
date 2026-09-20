@@ -39,7 +39,7 @@
 # path temporarily and gives it back.
 #
 # Usage: sh tools/ui-script/device-run.sh [--dry-run] [--desktop-keys]
-#            [--server-unavailable] [--timeout-s N] <smoke|series>
+#            [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry>
 #   --dry-run       print every host/remote action, do nothing (no SSH).
 #   --desktop-keys  do NOT set MIYOOFIN_UI_DEVICE_KEYS (shim sends WASD
 #                   codes; only useful with Raw: scancodes in the script).
@@ -100,7 +100,7 @@ while [ $# -gt 0 ]; do
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
@@ -120,6 +120,21 @@ BACKUP=launch.sh.uiscript-bak
 SERVER_BACKUP=server.txt.uiscript-bak
 SESSION_BACKUP=session.txt.uiscript-bak
 UNAVAILABLE_ENDPOINT=http://127.0.0.1:9
+
+# APP_DIR is interpolated into a few remote shell commands below.  Keep the
+# existing command structure, but refuse operator-supplied metacharacters
+# before the first SSH call rather than attempting to escape every nesting
+# level independently.
+case "$APP_DIR" in
+    /*) ;;
+    *) echo "device-run: MIYOOFIN_DEVICE_APP_DIR must be an absolute path" >&2; exit 2 ;;
+esac
+case "$APP_DIR" in
+    *[!A-Za-z0-9_./-]*)
+        echo "device-run: MIYOOFIN_DEVICE_APP_DIR contains unsafe characters" >&2
+        exit 2
+        ;;
+esac
 
 [ -f "$SCRIPT" ] || { echo "device-run: no such device script: $SCRIPT" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "device-run: python3 required" >&2; exit 2; }
@@ -587,6 +602,11 @@ case "$NAME" in
         fi
         SHOT="$OUT/shots/home.bmp"
         CHECKS="rendered,rails"
+        ;;
+    home-reentry)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/home-reentry.bmp"
+        CHECKS="rendered"
         ;;
     series)
         want='[SeriesScreen] enter series='

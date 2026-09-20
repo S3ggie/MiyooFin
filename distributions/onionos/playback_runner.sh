@@ -35,14 +35,42 @@ read_kv() {
     grep "^${2}=" "$1" 2>/dev/null | head -1 | cut -d'=' -f2-
 }
 
-cleanup_playback() {
-    if [ -n "$REPORTER_PID" ] && kill -0 "$REPORTER_PID" 2>/dev/null; then
-        kill "$REPORTER_PID" 2>/dev/null
-        wait "$REPORTER_PID" 2>/dev/null
+stop_and_reap_child() {
+    CHILD_NAME=$1
+    CHILD_PID=$2
+    [ -n "$CHILD_PID" ] || return
+
+    if kill -0 "$CHILD_PID" 2>/dev/null; then
+        playback_log "terminating $CHILD_NAME pid=$CHILD_PID"
+        kill -TERM "$CHILD_PID" 2>/dev/null
+        # Every PID here is an exact child of this runner.  Give it a brief,
+        # bounded graceful window, then escalate only for that known PID.
+        CHILD_STOP_WAIT=0
+        while kill -0 "$CHILD_PID" 2>/dev/null && [ "$CHILD_STOP_WAIT" -lt 2 ]; do
+            sleep 1
+            CHILD_STOP_WAIT=$((CHILD_STOP_WAIT + 1))
+        done
+        if kill -0 "$CHILD_PID" 2>/dev/null; then
+            playback_log "$CHILD_NAME did not exit after TERM; sending KILL pid=$CHILD_PID"
+            kill -KILL "$CHILD_PID" 2>/dev/null
+        fi
     fi
-    if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
-        kill "$BRIDGE_PID" 2>/dev/null
-        wait "$BRIDGE_PID" 2>/dev/null
+    wait "$CHILD_PID" 2>/dev/null || true
+    playback_log "${CHILD_NAME}_reaped pid=$CHILD_PID"
+}
+
+cleanup_playback() {
+    if [ -n "$FFPLAY_PID" ]; then
+        stop_and_reap_child ffplay "$FFPLAY_PID"
+        FFPLAY_PID=""
+    fi
+    if [ -n "$REPORTER_PID" ]; then
+        stop_and_reap_child reporter "$REPORTER_PID"
+        REPORTER_PID=""
+    fi
+    if [ -n "$BRIDGE_PID" ]; then
+        stop_and_reap_child bridge "$BRIDGE_PID"
+        BRIDGE_PID=""
     fi
     rm -f /tmp/stay_awake
 }
@@ -163,7 +191,9 @@ playback_log "Resume ticks=$REQUEST_RESUME_TICKS PlaySessionId=$PLAY_SESSION_ID"
 rm -f /tmp/stay_awake
 BRIDGE_PID=""
 REPORTER_PID=""
+FFPLAY_PID=""
 trap 'cleanup_playback' EXIT
+trap 'exit 143' HUP INT TERM
 
 # Keep the device awake during playback
 touch /tmp/stay_awake
@@ -303,7 +333,8 @@ else
 fi
 wait "$FFPLAY_PID"
 FFPLAY_EXIT=$?
-playback_log "FFplay exited with code $FFPLAY_EXIT"
+playback_log "FFplay exited with code $FFPLAY_EXIT pid=$FFPLAY_PID (reaped)"
+FFPLAY_PID=""
 
 # -------------------------------------------------------------------
 # Signal FFplay exit to reporter
@@ -319,11 +350,12 @@ if [ -n "$REPORTER_PID" ]; then
     done
     if kill -0 "$REPORTER_PID" 2>/dev/null; then
         playback_log "WARNING: Reporter did not exit within timeout, terminating"
-        kill "$REPORTER_PID" 2>/dev/null
-        wait "$REPORTER_PID" 2>/dev/null
+        stop_and_reap_child reporter "$REPORTER_PID"
     else
         playback_log "Reporter exited cleanly"
+        stop_and_reap_child reporter "$REPORTER_PID"
     fi
+    REPORTER_PID=""
 fi
 
 # -------------------------------------------------------------------

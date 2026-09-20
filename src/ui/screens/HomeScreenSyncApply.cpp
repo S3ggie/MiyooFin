@@ -279,7 +279,6 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     }
 }
 bool HomeScreen::liveChangeAffectsHome(
-    const JellyfinLibraryChangeBatch &batch,
     const library::LiveLibraryChangeResult &result) const
 {
     bool catalogItemAffectsHome = false;
@@ -309,7 +308,7 @@ bool HomeScreen::liveChangeAffectsHome(
             cachedHomeItemRemoved = true;
             break;
         }
-    return homeChangeNeedsPublication(batch.catchUpRequired,
+    return homeChangeNeedsPublication(result.catchUpRequired,
                                       catalogItemAffectsHome,
                                       cachedHomeItemRemoved);
 }
@@ -348,43 +347,6 @@ void HomeScreen::publishLiveCatalogItems(
     }
     refreshMovieFilter();
     rebuildShowsPresentation();
-}
-void HomeScreen::finishLiveChangeApply()
-{
-    if (!m_liveChangeThread.joinable()) return;
-    if (m_libraryCoordinator
-        && !m_libraryCoordinator->takeLiveChangeResult(
-            m_liveChangeIdentity, m_liveChangeResult)) {
-        // The worker can finish after coordinator stop/discard invalidates its
-        // identity.  There is then no result to apply, but the completed
-        // worker must still release Home's in-flight state.  Its thread is
-        // joined by the next update (or by teardown) after this cleanup.
-        if (!m_liveChangeDone.load()) return;
-        m_liveChangeDone.store(false);
-        m_liveChangeInFlight = false;
-        m_liveChangeCancellation.reset();
-        m_liveChangeResult = {};
-        return;
-    }
-    // Thread join deferred to next startLiveChangeApply() or joinAllWorkers().
-    // The Done atomic guarantees all result writes are visible.
-    m_liveChangeDone.store(false);
-    m_liveChangeInFlight = false;
-    const auto batch = m_liveChangeBatch;
-    const auto result = m_liveChangeResult;
-    m_liveChangeCancellation.reset();
-    if (result.success && liveChangeAffectsHome(batch, result)) {
-        publishLiveCatalogItems(result);
-        // Debounce: skip the rail refresh if the last successful refresh
-        // completed within kHomeRailRefreshDebounceMs to avoid hammering the
-        // server with ResumeItems+LatestItems pairs on rapid live changes.
-        const std::int64_t nowMs = wallClockMs();
-        if (!homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshCompletedMs)
-            && !homeRailRefreshDebounced(nowMs, m_lastHomeRailRefreshAttemptMs)) {
-            m_homeSyncActive = true;
-            startHomeRailRefresh();
-        }
-    }
 }
 void HomeScreen::finishHomeRailRefresh()
 {

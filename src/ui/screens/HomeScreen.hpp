@@ -144,17 +144,6 @@ public:
     // Pre-scaled card surface cache (performance: avoid per-frame create/scale/free)
     std::map<std::string, SDL_Surface*> m_cardSurfaceCache;
 
-    // --- Live-change policy helpers (public for testing) -----------------
-
-    /// True when a live-change batch has no meaningful work and should be
-    /// silently dropped before spawning a worker thread.
-    static bool liveChangeIsEmpty(
-        const JellyfinLibraryChangeBatch &batch);
-    /// True when a live-change with catchUpRequired needs a full library
-    /// reconcile because no usable sync checkpoint exists.
-    static bool liveChangeNeedsFullReconcile(
-        std::int64_t checkpointMs, bool catchUpRequired);
-
     // --- Offline snapshot cache (public for testing) -----------------------
     struct OfflineSnapshotSignature {
         std::size_t availableItemCount = 0;
@@ -416,16 +405,6 @@ private:
     void startDownloadRefresh();
     void finishDownloadRefresh();
 
-    // Live catalog changes are received by LibrarySync and applied here only
-    // after their worker-owned synchronization has completed.
-    std::thread m_liveChangeThread;
-    std::atomic<bool> m_liveChangeDone{false};
-    bool m_liveChangeInFlight = false;
-    std::mutex m_liveChangeMutex;
-    std::shared_ptr<std::atomic_bool> m_liveChangeCancellation;
-    JellyfinLibraryChangeBatch m_liveChangeBatch;
-    library::LiveChangeIdentity m_liveChangeIdentity;
-    library::LiveLibraryChangeResult m_liveChangeResult;
     std::int64_t m_lastSafetyReconcileMs = 0;
     bool m_safetyReconcileInFlight = false;
     bool m_homeSyncActive = false;
@@ -458,11 +437,7 @@ private:
     bool m_startupRailRAValid = false;
 
     void updateLiveLibraryChanges();
-    void startLiveChangeApply(const JellyfinLibraryChangeBatch &batch,
-                              const library::LiveChangeIdentity &identity);
-    void finishLiveChangeApply();
     bool liveChangeAffectsHome(
-        const JellyfinLibraryChangeBatch &batch,
         const library::LiveLibraryChangeResult &result) const;
     void publishLiveCatalogItems(const library::LiveLibraryChangeResult &result);
     void startHomeRailRefresh();
@@ -470,7 +445,6 @@ private:
     void startSafetyReconcile();
     void finishSafetyReconcile();
 
-    std::shared_ptr<library::LibrarySync> syncService() const;
     std::uint64_t catalogScopeEpoch() const;
     bool catalogScopeReady() const;
 

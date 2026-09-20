@@ -83,57 +83,25 @@ void HomeScreen::updateMediaPaging()
     }
 }
 
-bool HomeScreen::liveChangeIsEmpty(const JellyfinLibraryChangeBatch &batch)
-{
-    return !batch.catchUpRequired
-        && !batch.userDataChanged
-        && batch.itemsAdded.empty()
-        && batch.itemsUpdated.empty()
-        && batch.itemsRemoved.empty();
-}
-
-bool HomeScreen::liveChangeNeedsFullReconcile(
-    std::int64_t checkpointMs, bool catchUpRequired)
-{
-    return catchUpRequired && checkpointMs <= 0;
-}
-
 void HomeScreen::updateLiveLibraryChanges()
 {
-    const auto sync = syncService();
-    if (!sync || presentationOffline()) return;
-    if (m_liveChangeThread.joinable()) {
-        if (m_liveChangeDone.load()) finishLiveChangeApply();
-        else if (!m_liveChangeInFlight) m_liveChangeThread.join();
+    if (!m_libraryCoordinator || presentationOffline())
         return;
+
+    library::LiveLibraryChangeResult result;
+    if (!m_libraryCoordinator->takeLiveChangeResult(result))
+        return;
+
+    if (result.generation > m_topLevelSyncGeneration.load())
+        m_topLevelSyncGeneration.store(result.generation);
+    if (result.lastSuccessfulMs > 0) {
+        m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
+        m_syncState.lastReconcileMs = result.lastReconcileMs;
     }
-    // Do not begin a competing top-level sync while the initial
-    // population's top-level generation is still in flight.  Events
-    // remain queued and will be processed once the initial population
-    // commits.
-    if (m_initialPopulationInProgress)
-        return;
-    JellyfinLibraryChangeBatch batch;
-    library::LiveChangeIdentity identity;
-    const bool haveBatch = m_libraryCoordinator
-        ? m_libraryCoordinator->takeLiveChangeRequest(batch, identity)
-        : sync->takeLiveChange(batch);
-    if (!haveBatch)
-        return;
-    if (liveChangeIsEmpty(batch)) {
-        if (m_libraryCoordinator)
-            m_libraryCoordinator->discardLiveChangeResults();
-        return;
-    }
-    const bool hasItemChanges = !batch.itemsAdded.empty()
-        || !batch.itemsRemoved.empty()
-        || !batch.itemsUpdated.empty()
-        || batch.catchUpRequired;
-    if (hasItemChanges)
-        startLiveChangeApply(batch, identity);
-    else if (m_libraryCoordinator)
-        m_libraryCoordinator->discardLiveChangeResults();
-    if (batch.userDataChanged) {
+    if (result.success && liveChangeAffectsHome(result))
+        publishLiveCatalogItems(result);
+
+    if (result.success && result.userDataChanged) {
         const std::int64_t nowMs = wallClockMs();
         if (!homeRailRefreshDebounced(nowMs,
                                       m_lastHomeRailRefreshCompletedMs)
@@ -143,107 +111,6 @@ void HomeScreen::updateLiveLibraryChanges()
             startHomeRailRefresh();
         }
     }
-}
-
-void HomeScreen::startLiveChangeApply(
-    const JellyfinLibraryChangeBatch &batch,
-    const library::LiveChangeIdentity &identity)
-{
-    if (m_liveChangeThread.joinable()) {
-        // Join if the previous live-change completed (Done set) or if
-        // finishLiveChangeApply already ran (inFlight cleared).
-        if (m_liveChangeDone.load() || !m_liveChangeInFlight)
-            m_liveChangeThread.join();
-        else
-            return;  // previous live-change still running
-    }
-    m_liveChangeBatch = batch;
-    m_liveChangeIdentity = identity;
-    m_liveChangeResult = {};
-    m_liveChangeDone.store(false);
-    m_liveChangeInFlight = true;
-    m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
-    const auto sync = syncService();
-    const auto coordinator = m_libraryCoordinator;
-    const auto cancellation = m_liveChangeCancellation;
-    const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
-    m_liveChangeThread = std::thread(
-        [this, sync, batch, cancellation, checkpointMs, coordinator, identity] {
-            library::LiveLibraryChangeResult result;
-            const auto publishResult = [this, coordinator, identity](
-                                           library::LiveLibraryChangeResult result) {
-                if (coordinator) {
-                    // Stop/discard may invalidate the identity while this
-                    // worker is winding down.  Rejection still means the
-                    // worker has completed; Home must not wait forever for a
-                    // result that the coordinator intentionally discarded.
-                    (void)coordinator->publishLiveChangeResult(
-                        identity, std::move(result));
-                } else {
-                    m_liveChangeResult = std::move(result);
-                }
-                m_liveChangeDone.store(true);
-            };
-            // Any commit below (bounded catch-up, full reconcile) advances
-            // the epoch immediately, so a later apply failure cannot leave a
-            // stale cached offline snapshot in place.
-            bool catalogCommitted = false;
-            if (batch.catchUpRequired) {
-                if (!liveChangeNeedsFullReconcile(checkpointMs,
-                                                  batch.catchUpRequired)) {
-                    // Usable checkpoint — bounded catch-up only.
-                    // Skip the full library walk.
-                    const auto catchUp = sync->catchUpChangedCatalog(
-                        checkpointMs, cancellation).get();
-                    if (!catchUp.success) {
-                        result.cancelled = catchUp.cancelled;
-                        result.superseded = catchUp.superseded;
-                        result.error = catchUp.error;
-                        result.message = catchUp.message;
-                        result.catchUpRequired = !catchUp.cancelled
-                            && !catchUp.superseded;
-                        publishResult(std::move(result));
-                        return;
-                    }
-                    catalogCommitted = true;
-                    ++m_topLevelSyncGeneration;
-                } else {
-                    // No usable checkpoint — full reconcile to establish one.
-                    const auto reconciled = sync->reconcileAuthoritativeMembership(
-                        cancellation).get();
-                    if (!reconciled.success) {
-                        result.cancelled = reconciled.cancelled;
-                        result.superseded = reconciled.superseded;
-                        result.error = reconciled.error;
-                        result.message = reconciled.message;
-                        result.catchUpRequired = !reconciled.cancelled
-                            && !reconciled.superseded;
-                        publishResult(std::move(result));
-                        return;
-                    }
-                    // Successful full reconcile — write checkpoint so the next
-                    // cycle is bounded.
-                    catalogCommitted = true;
-                    ++m_topLevelSyncGeneration;
-                    const std::int64_t nowMs = wallClockMs();
-                    CatalogDbSyncState cp;
-                    if (coordinator)
-                        cp = coordinator->checkpointLiveCatalog(
-                            nowMs, nowMs, reconciled.generation).get();
-                    if (cp.success) {
-                        m_syncState.lastSuccessfulMs = cp.lastSuccessfulMs;
-                        m_syncState.lastReconcileMs = cp.lastReconcileMs;
-                    }
-                }
-            }
-            result = sync->applyLibraryChanges(batch, cancellation).get();
-            // A successful live change committed catalog metadata: advance
-            // the epoch so a cached offline snapshot is rebuilt, not reused.
-            // An earlier commit in this same run (catch-up or full reconcile)
-            // counts even when the apply itself failed.
-            if (result.success || catalogCommitted) ++m_topLevelSyncGeneration;
-            publishResult(std::move(result));
-        });
 }
 
 void HomeScreen::startHomeRailRefresh()

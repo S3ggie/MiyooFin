@@ -3,6 +3,7 @@
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <exception>
 
@@ -19,6 +20,14 @@ bool coordinatorSupportedLibraryView(const miyoofin::LibraryView &view)
 {
     return view.collectionType == "movies"
         || view.collectionType == "tvshows";
+}
+
+bool coordinatorLiveChangeIsEmpty(
+    const miyoofin::JellyfinLibraryChangeBatch &batch)
+{
+    return !batch.catchUpRequired && !batch.userDataChanged
+        && batch.itemsAdded.empty() && batch.itemsUpdated.empty()
+        && batch.itemsRemoved.empty();
 }
 
 } // namespace
@@ -53,6 +62,8 @@ void LibraryCoordinator::start()
         std::lock_guard<std::mutex> hierarchyLock(m_hierarchyMutex);
         m_hierarchyStop = false;
     }
+    m_liveChangeStop = false;
+    m_liveChangeThread = std::thread(&LibraryCoordinator::liveChangeWorker, this);
     m_hierarchyThread = std::thread(&LibraryCoordinator::hierarchyWorker, this);
     m_running = true;
 }
@@ -1120,64 +1131,28 @@ bool LibraryCoordinator::requestLiveChange(
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (m_stopped || !m_running || !m_sync)
         return false;
-    return m_liveChangeRequests.push(batch);
+    const bool accepted = m_liveChangeRequests.push(batch);
+    m_liveChangeWake.notify_one();
+    return accepted;
 }
 
-bool LibraryCoordinator::takeLiveChangeRequest(
-    JellyfinLibraryChangeBatch &batch, LiveChangeIdentity &identity)
+bool LibraryCoordinator::takeLiveChangeResult(LiveLibraryChangeResult &result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-
-    // LibraryCoordinator is the only consumer of the event queue. Drain the
-    // LibrarySync queue before applying the serialized-sync gate so events
-    // cannot be popped by Home and then lost when the gate is closed.
-    if (m_sync) {
-        JellyfinLibraryChangeBatch incoming;
-        while (m_sync->takeLiveChange(incoming))
-            (void)m_liveChangeRequests.push(incoming);
-    }
-    // Keep the queued batch intact until the serialized consumer has
-    // released its previous live-change slot.  Home may still have a worker
-    // thread active even though the coordinator's startup/full-sync gates are
-    // open.
-    if (m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
-        || !m_fullPopulationUpdates.empty()
-        || m_safetyReconcileInFlight || m_safetyReconcileResultReady
-        || m_liveChangeActive)
-        return false;
-    if (!m_liveChangeRequests.pop(batch))
-        return false;
-
-    const auto syncStatus = m_sync ? m_sync->status() : LibrarySync::Status{};
-    identity.worker = ++m_liveChangeWorker;
-    identity.generation = syncStatus.generation;
-    identity.request = ++m_liveChangeRequest;
-    m_liveChangeActive = identity;
-    return true;
-}
-
-bool LibraryCoordinator::publishLiveChangeResult(
-    const LiveChangeIdentity &identity, LiveLibraryChangeResult result)
-{
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_stopped || !m_liveChangeActive
-        || !(*m_liveChangeActive == identity) || m_liveChangeResult)
-        return false;
-    m_liveChangeResult = std::move(result);
-    return true;
-}
-
-bool LibraryCoordinator::takeLiveChangeResult(
-    const LiveChangeIdentity &identity, LiveLibraryChangeResult &result)
-{
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (!m_liveChangeResult || !m_liveChangeActive
-        || !(*m_liveChangeActive == identity))
+    if (!m_liveChangeResult)
         return false;
     result = std::move(*m_liveChangeResult);
     m_liveChangeResult.reset();
     m_liveChangeActive.reset();
+    m_liveChangeWake.notify_one();
     return true;
+}
+
+void LibraryCoordinator::cancelLiveChange() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_liveChangeCancellation)
+        m_liveChangeCancellation->store(true);
 }
 
 void LibraryCoordinator::discardLiveChangeResults() noexcept
@@ -1185,6 +1160,227 @@ void LibraryCoordinator::discardLiveChangeResults() noexcept
     std::lock_guard<std::mutex> lock(m_startupMutex);
     m_liveChangeResult.reset();
     m_liveChangeActive.reset();
+    m_liveChangeWake.notify_one();
+}
+
+void LibraryCoordinator::liveChangeWorker()
+{
+    for (;;) {
+        JellyfinLibraryChangeBatch batch;
+        LiveChangeIdentity identity;
+        std::shared_ptr<std::atomic_bool> cancellation;
+        {
+            std::unique_lock<std::mutex> lock(m_startupMutex);
+            // The event receiver writes directly to LibrarySync's bounded
+            // queue. Drain it here, never on Home's SDL thread, before
+            // checking the serialized top-level gates.  If the coordinator
+            // queue is full, push() may have coalesced only part of the
+            // batch.  Preserve that loss as an explicit catch-up barrier and
+            // stop popping the source until the barrier is consumed.
+            if (!m_liveChangeDrainPendingCatchUp && m_sync) {
+                JellyfinLibraryChangeBatch incoming;
+                while (m_sync->takeLiveChange(incoming)) {
+                    if (m_liveChangeRequests.push(incoming))
+                        continue;
+                    m_liveChangeRequests.markCatchUpRequired();
+                    m_liveChangeDrainPendingCatchUp = true;
+                    break;
+                }
+            }
+            if (m_liveChangeStop)
+                return;
+            const bool serializedSlotOpen = !m_startupInFlight
+                && !m_startupResultReady && !m_fullSyncInFlight
+                && m_fullPopulationUpdates.empty()
+                && !m_safetyReconcileInFlight
+                && !m_safetyReconcileResultReady
+                && !m_liveChangeActive && !m_liveChangeResult;
+            if (!serializedSlotOpen
+                || !m_liveChangeRequests.pop(batch)) {
+                m_liveChangeWake.wait_for(lock, std::chrono::milliseconds(5));
+                continue;
+            }
+            if (batch.catchUpRequired)
+                m_liveChangeDrainPendingCatchUp = true;
+            if (coordinatorLiveChangeIsEmpty(batch))
+                continue;
+
+            identity.worker = ++m_liveChangeWorker;
+            identity.generation = m_catalogGeneration;
+            identity.request = ++m_liveChangeRequest;
+            m_liveChangeActive = identity;
+            m_liveChangeCancellation =
+                std::make_shared<std::atomic_bool>(false);
+            cancellation = m_liveChangeCancellation;
+        }
+
+        LiveLibraryChangeResult result;
+        result.catchUpRequired = batch.catchUpRequired;
+        result.userDataChanged = batch.userDataChanged;
+        std::uint64_t committedGeneration = identity.generation;
+        bool catchUpSucceeded = !batch.catchUpRequired;
+        const auto cancelled = [&] {
+            return cancellation && cancellation->load();
+        };
+        const auto advanceCommittedGeneration = [&] {
+            std::lock_guard<std::mutex> lock(m_startupMutex);
+            committedGeneration = ++m_catalogGeneration;
+            return committedGeneration;
+        };
+        const auto publish = [&](LiveLibraryChangeResult value) {
+            std::lock_guard<std::mutex> lock(m_startupMutex);
+            // Discarding a result or accepting a newer worker identity makes
+            // this publication stale. It must never be consumed by the next
+            // live batch.
+            if (!m_liveChangeActive
+                || !(*m_liveChangeActive == identity)
+                || m_liveChangeResult)
+                return;
+            value.generation = std::max(value.generation,
+                                        committedGeneration);
+            m_liveChangeResult = std::move(value);
+            m_liveChangeWake.notify_one();
+        };
+
+        try {
+            if (!m_db || m_scopeEpoch == 0) {
+                result.error = CatalogDbErrorCategory::ScopeNotReady;
+                result.message = "CatalogDb scope is unavailable";
+            } else if (cancelled()) {
+                result.cancelled = true;
+                result.error = CatalogDbErrorCategory::Superseded;
+                result.message = "live library change cancelled";
+            } else if (batch.catchUpRequired) {
+                CatalogDbJobMetadata metadata;
+                metadata.scopeEpoch = m_scopeEpoch;
+                metadata.cancellation = cancellation;
+                const auto state = m_db->readSyncState(
+                    false, 0, 0, metadata).get();
+                if (!state.success) {
+                    result.error = state.error;
+                    result.message = state.message;
+                    result.lastSuccessfulMs = state.lastSuccessfulMs;
+                    result.lastReconcileMs = state.lastReconcileMs;
+                } else {
+                    result.lastSuccessfulMs = state.lastSuccessfulMs;
+                    result.lastReconcileMs = state.lastReconcileMs;
+                    if (state.committedGeneration > committedGeneration) {
+                        std::lock_guard<std::mutex> lock(m_startupMutex);
+                        if (state.committedGeneration > m_catalogGeneration)
+                            m_catalogGeneration = state.committedGeneration;
+                        committedGeneration = m_catalogGeneration;
+                    }
+                    if (cancelled()) {
+                        result.cancelled = true;
+                        result.error = CatalogDbErrorCategory::Superseded;
+                        result.message = "live library change cancelled";
+                    } else if (state.lastSuccessfulMs > 0) {
+                        const auto catchUp = m_sync->catchUpChangedCatalog(
+                            state.lastSuccessfulMs, cancellation).get();
+                        if (!catchUp.success) {
+                            result.cancelled = catchUp.cancelled;
+                            result.superseded = catchUp.superseded;
+                            result.error = catchUp.error;
+                            result.message = catchUp.message;
+                        } else {
+                            catchUpSucceeded = true;
+                            result.checkpointMs = catchUp.checkpointMs;
+                            result.lastSuccessfulMs = catchUp.checkpointMs;
+                            result.generation = advanceCommittedGeneration();
+                        }
+                    } else {
+                        const auto reconciled =
+                            m_sync->reconcileAuthoritativeMembership(
+                                cancellation).get();
+                        if (!reconciled.success) {
+                            result.cancelled = reconciled.cancelled;
+                            result.superseded = reconciled.superseded;
+                            result.error = reconciled.error;
+                            result.message = reconciled.message;
+                        } else {
+                            result.generation = advanceCommittedGeneration();
+                            const std::int64_t nowMs =
+                                coordinatorWallClockMs();
+                            // The authoritative membership commit is already
+                            // durable. Finish this checkpoint even if the
+                            // caller requested cancellation meanwhile.
+                            const auto checkpoint = m_sync->writeSyncState(
+                                nowMs, nowMs, reconciled.generation).get();
+                            if (checkpoint.success) {
+                                catchUpSucceeded = true;
+                                result.checkpointMs = checkpoint.lastSuccessfulMs;
+                                result.lastSuccessfulMs =
+                                    checkpoint.lastSuccessfulMs;
+                                result.lastReconcileMs =
+                                    checkpoint.lastReconcileMs;
+                            } else if (result.message.empty()) {
+                                result.error = checkpoint.error;
+                                result.message = checkpoint.message;
+                            }
+                        }
+                    }
+                }
+            }
+
+            const bool catchUpFailed = batch.catchUpRequired
+                && !catchUpSucceeded;
+            if (!catchUpFailed && result.error == CatalogDbErrorCategory::None
+                && !result.cancelled && !result.superseded) {
+                if (batch.itemsAdded.empty() && batch.itemsRemoved.empty()
+                    && batch.itemsUpdated.empty()
+                    && !batch.catchUpRequired) {
+                    result.success = true;
+                } else {
+                    auto applied = m_sync->applyLibraryChanges(
+                        batch, cancellation).get();
+                    const bool userDataChanged = result.userDataChanged;
+                    const auto priorGeneration = result.generation;
+                    result = std::move(applied);
+                    result.userDataChanged = userDataChanged;
+                    result.generation = std::max(result.generation,
+                                                 priorGeneration);
+                    result.catchUpRequired = batch.catchUpRequired
+                        || result.catchUpRequired;
+                    if (result.success)
+                        result.generation = advanceCommittedGeneration();
+                }
+            }
+        } catch (const std::exception &error) {
+            result.cancelled = cancelled();
+            result.superseded = !result.cancelled;
+            result.error = result.cancelled
+                ? CatalogDbErrorCategory::Superseded
+                : CatalogDbErrorCategory::SqliteError;
+            result.message = error.what();
+        } catch (...) {
+            result.cancelled = cancelled();
+            result.superseded = !result.cancelled;
+            result.error = result.cancelled
+                ? CatalogDbErrorCategory::Superseded
+                : CatalogDbErrorCategory::SqliteError;
+            result.message = "live library change failed unexpectedly";
+        }
+        if (batch.catchUpRequired) {
+            std::lock_guard<std::mutex> lock(m_startupMutex);
+            const bool transferredBarrierSucceeded = catchUpSucceeded
+                && result.success;
+            if (transferredBarrierSucceeded) {
+                m_liveChangeDrainPendingCatchUp = false;
+            } else if (!m_liveChangeStop) {
+                // The source event batch has already been transferred and its
+                // overflow bit was consumed.  Keep the catch-up barrier
+                // queued until the whole transferred batch completes
+                // successfully, including any item application after the
+                // checkpoint advances.  Home only consumes the failure
+                // publication and never owns retry policy.
+                (void)m_liveChangeRequests.push(batch);
+                m_liveChangeRequests.markCatchUpRequired();
+                m_liveChangeDrainPendingCatchUp = true;
+            }
+        }
+        result.generation = std::max(result.generation, committedGeneration);
+        publish(std::move(result));
+    }
 }
 
 void LibraryCoordinator::cancelStartupSync() noexcept
@@ -1207,6 +1403,7 @@ void LibraryCoordinator::stop() noexcept
     std::thread fullPopulationThread;
     std::thread homeRailThread;
     std::thread safetyReconcileThread;
+    std::thread liveChangeThread;
     std::thread hierarchyThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
@@ -1222,8 +1419,9 @@ void LibraryCoordinator::stop() noexcept
             m_homeRailCancellation->store(true);
         if (m_safetyReconcileCancellation)
             m_safetyReconcileCancellation->store(true);
-        m_liveChangeResult.reset();
-        m_liveChangeActive.reset();
+        if (m_liveChangeCancellation)
+            m_liveChangeCancellation->store(true);
+        m_liveChangeStop = true;
         if (m_startupThread.joinable())
             startupThread = std::move(m_startupThread);
         if (m_fullPopulationThread.joinable())
@@ -1232,7 +1430,10 @@ void LibraryCoordinator::stop() noexcept
             homeRailThread = std::move(m_homeRailThread);
         if (m_safetyReconcileThread.joinable())
             safetyReconcileThread = std::move(m_safetyReconcileThread);
+        if (m_liveChangeThread.joinable())
+            liveChangeThread = std::move(m_liveChangeThread);
     }
+    m_liveChangeWake.notify_all();
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
         m_hierarchyStop = true;
@@ -1251,6 +1452,8 @@ void LibraryCoordinator::stop() noexcept
         homeRailThread.join();
     if (safetyReconcileThread.joinable())
         safetyReconcileThread.join();
+    if (liveChangeThread.joinable())
+        liveChangeThread.join();
     if (hierarchyThread.joinable())
         hierarchyThread.join();
     if (m_sync)

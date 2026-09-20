@@ -53,14 +53,17 @@ static void testHomeIncrementalPublicationPolicy()
     CHECK(sourceContains(render, "homeSyncStatus(true)"));
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string coordinator = readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
     CHECK(!sync.empty());
     CHECK(!apply.empty());
+    CHECK(!coordinator.empty());
     // Structural: these call sites have no pure unit behind them (they run
     // on the fetch worker), so the wiring is pinned by scan while the
     // policy above is covered behaviourally.
     CHECK(sourceContains(sync, "updateLiveLibraryChanges()"));
-    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
-    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
+    CHECK(sourceContains(coordinator, "catchUpChangedCatalog"));
+    CHECK(sourceContains(coordinator, "reconcileAuthoritativeMembership"));
     CHECK(sourceContains(apply, "m_lastSafetyReconcileMs"));
     CHECK(sourceContains(apply, "m_cachedSnapshot.continueWatching"));
     std::printf("[test] Home incremental publication policy OK\n");
@@ -628,8 +631,11 @@ static void testHomeStartupSyncSourceOrder()
     std::printf("[test] Home startup sync source order assertions\n");
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string coordinator = readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
     CHECK(!sync.empty());
     CHECK(!apply.empty());
+    CHECK(!coordinator.empty());
     // Structural: fetch ordering across worker threads has no deterministic
     // unit (thread interleaving), so the call-site order is pinned by scan
     // in whitespace-free token space (positions, unlike raw offsets, are
@@ -658,8 +664,8 @@ static void testHomeStartupSyncSourceOrder()
     // m_fetchComplete
     CHECK(sourceContains(apply, "m_homeRailsReady.load() && !m_homeRailsApplied"));
     // Existing source substrings that scan tests pin
-    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
-    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
+    CHECK(sourceContains(coordinator, "catchUpChangedCatalog"));
+    CHECK(sourceContains(coordinator, "reconcileAuthoritativeMembership"));
     CHECK(sourceContains(sync, "planHomeRailPosterJobs(cw, ra)"));
     CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
     CHECK(sourceContains(sync, "update.firstPage"));
@@ -754,54 +760,6 @@ static void testClockMessageFormat()
     CHECK(msg.find("Tweaks") != std::string::npos);
     CHECK(msg.find("Date/time") != std::string::npos);
     std::printf("[test] kClockErrorMessage: one-line, short, contains OnionOS path OK\n");
-}
-
-static void testLiveChangeCheckpointPolicy()
-{
-    std::printf("[test] live change checkpoint policy\n");
-
-    // liveChangeIsEmpty truth table
-    {
-        JellyfinLibraryChangeBatch b;
-        CHECK(HomeScreen::liveChangeIsEmpty(b));
-    }
-    {
-        JellyfinLibraryChangeBatch b;
-        b.catchUpRequired = true;
-        CHECK(!HomeScreen::liveChangeIsEmpty(b));
-    }
-    {
-        JellyfinLibraryChangeBatch b;
-        b.itemsAdded.push_back("id1");
-        CHECK(!HomeScreen::liveChangeIsEmpty(b));
-    }
-    {
-        JellyfinLibraryChangeBatch b;
-        b.itemsUpdated.push_back("id1");
-        CHECK(!HomeScreen::liveChangeIsEmpty(b));
-    }
-    {
-        JellyfinLibraryChangeBatch b;
-        b.itemsRemoved.push_back("id1");
-        CHECK(!HomeScreen::liveChangeIsEmpty(b));
-    }
-
-    // liveChangeNeedsFullReconcile truth table
-    CHECK(HomeScreen::liveChangeNeedsFullReconcile(0, true));
-    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(1000, true));
-    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(0, false));
-    CHECK(!HomeScreen::liveChangeNeedsFullReconcile(1000, false));
-
-    // Tripwire: both bounded and full reconcile paths remain in the source.
-    // Structural: which path live changes take is a worker-thread decision
-    // (needs network + timing), so both callees' presence is pinned by scan
-    // while the empty/full-reconcile policy above is covered behaviourally.
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(!sync.empty());
-    CHECK(sourceContains(sync, "catchUpChangedCatalog"));
-    CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
-
-    std::printf("[test] live change checkpoint policy OK\n");
 }
 
 static void testHomeRowFocusReconciliation()
@@ -899,13 +857,6 @@ static void testNonBlockingFinishPolicy()
     const std::string syncApply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!syncApply.empty());
 
-    // finishLiveChangeApply should not contain thread.join()
-    // It should contain the "Thread join deferred" comment
-    CHECK(sourceContains(syncApply, "finishLiveChangeApply"));
-    const std::string liveChangeBody = sourceFunction(syncApply, "void HomeScreen::finishLiveChangeApply(");
-    CHECK(!liveChangeBody.empty());
-    CHECK(sourceLacks(liveChangeBody, ".join()"));
-    CHECK(sourceContains(liveChangeBody, "Thread join deferred"));
     // finishHomeRailRefresh should not join; the coordinator owns its worker.
     CHECK(sourceContains(syncApply, "finishHomeRailRefresh"));
     const std::string homeRailBody = sourceFunction(syncApply, "void HomeScreen::finishHomeRailRefresh(");
@@ -935,11 +886,6 @@ static void testNonBlockingFinishPolicy()
     CHECK(!downloadBody.empty());
     CHECK(sourceLacks(downloadBody, ".join()"));
     CHECK(sourceContains(downloadBody, "Thread join deferred"));
-
-    // Verify start* functions still join before starting new threads
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(!sync.empty());
-    CHECK(sourceContains(sync, "m_liveChangeDone.load() || !m_liveChangeInFlight"));
 
     // Verify the header declares the post-finalize flag
     const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");

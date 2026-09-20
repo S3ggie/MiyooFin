@@ -42,11 +42,6 @@ HomeScreen::HomeScreen(const Session &session,
     }
 }
 
-std::shared_ptr<library::LibrarySync> HomeScreen::syncService() const
-{
-    return m_libraryCoordinator ? m_libraryCoordinator->sync() : nullptr;
-}
-
 std::uint64_t HomeScreen::catalogScopeEpoch() const
 {
     return m_libraryQuery ? m_libraryQuery->scopeEpoch() : 0;
@@ -61,8 +56,6 @@ HomeScreen::~HomeScreen()
 {
     requestStopAllWorkers();
     joinAllWorkers();
-    if (m_libraryCoordinator)
-        m_libraryCoordinator->discardLiveChangeResults();
     freeAllCardSurfaces();
 }
 
@@ -84,8 +77,8 @@ void HomeScreen::requestStopAllWorkers() noexcept
     }
     if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
     if (m_libraryCoordinator) m_libraryCoordinator->cancelFullPopulation();
-    if (m_liveChangeCancellation)
-        m_liveChangeCancellation->store(true);
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelLiveChange();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelSafetyReconcile();
     if (m_libraryCoordinator)
@@ -107,8 +100,6 @@ void HomeScreen::joinAllWorkers()
         m_resumeRefreshThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
-    if (m_liveChangeThread.joinable())
-        m_liveChangeThread.join();
     for (auto &thread : m_posterThreads)
         if (thread.joinable()) thread.join();
     if (m_decodeThread.joinable()) m_decodeThread.join();
@@ -267,7 +258,6 @@ void HomeScreen::update(Uint32 dt)
         finishResumeRefresh();
     }
     if (m_loadState == LoadState::Ready) {
-        if (m_liveChangeDone.load()) finishLiveChangeApply();
         updateLiveLibraryChanges();
         if (m_homeRailRefreshInFlight && m_libraryCoordinator) {
             library::HomeRailResult railResult;

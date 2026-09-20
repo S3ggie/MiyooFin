@@ -253,14 +253,11 @@ public:
     bool takeHomeState(std::shared_ptr<const HomeState> &state);
 
     /// Queue a live change for the next serialized consumer. Requests made
-    /// during startup or full sync are retained rather than applied.
+    /// during startup or full sync are retained rather than applied. The
+    /// coordinator-owned worker drains and applies the queued batch.
     bool requestLiveChange(const JellyfinLibraryChangeBatch &batch);
-    bool takeLiveChangeRequest(JellyfinLibraryChangeBatch &batch,
-                               LiveChangeIdentity &identity);
-    bool publishLiveChangeResult(const LiveChangeIdentity &identity,
-                                 LiveLibraryChangeResult result);
-    bool takeLiveChangeResult(const LiveChangeIdentity &identity,
-                              LiveLibraryChangeResult &result);
+    bool takeLiveChangeResult(LiveLibraryChangeResult &result);
+    void cancelLiveChange() noexcept;
     void discardLiveChangeResults() noexcept;
 
     /// Cancel and join coordinator-owned work. Safe to call more than once.
@@ -277,7 +274,13 @@ public:
         return m_stopped;
     }
 
-    std::shared_ptr<LibrarySync> sync() const { return m_sync; }
+#ifdef MIYOOFIN_TEST_BUILD
+    // The application-facing coordinator boundary does not expose its raw
+    // sync service.  Migration tests still need the service for direct
+    // CatalogDb fixture setup, so keep that seam explicitly test-only.
+    std::shared_ptr<LibrarySync> syncForTestSetup() const { return m_sync; }
+#endif
+
     std::shared_ptr<LibraryQuery> query() const { return m_query; }
     /// Refresh a series hierarchy through the coordinator-owned sync service.
     /// Callers retain ownership of the returned future and may cancel through
@@ -301,6 +304,7 @@ public:
     Status status() const;
 
 private:
+    void liveChangeWorker();
     void hierarchyWorker();
 
     Session m_session;
@@ -334,6 +338,14 @@ private:
     std::optional<LiveChangeIdentity> m_liveChangeActive;
     std::uint64_t m_liveChangeWorker = 0;
     std::uint64_t m_liveChangeRequest = 0;
+    std::thread m_liveChangeThread;
+    std::shared_ptr<std::atomic_bool> m_liveChangeCancellation;
+    std::condition_variable m_liveChangeWake;
+    // A failed transfer from LibrarySync's bounded event queue has already
+    // set the destination overflow bit, but keep this state until that
+    // catch-up batch is consumed before draining the source again.
+    bool m_liveChangeDrainPendingCatchUp = false;
+    bool m_liveChangeStop = false;
     std::thread m_homeRailThread;
     std::shared_ptr<std::atomic_bool> m_homeRailCancellation;
     HomeRailResult m_homeRailResult;

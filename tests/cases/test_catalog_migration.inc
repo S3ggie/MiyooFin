@@ -586,7 +586,7 @@ static void testHomeCatalogHierarchyIntegration()
     {
         auto libraryCoordinator =
             std::make_shared<library::LibraryCoordinator>(session, db, epoch);
-        auto librarySync = libraryCoordinator->sync();
+        auto librarySync = libraryCoordinator->syncForTestSetup();
         HomeScreen home(session, {}, libraryCoordinator->query(),
                         libraryCoordinator);
 

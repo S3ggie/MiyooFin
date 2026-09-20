@@ -190,6 +190,60 @@ void testLiveChangesWaitForSerializedSyncSlots()
     std::printf("[test] LibraryCoordinator live-change seam OK\n");
 }
 
+void testSafetyReconcilePublishesCoordinatorResult()
+{
+    std::printf("[test] LibraryCoordinator safety reconcile result\n");
+    Session session;
+    auto coordinator = library::LibraryCoordinator(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator.start();
+
+    CHECK(coordinator.requestSafetyReconcile());
+    CHECK(!coordinator.requestSafetyReconcile());
+    library::SafetyReconcileResult result;
+    for (int i = 0; i < 200 && !coordinator.takeSafetyReconcileResult(result);
+         ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
+    CHECK(!coordinator.status().safetyReconcileInFlight);
+
+    const auto homeHeader = miyoofin_test::readTestBytes(
+        "src/ui/screens/HomeScreen.hpp");
+    const auto homeSync = miyoofin_test::readTestBytes(
+        "src/ui/screens/HomeScreenSync.cpp");
+    const auto homeApply = miyoofin_test::readTestBytes(
+        "src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(miyoofin_test::sourceContains(
+        homeSync, "requestSafetyReconcile()"));
+    CHECK(miyoofin_test::sourceContains(
+        homeApply, "takeSafetyReconcileResult(result)"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeHeader, "m_safetyReconcileThread"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeHeader, "m_safetyReconcileCancellation"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeHeader, "m_safetyReconcileDone"));
+    std::printf("[test] LibraryCoordinator safety reconcile result OK\n");
+}
+
+void testSafetyReconcileStopPublishesCompletion()
+{
+    std::printf("[test] LibraryCoordinator safety reconcile stop\n");
+    Session session;
+    auto coordinator = library::LibraryCoordinator(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator.start();
+
+    CHECK(coordinator.requestSafetyReconcile());
+    coordinator.stop();
+
+    library::SafetyReconcileResult result;
+    CHECK(coordinator.takeSafetyReconcileResult(result));
+    CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator safety reconcile stop OK\n");
+}
+
 void testHomeRailStopPublishesCompletion()
 {
     std::printf("[test] LibraryCoordinator Home rail lifecycle\n");
@@ -226,6 +280,8 @@ int main()
     testLibraryCoordinatorIsTheSingleStartupDriver();
     testStopRacingStartupIsSafe();
     testLiveChangesWaitForSerializedSyncSlots();
+    testSafetyReconcilePublishesCoordinatorResult();
+    testSafetyReconcileStopPublishesCompletion();
     testHomeRailStopPublishesCompletion();
     return miyoofin_test::finish("library_coordinator");
 }

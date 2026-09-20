@@ -430,12 +430,8 @@ private:
     library::LiveChangeIdentity m_liveChangeIdentity;
     library::LiveLibraryChangeResult m_liveChangeResult;
     std::int64_t m_lastSafetyReconcileMs = 0;
-    std::thread m_safetyReconcileThread;
-    std::atomic<bool> m_safetyReconcileDone{false};
     bool m_safetyReconcileInFlight = false;
-    std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     bool m_homeSyncActive = false;
-    std::string m_safetyReconcileError;
     std::atomic<bool> m_homeRailRefreshDone{false};
     bool m_homeRailRefreshInFlight = false;
     bool m_homeRailRefreshPending = false;

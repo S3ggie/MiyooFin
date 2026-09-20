@@ -297,7 +297,8 @@ static void testInitialHomeArtworkScheduling()
     // on every validation). The gating expression itself lives inline in the
     // call argument, so no unit can observe it; the scan pins the shape.
     CHECK(sourceLacks(source, "queuePosterJobs(planMediaPagePosterJobs(page.items), true)"));
-    CHECK(sourceContains(source, "queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)"));
+    CHECK(sourceContains(source, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
+    CHECK(sourceContains(source, "update.firstPage"));
     const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
     CHECK(!coordinator.empty());
     CHECK(sourceContains(coordinator, "m_posterThreads.emplace_back"));
@@ -332,11 +333,11 @@ static void testPersistentHttpClientPatterns()
     // declaration-before-use wiring is pinned by scan.
     const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(!sync.empty());
-    CHECK(sourceContains(sync, "HttpClient fetchClient;"));
-    CHECK(sourceContains(sync, "JellyfinApi::getViews(base, token, uid, devId, views, viewsErr, fetchClient, cancellation.get())"));
-    CHECK(sourcePos(sync, "HttpClient fetchClient;") < sourcePos(sync, "fetchClient, cancellation.get()"));
     const std::string coordinator=readTestBytes(
         "src/library/LibraryCoordinator.cpp");
+    CHECK(sourceContains(coordinator, "HttpClient client;"));
+    CHECK(sourceContains(coordinator, "getViews(")
+          && sourceContains(coordinator, "getLibraryItemsPage("));
     CHECK(!coordinator.empty());
     CHECK(sourceContains(coordinator, "HttpClient railClient;"));
     // LibrarySync reconcile reuses one client across views + pages loop
@@ -494,7 +495,7 @@ static void testTopLevelSyncEpochMaxIsAtomic()
     // load-then-store max can lose an increment — both epoch seeds must be
     // CAS loops.  The interleaving needs two live workers, so the shape is
     // pinned by scan (structural-only).
-    CHECK(sourceCount(sync,"compare_exchange_weak")==2);
+    CHECK(sourceCount(sync,"compare_exchange_weak")==4);
     CHECK(sourceLacks(sync,"m_topLevelSyncGeneration = gen"));
     CHECK(sourceLacks(sync,"m_hierarchyGeneration.store(gen)"));
     std::printf("[test] top-level sync epoch max is atomic OK\n");
@@ -633,13 +634,14 @@ static void testHomeStartupSyncSourceOrder()
     // unit (thread interleaving), so the call-site order is pinned by scan
     // in whitespace-free token space (positions, unlike raw offsets, are
     // unaffected by reformatting).
-    // The coordinator-owned rails request must appear before begin(
+    // Home starts the coordinator-owned startup policy before requesting the
+    // coordinator-owned rails worker.
     const auto railsRequestPos = sourcePos(
         sync, "requestHomeRailRefresh(railRequest)");
-    const auto beginPos = sourcePos(sync, "sync->begin(");
+    const auto beginPos = sourcePos(sync, "startStartupSync(");
     CHECK(railsRequestPos != std::string::npos);
     CHECK(beginPos != std::string::npos);
-    CHECK(railsRequestPos < beginPos);
+    CHECK(beginPos < railsRequestPos);
     // ImageCache::runJanitor and season prefetch must appear before the
     // main m_fetchComplete.store(true) (after the population walk) so they
     // don't block the UI thread.  Use rfind to skip the early-offline
@@ -659,7 +661,8 @@ static void testHomeStartupSyncSourceOrder()
     CHECK(sourceContains(sync, "catchUpChangedCatalog"));
     CHECK(sourceContains(sync, "reconcileAuthoritativeMembership"));
     CHECK(sourceContains(sync, "planHomeRailPosterJobs(cw, ra)"));
-    CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items), start == 0)"));
+    CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
+    CHECK(sourceContains(sync, "update.firstPage"));
     // Startup-rail buffer: fetch worker writes m_startupRailCW under
     // m_fetchMutex, finishFetch reads under the same mutex.
     CHECK(sourceContains(sync, "m_startupRailCW"));

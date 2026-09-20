@@ -8,6 +8,17 @@ namespace miyoofin {
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
 static void makeMediaTabsBounded(std::vector<TabData> &tabs);
 
+static std::vector<TabData> emptyHomeTabs()
+{
+    return {
+        {"Home", { {"", {}} }},
+        {"Movies", { {"", {}} }},
+        {"Shows", { {"", {}} }},
+        {"Downloads", { {"", {}} }},
+        {"Settings", { {"", {}} }},
+    };
+}
+
 void HomeScreen::publishCoordinatorHomeState(
     const std::vector<TabData> &tabs, const LibrarySnapshot &snapshot,
     bool contentValid, bool cachedSnapshotValid, bool offline, bool stale,
@@ -439,6 +450,71 @@ void HomeScreen::finishFetch()
 {
     if (!m_fetchReady.load())
         return;
+    // A first page is published early so Home becomes useful quickly, but it
+    // is not a replacement for the last committed catalog.  If a later page
+    // fails or the population is cancelled, restore the presentation that was
+    // valid when this fetch began, or discard the provisional frame entirely
+    // when there was no authoritative Home content to restore.
+    if (m_fetchComplete.load() && !m_fetchCatalogCommitted.load()
+        && !m_fetchError.empty() && !m_fetchFailureRestored) {
+        const std::string focusedLabel = focusedHomeRowLabel();
+        const std::vector<TabData> previous = m_tabs;
+        const int selected = m_activeTab;
+        // No later rail or finalize path may put the provisional page back
+        // after this terminal failure has been handled.
+        m_homeRailsApplied = true;
+        m_fetchPostFinalizeApplied = true;
+        if (m_fetchPreviousContentValid) {
+            m_tabs = m_fetchPreviousTabs;
+            m_cachedSnapshot = m_fetchPreviousCachedSnapshot;
+            m_remoteSnapshot = m_fetchPreviousRemoteSnapshot;
+            m_haveCachedSnapshot = m_fetchPreviousHaveCachedSnapshot;
+            m_libraryOffline = m_fetchPreviousLibraryOffline;
+            const HomeMediaWindows warmWindows = mediaWindowsFromTabs(m_tabs);
+            resetMediaPaging();
+            if (!warmWindows.movies.empty()) {
+                m_moviePage.items = warmWindows.movies;
+                m_movieWindow = warmWindows.movies;
+                refreshMovieFilter();
+            }
+            if (!warmWindows.shows.empty()) {
+                m_showPage.items = warmWindows.shows;
+                m_showWindow = warmWindows.shows;
+                rebuildShowsPresentation();
+            }
+            m_activeTab = transitionTabIndex(previous, selected, m_tabs);
+            restoreHomeRowFocus(focusedLabel);
+            m_loadState = LoadState::Ready;
+            clampNavigation();
+            publishCoordinatorHomeState(
+                m_tabs, m_cachedSnapshot, true, m_haveCachedSnapshot,
+                m_libraryOffline, true, false, false, m_fetchError);
+        } else {
+            // A cold start has no authoritative tabs or snapshot.  Do not
+            // leave the first bounded page (or its rails) looking Ready.
+            m_tabs = emptyHomeTabs();
+            m_cachedSnapshot = {};
+            m_remoteSnapshot = {};
+            m_haveCachedSnapshot = false;
+            m_libraryOffline = false;
+            {
+                std::lock_guard<std::mutex> lock(m_fetchMutex);
+                m_fetchResult.clear();
+                m_startupRailCW.clear();
+                m_startupRailRA.clear();
+                m_startupRailCWValid = false;
+                m_startupRailRAValid = false;
+            }
+            resetMediaPaging();
+            m_activeTab = transitionTabIndex(previous, selected, m_tabs);
+            restoreHomeRowFocus(focusedLabel);
+            m_loadState = m_offlineModeFetchPending
+                ? LoadState::Loading : LoadState::Error;
+            clampNavigation();
+        }
+        m_fetchPublished = true;
+        m_fetchFailureRestored = true;
+    }
     if (!m_fetchPublished) {
         if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot && !m_offlineModeFetchPending)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
         else {
@@ -507,7 +583,8 @@ void HomeScreen::finishFetch()
             rebuiltTabs = std::move(m_fetchResult);
         }
         const std::string focusedLabel = focusedHomeRowLabel();
-        if (m_fetchError.empty() && !rebuiltTabs.empty()) {
+        if ((m_fetchError.empty() || m_fetchCatalogCommitted.load())
+            && !rebuiltTabs.empty()) {
             const HomeMediaWindows warmWindows =
                 mediaWindowsFromTabs(rebuiltTabs);
             const std::vector<TabData> previous = m_tabs;
@@ -523,6 +600,12 @@ void HomeScreen::finishFetch()
             if (!warmWindows.shows.empty()) {
                 m_showPage.items = warmWindows.shows;
                 rebuildShowsPresentation();
+            }
+            if (m_fetchCatalogCommitted.load()) {
+                // The final generation is now authoritative.  Replace the
+                // provisional coordinator publication only after finalize.
+                publishCoordinatorHomeState(
+                    m_tabs, {}, true, false, false, false, false, false);
             }
         }
         if (m_fetchCacheSaved) {

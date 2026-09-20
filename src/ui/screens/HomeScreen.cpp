@@ -74,6 +74,7 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_animePage.cancellation) m_animePage.cancellation->store(true);
     if (m_fetchCancellation) m_fetchCancellation->store(true);
     if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
+    if (m_libraryCoordinator) m_libraryCoordinator->cancelFullPopulation();
     if (m_liveChangeCancellation)
         m_liveChangeCancellation->store(true);
     if (m_libraryCoordinator)

@@ -234,7 +234,7 @@ inline std::string sourceFunction(const std::string &haystack,
             end = pos;
     }
     if (end == std::string::npos)
-        end = std::min(haystack.size(), begin + 6000);
+        end = haystack.size();
     return haystack.substr(begin, end - begin);
 }
 

@@ -139,6 +139,36 @@ bool takeFullUpdate(library::LibraryCoordinator &coordinator,
     return false;
 }
 
+struct HomeRailResponse {
+    std::string body;
+    int status = 200;
+};
+
+bool takeHomeRailResult(library::LibraryCoordinator &coordinator,
+                        std::uint64_t request,
+                        library::HomeRailResult &result)
+{
+    for (int i = 0; i < 1000; ++i) {
+        if (coordinator.takeHomeRailResult(request, result))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
+}
+
+void serveHomeRailResponses(int listener,
+                            const std::vector<HomeRailResponse> &responses)
+{
+    for (const auto &response : responses) {
+        const int client = coordinatorAccept(listener);
+        if (client < 0)
+            return;
+        coordinatorReadRequest(client);
+        coordinatorSendJson(client, response.body, response.status);
+        ::close(client);
+    }
+}
+
 void testLibraryCoordinatorIsTheSingleStartupDriver()
 {
     std::printf("[test] LibraryCoordinator single startup driver\n");
@@ -566,6 +596,122 @@ void testHomeRailStopPublishesCompletion()
     std::printf("[test] LibraryCoordinator Home rail lifecycle OK\n");
 }
 
+void testHomeRailSuccessPublishesBothRails()
+{
+    std::printf("[test] LibraryCoordinator Home rail success\n");
+    const int listener = coordinatorTestListener();
+    if (listener < 0)
+        return;
+    std::thread server([&] {
+        serveHomeRailResponses(listener, {
+            {R"({"Items":[{"Id":"continue-1","Type":"Episode","Name":"Continue"}]})"},
+            {R"({"Items":[{"Id":"recent-1","Type":"Movie","Name":"Recent"}]})"},
+        });
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.userId = "home-rail-user";
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator->start();
+    std::uint64_t request = 0;
+    CHECK(coordinator->requestHomeRailRefresh(request));
+    library::HomeRailResult result;
+    CHECK(takeHomeRailResult(*coordinator, request, result));
+    server.join();
+
+    CHECK(result.request == request);
+    CHECK(result.success && !result.cancelled);
+    CHECK(result.continueValid && result.recentlyAddedValid);
+    CHECK(result.continueWatching.size() == 1);
+    CHECK(result.recentlyAdded.size() == 1);
+    CHECK(result.continueWatching[0].id == "continue-1");
+    CHECK(result.recentlyAdded[0].id == "recent-1");
+    coordinator->stop();
+    coordinator.reset();
+    ::close(listener);
+    std::printf("[test] LibraryCoordinator Home rail success OK\n");
+}
+
+void testHomeRailCachedFailureRetainsInvalidRail()
+{
+    std::printf("[test] LibraryCoordinator Home rail cached failure\n");
+    const int listener = coordinatorTestListener();
+    if (listener < 0)
+        return;
+    std::thread server([&] {
+        serveHomeRailResponses(listener, {
+            {R"({"Error":"resume unavailable"})", 500},
+            {R"({"Items":[{"Id":"recent-after-failure","Type":"Movie","Name":"Recent"}]})"},
+        });
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.userId = "home-rail-cache-user";
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator->start();
+    std::uint64_t request = 0;
+    CHECK(coordinator->requestHomeRailRefresh(request));
+    library::HomeRailResult result;
+    CHECK(takeHomeRailResult(*coordinator, request, result));
+    server.join();
+
+    // Home must retain its cached Continue Watching row when this optional
+    // rail fails, while still consuming the valid Recently Added result.
+    CHECK(result.success && !result.cancelled);
+    CHECK(!result.continueValid && result.continueWatching.empty());
+    CHECK(result.recentlyAddedValid && result.recentlyAdded.size() == 1);
+    CHECK(!result.error.empty());
+    coordinator->stop();
+    coordinator.reset();
+    ::close(listener);
+    std::printf("[test] LibraryCoordinator Home rail cached failure OK\n");
+}
+
+void testHomeRailCoalescesAndRerunsAfterConsumption()
+{
+    std::printf("[test] LibraryCoordinator Home rail coalescing\n");
+    const int listener = coordinatorTestListener();
+    if (listener < 0)
+        return;
+    std::thread server([&] {
+        serveHomeRailResponses(listener, {
+            {R"({"Items":[]})"}, {R"({"Items":[]})"},
+            {R"({"Items":[]})"}, {R"({"Items":[]})"},
+        });
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.userId = "home-rail-coalesce-user";
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, std::make_shared<CatalogDb>(), 0);
+    coordinator->start();
+    std::uint64_t firstRequest = 0;
+    std::uint64_t duplicateRequest = 0;
+    CHECK(coordinator->requestHomeRailRefresh(firstRequest));
+    CHECK(!coordinator->requestHomeRailRefresh(duplicateRequest));
+
+    library::HomeRailResult firstResult;
+    CHECK(takeHomeRailResult(*coordinator, firstRequest, firstResult));
+    std::uint64_t secondRequest = 0;
+    CHECK(coordinator->requestHomeRailRefresh(secondRequest));
+    CHECK(secondRequest != firstRequest);
+    CHECK(!coordinator->requestHomeRailRefresh(duplicateRequest));
+
+    library::HomeRailResult secondResult;
+    CHECK(takeHomeRailResult(*coordinator, secondRequest, secondResult));
+    server.join();
+    CHECK(firstResult.success && secondResult.success);
+    coordinator->stop();
+    coordinator.reset();
+    ::close(listener);
+    std::printf("[test] LibraryCoordinator Home rail coalescing OK\n");
+}
+
 void testFullPopulationSuccessCommitsCheckpoint()
 {
     std::printf("[test] LibraryCoordinator full population success\n");
@@ -883,6 +1029,9 @@ int main()
     testSafetyReconcilePublishesCoordinatorResult();
     testSafetyReconcileStopPublishesCompletion();
     testHomeRailStopPublishesCompletion();
+    testHomeRailSuccessPublishesBothRails();
+    testHomeRailCachedFailureRetainsInvalidRail();
+    testHomeRailCoalescesAndRerunsAfterConsumption();
     testFullPopulationSuccessCommitsCheckpoint();
     testFullPopulationCancellationAbortsStagedGeneration();
     testFullPopulationFailureAbortsWithoutCheckpoint();

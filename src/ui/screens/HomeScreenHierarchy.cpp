@@ -103,11 +103,6 @@ void HomeScreen::consumeHierarchyResults()
     }
 }
 
-void HomeScreen::startPosterSync(const LibrarySnapshot &snapshot)
-{
-    queuePosterJobs(planHomePosterJobs(snapshot));
-}
-
 std::string HomeScreen::posterJobKey(const PosterJob &job)
 {
     return job.itemId + ":"

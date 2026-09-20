@@ -96,8 +96,6 @@ void HomeScreen::joinAllWorkers()
 {
     if (m_fetchThread.joinable())
         m_fetchThread.join();
-    if (m_resumeRefreshThread.joinable())
-        m_resumeRefreshThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
     for (auto &thread : m_posterThreads)
@@ -225,10 +223,7 @@ void HomeScreen::enter()
         }
     }
     else if (m_loadState == LoadState::Ready) {
-        if (m_resumeRefreshInFlight)
-            m_resumeRefreshPending = true;
-        else
-            startResumeRefresh();
+        startHomeRailRefresh();
     }
 }
 
@@ -252,10 +247,6 @@ void HomeScreen::update(Uint32 dt)
     if (m_fetchReady.load()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();
-    }
-    if (m_loadState == LoadState::Ready && m_resumeRefreshDone) {
-        UiDiagnostics::Scope scope("HomeScreen::publishResumeResult");
-        finishResumeRefresh();
     }
     if (m_loadState == LoadState::Ready) {
         updateLiveLibraryChanges();

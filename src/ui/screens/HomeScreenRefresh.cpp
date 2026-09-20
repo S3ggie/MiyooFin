@@ -1,6 +1,4 @@
 #include "HomeScreen.hpp"
-#include "../../net/JellyfinApi.hpp"
-#include "../../net/RouteRequest.hpp"
 #include "../../cache/LibraryCache.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
@@ -59,90 +57,6 @@ void HomeScreen::finishDownloadRefresh()
     }
     if (!m_journalDiscardConfirmId.empty() && (m_missingJournalEntries.empty() || m_missingJournalEntries.front().itemId != m_journalDiscardConfirmId))
         m_journalDiscardConfirmId.clear();
-}
-
-void HomeScreen::startResumeRefresh()
-{
-    // Never block the UI thread joining a still-running worker: a refresh
-    // already in flight coalesces into a pending rerun, so the join below
-    // only ever reclaims an already-finished thread.
-    if (m_resumeRefreshInFlight) {
-        m_resumeRefreshPending = true;
-        return;
-    }
-    // Continue Watching is an ephemeral rail; the legacy compatibility table
-    // is not a runtime source or destination for this refresh.
-    if (m_resumeRefreshThread.joinable())
-        m_resumeRefreshThread.join();
-
-    m_resumeRefreshDone = false;
-    m_resumeRefreshInFlight = true;
-    m_resumeRefreshSucceeded = false;
-    m_resumeRefreshCacheSaved = false;
-    m_resumeRefreshError.clear();
-    m_resumeRefreshResult.clear();
-
-    Session session=m_session;
-    std::string url = session.serverUrl;
-    std::string token = m_session.accessToken;
-    std::string uid = m_session.userId;
-    std::string devId = m_session.deviceId;
-
-    LibrarySnapshot snapshot=m_cachedSnapshot;
-    m_resumeRefreshThread = std::thread([this, session, url, token, uid, devId, snapshot]() mutable {
-        PerformanceTelemetry &telemetry=performanceTelemetry();
-        telemetry.setWorkerActive(WorkerId::HomeResumeRefresh, true);
-        telemetry.setWorkerQueueDepth(WorkerId::HomeResumeRefresh, 1);
-        TelemetryTimer refreshTimer;
-        std::vector<MediaItem> items;
-        std::string error;
-        if (RouteRequest(session).run([&](const std::string &base){return JellyfinApi::getResumeItems(base, token, uid, devId, 12,items, error, nullptr);},error)) {
-            m_resumeRefreshResult = std::move(items);
-            m_resumeRefreshSucceeded = true;
-            snapshot.continueWatching=m_resumeRefreshResult;
-            // Resume metadata is presentation-only. It is not persisted as a
-            // full catalog snapshot; online population owns catalog writes.
-            m_resumeRefreshCacheSaved = true;
-            startPosterSync(snapshot);
-        } else {
-            m_resumeRefreshError = error;
-        }
-        if (refreshTimer.active()) (void)refreshTimer.elapsedUs();
-        if (m_resumeRefreshSucceeded)
-            telemetry.addWorkerCompleted(WorkerId::HomeResumeRefresh);
-        else
-            telemetry.addWorkerFailed(WorkerId::HomeResumeRefresh);
-        telemetry.setWorkerActive(WorkerId::HomeResumeRefresh, false);
-        telemetry.setWorkerQueueDepth(WorkerId::HomeResumeRefresh, 0);
-        m_resumeRefreshDone = true;
-    });
-}
-
-void HomeScreen::finishResumeRefresh()
-{
-    // Thread join deferred to next startResumeRefresh() or joinAllWorkers().
-    m_resumeRefreshDone = false;
-    m_resumeRefreshInFlight = false;
-
-    if (!m_resumeRefreshSucceeded) {
-        printf("[HomeScreen] Continue Watching refresh failed: %s\n",
-               m_resumeRefreshError.c_str());
-    } else {
-        const std::string focusedLabel = focusedHomeRowLabel();
-        updateContinueWatchingRow(m_tabs, m_resumeRefreshResult);
-        m_cachedSnapshot.continueWatching = m_resumeRefreshResult;
-        restoreHomeRowFocus(focusedLabel);
-        if (!m_resumeRefreshCacheSaved)
-            printf("[HomeScreen] Continue Watching cache save failed\n");
-        clampNavigation();
-        printf("[HomeScreen] Continue Watching refreshed: %zu items\n",
-               m_resumeRefreshResult.size());
-    }
-
-    if (m_resumeRefreshPending) {
-        m_resumeRefreshPending = false;
-        startResumeRefresh();
-    }
 }
 
 } // namespace miyoofin

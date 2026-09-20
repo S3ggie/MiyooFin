@@ -18,6 +18,7 @@ int main()
     testShouldShowClockErrorTrue(); testShouldShowClockErrorFalseModernEpoch();
     testShouldShowClockErrorFalseUnrelatedFailure(); testClockMessageFormat();
     testHomeRowFocusReconciliation();
+    testHomeRailRefreshCoordinatorPath();
     testCardSurfaceCacheEviction(); testNonBlockingFinishPolicy();
     testRefreshMovieFilterHomeNavPreserved();     testLivePublicationNoopEmptyResult();
     testSqliteTempDirPath();

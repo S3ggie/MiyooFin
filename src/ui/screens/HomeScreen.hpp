@@ -368,7 +368,6 @@ private:
     void restoreOnlinePresentation();
     void applyOfflineProjection();
     void prepareOfflineProjection();
-    void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
     void posterWorker();
     bool requestHierarchy(const std::vector<MediaItem> &shows,
@@ -379,19 +378,6 @@ private:
     void drainDecodedArtwork();
     void submitDecode(const MediaItem &item, bool highPriority=false,
                       bool shows=false);
-
-    // Lightweight refresh used when returning to an already-loaded Home.
-    std::thread m_resumeRefreshThread;
-    std::atomic<bool> m_resumeRefreshDone{false};
-    std::atomic<bool> m_resumeRefreshInFlight{false};
-    bool m_resumeRefreshPending = false;
-    bool m_resumeRefreshSucceeded = false;
-    std::string m_resumeRefreshError;
-    std::vector<MediaItem> m_resumeRefreshResult;
-    bool m_resumeRefreshCacheSaved = false;
-
-    void startResumeRefresh();
-    void finishResumeRefresh();
 
     // DownloadManager may hold its mutex while reconciling/persisting on slow
     // SD storage.  Snapshot and playback-journal reads are therefore published

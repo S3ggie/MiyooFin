@@ -24,10 +24,11 @@
 #      with verification, removes scratch, and runs the SAME assertions
 #      (tools/ui-script/assert_shots.py) as the desktop variant.
 #
-# There is deliberately NO stub server and NO reverse SSH tunnel here: the
-# privileged launch uses the app's REAL session and real server, exactly as
-# production does. (The stub/tunnel still exists for the desktop harness,
-# tools/ui-script/run.sh, which has no server of its own.)
+# There is deliberately NO stub server and NO reverse SSH tunnel here. By
+# default the privileged launch uses the app's REAL session and real server,
+# exactly as production does. The test-only --server-unavailable mode instead
+# routes the saved configuration to a closed loopback port while the app runs;
+# tokens remain on-device and the original files are restored after exit.
 #
 # Why privileged: launching the binary directly over SSH runs as the
 # default non-root user, which CANNOT work — /dev/mi/gfx and /dev/mi/sys
@@ -38,7 +39,7 @@
 # path temporarily and gives it back.
 #
 # Usage: sh tools/ui-script/device-run.sh [--dry-run] [--desktop-keys]
-#            [--timeout-s N] <smoke|series>
+#            [--server-unavailable] [--timeout-s N] <smoke|series>
 #   --dry-run       print every host/remote action, do nothing (no SSH).
 #   --desktop-keys  do NOT set MIYOOFIN_UI_DEVICE_KEYS (shim sends WASD
 #                   codes; only useful with Raw: scancodes in the script).
@@ -50,13 +51,16 @@
 #     surgery offline via tools/ui-script/test-launcher-roundtrip.sh
 #     (the same tools/ui-script/launcher-surgery.sh functions the device
 #     runs over SSH).
+#   --server-unavailable is test-only: it temporarily routes server.txt and
+#     session route keys to http://127.0.0.1:9. It never prints session.txt.
 #
 # SAFETY (unattended hardware — read before extending):
 #   - NEVER reboots or power-cycles the device (no such command exists here).
 #   - The ONLY writes outside /tmp/miyoofin-ui-script are the launcher
-#     backup + in-place rewrite inside the app dir; both are undone by the
-#     restore step, which is verified (checksum vs the pre-injection value
-#     + byte-compare + marker-absent + executable-bit check).
+#     surgery and, only in --server-unavailable mode, the two configuration
+#     backups + in-place route rewrite inside the app dir. Every modified file
+#     is restored byte-for-byte; launcher restore also verifies its checksum,
+#     markers, and executable bit.
 #   - The device filesystem rejects `cp -p` and `chmod` on the root-owned
 #     launcher for the unprivileged SSH user, so the surgery uses NEITHER:
 #     plain `cp` for the backup, in-place `cat ... > launch.sh` redirects
@@ -74,16 +78,17 @@
 #     present (never clobbers; tells the operator how to restore).
 #   - MainUI is never stopped/started directly; the Onion helpers own the
 #     handoff. Residency is verified after the run (warning on mismatch).
-#   - Restore runs on EVERY exit path — success, assertion failure,
-#     timeout, INT, TERM — via the EXIT trap, and fails LOUDLY (non-zero
-#     exit) if the launcher cannot be put back. The device must never be
-#     left with an injected launcher.
+#   - Restore runs on EVERY exit path — success, assertion failure, timeout,
+#     INT, TERM — via the EXIT trap, and fails LOUDLY (non-zero exit) if either
+#     the launcher or test-only configuration cannot be put back. Configuration
+#     restoration is attempted only after MiyooFin is gone.
 #   - Every wait is bounded; the whole run terminates deterministically.
 
 set -eu
 
 DRY_RUN=0
 DEVICE_KEYS=1
+SERVER_UNAVAILABLE=0
 TIMEOUT_S=${MIYOOFIN_UI_TIMEOUT_S:-300}
 NAME=""
 
@@ -91,16 +96,17 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --desktop-keys) DEVICE_KEYS=0; shift ;;
+        --server-unavailable) SERVER_UNAVAILABLE=1; shift ;;
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--timeout-s N] <smoke|series>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
     esac
 done
-[ -n "$NAME" ] || { echo "usage: device-run.sh [--dry-run] [--desktop-keys] [--timeout-s N] <smoke|series>" >&2; exit 2; }
+[ -n "$NAME" ] || { echo "usage: device-run.sh [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series>" >&2; exit 2; }
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 SCRIPT_DIR="$ROOT/tools/ui-script"
@@ -111,6 +117,9 @@ SHIM_ARM="$ROOT/output/ui-script/shim-arm.so"
 APP_DIR=${MIYOOFIN_DEVICE_APP_DIR:-/mnt/SDCARD/App/MiyooFin}
 SCRATCH=/tmp/miyoofin-ui-script
 BACKUP=launch.sh.uiscript-bak
+SERVER_BACKUP=server.txt.uiscript-bak
+SESSION_BACKUP=session.txt.uiscript-bak
+UNAVAILABLE_ENDPOINT=http://127.0.0.1:9
 
 [ -f "$SCRIPT" ] || { echo "device-run: no such device script: $SCRIPT" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "device-run: python3 required" >&2; exit 2; }
@@ -122,6 +131,8 @@ command -v python3 >/dev/null 2>&1 || { echo "device-run: python3 required" >&2;
 # the device through SSH stdin, and the test sources this same file.
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/launcher-surgery.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/server-unavailable-surgery.sh"
 TARGET=$MIYOO_SSH_TARGET
 
 fail() { echo "device-run($NAME): $*" >&2; exit 1; }
@@ -134,8 +145,14 @@ if [ "$DEVICE_KEYS" = 1 ]; then
 else
     DEVKEYS_LINE='unset MIYOOFIN_UI_DEVICE_KEYS (shim sends desktop WASD codes)'
 fi
+if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+    SERVER_MODE_LINE='ssh: server-unavailable: back up server.txt + session.txt (without printing contents), route server endpoint overrides to the closed loopback endpoint'
+else
+    SERVER_MODE_LINE='ssh: use the real saved server/session (no configuration changes)'
+fi
     cat <<EOF
 dry-run: target=$TARGET appdir=$APP_DIR script=$SCRIPT timeout=${TIMEOUT_S}s
+dry-run: $SERVER_MODE_LINE
 dry-run: host: make -f tools/ui-script/Makefile.arm
 dry-run: ssh $TARGET 'test -x $APP_DIR/launch.sh, refuse if $BACKUP present (restore first), refuse if miyoofin running, require sole MainUI'
 dry-run: ssh $TARGET 'mkdir -p $SCRATCH $SCRATCH/shots'  (scp does not create parents)
@@ -153,6 +170,7 @@ dry-run: host: sh tools/miyoo/onion-remote-launch.sh &  (privileged Onion handof
 dry-run: host: poll /proc comm loop over SSH for miyoofin (BusyBox pgrep -x is broken), <=120s, else fail
 dry-run: host: poll $SCRATCH/result.txt for 'script complete, quitting app' / FAIL every 3s, bound ${TIMEOUT_S}s (uses REAL server/session; no stub, no tunnel)
 dry-run: host: if app still resident: sh tools/miyoo/onion-remote-exit.sh (bounded); verify MainUI sole foreground again
+dry-run: ssh $TARGET 'after MiyooFin exits: restore server.txt + session.txt byte-for-byte and remove only verified backups'
 dry-run: scp -r $TARGET:$SCRATCH/shots $TARGET:$SCRATCH/app.log $TARGET:$SCRATCH/result.txt -> $OUT/
 dry-run: RESTORE (always, every path incl. INT/TERM and inject failure): NEEDS_RESTORE is armed BEFORE launch.sh is first touched; ssh $TARGET 'cat $APP_DIR/$BACKUP > $APP_DIR/launch.sh in place, cmp vs backup, checksum vs pre-injection value, sh -n clean, MIYOOFIN_UI/LD_PRELOAD absent, executable kept, rm backup'; retried with backoff; fail loudly (CRITICAL + manual recovery command) if unverifiable
 dry-run: ssh $TARGET 'rm -rf $SCRATCH'; reap launch helper
@@ -168,8 +186,10 @@ make -f "$SCRIPT_DIR/Makefile.arm" >/dev/null || fail "ARM shim build failed"
 
 # --- globals for the cleanup trap ----------------------------------------
 RUNDIR=$(mktemp -d /tmp/miyoofin-ui-device.XXXXXX)
+DEVICE_SCRIPT="$SCRIPT"
 LAUNCH_PID=""
 NEEDS_RESTORE=0
+NEEDS_CONFIG_RESTORE=0
 SCRATCH_PUSHED=0
 IN_CLEANUP=0
 # Pre-injection pristine state, captured BEFORE NEEDS_RESTORE is armed
@@ -250,10 +270,70 @@ restore_launcher() {
     return 0
 }
 
+# The configuration surgery is also piped as exact bytes to the device. It
+# never captures or prints session.txt; only helper diagnostics are logged.
+remote_config_apply() {
+    {
+        cat "$SCRIPT_DIR/server-unavailable-surgery.sh"
+        printf '\nmiyoofin_server_unavailable_apply "$@"\n'
+    } | miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$SERVER_BACKUP" "$SESSION_BACKUP" "$UNAVAILABLE_ENDPOINT"
+}
+
+remote_config_restore_once() {
+    {
+        cat "$SCRIPT_DIR/server-unavailable-surgery.sh"
+        printf '\nmiyoofin_server_unavailable_restore "$@"\n'
+    } | miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$SERVER_BACKUP" "$SESSION_BACKUP"
+}
+
+# Configuration must not be restored while the app can still read it. On
+# cleanup paths, use the same supported Onion exit helper as the normal path,
+# then require a bounded, positive process absence before restoring bytes.
+stop_app_before_config_restore() {
+    _sc_count=$(count_remote miyoofin)
+    [ "$_sc_count" = 0 ] && return 0
+    if [ "$_sc_count" = -1 ]; then
+        echo 'device-run: CRITICAL: cannot establish MiyooFin exit state; refusing to restore server configuration' >&2
+        return 1
+    fi
+    echo 'device-run: app still resident during cleanup; requesting supported Onion exit' >&2
+    if ! sh "$ROOT/tools/miyoo/onion-remote-exit.sh" >"$RUNDIR/exit-cleanup.log" 2>&1; then
+        sed 's/^/remote-exit: /' "$RUNDIR/exit-cleanup.log" >&2 || true
+    fi
+    _sc_i=0
+    while [ "$_sc_i" -lt 45 ]; do
+        [ "$(count_remote miyoofin)" = 0 ] && return 0
+        sleep 1
+        _sc_i=$((_sc_i + 1))
+    done
+    echo 'device-run: CRITICAL: MiyooFin did not exit; server configuration remains backed up and routed' >&2
+    return 1
+}
+
+restore_server_config() {
+    [ "$NEEDS_CONFIG_RESTORE" = 1 ] || return 0
+    if ! stop_app_before_config_restore; then
+        return 1
+    fi
+    if remote_config_restore_once >"$RUNDIR/config-restore.log" 2>&1; then
+        cat "$RUNDIR/config-restore.log"
+        NEEDS_CONFIG_RESTORE=0
+        return 0
+    fi
+    sed 's/^/config-restore: /' "$RUNDIR/config-restore.log" >&2 || true
+    echo 'device-run: CRITICAL: server configuration restore failed; do not launch from Onion until the two .uiscript-bak files are recovered' >&2
+    return 1
+}
+
 cleanup() {
     rc=$?
     if [ "$IN_CLEANUP" = 1 ]; then exit "$rc"; fi
     IN_CLEANUP=1
+    if [ "$NEEDS_CONFIG_RESTORE" = 1 ]; then
+        if ! restore_server_config; then
+            rc=1
+        fi
+    fi
     if [ "$NEEDS_RESTORE" = 1 ]; then
         if restore_launcher >"$RUNDIR/restore.log" 2>&1; then
             cat "$RUNDIR/restore.log"
@@ -296,9 +376,10 @@ trap 'exit 143' TERM
 # expected state. In particular NEVER clobber an existing harness backup:
 # it means a previous run failed to restore, and only the operator knows
 # whether the installed launcher is safe to overwrite.
-miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$BACKUP" <<'EOF' || fail "device precondition check failed"
+miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$BACKUP" "$SERVER_UNAVAILABLE" "$SERVER_BACKUP" "$SESSION_BACKUP" <<'EOF' || fail "device precondition check failed"
 set -eu
 appdir=${1:?}; bak=${2:?}
+server_unavailable=${3:-0}; server_bak=${4:?}; session_bak=${5:?}
 [ -x "$appdir/launch.sh" ] || { echo "device-run: $appdir/launch.sh missing/not executable" >&2; exit 1; }
 grep -q '^./miyoofin' "$appdir/launch.sh" \
     || { echo "device-run: $appdir/launch.sh has no ./miyoofin line to inject before" >&2; exit 1; }
@@ -319,6 +400,12 @@ for proc in /proc/[0-9]*/comm; do
     [ "$(cat "$proc" 2>/dev/null || true)" = MainUI ] && m=$((m + 1)) || true
 done
 [ "$m" -eq 1 ] || { echo "device-run: MainUI is not the sole foreground UI (count=$m); the Onion handoff requires it" >&2; exit 1; }
+if [ "$server_unavailable" = 1 ]; then
+    [ -f "$appdir/server.txt" ] || { echo "device-run: --server-unavailable requires server.txt" >&2; exit 1; }
+    [ -f "$appdir/session.txt" ] || { echo "device-run: --server-unavailable requires session.txt" >&2; exit 1; }
+    [ ! -e "$appdir/$server_bak" ] || { echo "device-run: stale server configuration backup present" >&2; exit 1; }
+    [ ! -e "$appdir/$session_bak" ] || { echo "device-run: stale session configuration backup present" >&2; exit 1; }
+fi
 echo "device-run: preconditions OK (MainUI resident, no miyoofin, no stale backup)"
 EOF
 
@@ -328,7 +415,7 @@ miyoo_ssh "$TARGET" "mkdir -p '$SCRATCH' '$SCRATCH/shots'" || fail "device mkdir
 SCRATCH_PUSHED=1
 
 miyoo_scp "$SHIM_ARM" "$TARGET:$SCRATCH/shim-arm.so" || fail "scp shim failed"
-miyoo_scp "$SCRIPT" "$TARGET:$SCRATCH/script.txt" || fail "scp script failed"
+miyoo_scp "$DEVICE_SCRIPT" "$TARGET:$SCRATCH/script.txt" || fail "scp script failed"
 
 # --- 4. pristine copy + backup + inject the launcher --------------------
 # Pristine state is captured BEFORE anything is modified (the run has not
@@ -356,12 +443,26 @@ NEEDS_RESTORE=1
 } | miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$BACKUP" "$SCRATCH" "$DEVICE_KEYS" \
     || fail "launcher injection failed (restore runs on exit)"
 
+# --- 4b. optional closed-endpoint configuration ---------------------------
+# Arm the configuration restore before the first byte of either file changes.
+# The shared helper backs up and verifies both files without ever printing
+# session.txt, then routes only server.txt and the saved session route keys.
+if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+    NEEDS_CONFIG_RESTORE=1
+    remote_config_apply \
+        || fail "server-unavailable configuration injection failed (restore runs on exit)"
+fi
+
 # --- 5. privileged launch through Onion ----------------------------------
 # onion-remote-launch.sh queues the SAME /tmp/cmd_to_run.sh handoff MainUI
 # uses and blocks until the app exits and MainUI returns, so it runs in the
 # background while this script polls the shim verdict. The app runs as root
 # with its REAL session and real server — no stub, no tunnel.
-echo "device-run: triggering privileged Onion launch (as root, real server/session)..."
+if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+    echo "device-run: triggering privileged Onion launch (as root, server-unavailable mode)..."
+else
+    echo "device-run: triggering privileged Onion launch (as root, real server/session)..."
+fi
 sh "$ROOT/tools/miyoo/onion-remote-launch.sh" >"$RUNDIR/launch.log" 2>&1 &
 LAUNCH_PID=$!
 
@@ -421,6 +522,14 @@ while [ "$(count_remote MainUI)" != 1 ] && [ "$i" -lt 45 ]; do
 done
 [ "$(count_remote MainUI)" = 1 ] \
     || echo "device-run: WARNING: MainUI is not the sole foreground UI after exit" >&2
+[ "$(count_remote miyoofin)" = 0 ] \
+    || fail "MiyooFin is still resident after the exit path"
+
+# Do not put the real server/session back until MiyooFin is definitely gone;
+# this is also the first restore point used by the EXIT trap on failure paths.
+if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+    restore_server_config || fail "server configuration restore failed (see CRITICAL lines above)"
+fi
 
 # Reap the launch helper (it exits once MainUI returns); bounded, then kill.
 i=0
@@ -466,9 +575,16 @@ fi
 grep -q 'script complete, quitting app' "$OUT/result.txt" 2>/dev/null \
     || fail "no clean script verdict (app $VERDICT; see $OUT/app.log)"
 
+nonfatal_want=''
 case "$NAME" in
     smoke)
         want='[HomeScreen] Library loaded'
+        if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+            # The warm CatalogDb still renders the cached catalog/rails while
+            # the request routes fail. This stdout marker proves the closed
+            # endpoint was exercised without weakening the normal load marker.
+            nonfatal_want='[Route] LAN failed; public fallback'
+        fi
         SHOT="$OUT/shots/home.bmp"
         CHECKS="rendered,rails"
         ;;
@@ -575,6 +691,11 @@ esac
 grep -Fq "$want" "$OUT/app.log" \
     || fail "expected screen marker missing from log: $want"
 echo "device-run: log marker OK: $want"
+if [ -n "$nonfatal_want" ]; then
+    grep -Fq "$nonfatal_want" "$OUT/app.log" \
+        || fail "expected nonfatal unavailable-server marker missing from log: $nonfatal_want"
+    echo "device-run: nonfatal marker OK: $nonfatal_want"
+fi
 
 if [ -n "$SHOT" ]; then
     [ -f "$SHOT" ] || fail "expected screenshot missing: $SHOT"

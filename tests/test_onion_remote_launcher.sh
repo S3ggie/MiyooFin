@@ -81,6 +81,12 @@ grep -q 'validated_target_signal_eperm' tools/miyoo/miyoofin-graceful-exit.c || 
 grep -q 'unclassified_helper_failure' "$EXIT_HELPER" || fail 'remote exit does not redact/classify helper failures'
 ! grep -Eq 'kill -9|kill -15|SIGKILL|system\(|popen\(|sudo|su ' tools/miyoo/miyoofin-graceful-exit.c "$EXIT_HELPER" || fail 'exit tooling exposes unsafe escalation'
 grep -q 'MainUI' "$EXIT_HELPER" || fail 'exit helper does not verify MainUI restoration'
+grep -q 'MiyooFin was already gone; MainUI restored' "$EXIT_HELPER" \
+    || fail 'exit helper does not close the already-exited race safely'
+grep -q 'exited during validation; MainUI restored' "$EXIT_HELPER" \
+    || fail 'exit helper does not re-check target-validation race safely'
+grep -q 'MiyooFin still resident' "$EXIT_HELPER" \
+    || fail 'exit helper does not fail closed when target remains resident'
 echo '[test] Onion graceful remote exit static contract OK'
 
 REBOOT_HELPER="$ROOT/tools/miyoo/onion-remote-reboot.sh"

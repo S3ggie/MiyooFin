@@ -17,7 +17,6 @@ int main()
     testHomeUsesSharedDownIntentAcrossPageLoads(); testShowsPresentation();
     testShouldShowClockErrorTrue(); testShouldShowClockErrorFalseModernEpoch();
     testShouldShowClockErrorFalseUnrelatedFailure(); testClockMessageFormat();
-    testLiveChangeCheckpointPolicy();
     testHomeRowFocusReconciliation();
     testCardSurfaceCacheEviction(); testNonBlockingFinishPolicy();
     testRefreshMovieFilterHomeNavPreserved();     testLivePublicationNoopEmptyResult();

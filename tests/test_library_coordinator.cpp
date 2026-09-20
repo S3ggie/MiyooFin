@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 #include "../src/library/LibraryCoordinator.hpp"
+#include "../src/net/JellyfinLibraryEvents.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -244,85 +245,242 @@ void testStopRacingStartupIsSafe()
 
 void testLiveChangesWaitForSerializedSyncSlots()
 {
-    std::printf("[test] LibraryCoordinator live-change seam\n");
+    std::printf("[test] LibraryCoordinator live-change result seam\n");
     auto coordinator = makeCoordinator();
     coordinator.start();
 
-    CHECK(coordinator.startStartupSync(false));
     JellyfinLibraryChangeBatch batch;
     batch.itemsUpdated.push_back("item-1");
     CHECK(coordinator.requestLiveChange(batch));
-    library::LiveChangeIdentity identity;
-    CHECK(!coordinator.takeLiveChangeRequest(batch, identity));
-
-    library::StartupSyncResult startupResult;
-    for (int i = 0; i < 200 && !coordinator.takeStartupSyncResult(startupResult);
-         ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    CHECK(coordinator.takeLiveChangeRequest(batch, identity));
-    CHECK(batch.itemsUpdated.size() == 1);
-
-    // A live result keeps the serialized slot until Home consumes it. A
-    // queued event must survive both top-level sync rejections unchanged.
-    JellyfinLibraryChangeBatch queuedDuringLive;
-    queuedDuringLive.itemsUpdated.push_back("queued-item");
-    CHECK(coordinator.requestLiveChange(queuedDuringLive));
-    library::LiveChangeIdentity queuedIdentity;
+    JellyfinLibraryChangeBatch queued;
+    queued.itemsUpdated.push_back("item-2");
+    CHECK(coordinator.requestLiveChange(queued));
     library::LiveLibraryChangeResult liveResult;
-    liveResult.success = true;
-    CHECK(coordinator.publishLiveChangeResult(identity, liveResult));
-    CHECK(!coordinator.startStartupSync(false));
-    CHECK(!coordinator.beginFullSync());
-    CHECK(!coordinator.takeLiveChangeRequest(queuedDuringLive,
-                                             queuedIdentity));
-    CHECK(coordinator.takeLiveChangeResult(identity, liveResult));
-    CHECK(coordinator.takeLiveChangeRequest(queuedDuringLive, queuedIdentity));
-    CHECK(queuedDuringLive.itemsUpdated.size() == 1);
-    liveResult.success = true;
-    CHECK(coordinator.publishLiveChangeResult(queuedIdentity, liveResult));
-    CHECK(coordinator.takeLiveChangeResult(queuedIdentity, liveResult));
+    for (int i = 0; i < 200
+         && !coordinator.takeLiveChangeResult(liveResult); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(!liveResult.success);
+    CHECK(liveResult.error == CatalogDbErrorCategory::ScopeNotReady);
 
-    CHECK(coordinator.beginFullSync());
-    CHECK(coordinator.status().inFlight);
-    CHECK(coordinator.requestLiveChange(batch));
-    CHECK(!coordinator.takeLiveChangeRequest(batch, identity));
-    coordinator.finishFullSync();
-    CHECK(coordinator.takeLiveChangeRequest(batch, identity));
-    CHECK(batch.itemsUpdated.size() == 1);
-
-    // A queued batch must survive while Home's previous live worker still
-    // owns the serialized consumer slot.
-    JellyfinLibraryChangeBatch nextBatch;
-    nextBatch.itemsUpdated.push_back("item-2");
-    CHECK(coordinator.requestLiveChange(nextBatch));
-    library::LiveChangeIdentity nextIdentity;
-    CHECK(!coordinator.takeLiveChangeRequest(nextBatch, nextIdentity));
-
-    liveResult.success = true;
-    library::LiveChangeIdentity stale = identity;
-    ++stale.request;
-    CHECK(!coordinator.publishLiveChangeResult(stale, liveResult));
-    CHECK(coordinator.publishLiveChangeResult(identity, std::move(liveResult)));
-    CHECK(coordinator.takeLiveChangeResult(identity, liveResult));
-    CHECK(liveResult.success);
-    CHECK(coordinator.takeLiveChangeRequest(nextBatch, nextIdentity));
-    CHECK(nextBatch.itemsUpdated.size() == 1);
-    coordinator.discardLiveChangeResults();
-    CHECK(!coordinator.publishLiveChangeResult(identity, std::move(liveResult)));
+    // A published result holds the serialized slot until Home consumes it;
+    // the queued second change is then published afterward.
+    library::LiveLibraryChangeResult nextResult;
+    for (int i = 0; i < 200
+         && !coordinator.takeLiveChangeResult(nextResult); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(!nextResult.success);
     coordinator.stop();
 
-    // A rejected publication is the completion path for Home's worker when
-    // stop/discard clears the active identity; keep the Home-side signal in
-    // place so this regression cannot become a silent wait again.
+    // Home consumes coordinator publications and no longer owns a live-change
+    // worker or identity/publish handshake.
     const auto homeSync = miyoofin_test::readTestBytes(
         "src/ui/screens/HomeScreenSync.cpp");
-    const auto rejectedPublish = miyoofin_test::sourcePos(
-        homeSync, "publishLiveChangeResult(");
-    const auto doneSignal = miyoofin_test::sourcePos(
-        homeSync, "m_liveChangeDone.store(true);");
-    CHECK(rejectedPublish != std::string::npos);
-    CHECK(doneSignal != std::string::npos);
-    std::printf("[test] LibraryCoordinator live-change seam OK\n");
+    CHECK(miyoofin_test::sourcePos(
+              homeSync, "takeLiveChangeResult(result)") != std::string::npos);
+    CHECK(miyoofin_test::sourcePos(
+              homeSync, "m_liveChangeThread") == std::string::npos);
+    CHECK(miyoofin_test::sourcePos(
+              homeSync, "startLiveChangeApply") == std::string::npos);
+    std::printf("[test] LibraryCoordinator live-change result seam OK\n");
+}
+
+void testLiveChangeQueueFullDrainFallsBackToCatchUp()
+{
+    std::printf("[test] LibraryCoordinator live-change queue-full drain\n");
+
+    // Model the LibrarySync -> coordinator transfer with the same bounded
+    // queue semantics.  Existing ids still coalesce, while a new id that
+    // cannot fit is represented by catch-up instead of being silently lost.
+    JellyfinLibraryEventQueue coordinatorQueue(3);
+    JellyfinLibraryChangeBatch queued;
+    queued.itemsUpdated = {"a", "b", "c"};
+    CHECK(coordinatorQueue.push(queued));
+
+    JellyfinLibraryChangeBatch incoming;
+    incoming.itemsUpdated = {"b", "d"};
+    incoming.userDataChanged = true;
+    JellyfinLibraryEventQueue librarySyncQueue(3);
+    CHECK(librarySyncQueue.push(incoming));
+    JellyfinLibraryChangeBatch transferred;
+    CHECK(librarySyncQueue.pop(transferred));
+    CHECK(!librarySyncQueue.pop(incoming));
+    CHECK(!coordinatorQueue.push(transferred));
+    CHECK(coordinatorQueue.overflowed());
+
+    JellyfinLibraryChangeBatch drained;
+    CHECK(coordinatorQueue.pop(drained));
+    CHECK(drained.catchUpRequired);
+    CHECK(drained.userDataChanged);
+    CHECK(drained.itemsUpdated.size() == 3);
+    CHECK(drained.itemsUpdated[0] == "a");
+    CHECK(drained.itemsUpdated[1] == "b");
+    CHECK(drained.itemsUpdated[2] == "c");
+    CHECK(!coordinatorQueue.pop(drained));
+
+    // Pin the coordinator-side failure handling so a future refactor cannot
+    // reintroduce a discarded source pop while preserving the queue test
+    // above's coalescing/overflow contract.
+    const auto coordinator = miyoofin_test::readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
+    CHECK(miyoofin_test::sourcePos(
+              coordinator, "m_liveChangeRequests.push(incoming)")
+          != std::string::npos);
+    CHECK(miyoofin_test::sourcePos(
+              coordinator, "m_liveChangeDrainPendingCatchUp")
+          != std::string::npos);
+    std::printf("[test] LibraryCoordinator live-change queue-full drain OK\n");
+}
+
+void testLiveChangeCatchUpFailureIsRetriedByCoordinator()
+{
+    std::printf("[test] LibraryCoordinator live-change catch-up retry\n");
+    const auto scope = coordinatorTestScope("live-catch-up-retry");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto seeded = db->writeSyncState(
+        1000, 0, 0, {0, epoch, {}}).get();
+    CHECK(seeded.success);
+
+    const int listener = coordinatorTestListener();
+    if (listener < 0) {
+        removeCoordinatorTestScope(scope);
+        return;
+    }
+    std::thread server([&] {
+        const int statuses[] = {500, 200};
+        for (const int status : statuses) {
+            const int client = coordinatorAccept(listener);
+            if (client < 0)
+                return;
+            coordinatorReadRequest(client);
+            coordinatorSendJson(client,
+                                status == 200 ? R"({"Items":[]})"
+                                              : R"({"Error":"transient"})",
+                                status);
+            ::close(client);
+        }
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.accessToken = "test-token";
+    session.userId = scope.user;
+    session.manualOfflineMode = true;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    JellyfinLibraryChangeBatch overflow;
+    overflow.catchUpRequired = true;
+    CHECK(coordinator->requestLiveChange(overflow));
+
+    library::LiveLibraryChangeResult failed;
+    bool tookFailure = false;
+    for (int i = 0; i < 1000 && !tookFailure; ++i) {
+        tookFailure = coordinator->takeLiveChangeResult(failed);
+        if (!tookFailure)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookFailure);
+    CHECK(!failed.success && failed.catchUpRequired);
+
+    library::LiveLibraryChangeResult retried;
+    bool tookRetry = false;
+    for (int i = 0; i < 1000 && !tookRetry; ++i) {
+        tookRetry = coordinator->takeLiveChangeResult(retried);
+        if (!tookRetry)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookRetry);
+    CHECK(retried.success && retried.catchUpRequired);
+
+    coordinator->stop();
+    server.join();
+    coordinator.reset();
+    db.reset();
+    ::close(listener);
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator live-change catch-up retry OK\n");
+}
+
+void testLiveChangeCatchUpApplyFailureRetainsBarrier()
+{
+    std::printf("[test] LibraryCoordinator catch-up apply failure retry\n");
+    const auto scope = coordinatorTestScope("live-catch-up-apply-retry");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto seeded = db->writeSyncState(
+        1000, 0, 0, {0, epoch, {}}).get();
+    CHECK(seeded.success);
+
+    const int listener = coordinatorTestListener();
+    if (listener < 0) {
+        removeCoordinatorTestScope(scope);
+        return;
+    }
+    const int statuses[] = {200, 500, 200, 200};
+    std::atomic<int> requestCount{0};
+    std::thread server([&] {
+        for (const int status : statuses) {
+            const int client = coordinatorAccept(listener);
+            if (client < 0)
+                return;
+            coordinatorReadRequest(client);
+            ++requestCount;
+            coordinatorSendJson(client,
+                                status == 500 ? R"({"Error":"transient"})"
+                                              : R"({"Items":[]})",
+                                status);
+            ::close(client);
+        }
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.accessToken = "test-token";
+    session.userId = scope.user;
+    session.manualOfflineMode = true;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    JellyfinLibraryChangeBatch overflow;
+    overflow.catchUpRequired = true;
+    overflow.itemsUpdated.push_back("apply-after-catch-up");
+    CHECK(coordinator->requestLiveChange(overflow));
+
+    library::LiveLibraryChangeResult failed;
+    bool tookFailure = false;
+    for (int i = 0; i < 1000 && !tookFailure; ++i) {
+        tookFailure = coordinator->takeLiveChangeResult(failed);
+        if (!tookFailure)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookFailure);
+    CHECK(!failed.success && failed.catchUpRequired);
+
+    library::LiveLibraryChangeResult retried;
+    bool tookRetry = false;
+    for (int i = 0; i < 1000 && !tookRetry; ++i) {
+        tookRetry = coordinator->takeLiveChangeResult(retried);
+        if (!tookRetry)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookRetry);
+    CHECK(retried.success && retried.catchUpRequired);
+
+    coordinator->stop();
+    server.join();
+    CHECK(requestCount == 4);
+    coordinator.reset();
+    db.reset();
+    ::close(listener);
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator catch-up apply failure retry OK\n");
 }
 
 void testSafetyReconcilePublishesCoordinatorResult()
@@ -684,8 +842,8 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     JellyfinLibraryChangeBatch batch;
     batch.itemsUpdated.push_back("startup-queued-live");
     CHECK(coordinator->requestLiveChange(batch));
-    library::LiveChangeIdentity identity;
-    CHECK(!coordinator->takeLiveChangeRequest(batch, identity));
+    library::LiveLibraryChangeResult liveResult;
+    CHECK(!coordinator->takeLiveChangeResult(liveResult));
     coordinator->cancelStartupSync();
     db->setWorkerPausedForTest(false);
     library::StartupSyncResult startupResult;
@@ -702,7 +860,7 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     CHECK(coordinator->requestSafetyReconcile());
     CHECK(!coordinator->startStartupSync(false));
     CHECK(!coordinator->requestFullPopulation(request));
-    CHECK(!coordinator->takeLiveChangeRequest(batch, identity));
+    CHECK(!coordinator->takeLiveChangeResult(liveResult));
     coordinator->cancelSafetyReconcile();
     db->setWorkerPausedForTest(false);
     coordinator->stop();
@@ -718,6 +876,9 @@ int main()
 {
     testLibraryCoordinatorIsTheSingleStartupDriver();
     testStopRacingStartupIsSafe();
+    testLiveChangeQueueFullDrainFallsBackToCatchUp();
+    testLiveChangeCatchUpFailureIsRetriedByCoordinator();
+    testLiveChangeCatchUpApplyFailureRetainsBarrier();
     testLiveChangesWaitForSerializedSyncSlots();
     testSafetyReconcilePublishesCoordinatorResult();
     testSafetyReconcileStopPublishesCompletion();

@@ -44,6 +44,7 @@ struct FullPopulationUpdate {
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
     bool terminal = false;
+    bool cacheOnly = false;
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -95,6 +96,38 @@ struct HomeRailResult {
     std::vector<MediaItem> continueWatching;
     std::vector<MediaItem> recentlyAdded;
     std::string error;
+};
+
+/// One serialized Home hierarchy walk.  The coordinator owns the cancellation
+/// token after accepting the request; callers only retain the request id and
+/// consume immutable results.
+struct HierarchyRequest {
+    std::uint64_t request = 0;
+    std::uint64_t generation = 0;
+    bool forceReconcile = false;
+    std::vector<MediaItem> shows;
+};
+
+/// Per-series and terminal publications from the coordinator-owned hierarchy
+/// worker.  A result may contain the cached seasons observed before the raw
+/// refresh; this preserves cache-first artwork scheduling on Home.
+struct HierarchyResult {
+    std::uint64_t request = 0;
+    std::uint64_t generation = 0;
+    bool terminal = false;
+    bool cacheOnly = false;
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    bool checkpointCommitted = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::string seriesId;
+    std::vector<MediaItem> cachedSeasons;
+    std::vector<MediaItem> seasons;
+    std::int64_t checkpointMs = 0;
+    std::int64_t lastSuccessfulMs = 0;
+    std::int64_t lastReconcileMs = 0;
 };
 
 /// Coordinator publication for Home content and synchronization metadata.
@@ -201,6 +234,17 @@ public:
     bool takeHomeRailResult(std::uint64_t request, HomeRailResult &result);
     void cancelHomeRailRefresh() noexcept;
 
+    /// Queue one serialized hierarchy walk for Home.  Results are published
+    /// per series followed by one terminal checkpoint result.
+    bool requestHierarchy(const std::vector<MediaItem> &shows,
+                          std::uint64_t generation, bool forceReconcile,
+                          std::uint64_t &request);
+    bool takeHierarchyResult(std::uint64_t request, HierarchyResult &result);
+    /// Cancel the current Home lifetime, invalidate/discard its publications,
+    /// and release the request slot for the next Home lifetime.  The worker
+    /// itself remains serialized while a cancelled network future unwinds.
+    void cancelHierarchy() noexcept;
+
     /// Publish and consume immutable Home content/status snapshots.  A
     /// publication from another scope or an older catalog generation is
     /// rejected.  Missing content/rails retain the last valid cached value so
@@ -257,6 +301,8 @@ public:
     Status status() const;
 
 private:
+    void hierarchyWorker();
+
     Session m_session;
     std::shared_ptr<LibrarySync> m_sync;
     std::shared_ptr<LibraryQuery> m_query;
@@ -294,6 +340,22 @@ private:
     bool m_homeRailResultReady = false;
     bool m_homeRailInFlight = false;
     std::uint64_t m_homeRailRequest = 0;
+    mutable std::mutex m_hierarchyMutex;
+    std::condition_variable m_hierarchyWake;
+    std::thread m_hierarchyThread;
+    std::deque<HierarchyRequest> m_hierarchyRequests;
+    std::deque<HierarchyResult> m_hierarchyResults;
+    std::shared_ptr<std::atomic_bool> m_hierarchyCancellation;
+    std::uint64_t m_hierarchyRequest = 0;
+    std::uint64_t m_hierarchyGeneration = 0;
+    std::size_t m_hierarchyCompleted = 0;
+    std::size_t m_hierarchyTotal = 0;
+    bool m_hierarchyInFlight = false;
+    bool m_hierarchyStop = false;
+    bool m_hierarchyOffline = false;
+    bool m_hierarchyForceReconcile = false;
+    std::int64_t m_hierarchyLastSuccessfulMs = 0;
+    std::int64_t m_hierarchyLastReconcileMs = 0;
     std::shared_ptr<const HomeState> m_homeState;
     std::shared_ptr<const HomeState> m_homeStateRetained;
     std::uint64_t m_homeStateRevision = 0;

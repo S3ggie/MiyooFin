@@ -228,8 +228,7 @@ private:
     // reconcile, live-change catch-up/reconcile/apply — including a commit
     // whose later step fails).  Atomic so the SDL thread can read it for
     // the offline-snapshot signature without a DB query.  Hierarchy-only
-    // commits (seasons/episodes via the hierarchy worker, tracked by the
-    // separate m_hierarchyGeneration below) do NOT advance this epoch.
+    // commits (seasons/episodes) do NOT advance this epoch.
     std::atomic<std::uint64_t> m_topLevelSyncGeneration{0};
     std::string m_userName;
 
@@ -316,7 +315,6 @@ private:
     LibrarySnapshot m_offlineSnapshotCache;
     bool m_haveOfflineSnapshotCache = false;
     SyncState m_syncState;
-    bool m_forceHierarchyReconcile = false;
     LibrarySyncSchedule m_syncSchedule;
     std::atomic<size_t> m_metadataCompleted{0}, m_metadataTotal{0};
     std::atomic<bool> m_metadataActive{false};
@@ -341,21 +339,17 @@ private:
     // Session-level guard for bounded season-poster prefetch: each series is
     // prefetched at most once per process lifetime so repeat home fetches are
     // free.
+    std::mutex m_hierarchyStateMutex;
     std::set<std::string> m_seasonPrefetchedIds;
     bool m_stopPosterWorker = false;
-    // Hierarchy discovery is deliberately a single background worker: it keeps
-    // startup and the SDL thread free while placing a firm bound on requests.
-    std::thread m_hierarchyThread;
-    std::mutex m_hierarchyMutex;
-    std::condition_variable m_hierarchyWake;
-    std::vector<MediaItem> m_pendingHierarchyShows;
-    std::uint64_t m_pendingHierarchyGeneration = 0;
-    std::shared_ptr<std::atomic_bool> m_catalogGenerationCancellation;
-    std::atomic<std::uint64_t> m_hierarchyGeneration{0};
+    // The coordinator owns hierarchy work, cancellation, and generation.
+    // Home retains only the request identity and UI-local progress state.
+    std::atomic<std::uint64_t> m_hierarchyRequest{0};
+    std::atomic<bool> m_hierarchyRequestReady{false};
     std::atomic<size_t> m_hierarchyCompleted{0}, m_hierarchyTotal{0};
     std::atomic<bool> m_hierarchyActive{false};
     std::atomic<bool> m_hierarchyOffline{false};
-    bool m_stopHierarchyWorker = false;
+    bool m_hierarchySubmissionClosed = false;
     std::thread m_decodeThread;
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeWake;
@@ -388,8 +382,9 @@ private:
     void startPosterSync(const LibrarySnapshot &snapshot);
     void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
     void posterWorker();
-    void hierarchyWorker();
-    bool publishHierarchyCheckpoint(std::uint64_t generation);
+    bool requestHierarchy(const std::vector<MediaItem> &shows,
+                          std::uint64_t generation, bool forceReconcile);
+    void consumeHierarchyResults();
     std::string syncStatusText() const;
     void decodeWorker();
     void drainDecodedArtwork();

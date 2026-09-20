@@ -259,6 +259,13 @@ void testLibraryCacheHomeParityHarness()
           != std::string::npos);
     CHECK(syncSource.find("m_metadataCompleted.store")
           != std::string::npos);
+    CHECK(syncSource.find("collectBoundedSeriesIds")
+          != std::string::npos);
+    CHECK(syncSource.find("itemsByIds") != std::string::npos);
+    CHECK(syncSource.find("requestHierarchy") != std::string::npos);
+    CHECK(syncSource.find("refreshSeasons") == std::string::npos);
+    CHECK(syncSource.find("refreshEpisodes") == std::string::npos);
+    CHECK(syncSource.find("writeSyncState") == std::string::npos);
     const std::string episodeNavigationSource =
         readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     CHECK(episodeNavigationSource.find("season.seriesId = series.id;")
@@ -267,21 +274,41 @@ void testLibraryCacheHomeParityHarness()
         readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
     CHECK(hierarchySource.find("getSeasons(") == std::string::npos);
     CHECK(hierarchySource.find("getEpisodes(") == std::string::npos);
-    CHECK(hierarchySource.find("submitCatalogHierarchy") == std::string::npos);
     CHECK(hierarchySource.find("m_libraryQuery->seasons")
-          != std::string::npos);
+          == std::string::npos);
     CHECK(hierarchySource.find("m_libraryQuery->episodes")
-          != std::string::npos);
+          == std::string::npos);
     CHECK(hierarchySource.find("sync->refreshSeasons")
-          != std::string::npos);
+          == std::string::npos);
     CHECK(hierarchySource.find("sync->refreshEpisodes")
+          == std::string::npos);
+    CHECK(hierarchySource.find("writeSyncState") == std::string::npos);
+    CHECK(hierarchySource.find("requestHierarchy") != std::string::npos);
+    CHECK(hierarchySource.find("takeHierarchyResult") != std::string::npos);
+    CHECK(hierarchySource.find("cacheOnly") != std::string::npos);
+    const std::string coordinatorSource =
+        readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(coordinatorSource.find("hierarchyWorker") != std::string::npos);
+    CHECK(coordinatorSource.find("m_query->seasons") != std::string::npos);
+    CHECK(coordinatorSource.find("m_sync->refreshSeasons")
+          != std::string::npos);
+    CHECK(coordinatorSource.find("m_sync->refreshEpisodes")
+          != std::string::npos);
+    CHECK(coordinatorSource.find("m_sync->writeSyncState")
           != std::string::npos);
     const std::string lifecycleSource =
         readTestBytes("src/ui/screens/HomeScreen.cpp");
-    CHECK(lifecycleSource.find("submitCatalogHierarchy")
+    const std::string homeHeader =
+        readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(lifecycleSource.find("m_hierarchyThread") == std::string::npos);
+    CHECK(homeHeader.find("m_hierarchyThread") == std::string::npos);
+    CHECK(homeHeader.find("m_hierarchyWake") == std::string::npos);
+    CHECK(homeHeader.find("m_stopHierarchyWorker") == std::string::npos);
+    CHECK(lifecycleSource.find("stageSeriesHierarchy")
           == std::string::npos);
-    CHECK(lifecycleSource.find("m_catalogDb->stageSeriesHierarchy")
-          == std::string::npos);
+    CHECK(lifecycleSource.find("writeSyncState") == std::string::npos);
+    CHECK(hierarchySource.find("m_libraryCoordinator->requestHierarchy")
+          != std::string::npos);
 
     LibrarySnapshot snapshot;
     MediaItem a = catalogParityItem("__task30_a__", "movie", "The apple");

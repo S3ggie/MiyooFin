@@ -49,6 +49,11 @@ void LibraryCoordinator::start()
     if (m_stopped || m_running || !m_sync)
         return;
     m_sync->startLiveEvents();
+    {
+        std::lock_guard<std::mutex> hierarchyLock(m_hierarchyMutex);
+        m_hierarchyStop = false;
+    }
+    m_hierarchyThread = std::thread(&LibraryCoordinator::hierarchyWorker, this);
     m_running = true;
 }
 
@@ -825,6 +830,239 @@ void LibraryCoordinator::cancelHomeRailRefresh() noexcept
         m_homeRailCancellation->store(true);
 }
 
+bool LibraryCoordinator::requestHierarchy(
+    const std::vector<MediaItem> &shows, std::uint64_t generation,
+    bool forceReconcile, std::uint64_t &request)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_stopped || !m_running)
+            return false;
+    }
+    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    if (m_hierarchyStop || !m_sync || !m_query
+        || m_hierarchyInFlight || !m_hierarchyRequests.empty()
+        || !m_hierarchyResults.empty() || generation == 0
+        || generation < m_hierarchyGeneration)
+        return false;
+
+    request = ++m_hierarchyRequest;
+    m_hierarchyGeneration = generation;
+    m_hierarchyCompleted = 0;
+    m_hierarchyTotal = shows.size();
+    m_hierarchyOffline = false;
+    m_hierarchyForceReconcile = forceReconcile;
+    m_hierarchyLastSuccessfulMs = 0;
+    m_hierarchyLastReconcileMs = 0;
+    m_hierarchyCancellation = std::make_shared<std::atomic_bool>(false);
+    m_hierarchyRequests.push_back(HierarchyRequest{
+        request, generation, forceReconcile, shows});
+    m_hierarchyInFlight = true;
+    m_hierarchyWake.notify_one();
+    return true;
+}
+
+bool LibraryCoordinator::takeHierarchyResult(
+    std::uint64_t request, HierarchyResult &result)
+{
+    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    if (request == 0 || request != m_hierarchyRequest
+        || m_hierarchyResults.empty())
+        return false;
+    result = std::move(m_hierarchyResults.front());
+    m_hierarchyResults.pop_front();
+    return true;
+}
+
+void LibraryCoordinator::cancelHierarchy() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    if (m_hierarchyCancellation)
+        m_hierarchyCancellation->store(true);
+    // Cancellation belongs to the Home lifetime, not to the next Home
+    // request.  Invalidate every publication from this lifetime and discard
+    // anything Home did not consume before teardown.  A cancelled worker may
+    // still be unwinding a network future; allowing the next request into the
+    // queue keeps that worker serialized without letting its results reserve
+    // the request slot forever.
+    ++m_hierarchyRequest;
+    m_hierarchyRequests.clear();
+    m_hierarchyResults.clear();
+    m_hierarchyInFlight = false;
+}
+
+void LibraryCoordinator::hierarchyWorker()
+{
+    for (;;) {
+        HierarchyRequest request;
+        std::shared_ptr<std::atomic_bool> cancellation;
+        {
+            std::unique_lock<std::mutex> lock(m_hierarchyMutex);
+            m_hierarchyWake.wait(lock, [&] {
+                return m_hierarchyStop || !m_hierarchyRequests.empty();
+            });
+            if (m_hierarchyStop)
+                return;
+            request = std::move(m_hierarchyRequests.front());
+            m_hierarchyRequests.pop_front();
+            cancellation = m_hierarchyCancellation;
+        }
+
+        const auto cancelled = [&] {
+            return cancellation && cancellation->load();
+        };
+        std::size_t completed = 0;
+        bool failed = false;
+        HierarchyResult terminal;
+        terminal.request = request.request;
+        terminal.generation = request.generation;
+        terminal.terminal = true;
+
+        const auto publish = [&](HierarchyResult result) {
+            std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+            if (request.request != m_hierarchyRequest)
+                return;
+            result.request = request.request;
+            result.generation = request.generation;
+            m_hierarchyResults.push_back(std::move(result));
+        };
+
+        try {
+            for (const auto &series : request.shows) {
+                if (cancelled()) {
+                    terminal.cancelled = true;
+                    terminal.error = CatalogDbErrorCategory::Superseded;
+                    terminal.message = "hierarchy refresh cancelled";
+                    break;
+                }
+
+                HierarchyResult result;
+                result.request = request.request;
+                result.generation = request.generation;
+                result.seriesId = series.id;
+                if (m_query) {
+                    const auto cached = m_query->seasons(
+                        series.id, cancellation).get();
+                    if (cached.success) {
+                        result.cachedSeasons = std::move(cached.items);
+                        if (!result.cachedSeasons.empty()) {
+                            HierarchyResult cachedResult;
+                            cachedResult.request = request.request;
+                            cachedResult.generation = request.generation;
+                            cachedResult.seriesId = series.id;
+                            cachedResult.cachedSeasons = result.cachedSeasons;
+                            cachedResult.cacheOnly = true;
+                            publish(std::move(cachedResult));
+                            result.cachedSeasons.clear();
+                        }
+                    }
+                }
+
+                const auto seasonRefresh = m_sync->refreshSeasons(
+                    series, cancellation).get();
+                if (!seasonRefresh.success) {
+                    result.cancelled = seasonRefresh.cancelled;
+                    result.superseded = seasonRefresh.superseded;
+                    result.error = seasonRefresh.error;
+                    result.message = seasonRefresh.message;
+                    failed = true;
+                    publish(std::move(result));
+                    if (cancelled()) {
+                        terminal.cancelled = true;
+                        terminal.error = CatalogDbErrorCategory::Superseded;
+                        terminal.message = "hierarchy refresh cancelled";
+                        break;
+                    }
+                    continue;
+                }
+                result.seasons = seasonRefresh.items;
+
+                bool complete = true;
+                for (const auto &season : result.seasons) {
+                    if (cancelled()) {
+                        complete = false;
+                        terminal.cancelled = true;
+                        terminal.error = CatalogDbErrorCategory::Superseded;
+                        terminal.message = "hierarchy refresh cancelled";
+                        break;
+                    }
+                    if (season.id.empty()) {
+                        complete = false;
+                        break;
+                    }
+                    const auto episodeRefresh = m_sync->refreshEpisodes(
+                        series, season, cancellation).get();
+                    if (!episodeRefresh.success) {
+                        complete = false;
+                        result.cancelled = episodeRefresh.cancelled;
+                        result.superseded = episodeRefresh.superseded;
+                        result.error = episodeRefresh.error;
+                        result.message = episodeRefresh.message;
+                        break;
+                    }
+                }
+
+                result.success = complete;
+                if (result.success) {
+                    ++completed;
+                    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+                    if (request.request == m_hierarchyRequest)
+                        ++m_hierarchyCompleted;
+                } else {
+                    failed = true;
+                }
+                publish(std::move(result));
+                if (terminal.cancelled)
+                    break;
+            }
+            if (cancelled()) {
+                terminal.cancelled = true;
+                terminal.error = CatalogDbErrorCategory::Superseded;
+                if (terminal.message.empty())
+                    terminal.message = "hierarchy refresh cancelled";
+            }
+            if (!terminal.cancelled && !failed
+                && completed == request.shows.size()) {
+                const std::int64_t nowMs = coordinatorWallClockMs();
+                const auto checkpoint = m_sync->writeSyncState(
+                    nowMs, request.forceReconcile ? nowMs : 0,
+                    request.generation, cancellation).get();
+                terminal.checkpointCommitted = checkpoint.success;
+                terminal.checkpointMs = checkpoint.lastSuccessfulMs;
+                terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                terminal.lastReconcileMs = checkpoint.lastReconcileMs;
+                terminal.success = checkpoint.success;
+                terminal.error = checkpoint.error;
+                terminal.message = checkpoint.message;
+                if (checkpoint.success) {
+                    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+                    if (request.request == m_hierarchyRequest) {
+                        m_hierarchyLastSuccessfulMs =
+                            checkpoint.lastSuccessfulMs;
+                        m_hierarchyLastReconcileMs =
+                            checkpoint.lastReconcileMs;
+                    }
+                }
+            } else if (!terminal.cancelled && failed) {
+                terminal.message = "hierarchy refresh failed";
+            }
+        } catch (const std::exception &error) {
+            terminal.error = CatalogDbErrorCategory::SqliteError;
+            terminal.message = error.what();
+        } catch (...) {
+            terminal.error = CatalogDbErrorCategory::SqliteError;
+            terminal.message = "hierarchy refresh failed unexpectedly";
+        }
+
+        publish(std::move(terminal));
+        {
+            std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+            if (request.request == m_hierarchyRequest)
+                m_hierarchyInFlight = false;
+        }
+    }
+}
+
 bool LibraryCoordinator::publishHomeState(HomeState state)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
@@ -969,6 +1207,7 @@ void LibraryCoordinator::stop() noexcept
     std::thread fullPopulationThread;
     std::thread homeRailThread;
     std::thread safetyReconcileThread;
+    std::thread hierarchyThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (m_stopped)
@@ -994,6 +1233,14 @@ void LibraryCoordinator::stop() noexcept
         if (m_safetyReconcileThread.joinable())
             safetyReconcileThread = std::move(m_safetyReconcileThread);
     }
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        m_hierarchyStop = true;
+        if (m_hierarchyCancellation)
+            m_hierarchyCancellation->store(true);
+        hierarchyThread = std::move(m_hierarchyThread);
+    }
+    m_hierarchyWake.notify_all();
     // The startup worker publishes through m_startupMutex, so never join it
     // while holding that mutex.
     if (startupThread.joinable())
@@ -1004,6 +1251,8 @@ void LibraryCoordinator::stop() noexcept
         homeRailThread.join();
     if (safetyReconcileThread.joinable())
         safetyReconcileThread.join();
+    if (hierarchyThread.joinable())
+        hierarchyThread.join();
     if (m_sync)
         m_sync->stop();
 }

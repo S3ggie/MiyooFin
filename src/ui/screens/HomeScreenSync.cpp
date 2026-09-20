@@ -423,6 +423,9 @@ bool HomeScreen::startFetch()
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
             m_fetchCacheSaved = true;
+            publishCoordinatorHomeState(
+                m_fetchResult, m_cachedSnapshot, true, true, true, false,
+                true, true);
             m_metadataActive.store(false);
             completeTelemetry(Outcome::Success);
             m_fetchComplete.store(true);
@@ -478,6 +481,14 @@ bool HomeScreen::startFetch()
                     }
                     m_fetchResult = std::move(warmTabs);
                 }
+                std::vector<TabData> warmTabsForState;
+                {
+                    std::lock_guard<std::mutex> lock(m_fetchMutex);
+                    warmTabsForState = m_fetchResult;
+                }
+                publishCoordinatorHomeState(
+                    warmTabsForState, {}, true, false, false, true,
+                    false, false);
                 uiDiagnostics().log(
                     "[HomeScreen] startup stage=warm_sqlite_catalog_ready");
                 initialPagePublished = true;
@@ -555,6 +566,12 @@ bool HomeScreen::startFetch()
             m_startupRailRAValid = raOk;
         }
         m_homeRailsReady.store(true);
+        LibrarySnapshot railSnapshot;
+        railSnapshot.continueWatching = cw;
+        railSnapshot.recentlyAdded = ra;
+        publishCoordinatorHomeState(
+            {}, railSnapshot, false, false, false, true,
+            cwOk, raOk);
         queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         if (coordinatorStartupStarted) {
             for (;;) {
@@ -769,10 +786,18 @@ bool HomeScreen::startFetch()
                         // Home becomes useful after the first bounded page;
                         // remaining pages continue in this worker and are
                         // available to lazy CatalogDb reads as they commit.
+                        std::vector<TabData> firstPageTabs;
                         {
                             std::lock_guard<std::mutex> lock(m_fetchMutex);
                             m_fetchResult=JellyfinApi::buildTabs(views,cw,ra,{},{});
+                            firstPageTabs = m_fetchResult;
                         }
+                        LibrarySnapshot firstPageSnapshot;
+                        firstPageSnapshot.continueWatching = cw;
+                        firstPageSnapshot.recentlyAdded = ra;
+                        publishCoordinatorHomeState(
+                            firstPageTabs, firstPageSnapshot, true, false,
+                            false, true, cwOk, raOk);
                         std::printf("[HomeScreen] first bounded page ready views=%zu\n",
                                     views.size());
                         initialPagePublished = true;

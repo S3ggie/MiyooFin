@@ -6,6 +6,100 @@
 namespace miyoofin {
 
 static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
+static void makeMediaTabsBounded(std::vector<TabData> &tabs);
+
+void HomeScreen::publishCoordinatorHomeState(
+    const std::vector<TabData> &tabs, const LibrarySnapshot &snapshot,
+    bool contentValid, bool cachedSnapshotValid, bool offline, bool stale,
+    bool continueValid, bool recentlyAddedValid, const std::string &error)
+{
+    if (!m_libraryCoordinator)
+        return;
+    library::HomeState state;
+    state.scopeEpoch = m_catalogMetadata.scopeEpoch;
+    state.catalogGeneration = m_topLevelSyncGeneration.load();
+    state.offline = offline;
+    state.stale = stale;
+    state.contentValid = contentValid;
+    state.cachedSnapshotValid = cachedSnapshotValid;
+    state.tabs = tabs;
+    state.cachedSnapshot = snapshot;
+    state.continueValid = continueValid;
+    state.recentlyAddedValid = recentlyAddedValid;
+    state.continueWatching = snapshot.continueWatching;
+    state.recentlyAdded = snapshot.recentlyAdded;
+    state.error = error;
+    const auto sync = m_libraryCoordinator->status();
+    state.sync.inFlight = sync.inFlight;
+    state.sync.startupInFlight = sync.startupInFlight;
+    state.sync.fullSyncInFlight = sync.fullSyncInFlight;
+    state.sync.cancelRequested = sync.cancelRequested;
+    state.sync.success = sync.success;
+    state.sync.generation = sync.generation;
+    state.sync.lastSuccessfulMs = m_syncState.lastSuccessfulMs;
+    state.sync.lastReconcileMs = m_syncState.lastReconcileMs;
+    (void)m_libraryCoordinator->publishHomeState(std::move(state));
+}
+
+void HomeScreen::consumeCoordinatorHomeState()
+{
+    if (!m_libraryCoordinator)
+        return;
+    std::shared_ptr<const library::HomeState> state;
+    if (!m_libraryCoordinator->takeHomeState(state) || !state
+        || state->revision <= m_homeStateRevision)
+        return;
+    m_homeStateRevision = state->revision;
+    applyCoordinatorHomeState(*state);
+}
+
+void HomeScreen::applyCoordinatorHomeState(const library::HomeState &state)
+{
+    // Only content/status comes from the coordinator.  Focus, selection,
+    // scroll, and artwork remain untouched except for the existing bounds and
+    // row-label reconciliation required after a content replacement.
+    if (state.contentValid) {
+        const std::string focusedLabel = focusedHomeRowLabel();
+        const std::vector<TabData> previous = m_tabs;
+        const int selected = m_activeTab;
+        m_tabs = state.tabs;
+        makeMediaTabsBounded(m_tabs);
+        m_activeTab = transitionTabIndex(previous, selected, m_tabs);
+        if (state.cachedSnapshotValid) {
+            m_cachedSnapshot = state.cachedSnapshot;
+            m_haveCachedSnapshot = true;
+            if (state.offline)
+                m_offlineSnapshot = state.cachedSnapshot;
+        }
+        restoreHomeRowFocus(focusedLabel);
+        m_loadState = LoadState::Ready;
+        clampNavigation();
+    }
+    if (state.cachedSnapshotValid) {
+        m_cachedSnapshot = state.cachedSnapshot;
+        m_haveCachedSnapshot = true;
+    }
+    if (state.continueValid) {
+        updateContinueWatchingRow(m_tabs, state.continueWatching);
+        m_cachedSnapshot.continueWatching = state.continueWatching;
+        m_remoteSnapshot.continueWatching = state.continueWatching;
+    }
+    if (state.recentlyAddedValid) {
+        updateRecentlyAddedRow(m_tabs, state.recentlyAdded);
+        m_cachedSnapshot.recentlyAdded = state.recentlyAdded;
+        m_remoteSnapshot.recentlyAdded = state.recentlyAdded;
+    }
+    m_libraryOffline = state.offline;
+    if (!state.error.empty()) {
+        m_fetchError = state.error;
+        if (!state.contentValid && !m_haveCachedSnapshot)
+            m_loadState = LoadState::Error;
+    }
+    if (state.sync.lastSuccessfulMs > 0)
+        m_syncState.lastSuccessfulMs = state.sync.lastSuccessfulMs;
+    if (state.sync.lastReconcileMs > 0)
+        m_syncState.lastReconcileMs = state.sync.lastReconcileMs;
+}
 
 void HomeScreen::applyPresentationProjection() {
     // Called from finishFetch() after the offline worker path has populated

@@ -372,6 +372,13 @@ private:
     bool startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
+    void publishCoordinatorHomeState(
+        const std::vector<TabData> &tabs, const LibrarySnapshot &snapshot,
+        bool contentValid, bool cachedSnapshotValid, bool offline, bool stale,
+        bool continueValid, bool recentlyAddedValid,
+        const std::string &error = {});
+    void consumeCoordinatorHomeState();
+    void applyCoordinatorHomeState(const library::HomeState &state);
     void applyPresentationProjection();
     void restoreOnlinePresentation();
     void applyOfflineProjection();
@@ -446,6 +453,7 @@ private:
     /// after rails are fetched but before the full walk completes.
     std::atomic<bool> m_homeRailsReady{false};
     bool m_homeRailsApplied = false;
+    std::uint64_t m_homeStateRevision = 0;
 
     /// Worker-owned startup rail buffer: written by the fetch worker under
     /// m_fetchMutex, read by finishFetch() under the same mutex.  Kept

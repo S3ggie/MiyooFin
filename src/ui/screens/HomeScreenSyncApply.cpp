@@ -407,15 +407,25 @@ void HomeScreen::finishHomeRailRefresh()
 }
 void HomeScreen::finishSafetyReconcile()
 {
-    if (!m_safetyReconcileThread.joinable()) return;
-    // Thread join deferred to next startSafetyReconcile() or joinAllWorkers().
-    m_safetyReconcileDone.store(false);
+    if (!m_safetyReconcileInFlight || !m_libraryCoordinator)
+        return;
+    library::SafetyReconcileResult result;
+    if (!m_libraryCoordinator->takeSafetyReconcileResult(result))
+        return;
+    // Thread join deferred to LibraryCoordinator teardown; the UI thread only
+    // consumes the completed result here.
     m_safetyReconcileInFlight = false;
-    m_lastSafetyReconcileMs = wallClockMs();
-    if (!m_safetyReconcileError.empty())
+    if (result.generation > m_topLevelSyncGeneration.load())
+        m_topLevelSyncGeneration.store(result.generation);
+    if (result.lastSuccessfulMs > 0) {
+        m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
+        m_syncState.lastReconcileMs = result.lastReconcileMs;
+    }
+    m_lastSafetyReconcileMs = result.lastReconcileMs > 0
+        ? result.lastReconcileMs : wallClockMs();
+    if (!result.success && !result.message.empty())
         std::printf("[HomeScreen] safety reconciliation failed: %s\n",
-                    m_safetyReconcileError.c_str());
-    m_safetyReconcileCancellation.reset();
+                    result.message.c_str());
 }
 
 static void makeMediaTabsBounded(std::vector<TabData> &tabs)

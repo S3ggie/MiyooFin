@@ -2,12 +2,14 @@
 #include "../net/HttpClient.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
+#include <algorithm>
 #include <ctime>
+#include <exception>
 
 namespace {
 
 // HomeScreen retains the full population walk, while this coordinator owns
-// the persisted-checkpoint decision and any bounded startup catch-up.
+// the persisted-checkpoint decision and bounded top-level synchronization.
 constexpr bool kCoordinatorStartupSyncEnabled = true;
 
 std::int64_t coordinatorWallClockMs()
@@ -60,7 +62,8 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (m_stopped || !m_running || !m_sync || m_startupInFlight
-            || m_fullSyncInFlight || m_liveChangeActive)
+            || m_fullSyncInFlight || m_safetyReconcileInFlight
+            || m_safetyReconcileResultReady || m_liveChangeActive)
             return false;
         if (m_startupThread.joinable())
             priorThread = std::move(m_startupThread);
@@ -115,6 +118,11 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                     result.lastReconcileMs = state.lastReconcileMs;
                     if (result.generation > 0)
                         sync->seedGeneration(result.generation);
+                    {
+                        std::lock_guard<std::mutex> lock(m_startupMutex);
+                        if (result.generation > m_catalogGeneration)
+                            m_catalogGeneration = result.generation;
+                    }
 
                     const bool validCheckpoint = catalogHasRows
                         && state.lastSuccessfulMs > 0
@@ -187,7 +195,8 @@ bool LibraryCoordinator::beginFullSync()
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (m_stopped || !m_running || m_startupInFlight || m_startupResultReady
-        || m_fullSyncInFlight || m_liveChangeActive)
+        || m_fullSyncInFlight || m_safetyReconcileInFlight
+        || m_safetyReconcileResultReady || m_liveChangeActive)
         return false;
     m_fullSyncInFlight = true;
     return true;
@@ -197,6 +206,181 @@ void LibraryCoordinator::finishFullSync() noexcept
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
     m_fullSyncInFlight = false;
+}
+
+bool LibraryCoordinator::requestSafetyReconcile()
+{
+    std::thread priorThread;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_stopped || !m_running || !m_sync || m_session.manualOfflineMode
+            || m_startupInFlight || m_startupResultReady
+            || m_fullSyncInFlight || m_safetyReconcileInFlight
+            || m_safetyReconcileResultReady || m_liveChangeActive)
+            return false;
+        if (m_safetyReconcileThread.joinable())
+            priorThread = std::move(m_safetyReconcileThread);
+        m_safetyReconcileInFlight = true;
+        m_safetyReconcileCancellation =
+            std::make_shared<std::atomic_bool>(false);
+        m_safetyReconcileResult = {};
+        m_safetyReconcileResultReady = false;
+    }
+    if (priorThread.joinable())
+        priorThread.join();
+
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_stopped || !m_running || !m_sync) {
+        m_safetyReconcileInFlight = false;
+        return false;
+    }
+
+    const auto cancellation = m_safetyReconcileCancellation;
+    const auto sync = m_sync;
+    const auto db = m_db;
+    const auto scopeEpoch = m_scopeEpoch;
+    try {
+        m_safetyReconcileThread = std::thread(
+            [this, cancellation, sync, db, scopeEpoch] {
+            SafetyReconcileResult result;
+            std::uint64_t committedGeneration = 0;
+            const auto cancelled = [&] {
+                return cancellation && cancellation->load();
+            };
+            const auto advanceCommittedGeneration = [&] {
+                std::lock_guard<std::mutex> guard(m_startupMutex);
+                committedGeneration = ++m_catalogGeneration;
+                return committedGeneration;
+            };
+            const auto publish = [this](SafetyReconcileResult value) {
+                std::lock_guard<std::mutex> guard(m_startupMutex);
+                m_safetyReconcileResult = std::move(value);
+                m_safetyReconcileResultReady = true;
+                m_safetyReconcileInFlight = false;
+            };
+            try {
+                if (!db || scopeEpoch == 0) {
+                    result.error = CatalogDbErrorCategory::ScopeNotReady;
+                    result.message = "CatalogDb scope is unavailable";
+                } else if (cancelled()) {
+                    result.cancelled = true;
+                    result.error = CatalogDbErrorCategory::Superseded;
+                    result.message = "safety reconcile cancelled";
+                } else {
+                    CatalogDbJobMetadata metadata;
+                    metadata.scopeEpoch = scopeEpoch;
+                    metadata.cancellation = cancellation;
+                    const auto state = db->readSyncState(
+                        false, 0, 0, metadata).get();
+                    if (!state.success) {
+                        result.error = state.error;
+                        result.message = state.message;
+                    } else {
+                        sync->seedGeneration(state.committedGeneration);
+                        {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            if (state.committedGeneration > m_catalogGeneration)
+                                m_catalogGeneration = state.committedGeneration;
+                            result.lastSuccessfulMs = state.lastSuccessfulMs;
+                            result.lastReconcileMs = state.lastReconcileMs;
+                        }
+                        if (cancelled()) {
+                            result.cancelled = true;
+                            result.error = CatalogDbErrorCategory::Superseded;
+                            result.message = "safety reconcile cancelled";
+                        } else {
+                            if (state.lastSuccessfulMs > 0) {
+                                const auto catchUp = sync->catchUpChangedCatalog(
+                                    state.lastSuccessfulMs, cancellation).get();
+                                if (!catchUp.success) {
+                                    result.cancelled = catchUp.cancelled;
+                                    result.superseded = catchUp.superseded;
+                                    result.error = catchUp.error;
+                                    result.message = catchUp.message;
+                                    publish(std::move(result));
+                                    return;
+                                }
+                                result.checkpointMs = catchUp.checkpointMs;
+                                result.lastSuccessfulMs = catchUp.checkpointMs;
+                                committedGeneration =
+                                    advanceCommittedGeneration();
+                                result.generation = committedGeneration;
+                            }
+
+                            if (cancelled()) {
+                                result.cancelled = true;
+                                result.error = CatalogDbErrorCategory::Superseded;
+                                result.message = "safety reconcile cancelled";
+                            } else {
+                                const auto reconciled =
+                                    sync->reconcileAuthoritativeMembership(
+                                        cancellation).get();
+                                if (!reconciled.success) {
+                                    result.cancelled = reconciled.cancelled;
+                                    result.superseded = reconciled.superseded;
+                                    result.error = reconciled.error;
+                                    result.message = reconciled.message;
+                                } else {
+                                    committedGeneration =
+                                        advanceCommittedGeneration();
+                                    result.generation = committedGeneration;
+                                    const auto nowMs = coordinatorWallClockMs();
+                                    // The authoritative commit is already
+                                    // durable.  Finish its checkpoint without
+                                    // cancellation so restart cannot regress
+                                    // to the prior committed boundary.
+                                    auto checkpoint = sync->writeSyncState(
+                                        nowMs, nowMs, reconciled.generation)
+                                        .get();
+                                    result.success = true;
+                                    result.checkpointMs = checkpoint.success
+                                        ? checkpoint.lastSuccessfulMs
+                                        : result.checkpointMs;
+                                    result.lastSuccessfulMs =
+                                        checkpoint.success
+                                            ? checkpoint.lastSuccessfulMs
+                                            : result.lastSuccessfulMs;
+                                    result.lastReconcileMs =
+                                        checkpoint.success
+                                            ? checkpoint.lastReconcileMs
+                                            : result.lastReconcileMs;
+                                    if (!checkpoint.success
+                                        && result.message.empty()) {
+                                        result.error = checkpoint.error;
+                                        result.message = checkpoint.message;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (const std::exception &error) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = error.what();
+            } catch (...) {
+                result.error = CatalogDbErrorCategory::SqliteError;
+                result.message = "safety reconcile failed unexpectedly";
+            }
+            result.generation = std::max(result.generation,
+                                         committedGeneration);
+            publish(std::move(result));
+            });
+    } catch (...) {
+        m_safetyReconcileInFlight = false;
+        throw;
+    }
+    return true;
+}
+
+bool LibraryCoordinator::takeSafetyReconcileResult(
+    SafetyReconcileResult &result)
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (!m_safetyReconcileResultReady || m_safetyReconcileInFlight)
+        return false;
+    result = std::move(m_safetyReconcileResult);
+    m_safetyReconcileResultReady = false;
+    return true;
 }
 
 bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
@@ -371,6 +555,7 @@ bool LibraryCoordinator::takeLiveChangeRequest(
     // thread active even though the coordinator's startup/full-sync gates are
     // open.
     if (m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
+        || m_safetyReconcileInFlight || m_safetyReconcileResultReady
         || m_liveChangeActive)
         return false;
     if (!m_liveChangeRequests.pop(batch))
@@ -422,10 +607,18 @@ void LibraryCoordinator::cancelStartupSync() noexcept
         m_startupCancellation->store(true);
 }
 
+void LibraryCoordinator::cancelSafetyReconcile() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    if (m_safetyReconcileCancellation)
+        m_safetyReconcileCancellation->store(true);
+}
+
 void LibraryCoordinator::stop() noexcept
 {
     std::thread startupThread;
     std::thread homeRailThread;
+    std::thread safetyReconcileThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (m_stopped)
@@ -436,13 +629,16 @@ void LibraryCoordinator::stop() noexcept
             m_startupCancellation->store(true);
         if (m_homeRailCancellation)
             m_homeRailCancellation->store(true);
-        m_homeRailInFlight = false;
+        if (m_safetyReconcileCancellation)
+            m_safetyReconcileCancellation->store(true);
         m_liveChangeResult.reset();
         m_liveChangeActive.reset();
         if (m_startupThread.joinable())
             startupThread = std::move(m_startupThread);
         if (m_homeRailThread.joinable())
             homeRailThread = std::move(m_homeRailThread);
+        if (m_safetyReconcileThread.joinable())
+            safetyReconcileThread = std::move(m_safetyReconcileThread);
     }
     // The startup worker publishes through m_startupMutex, so never join it
     // while holding that mutex.
@@ -450,6 +646,8 @@ void LibraryCoordinator::stop() noexcept
         startupThread.join();
     if (homeRailThread.joinable())
         homeRailThread.join();
+    if (safetyReconcileThread.joinable())
+        safetyReconcileThread.join();
     if (m_sync)
         m_sync->stop();
 }
@@ -466,10 +664,11 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     std::lock_guard<std::mutex> lock(m_startupMutex);
     status.startupInFlight = m_startupInFlight;
     status.fullSyncInFlight = m_fullSyncInFlight;
+    status.safetyReconcileInFlight = m_safetyReconcileInFlight;
     status.cancelRequested = m_startupCancellation
         && m_startupCancellation->load();
     status.inFlight = status.inFlight || status.startupInFlight
-        || status.fullSyncInFlight;
+        || status.fullSyncInFlight || status.safetyReconcileInFlight;
     return status;
 }
 

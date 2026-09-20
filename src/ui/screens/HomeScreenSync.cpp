@@ -274,45 +274,16 @@ void HomeScreen::startHomeRailRefresh()
 
 void HomeScreen::startSafetyReconcile()
 {
-    if (m_safetyReconcileInFlight || !m_librarySync || presentationOffline())
+    if (m_safetyReconcileInFlight || !m_libraryCoordinator
+        || presentationOffline())
         return;
     // Do not begin a competing top-level sync while the initial
     // population's top-level generation is still in flight.
     if (m_initialPopulationInProgress)
         return;
-    if (m_safetyReconcileThread.joinable())
-        m_safetyReconcileThread.join();
-    m_safetyReconcileDone.store(false);
+    if (!m_libraryCoordinator->requestSafetyReconcile())
+        return;
     m_safetyReconcileInFlight = true;
-    m_safetyReconcileError.clear();
-    m_safetyReconcileCancellation = std::make_shared<std::atomic_bool>(false);
-    const auto sync = m_librarySync;
-    const auto cancellation = m_safetyReconcileCancellation;
-    const std::int64_t checkpointMs = m_syncState.lastSuccessfulMs;
-    m_safetyReconcileThread = std::thread(
-        [this, sync, cancellation, checkpointMs] {
-            if (checkpointMs > 0) {
-                const auto catchUp = sync->catchUpChangedCatalog(
-                    checkpointMs, cancellation).get();
-                if (!catchUp.success) {
-                    m_safetyReconcileError = catchUp.message;
-                    m_safetyReconcileDone.store(true);
-                    return;
-                }
-                // Catch-up committed catalog metadata before the authoritative
-                // reconcile below runs: advance the epoch now, so a later
-                // reconcile failure cannot leave a stale cached offline
-                // snapshot in place.
-                ++m_topLevelSyncGeneration;
-            }
-            const auto result = sync->reconcileAuthoritativeMembership(
-                cancellation).get();
-            if (!result.success) m_safetyReconcileError = result.message;
-            // A successful safety reconcile committed catalog metadata:
-            // advance the epoch so a cached offline snapshot is rebuilt.
-            else ++m_topLevelSyncGeneration;
-            m_safetyReconcileDone.store(true);
-        });
 }
 
 bool HomeScreen::startFetch()

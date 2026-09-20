@@ -34,6 +34,22 @@ struct StartupSyncResult {
     std::int64_t lastReconcileMs = 0;
 };
 
+/// Terminal publication from the coordinator-owned periodic authoritative
+/// reconcile.  `generation` is the last committed Home catalog epoch, not an
+/// attempted generation: cancellation after a catch-up commit therefore
+/// cannot make Home forget work that is already durable.
+struct SafetyReconcileResult {
+    bool success = false;
+    bool cancelled = false;
+    bool superseded = false;
+    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
+    std::string message;
+    std::uint64_t generation = 0;
+    std::int64_t checkpointMs = 0;
+    std::int64_t lastSuccessfulMs = 0;
+    std::int64_t lastReconcileMs = 0;
+};
+
 /// Immutable publication from the coordinator-owned Home rail worker.  A
 /// failed optional rail leaves its valid flag clear; consumers must retain
 /// their previous value for that rail.
@@ -55,6 +71,7 @@ struct HomeSyncStatus {
     bool inFlight = false;
     bool startupInFlight = false;
     bool fullSyncInFlight = false;
+    bool safetyReconcileInFlight = false;
     bool cancelRequested = false;
     bool success = false;
     std::uint64_t generation = 0;
@@ -123,6 +140,13 @@ public:
     bool beginFullSync();
     void finishFullSync() noexcept;
 
+    /// Start one serialized safety catch-up/reconcile.  The coordinator owns
+    /// the checkpoint decision, worker, committed-generation policy, and
+    /// cancellation lifetime.
+    bool requestSafetyReconcile();
+    bool takeSafetyReconcileResult(SafetyReconcileResult &result);
+    void cancelSafetyReconcile() noexcept;
+
     /// Start one coordinator-owned Continue Watching/Recently Added refresh.
     /// The result is published atomically for the SDL thread to take later;
     /// a refresh never mutates HomeScreen state directly.
@@ -168,6 +192,7 @@ public:
         bool inFlight = false;
         bool startupInFlight = false;
         bool fullSyncInFlight = false;
+        bool safetyReconcileInFlight = false;
         bool cancelRequested = false;
         bool success = false;
         std::uint64_t generation = 0;
@@ -191,6 +216,12 @@ private:
     bool m_startupResultReady = false;
     bool m_startupInFlight = false;
     bool m_fullSyncInFlight = false;
+    std::thread m_safetyReconcileThread;
+    std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
+    SafetyReconcileResult m_safetyReconcileResult;
+    bool m_safetyReconcileResultReady = false;
+    bool m_safetyReconcileInFlight = false;
+    std::uint64_t m_catalogGeneration = 0;
     JellyfinLibraryEventQueue m_liveChangeRequests;
     std::optional<LiveLibraryChangeResult> m_liveChangeResult;
     std::optional<LiveChangeIdentity> m_liveChangeActive;

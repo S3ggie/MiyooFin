@@ -68,8 +68,8 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
     if (m_liveChangeCancellation)
         m_liveChangeCancellation->store(true);
-    if (m_safetyReconcileCancellation)
-        m_safetyReconcileCancellation->store(true);
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelSafetyReconcile();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelHomeRailRefresh();
     m_updateManager.cancel();
@@ -96,8 +96,6 @@ void HomeScreen::joinAllWorkers()
         m_downloadRefreshThread.join();
     if (m_liveChangeThread.joinable())
         m_liveChangeThread.join();
-    if (m_safetyReconcileThread.joinable())
-        m_safetyReconcileThread.join();
     if (m_hierarchyThread.joinable()) m_hierarchyThread.join();
     for (auto &thread : m_posterThreads)
         if (thread.joinable()) thread.join();
@@ -279,7 +277,7 @@ void HomeScreen::update(Uint32 dt)
             }
         }
         if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
-        if (m_safetyReconcileDone.load()) finishSafetyReconcile();
+        finishSafetyReconcile();
         if (!m_session.manualOfflineMode && m_lastSafetyReconcileMs > 0
             && homeWallClockMs() - m_lastSafetyReconcileMs
                 >= 24LL * 60 * 60 * 1000)

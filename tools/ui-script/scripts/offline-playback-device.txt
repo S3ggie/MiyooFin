@@ -1,0 +1,20 @@
+# Bounded remote offline-playback flow.
+#
+# remote-scenario.sh verifies that the device already has at least one
+# completed download before this script is launched.  The confirmed list's
+# first Downloads row is selected; Confirm uses the existing Downloads
+# primary Play control and writes a local playback request.
+WAIT_LOG [HomeScreen] Library loaded 120000
+SETTLE 10000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 10000
+SCREENSHOT offline-playback-downloads
+KEY Confirm 3 2500
+WAIT_LOG [App] Starting external playback handoff 30000
+# Keep the app resident while the remote wrapper samples ffplay, bridge,
+# playback log, and framebuffer evidence. The wrapper ends this wait through
+# onion-remote-exit.sh after its configured bounded interval.
+SETTLE 600000
+QUIT

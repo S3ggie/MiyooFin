@@ -804,12 +804,65 @@ static void testHomeRowFocusReconciliation()
     CHECK(sourceContains(navigation, "focusedHomeRowLabel"));
     // Reconciliation must be wired at every Home-row mutation site
     CHECK(sourceContains(apply, "restoreHomeRowFocus"));
-    CHECK(sourceContains(refresh, "restoreHomeRowFocus"));
     // Source files must not mutate m_tabs without focus reconciliation
     // (the tab-move sites in SyncApply must call focusedHomeRowLabel)
     CHECK(sourceContains(apply, "focusedHomeRowLabel"));
-    CHECK(sourceContains(refresh, "focusedHomeRowLabel"));
     std::printf("[test] Home row focus reconciliation sites OK\n");
+}
+
+static void testHomeRailRefreshCoordinatorPath()
+{
+    std::printf("[test] Home rail refresh uses one coordinator path\n");
+    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    const std::string home = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
+    const std::string coordinator = readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
+    CHECK(!header.empty());
+    CHECK(!home.empty());
+    CHECK(!sync.empty());
+    CHECK(!apply.empty());
+    CHECK(!refresh.empty());
+    CHECK(!coordinator.empty());
+
+    // Returning to a loaded Home uses the same live-refresh state machine;
+    // the old resume worker and its result buffers must stay retired.
+    CHECK(sourceContains(home, "startHomeRailRefresh()"));
+    CHECK(sourceLacks(header, "m_resumeRefreshThread"));
+    CHECK(sourceLacks(header, "m_resumeRefreshResult"));
+    CHECK(sourceLacks(home, "finishResumeRefresh"));
+    CHECK(sourceLacks(refresh, "getResumeItems"));
+    CHECK(sourceLacks(refresh, "getLatestItems"));
+    CHECK(sourceLacks(refresh, "RouteRequest"));
+
+    // Both rails are consumed from the immutable coordinator result.  A
+    // partial failure only updates the valid rail, retaining cached content
+    // for the failed one, and the row label is restored around the mutation.
+    CHECK(sourceContains(home, "takeHomeRailResult"));
+    CHECK(sourceContains(home, "railResult.continueValid"));
+    CHECK(sourceContains(home, "railResult.recentlyAddedValid"));
+    const std::string finish = sourceFunction(
+        apply, "void HomeScreen::finishHomeRailRefresh(");
+    CHECK(sourceContains(finish, "m_homeRailContinueValid"));
+    CHECK(sourceContains(finish, "m_homeRailRecentValid"));
+    CHECK(sourceContains(finish, "restoreHomeRowFocus"));
+    CHECK(sourceContains(finish, "clampNavigation"));
+    CHECK(sourceContains(finish, "planHomeRailPosterJobs"));
+    CHECK(sourceContains(finish, "m_homeRailRefreshError"));
+
+    // Repeated triggers coalesce locally and rerun once after completion;
+    // teardown cancels the coordinator worker instead of joining a Home rail
+    // thread, so startup/live/resume cannot create duplicate Home workers.
+    CHECK(sourceContains(sync, "m_homeRailRefreshPending = true"));
+    CHECK(sourceContains(finish, "startHomeRailRefresh()"));
+    CHECK(sourceContains(home, "cancelHomeRailRefresh()"));
+    CHECK(sourceContains(sync, "requestHomeRailRefresh(request)"));
+    CHECK(sourceContains(home, "takeHomeRailResult"));
+    CHECK(sourceCount(coordinator, "m_homeRailThread = std::thread") == 1);
+    CHECK(sourceLacks(header, "m_resumeRefreshInFlight"));
+    std::printf("[test] Home rail refresh coordinator path OK\n");
 }
 
 static void testCardSurfaceCacheEviction()
@@ -856,6 +909,8 @@ static void testNonBlockingFinishPolicy()
     // joined.
     const std::string syncApply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!syncApply.empty());
+    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
+    CHECK(!header.empty());
 
     // finishHomeRailRefresh should not join; the coordinator owns its worker.
     CHECK(sourceContains(syncApply, "finishHomeRailRefresh"));
@@ -874,12 +929,11 @@ static void testNonBlockingFinishPolicy()
 
     const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
     CHECK(!refresh.empty());
-    // finishResumeRefresh should not join
-    CHECK(sourceContains(refresh, "finishResumeRefresh"));
-    const std::string resumeBody = sourceFunction(refresh, "void HomeScreen::finishResumeRefresh(");
-    CHECK(!resumeBody.empty());
-    CHECK(sourceLacks(resumeBody, ".join()"));
-    CHECK(sourceContains(resumeBody, "Thread join deferred"));
+    // Resume refresh now reuses finishHomeRailRefresh; no dedicated Home
+    // resume worker, completion flag, or join path remains.
+    CHECK(sourceLacks(refresh, "finishResumeRefresh"));
+    CHECK(sourceLacks(header, "m_resumeRefreshDone"));
+    CHECK(sourceLacks(header, "m_resumeRefreshThread"));
     // finishDownloadRefresh should not join
     CHECK(sourceContains(refresh, "finishDownloadRefresh"));
     const std::string downloadBody = sourceFunction(refresh, "void HomeScreen::finishDownloadRefresh(");
@@ -888,8 +942,6 @@ static void testNonBlockingFinishPolicy()
     CHECK(sourceContains(downloadBody, "Thread join deferred"));
 
     // Verify the header declares the post-finalize flag
-    const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
-    CHECK(!header.empty());
     CHECK(sourceContains(header, "m_fetchPostFinalizeApplied"));
 
     std::printf("[test] Non-blocking finish* join policy OK\n");

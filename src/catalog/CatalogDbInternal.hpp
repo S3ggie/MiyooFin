@@ -477,8 +477,10 @@ static inline bool sameMediaItemScalars(const MediaItem &expected, const MediaIt
         && expected.runTimeTicks == actual.runTimeTicks
         && expected.seriesName == actual.seriesName
         && expected.seriesId == actual.seriesId
-        && expected.seasonId == actual.seasonId && expected.artR == actual.artR
-        && expected.artG == actual.artG && expected.artB == actual.artB;
+        && expected.seasonId == actual.seasonId
+        && expected.placeholderArtwork.red == actual.placeholderArtwork.red
+        && expected.placeholderArtwork.green == actual.placeholderArtwork.green
+        && expected.placeholderArtwork.blue == actual.placeholderArtwork.blue;
 }
 
 static inline bool validateHierarchyInput(

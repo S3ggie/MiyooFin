@@ -2,7 +2,7 @@
 #define MIYOOFIN_HOME_TABS_HPP
 
 #include "../cache/LibraryCache.hpp"
-#include "../data/MediaItem.hpp"
+#include "PresentationModels.hpp"
 #include <string>
 #include <vector>
 

@@ -1,4 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
+#include "../ArtworkPresentation.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../download/DownloadSupport.hpp"
@@ -176,8 +177,9 @@ void EpisodeBrowserScreen::render(SDL_Surface *fb)
     }
 
     // Placeholder thumbnail (coloured box as fallback/background)
+    const SDL_Color color = presentationArtworkColor(ep);
     BitmapFont::fillRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H,
-        ep.artR, ep.artG, ep.artB, 255);
+        color.r, color.g, color.b, color.a);
 
     if (m_episodeArtworkSurface.surface) {
         SDL_Rect dstRect = {m_episodeArtworkSurface.x,

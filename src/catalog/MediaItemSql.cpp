@@ -139,9 +139,9 @@ bool bindMediaItemScalars(sqlite3_stmt *statement, const MediaItem &item,
                                         -1, SQLITE_TRANSIENT), error)
         && bindResult(bindOptionalText(statement, 15, item.seriesId), error)
         && bindResult(bindOptionalText(statement, 16, item.seasonId), error)
-        && bindResult(sqlite3_bind_int(statement, 17, item.artR), error)
-        && bindResult(sqlite3_bind_int(statement, 18, item.artG), error)
-        && bindResult(sqlite3_bind_int(statement, 19, item.artB), error);
+        && bindResult(sqlite3_bind_int(statement, 17, item.placeholderArtwork.red), error)
+        && bindResult(sqlite3_bind_int(statement, 18, item.placeholderArtwork.green), error)
+        && bindResult(sqlite3_bind_int(statement, 19, item.placeholderArtwork.blue), error);
 }
 
 bool readMediaItemScalars(sqlite3_stmt *statement, MediaItem &item,
@@ -171,9 +171,9 @@ bool readMediaItemScalars(sqlite3_stmt *statement, MediaItem &item,
     textColumn(statement, 13, item.seriesName);
     textColumn(statement, 14, item.seriesId);
     textColumn(statement, 15, item.seasonId);
-    item.artR = static_cast<Uint8>(sqlite3_column_int(statement, 16));
-    item.artG = static_cast<Uint8>(sqlite3_column_int(statement, 17));
-    item.artB = static_cast<Uint8>(sqlite3_column_int(statement, 18));
+    item.placeholderArtwork.red = static_cast<std::uint8_t>(sqlite3_column_int(statement, 16));
+    item.placeholderArtwork.green = static_cast<std::uint8_t>(sqlite3_column_int(statement, 17));
+    item.placeholderArtwork.blue = static_cast<std::uint8_t>(sqlite3_column_int(statement, 18));
     return true;
 }
 
@@ -335,8 +335,10 @@ bool mediaItemsEquivalentForCatalog(const MediaItem &expected,
         && expected.runTimeTicks == actual.runTimeTicks
         && expected.seriesName == actual.seriesName
         && expected.seriesId == actual.seriesId
-        && expected.seasonId == actual.seasonId && expected.artR == actual.artR
-        && expected.artG == actual.artG && expected.artB == actual.artB;
+        && expected.seasonId == actual.seasonId
+        && expected.placeholderArtwork.red == actual.placeholderArtwork.red
+        && expected.placeholderArtwork.green == actual.placeholderArtwork.green
+        && expected.placeholderArtwork.blue == actual.placeholderArtwork.blue;
 }
 
 } // namespace miyoofin

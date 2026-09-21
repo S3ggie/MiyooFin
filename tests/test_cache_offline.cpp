@@ -3,7 +3,7 @@
 
 int main()
 {
-    testLibraryCacheFetchDecision(); testOfflineLibraryProjection();
+    testLegacyCacheTintBytes(); testLibraryCacheFetchDecision(); testOfflineLibraryProjection();
     testOfflineLibraryQuery(); testOfflineHomeMediaPage(); testSettingsRowActions();
     testManualOfflineProjectionDeferredUntilSnapshotReady();
     testLanServerAddressClassificationAndSettingsLayout();

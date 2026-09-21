@@ -7,6 +7,7 @@
 #include <map>
 #include <cstdint>
 #include "../data/MediaItem.hpp"
+#include "../ui/PresentationModels.hpp"
 
 namespace miyoofin { class HttpClient; }
 

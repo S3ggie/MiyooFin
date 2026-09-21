@@ -2,6 +2,7 @@
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
+#include "../ArtworkPresentation.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
@@ -170,7 +171,8 @@ void HomeScreen::drawInfoPanel(SDL_Surface *fb)
     ArtworkBox box = artworkBoxSize(*item);
     int px=ART_X, py=ART_Y, pw=box.w, ph=box.h;
     // Placeholder colour behind everything
-    BitmapFont::fillRect(fb,px,py,pw,ph,item->artR,item->artG,item->artB,255);
+    const SDL_Color tint = presentationArtworkColor(*item);
+    BitmapFont::fillRect(fb,px,py,pw,ph,tint.r,tint.g,tint.b,tint.a);
 
     // Render decoded artwork if available, aspect-fit centred
     if (!m_selectedArtwork.empty()) {
@@ -390,7 +392,8 @@ void HomeScreen::drawMoviePreview(SDL_Surface *fb)
     const MediaItem *item = currentItem();
     if (!item) return;
     int px = 42, py = 29;
-    BitmapFont::fillRect(fb, px, py, 64, 96, item->artR, item->artG, item->artB, 255);
+    const SDL_Color color = presentationArtworkColor(*item);
+    BitmapFont::fillRect(fb, px, py, 64, 96, color.r, color.g, color.b, color.a);
     if (!m_selectedArtwork.empty()) {
         char cacheKey[512];
         std::snprintf(cacheKey, sizeof(cacheKey), "%s:%dx%d",
@@ -437,7 +440,7 @@ void HomeScreen::drawShowsAlphabetRail(SDL_Surface *fb) {
 }
 void HomeScreen::drawShowsPreview(SDL_Surface *fb) {
     BitmapFont::fillRect(fb,36,25,604,SHOWS_PREVIEW_H,24,24,32,255); BitmapFont::fillRect(fb,36,129,604,1,Theme::ACCENT_R,Theme::ACCENT_G,Theme::ACCENT_B,70);
-        const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;BitmapFont::fillRect(fb,px,py,64,96,item->artR,item->artG,item->artB,255);
+        const MediaItem*item=showsSelectedItem();if(!item)return;int px=42,py=29;const SDL_Color tint=presentationArtworkColor(*item);BitmapFont::fillRect(fb,px,py,64,96,tint.r,tint.g,tint.b,tint.a);
         std::string key=rowArtworkKey(*item);auto it=m_rowArtwork.find(key);const DecodedImage*imgPtr=nullptr;bool fromRowArtwork=false;
         if(it!=m_rowArtwork.end()&&it->second.status==RowArtworkStatus::Loaded&&it->second.image){imgPtr=it->second.image.get();fromRowArtwork=true;
             }else if(!m_selectedArtwork.empty())imgPtr=&m_selectedArtwork;if(imgPtr&&!imgPtr->empty()){char ckBuf[512];
@@ -467,7 +470,8 @@ void HomeScreen::drawShowsGrid(SDL_Surface *fb) {
 void HomeScreen::drawCard(SDL_Surface *fb,int x,int y,int w,int h,
                           const MediaItem &item,bool selected)
 {
-    BitmapFont::fillRect(fb,x,y,w,h,item.artR,item.artG,item.artB,255);
+    const SDL_Color tint = presentationArtworkColor(item);
+    BitmapFont::fillRect(fb,x,y,w,h,tint.r,tint.g,tint.b,tint.a);
 
     // B5d2b: render loaded row artwork over the placeholder
     {

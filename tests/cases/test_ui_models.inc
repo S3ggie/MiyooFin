@@ -347,14 +347,11 @@ static void testHomeArtworkPlan()
 static void testColdStartPopulationProducesNonEmptyTabs()
 {
     std::printf("[test] Cold-start population produces non-empty Movies/Shows tabs\n");
-    std::vector<LibraryView> views;
-    views.push_back({"vm", "Movies", "movies"});
-    views.push_back({"vs", "Shows", "tvshows"});
     const std::vector<MediaItem> cw = {makeHomeItem("cw1", "Continue", "movie")};
     const std::vector<MediaItem> ra = {makeHomeItem("ra1", "Recent", "movie")};
 
     // Empty byView => the first-bounded-page shape.
-    const auto emptyTabs = JellyfinApi::buildTabs(views, cw, ra, {}, {});
+    const auto emptyTabs = buildTabs(cw, ra, {}, {});
     CHECK(emptyTabs.size() == 5);
     const auto emptyWin = mediaWindowsFromTabs(emptyTabs);
     CHECK(emptyWin.movies.empty());
@@ -366,8 +363,7 @@ static void testColdStartPopulationProducesNonEmptyTabs()
                                        makeHomeItem("m2", "Beta", "movie")}});
     std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
     showsByView.push_back({"Shows", {makeHomeItem("s1", "ShowOne", "show")}});
-    const auto populatedTabs = JellyfinApi::buildTabs(views, cw, ra,
-                                                      moviesByView, showsByView);
+    const auto populatedTabs = buildTabs(cw, ra, moviesByView, showsByView);
     CHECK(populatedTabs.size() == 5);
     CHECK_EQ(populatedTabs[0].name, "Home");
     CHECK_EQ(populatedTabs[1].name, "Movies");

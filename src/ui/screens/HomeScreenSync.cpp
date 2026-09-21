@@ -509,8 +509,8 @@ bool HomeScreen::startFetch()
                             std::vector<TabData> firstPageTabs;
                             {
                                 std::lock_guard<std::mutex> lock(m_fetchMutex);
-                                pending.tabs = JellyfinApi::buildTabs(
-                                    views, cw, ra, moviesByView, showsByView);
+                                pending.tabs = buildTabs(cw, ra, moviesByView,
+                                                         showsByView);
                                 firstPageTabs = pending.tabs;
                             }
                             LibrarySnapshot firstPageSnapshot;
@@ -553,8 +553,8 @@ bool HomeScreen::startFetch()
                     if (update.committed)
                         m_fetchCatalogCommitted.store(true);
                     if (update.committed)
-                        pending.tabs = JellyfinApi::buildTabs(
-                            views, cw, ra, moviesByView, showsByView);
+                        pending.tabs = buildTabs(cw, ra, moviesByView,
+                                                 showsByView);
                     if (update.success)
                         uiDiagnostics().log(
                             "[HomeScreen] startup stage=views_finished");

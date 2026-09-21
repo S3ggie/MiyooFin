@@ -1,3 +1,6 @@
+// The tab projection belongs to the UI layer, not JellyfinApi.
+#include "../../src/ui/HomeTabs.hpp"
+
 static void testNormaliseUrl()
 {
     std::printf("[test] JellyfinApi::normaliseUrl\n");
@@ -123,7 +126,6 @@ static void testJsonToMediaItem()
 static void testBuildTabs()
 {
     std::printf("[test] buildTabs\n");
-    std::vector<LibraryView> views = {{"v1","Movies","movies"},{"v2","TV","tvshows"}};
     std::vector<MediaItem> cw = {{"c1","CW Movie","",2020,7.0f,"Action","movie"}};
     std::vector<MediaItem> ra = {{"r1","New Movie","",2023,6.5f,"Comedy","movie"}};
     std::vector<std::pair<std::string, std::vector<MediaItem>>> mbv =
@@ -132,7 +134,7 @@ static void testBuildTabs()
     std::vector<std::pair<std::string, std::vector<MediaItem>>> sbv =
         {{"TV", {{"s1","S1","",2019,9.0f,"S","show"}}}};
 
-    auto tabs = JellyfinApi::buildTabs(views, cw, ra, mbv, sbv);
+    auto tabs = buildTabs(cw, ra, mbv, sbv);
     CHECK(tabs.size() == 5);
     CHECK_EQ(tabs[0].name, "Home");
     CHECK_EQ(tabs[1].name, "Movies");
@@ -149,7 +151,7 @@ static void testBuildTabs()
     // Empty case
     std::vector<MediaItem> e;
     std::vector<std::pair<std::string, std::vector<MediaItem>>> ep;
-    auto t2 = JellyfinApi::buildTabs({}, e, e, ep, ep);
+    auto t2 = buildTabs(e, e, ep, ep);
     CHECK(t2.size() == 5);
     CHECK(t2[0].rows.size() == 1);
     CHECK(t2[0].rows[0].items.empty());

@@ -3,6 +3,7 @@
 
 int main()
 {
+    testNetworkLayerDoesNotDependOnPresentationModels();
     testSourceMatcherTolerance();
     testRouteRequest(); testMovieOrganizationalTitles();
     testMovieAlphabetOrganization(); testMovieOrganizationalSort();

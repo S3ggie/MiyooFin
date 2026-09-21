@@ -2,6 +2,8 @@
 #include "../net/HttpClient.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
+#include "../diagnostics/UiDiagnostics.hpp"
+#include "../diagnostics/TelemetryClock.hpp"
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -265,6 +267,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             std::make_shared<std::atomic_bool>(false);
         m_fullPopulationUpdates.clear();
         request = ++m_fullPopulationRequest;
+        m_fullPopulationGeneration = 0;
     }
     if (priorThread.joinable())
         priorThread.join();
@@ -300,6 +303,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             std::size_t metadataCompleted = 0;
             std::size_t mediaCount = 0;
             std::size_t requestCount = 0;
+            std::size_t completedPageCount = 0;
             bool firstPage = true;
 
             const auto cancelled = [&] {
@@ -316,6 +320,21 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 if (value.terminal)
                     m_fullSyncInFlight = false;
                 m_fullPopulationUpdates.push_back(std::move(value));
+                const auto &published = m_fullPopulationUpdates.back();
+                std::string kind = published.terminal
+                    ? (published.success ? "terminal_success"
+                        : (published.cancelled || published.superseded
+                            ? "terminal_cancel" : "terminal_failure"))
+                    : (published.firstPage ? "first_page" : "page");
+                uiDiagnostics().log(
+                    "[LibraryCoordinator] full_population_publish request="
+                    + std::to_string(published.request)
+                    + " generation=" + std::to_string(published.generation)
+                    + " kind=" + kind
+                    + " queue_depth="
+                    + std::to_string(m_fullPopulationUpdates.size())
+                    + " monotonic_us="
+                    + std::to_string(TelemetryClock::monotonicUs()));
             };
             const auto publishTerminal = [&](FullPopulationUpdate value) {
                 value.request = requestId;
@@ -359,6 +378,10 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                     committedGeneration = m_catalogGeneration + 1;
                 }
                 transactionGeneration = sync->nextTransactionGeneration();
+                {
+                    std::lock_guard<std::mutex> guard(m_startupMutex);
+                    m_fullPopulationGeneration = transactionGeneration;
+                }
                 const auto begin = sync->begin(transactionGeneration).get();
                 if (!begin.success) {
                     terminal.error = begin.error;
@@ -445,8 +468,60 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         writePage.ordinalStart = static_cast<std::size_t>(start);
                         writePage.viewOrdinal = static_cast<int>(viewOrdinal);
                         writePage.syncGeneration = transactionGeneration;
+                        writePage.request = requestId;
                         writePage.finalPage = !page.hasMore;
-                        const auto written = sync->stage(writePage).get();
+                        CatalogDbMediaPageUpsertResult written;
+                        try {
+                            written = sync->stage(writePage).get();
+                            if (written.success)
+                                ++completedPageCount;
+                            uiDiagnostics().log(
+                                "[LibraryCoordinator] full_population_stage_complete"
+                                " request=" + std::to_string(requestId)
+                                + " generation=" + std::to_string(transactionGeneration)
+                                + " page_kind="
+                                + (writePage.collectionType == "movies"
+                                    ? "movies"
+                                    : writePage.collectionType == "tvshows"
+                                        ? "tvshows" : "unknown")
+                                + " page_index="
+                                + std::to_string(writePage.ordinalStart)
+                                + " status="
+                                + (written.success ? "success"
+                                    : (written.cancelled || written.superseded
+                                        ? "cancelled" : "failure"))
+                                + " error="
+                                + std::to_string(static_cast<unsigned>(written.error))
+                                + " completed_pages="
+                                + std::to_string(completedPageCount)
+                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
+                                + " monotonic_us="
+                                + std::to_string(TelemetryClock::monotonicUs()));
+                        } catch (const std::exception &) {
+                            uiDiagnostics().log(
+                                "[LibraryCoordinator] full_population_stage_exception"
+                                " request=" + std::to_string(requestId)
+                                + " generation=" + std::to_string(transactionGeneration)
+                                + " exception_class=std_exception"
+                                + " completed_pages="
+                                + std::to_string(completedPageCount)
+                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
+                                + " monotonic_us="
+                                + std::to_string(TelemetryClock::monotonicUs()));
+                            throw;
+                        } catch (...) {
+                            uiDiagnostics().log(
+                                "[LibraryCoordinator] full_population_stage_exception"
+                                " request=" + std::to_string(requestId)
+                                + " generation=" + std::to_string(transactionGeneration)
+                                + " exception_class=unknown"
+                                + " completed_pages="
+                                + std::to_string(completedPageCount)
+                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
+                                + " monotonic_us="
+                                + std::to_string(TelemetryClock::monotonicUs()));
+                            throw;
+                        }
                         if (!written.success) {
                             terminal.cancelled = written.cancelled;
                             terminal.superseded = written.superseded;
@@ -1881,6 +1956,9 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     std::lock_guard<std::mutex> lock(m_startupMutex);
     status.startupInFlight = m_startupInFlight;
     status.fullSyncInFlight = m_fullSyncInFlight;
+    status.fullPopulationRequest = m_fullPopulationRequest;
+    status.fullPopulationGeneration = m_fullPopulationGeneration;
+    status.fullPopulationQueueDepth = m_fullPopulationUpdates.size();
     status.safetyReconcileInFlight = m_safetyReconcileInFlight;
     status.committedGeneration = m_catalogGeneration;
     status.lastSuccessfulMs = m_lastSuccessfulMs;

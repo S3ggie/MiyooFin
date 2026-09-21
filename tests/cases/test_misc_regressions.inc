@@ -1094,6 +1094,39 @@ static void testPageTransactionShouldRetry()
     std::printf("[test] Page transaction retry-bound decision OK\n");
 }
 
+static void testDiagnosticPageKindClassification()
+{
+    std::printf("[test] diagnostic page kind classification\n");
+    const std::string catalog = readTestBytes("src/catalog/CatalogDbWrite.cpp");
+    const std::string coordinator =
+        readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(!catalog.empty());
+    CHECK(!coordinator.empty());
+
+    const std::string catalogClassification =
+        "page.collectionType == \"movies\" ? \"movies\" : "
+        "page.collectionType == \"tvshows\" ? \"tvshows\" : \"unknown\"";
+    CHECK(sourceCount(catalog, catalogClassification) == 2);
+    CHECK(sourceLacks(catalog,
+                      "page.collectionType == \"tvshows\" ? \"series\" : \"movie\""));
+
+    const std::string coordinatorClassification =
+        "writePage.collectionType == \"movies\" ? \"movies\" : "
+        "writePage.collectionType == \"tvshows\" ? \"tvshows\" : \"unknown\"";
+    CHECK(sourceContains(coordinator, coordinatorClassification));
+    CHECK(sourceLacks(coordinator,
+                      "writePage.collectionType == \"tvshows\" ? \"series\" : \"movie\""));
+
+    const auto completedPageIncrement = sourcePos(
+        coordinator, "if (written.success) ++completedPageCount;");
+    const auto stageCompleteLog = sourcePos(
+        coordinator, "full_population_stage_complete");
+    CHECK(completedPageIncrement != std::string::npos);
+    CHECK(stageCompleteLog != std::string::npos);
+    CHECK(completedPageIncrement < stageCompleteLog);
+    std::printf("[test] diagnostic page kind classification OK\n");
+}
+
 static void testPageTransactionCleanupInvariants()
 {
     std::printf("[test] processMediaPageUpsert cleanup invariants\n");
@@ -1190,16 +1223,76 @@ static void testPageTransactionCleanupInvariants()
     CHECK(sourceContains(attempt, "if (itemOutcome == MediaPageItemLoopOutcome::Fatal)"));
     CHECK(sourceContains(attempt, "if (itemOutcome == MediaPageItemLoopOutcome::Retryable)"));
 
-    // The test-injection hook used by the catalog tests is intact in the
-    // item writer.
+    // Check each terminal branch in its own source region.  A single
+    // aggregate count can pass when a page_complete from an earlier branch
+    // is incorrectly used to satisfy a later result publication.
+    const std::string completionToken = sourceTokenString(
+        "logMediaPageTransition(command, \"page_complete\"");
+    const std::string resultToken = sourceTokenString(
+        "command->result.set_value");
+    const auto checkCompletionBeforePublication =
+        [&](const std::string &branch) {
+            const std::size_t completionPos = sourcePos(branch, completionToken);
+            const std::size_t resultPos = sourcePos(branch, resultToken);
+            CHECK(completionPos != std::string::npos);
+            CHECK(resultPos != std::string::npos);
+            CHECK(completionPos < resultPos);
+        };
+
+    // The injected row failure is the existing seam that exercises the
+    // MediaPageItemLoopOutcome::Fatal dispatch.
+    const std::string fatalBranch = sourceBetween(
+        attempt, "if (itemOutcome == MediaPageItemLoopOutcome::Fatal)",
+        "if (itemOutcome == MediaPageItemLoopOutcome::Retryable)");
+    CHECK(!fatalBranch.empty());
     CHECK(sourceContains(itemWriter, "failureSpec().failAfterRows"));
-    CHECK(sourceContains(itemWriter, "injected page failure"));
+    checkCompletionBeforePublication(fatalBranch);
 
     // Retry-backoff cancellation lives in processMediaPageUpsert.
     const auto fnEnd = src.find("} // namespace miyoofin", processStart);
     CHECK(fnEnd != std::string::npos);
     const std::string processFn =
         src.substr(processStart, fnEnd - processStart);
+
+    // Enqueue rejection completes its promise synchronously, before the
+    // command can ever reach the worker.
+    const auto enqueueStart = src.find(
+        "std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(");
+    const auto transitionStart = enqueueStart == std::string::npos
+        ? std::string::npos
+        : src.find("void CatalogDb::logMediaPageTransition(", enqueueStart);
+    CHECK(enqueueStart != std::string::npos);
+    CHECK(transitionStart != std::string::npos);
+    const std::string enqueueFn = enqueueStart == std::string::npos
+        || transitionStart == std::string::npos
+        ? std::string()
+        : src.substr(enqueueStart, transitionStart - enqueueStart);
+    const std::string enqueueRejection = sourceBetween(
+        enqueueFn, "if (m_stopping || m_pendingJobs >= kMaxPendingJobs)",
+        "m_mediaPageUpsertCommands.push_back");
+    CHECK(!enqueueRejection.empty());
+    checkCompletionBeforePublication(enqueueRejection);
+
+    // Cancellation during retry backoff and exhaustion after the bounded
+    // retry loop each have their own terminal result publication.
+    const std::string processCancellation = sourceBetween(
+        processFn,
+        "if (command->metadata.cancellation && command->metadata.cancellation->load())",
+        "std::this_thread::sleep_for");
+    CHECK(!processCancellation.empty());
+    checkCompletionBeforePublication(processCancellation);
+
+    const auto exhaustedStart = processFn.find("All retry attempts exhausted");
+    const std::string retryExhaustion = exhaustedStart == std::string::npos
+        ? std::string() : processFn.substr(exhaustedStart);
+    CHECK(!retryExhaustion.empty());
+    checkCompletionBeforePublication(retryExhaustion);
+
+    // The test-injection hook used by the catalog tests is intact in the
+    // item writer.
+    CHECK(sourceContains(itemWriter, "failureSpec().failAfterRows"));
+    CHECK(sourceContains(itemWriter, "injected page failure"));
+
     // Retry-backoff cancellation must set result.cancelled = true.
     CHECK(sourceContains(processFn, "result.cancelled = true"));
     CHECK(sourceContains(processFn, "kPageTransactionMaxAttempts"));

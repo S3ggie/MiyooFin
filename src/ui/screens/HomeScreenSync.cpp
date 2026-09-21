@@ -247,6 +247,7 @@ bool HomeScreen::startFetch()
             pending.continueWatching = pending.cachedSnapshot.continueWatching;
             pending.recentlyAdded = pending.cachedSnapshot.recentlyAdded;
             pending.complete = true;
+            pending.diagnosticStage = "offline_terminal";
             publish();
             m_metadataActive.store(false);
             completeTelemetry(Outcome::Success);
@@ -451,15 +452,78 @@ bool HomeScreen::startFetch()
                 pending.error = "Library sync already in flight";
             } else {
                 bool populationComplete = false;
+                std::size_t populationMissCount = 0;
+                std::size_t populationCompletedPages = 0;
+                bool populationMissLogged = false;
+                bool populationIdentityMismatchLogged = false;
+                std::string populationConsumerStage;
                 while (!populationComplete) {
                     if (cancellation->load())
                         m_libraryCoordinator->cancelFullPopulation();
                     library::FullPopulationUpdate update;
                     if (!m_libraryCoordinator->takeFullPopulationUpdate(
                             populationRequest, update)) {
+                        if (populationMissCount < 1000000)
+                            ++populationMissCount;
+                        const auto status = m_libraryCoordinator->status();
+                        const bool identityMismatch =
+                            status.fullPopulationRequest != populationRequest;
+                        if (!populationMissLogged ||
+                            (identityMismatch && !populationIdentityMismatchLogged)) {
+                            uiDiagnostics().log(
+                                "[HomeScreen] full_population_consumer miss"
+                                " requested_request="
+                                + std::to_string(populationRequest)
+                                + " current_request="
+                                + std::to_string(status.fullPopulationRequest)
+                                + " current_generation="
+                                + std::to_string(status.fullPopulationGeneration)
+                                + " identity_mismatch="
+                                + std::to_string(identityMismatch ? 1 : 0)
+                                + " miss_count="
+                                + std::to_string(populationMissCount)
+                                + " queue_depth="
+                                + std::to_string(status.fullPopulationQueueDepth));
+                            populationMissLogged = true;
+                            populationIdentityMismatchLogged =
+                                populationIdentityMismatchLogged || identityMismatch;
+                        }
                         std::this_thread::sleep_for(std::chrono::milliseconds(5));
                         continue;
                     }
+                    const std::string consumerStage = update.terminal
+                        ? (update.success ? "terminal_success"
+                            : (update.cancelled || update.superseded
+                                ? "terminal_cancel" : "terminal_failure"))
+                        : (update.firstPage ? "first_page" : "page");
+                    if (update.request != populationRequest) {
+                        uiDiagnostics().log(
+                            "[HomeScreen] full_population_consumer identity_mismatch"
+                            " requested_request=" + std::to_string(populationRequest)
+                            + " current_request=" + std::to_string(update.request)
+                            + " current_update_generation="
+                            + std::to_string(update.generation)
+                            + " miss_count=" + std::to_string(populationMissCount));
+                    }
+                    if (consumerStage != populationConsumerStage) {
+                        uiDiagnostics().log(
+                            std::string("[HomeScreen] full_population_consumer ")
+                            + (populationConsumerStage.empty() ? "hit" : "transition")
+                            + " requested_request="
+                            + std::to_string(populationRequest)
+                            + " current_request=" + std::to_string(update.request)
+                            + " current_update_generation="
+                            + std::to_string(update.generation)
+                            + " stage=" + consumerStage
+                            + " miss_count=" + std::to_string(populationMissCount));
+                        populationConsumerStage = consumerStage;
+                    }
+                    if (update.pageValid)
+                        ++populationCompletedPages;
+                    pending.diagnosticRequest = populationRequest;
+                    pending.diagnosticGeneration = update.generation;
+                    pending.diagnosticCompletedPages = populationCompletedPages;
+                    pending.diagnosticStage = consumerStage;
                     if (!update.views.empty())
                         views = update.views;
                     requestCount = update.requestCount;
@@ -639,6 +703,11 @@ bool HomeScreen::startFetch()
         pending.contentValid = !catalogRefreshFailed
             || pending.catalogCommitted;
         pending.libraryOffline = false;
+        if (pending.diagnosticStage.empty())
+            pending.diagnosticStage = catalogRefreshFailed
+                ? "terminal_failure" : "terminal_success";
+        if (pending.diagnosticGeneration == 0)
+            pending.diagnosticGeneration = committedCatalogGeneration();
         publish();
         m_fetchDone.store(true);
         m_fetchDone=true;

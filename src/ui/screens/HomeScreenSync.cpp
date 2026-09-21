@@ -134,20 +134,6 @@ void HomeScreen::startHomeRailRefresh()
     m_homeRailRefreshError.clear();
 }
 
-void HomeScreen::startSafetyReconcile()
-{
-    if (m_safetyReconcileInFlight || !m_libraryCoordinator
-        || presentationOffline())
-        return;
-    // Do not begin a competing top-level sync while the initial
-    // population's top-level generation is still in flight.
-    if (m_initialPopulationInProgress)
-        return;
-    if (!m_libraryCoordinator->requestSafetyReconcile())
-        return;
-    m_safetyReconcileInFlight = true;
-}
-
 bool HomeScreen::startFetch()
 {
     if (m_fetchThread.joinable()) {

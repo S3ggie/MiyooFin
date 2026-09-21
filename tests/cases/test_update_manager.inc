@@ -89,33 +89,93 @@ static void testUpdateManagerInitialState()
 }
 
 // -------------------------------------------------------------------
-// testUpdateManagerEnabled — enabled manager (no network) lifecycle
+// testUpdateManagerEnabled — enabled manager (local manifest) lifecycle
 // -------------------------------------------------------------------
 static void testUpdateManagerEnabled()
 {
     std::printf("[test] Update manager enabled lifecycle\n");
+
+    // Do not make this lifecycle test depend on the production GitHub
+    // endpoint: test results must not depend on public internet access.
+    char tempTemplate[] = "/tmp/miyoofin-test-update-XXXXXX";
+    char *tempDir = ::mkdtemp(tempTemplate);
+    CHECK(tempDir != nullptr);
+    if (!tempDir)
+        return;
+
+    struct UpdateUrlEnvironmentGuard {
+        bool hadValue = false;
+        std::string previousValue;
+
+        UpdateUrlEnvironmentGuard()
+        {
+            const char *value = std::getenv("MIYOOFIN_UPDATE_URL");
+            if (value != nullptr) {
+                hadValue = true;
+                previousValue = value;
+            }
+            ::unsetenv("MIYOOFIN_UPDATE_URL");
+        }
+
+        ~UpdateUrlEnvironmentGuard()
+        {
+            if (hadValue)
+                ::setenv("MIYOOFIN_UPDATE_URL", previousValue.c_str(), 1);
+            else
+                ::unsetenv("MIYOOFIN_UPDATE_URL");
+        }
+    } updateUrlEnvironment;
+
+    const std::string appDir(tempDir);
+    const std::string manifestPath = appDir + "/manifest.json";
+    const std::string devUrlPath = appDir + "/update-dev-url.txt";
+    struct TemporaryUpdateFiles {
+        const std::string &manifestPath;
+        const std::string &devUrlPath;
+        const std::string &appDir;
+
+        ~TemporaryUpdateFiles()
+        {
+            std::remove(manifestPath.c_str());
+            std::remove(devUrlPath.c_str());
+            ::rmdir(appDir.c_str());
+        }
+    } temporaryFiles{manifestPath, devUrlPath, appDir};
+
     {
-        UpdateManager mgr("/tmp/miyoofin-test-update");
+        std::ofstream manifest(manifestPath);
+        manifest << "{\"version\":\"" << VERSION_STR
+                 << "\",\"assets\":{\"tar_gz\":{"
+                    "\"url\":\"file://" << appDir << "/update.tar.gz\","
+                    "\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\","
+                    "\"size\":0}}}";
+        std::ofstream devUrl(devUrlPath);
+        devUrl << "file://" << manifestPath << '\n';
+    }
+
+    {
+        UpdateManager mgr(appDir);
         CHECK(mgr.enabled());
         CHECK(!mgr.busy());
         CHECK(!mgr.pollDone());
 
-        // checkForUpdates will fail fast (no network) but should complete.
         mgr.checkForUpdates();
-        // Give the worker time to finish (network timeout can be slow).
-        for (int i = 0; i < 200 && !mgr.pollDone(); ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        bool completed = mgr.pollDone();
 
+        for (int i = 0; i < 200 && !completed; ++i) {
+            completed = mgr.pollDone();
+            if (!completed)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        CHECK(completed);
         CHECK(!mgr.busy());
         auto snap = mgr.snapshot();
-        // Should end in Error (network unreachable), UpToDate, or Available
-        // depending on network availability and manifest state.
-        bool validEndState =
-            snap.stage == UpdateStage::Error ||
-            snap.stage == UpdateStage::UpToDate ||
-            snap.stage == UpdateStage::Available;
-        CHECK(validEndState);
+        CHECK(snap.stage == UpdateStage::UpToDate);
+        CHECK_EQ(snap.availableVersion, std::string(VERSION_STR));
+        CHECK(mgr.devOverrideActive());
     }
+
     std::printf("[test] Update manager enabled lifecycle OK\n");
 }
 

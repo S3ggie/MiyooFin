@@ -440,3 +440,74 @@ static void testHomeUsesCatalogBeforeNetworkRefresh()
     std::printf("[test] Home uses CatalogDb before network refresh OK\n");
 }
 
+static void testLibraryQueryDomainBoundary()
+{
+    std::printf("[test] LibraryQuery domain boundary\n");
+    const std::string header = readTestBytes("src/library/LibraryQuery.hpp");
+    for (const char *leaked : {"CatalogDbPageCursor",
+                               "CatalogDbMediaPageMembership",
+                               "CatalogDbErrorCategory",
+                               "CatalogDbMediaPageResult",
+                               "CatalogDbHierarchyResult",
+                               "CatalogDbJobMetadata"}) {
+        CHECK(header.find(leaked) == std::string::npos);
+    }
+    CHECK(header.find("LibraryPageCursor") != std::string::npos);
+    CHECK(header.find("LibraryMembership") != std::string::npos);
+    CHECK(header.find("LibraryQueryErrorCategory") != std::string::npos);
+    static_assert(!std::is_same<library::LibraryPageCursor,
+                                CatalogDbPageCursor>::value,
+                  "LibraryQuery cursor must be a domain type");
+    static_assert(!std::is_same<library::LibraryMembership,
+                                CatalogDbMediaPageMembership>::value,
+                  "LibraryQuery membership must be a domain type");
+    static_assert(!std::is_same<library::LibraryQueryErrorCategory,
+                                CatalogDbErrorCategory>::value,
+                  "LibraryQuery errors must be a domain type");
+
+    const std::string url = "https://library-query-domain-boundary.example";
+    const std::string user = "library-query-domain-boundary-user";
+    const auto paths = catalogMigrationTestPaths(url, user);
+    removeCatalogMigrationTestPaths(paths);
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(url, user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    LibrarySnapshot snapshot;
+    snapshot.movies.push_back({
+        "movies", "Movies", "movies",
+        {catalogParityItem("__library_query_boundary_a__", "movie", "First"),
+         catalogParityItem("__library_query_boundary_b__", "movie", "Second")}});
+    CHECK(CatalogCompatibility::seedLibrarySnapshot(
+              *db, snapshot, {0, epoch, {}}).get().success);
+
+    library::LibraryQuery query(db, epoch);
+    const library::LibraryPageCursor initial;
+    const auto first = query.movies(-1, 1, initial).get();
+    CHECK(first.success && first.items.size() == 1 && first.hasMore
+          && first.next.valid);
+    CHECK(first.membershipsByItem.at(first.items.front().id).size() == 1);
+    if (!first.items.empty()) {
+        const auto &membership = first.membershipsByItem.at(first.items.front().id).front();
+        CHECK(membership.viewId == "movies");
+        CHECK(membership.viewName == "Movies");
+        CHECK(membership.collectionType == "movies");
+    }
+
+    const auto second = query.movies(-1, 1, first.next).get();
+    CHECK(second.success && second.items.size() == 1 && !second.hasMore
+          && second.next.valid);
+    CHECK(second.items.front().id != first.items.front().id);
+
+    const auto invalid = query.movies(-1, 0).get();
+    CHECK(!invalid.success
+          && invalid.error == library::LibraryQueryErrorCategory::SqliteError);
+    auto cancellation = std::make_shared<std::atomic_bool>(true);
+    const auto cancelled = query.itemsByIds({first.items.front().id}, cancellation).get();
+    CHECK(cancelled.cancelled && !cancelled.success
+          && cancelled.error == library::LibraryQueryErrorCategory::Superseded);
+
+    db.reset();
+    removeCatalogMigrationTestPaths(paths);
+    std::printf("[test] LibraryQuery domain boundary OK\n");
+}

@@ -10,7 +10,6 @@
 #include "../../download/DownloadUi.hpp"
 #include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
-#include "../../catalog/CatalogDb.hpp"
 #include "../../library/LibrarySync.hpp"
 #include "../../library/LibraryQuery.hpp"
 #include "../../library/LibraryCoordinator.hpp"
@@ -110,7 +109,7 @@ public:
                                                 const std::string &type,
                                                 int alphabetLetter,
                                                 std::size_t limit,
-                                                const CatalogDbPageCursor &after = {});
+                                                const library::LibraryPageCursor &after = {});
     /// Offline contains only locally playable libraries; Home is intentionally absent.
     static std::vector<std::string> tabNames(const std::vector<TabData> &tabs);
     /// Keep a named tab across a layout change, falling back to Movies.
@@ -222,7 +221,7 @@ private:
         std::string type;
         int letter = -1;
         std::vector<MediaItem> items;
-        CatalogDbPageCursor next;
+        library::LibraryPageCursor next;
         bool hasMore = true;
         bool hasEarlier = false;
         bool replaceWindowOnNextPage = false;

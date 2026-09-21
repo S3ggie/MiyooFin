@@ -158,7 +158,7 @@ static void testCatalogDbMediaPagePreservesViewMembership()
             const auto &memberships = page.membershipsByItem.at(item.id);
             return std::any_of(
                 memberships.begin(), memberships.end(),
-                [&](const CatalogDbMediaPageMembership &membership) {
+                [&](const library::LibraryMembership &membership) {
                     return isAnimeSeries(membership.viewName, item);
                 });
         };
@@ -239,7 +239,7 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         const auto &movieMemberships = moviePage.membershipsByItem.at(movie.id);
         const bool hasSupportedMovieMembership = std::any_of(
             movieMemberships.begin(), movieMemberships.end(),
-            [&](const CatalogDbMediaPageMembership &membership) {
+            [&](const library::LibraryMembership &membership) {
                 return membership.viewId == movies.viewId
                     && membership.collectionType == "movies";
             });

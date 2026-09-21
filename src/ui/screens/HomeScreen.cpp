@@ -118,10 +118,10 @@ void HomeScreen::updateContinueWatchingRow(std::vector<TabData> &tabs, const std
 std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::tabsFromSnapshot(s); }
 std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::offlineTabsFromSnapshot(s); }
 library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
-                                                const std::string &type,
-                                                int alphabetLetter,
-                                                std::size_t limit,
-                                                const CatalogDbPageCursor &after)
+                                                 const std::string &type,
+                                                 int alphabetLetter,
+                                                 std::size_t limit,
+                                                 const library::LibraryPageCursor &after)
 {
     std::vector<MediaItem> items;
     if (type == "movie") {

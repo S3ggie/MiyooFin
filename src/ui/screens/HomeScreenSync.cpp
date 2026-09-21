@@ -1,5 +1,6 @@
 #include "HomeScreen.hpp"
 #include <chrono>
+#include "../../catalog/CatalogDb.hpp"
 #include "../../library/OfflineLibraryQuery.hpp"
 #include "../../playback/OfflineLibraryProjection.hpp"
 #include "../../net/JellyfinApi.hpp"

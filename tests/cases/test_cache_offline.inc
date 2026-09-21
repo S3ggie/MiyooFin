@@ -390,7 +390,8 @@ static void testOfflineLibraryQuery(){
     std::vector<std::string> oversizedMetadataIds(65, "unused");
     const auto oversizedMetadata = query.itemsByIds(oversizedMetadataIds).get();
     CHECK(!oversizedMetadata.success
-          && oversizedMetadata.error == CatalogDbErrorCategory::ConfigurationFailed);
+          && oversizedMetadata.error
+                 == library::LibraryQueryErrorCategory::ConfigurationFailed);
     std::vector<MediaItem> metadata = metadataPage.items;
     const auto offlineRoot = OfflineLibraryQuery::build(
         DownloadSnapshot{loaded}, metadata);

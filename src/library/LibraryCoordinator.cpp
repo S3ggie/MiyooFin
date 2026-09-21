@@ -1,4 +1,5 @@
 #include "LibraryCoordinator.hpp"
+#include "LibrarySync.hpp"
 #include "../net/HttpClient.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"

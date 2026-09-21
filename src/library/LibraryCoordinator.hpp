@@ -2,12 +2,16 @@
 #define MIYOOFIN_LIBRARY_COORDINATOR_HPP
 
 #include "LibraryQuery.hpp"
-#include "LibrarySync.hpp"
+#include "LibraryChangeTypes.hpp"
+#include "../catalog/CatalogDb.hpp"
+#include "../net/JellyfinLibraryEvents.hpp"
+#include "../net/Session.hpp"
 #include "../net/JellyfinApi.hpp"
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -18,6 +22,8 @@
 
 namespace miyoofin {
 namespace library {
+
+class LibrarySync;
 
 /// Session-owned boundary for the shared online library services.
 ///

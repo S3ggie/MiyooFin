@@ -19,101 +19,64 @@ static std::vector<TabData> emptyHomeTabs()
     };
 }
 
-void HomeScreen::publishCoordinatorHomeState(
-    const std::vector<TabData> &tabs, const LibrarySnapshot &snapshot,
-    bool contentValid, bool cachedSnapshotValid, bool offline, bool stale,
-    bool continueValid, bool recentlyAddedValid, const std::string &error)
+void HomeScreen::publishPendingPresentation(PendingPresentation presentation)
 {
-    if (!m_libraryCoordinator)
-        return;
-    library::HomeState state;
-    state.scopeEpoch = catalogScopeEpoch();
-    state.catalogGeneration = committedCatalogGeneration();
-    state.offline = offline;
-    state.stale = stale;
-    state.contentValid = contentValid;
-    state.cachedSnapshotValid = cachedSnapshotValid;
-    state.tabs = tabs;
-    state.cachedSnapshot = snapshot;
-    state.continueValid = continueValid;
-    state.recentlyAddedValid = recentlyAddedValid;
-    state.continueWatching = snapshot.continueWatching;
-    state.recentlyAdded = snapshot.recentlyAdded;
-    state.error = error;
-    const auto sync = m_libraryCoordinator->status();
-    state.sync.inFlight = sync.inFlight;
-    state.sync.startupInFlight = sync.startupInFlight;
-    state.sync.fullSyncInFlight = sync.fullSyncInFlight;
-    state.sync.cancelRequested = sync.cancelRequested;
-    state.sync.success = sync.success;
-    state.sync.generation = sync.generation;
-    state.sync.committedGeneration = sync.committedGeneration;
-    state.sync.lastSuccessfulMs = sync.lastSuccessfulMs;
-    state.sync.lastReconcileMs = sync.lastReconcileMs;
-    state.sync.safetyReconcileDue = sync.safetyReconcileDue;
-    state.sync.maintenanceDue = sync.maintenanceDue;
-    state.sync.manualOffline = sync.manualOffline;
-    (void)m_libraryCoordinator->publishHomeState(std::move(state));
+    std::lock_guard<std::mutex> lock(m_fetchMutex);
+    const bool complete = presentation.complete;
+    m_pendingPresentation = std::make_shared<const PendingPresentation>(
+        std::move(presentation));
+    m_fetchComplete.store(complete);
+    m_fetchReady.store(true);
 }
 
-void HomeScreen::consumeCoordinatorHomeState()
+bool HomeScreen::takePendingPresentation(PendingPresentation &presentation)
 {
-    if (!m_libraryCoordinator)
-        return;
-    std::shared_ptr<const library::HomeState> state;
-    if (!m_libraryCoordinator->takeHomeState(state) || !state
-        || state->revision <= m_homeStateRevision)
-        return;
-    m_homeStateRevision = state->revision;
-    applyCoordinatorHomeState(*state);
+    std::lock_guard<std::mutex> lock(m_fetchMutex);
+    if (!m_pendingPresentation)
+        return false;
+    presentation = *m_pendingPresentation;
+    m_pendingPresentation.reset();
+    m_fetchReady.store(false);
+    return true;
 }
 
-void HomeScreen::applyCoordinatorHomeState(const library::HomeState &state)
+void HomeScreen::applyPendingPresentation(
+    const PendingPresentation &presentation)
 {
-    // Only content/status comes from the coordinator.  Focus, selection,
-    // scroll, and artwork remain untouched except for the existing bounds and
-    // row-label reconciliation required after a content replacement.
-    if (state.contentValid) {
-        const std::string focusedLabel = focusedHomeRowLabel();
-        const std::vector<TabData> previous = m_tabs;
-        const int selected = m_activeTab;
-        m_tabs = state.tabs;
-        makeMediaTabsBounded(m_tabs);
-        m_activeTab = transitionTabIndex(previous, selected, m_tabs);
-        if (state.cachedSnapshotValid) {
-            m_cachedSnapshot = state.cachedSnapshot;
-            m_haveCachedSnapshot = true;
-            if (state.offline)
-                m_offlineSnapshot = state.cachedSnapshot;
-        }
-        restoreHomeRowFocus(focusedLabel);
-        m_loadState = LoadState::Ready;
-        clampNavigation();
+    m_fetchResult = presentation.tabs;
+    m_fetchError = presentation.error;
+    m_fetchCacheSaved = presentation.cacheSaved;
+    m_libraryOffline = presentation.libraryOffline;
+    if (presentation.offlineCacheValid) {
+        m_offlineSnapshotCache = presentation.offlineSnapshotCache;
+        m_offlineSignature = presentation.offlineSignature;
+        m_haveOfflineSnapshotCache = true;
+        m_haveOfflineSignature = true;
     }
-    if (state.cachedSnapshotValid) {
-        m_cachedSnapshot = state.cachedSnapshot;
+    if (presentation.railsReady) {
+        m_homeRailsReady.store(true);
+        m_fetchRailCW = presentation.continueWatching;
+        m_fetchRailRA = presentation.recentlyAdded;
+        m_fetchRailCWValid = presentation.continueValid;
+        m_fetchRailRAValid = presentation.recentlyAddedValid;
+    }
+    if (presentation.haveCachedSnapshot) {
+        m_cachedSnapshot = presentation.cachedSnapshot;
         m_haveCachedSnapshot = true;
+        if (presentation.libraryOffline)
+            m_offlineSnapshot = presentation.cachedSnapshot;
     }
-    if (state.continueValid) {
-        updateContinueWatchingRow(m_tabs, state.continueWatching);
-        m_cachedSnapshot.continueWatching = state.continueWatching;
-        m_remoteSnapshot.continueWatching = state.continueWatching;
+    m_remoteSnapshot = presentation.remoteSnapshot;
+    if (presentation.continueValid) {
+        updateContinueWatchingRow(m_tabs, presentation.continueWatching);
+        m_cachedSnapshot.continueWatching = presentation.continueWatching;
+        m_remoteSnapshot.continueWatching = presentation.continueWatching;
     }
-    if (state.recentlyAddedValid) {
-        updateRecentlyAddedRow(m_tabs, state.recentlyAdded);
-        m_cachedSnapshot.recentlyAdded = state.recentlyAdded;
-        m_remoteSnapshot.recentlyAdded = state.recentlyAdded;
+    if (presentation.recentlyAddedValid) {
+        updateRecentlyAddedRow(m_tabs, presentation.recentlyAdded);
+        m_cachedSnapshot.recentlyAdded = presentation.recentlyAdded;
+        m_remoteSnapshot.recentlyAdded = presentation.recentlyAdded;
     }
-    m_libraryOffline = state.offline;
-    if (!state.error.empty()) {
-        m_fetchError = state.error;
-        if (!state.contentValid && !m_haveCachedSnapshot)
-            m_loadState = LoadState::Error;
-    }
-    if (state.sync.lastSuccessfulMs > 0)
-        m_syncState.lastSuccessfulMs = state.sync.lastSuccessfulMs;
-    if (state.sync.lastReconcileMs > 0)
-        m_syncState.lastReconcileMs = state.sync.lastReconcileMs;
 }
 
 void HomeScreen::applyPresentationProjection() {
@@ -392,10 +355,6 @@ void HomeScreen::finishSafetyReconcile()
     // Thread join deferred to LibraryCoordinator teardown; the UI thread only
     // consumes the completed result here.
     m_safetyReconcileInFlight = false;
-    if (result.lastSuccessfulMs > 0) {
-        m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
-        m_syncState.lastReconcileMs = result.lastReconcileMs;
-    }
     if (!result.success && !result.message.empty())
         std::printf("[HomeScreen] safety reconciliation failed: %s\n",
                     result.message.c_str());
@@ -410,14 +369,16 @@ static void makeMediaTabsBounded(std::vector<TabData> &tabs)
 }
 void HomeScreen::finishFetch()
 {
-    if (!m_fetchReady.load())
+    PendingPresentation presentation;
+    if (!takePendingPresentation(presentation))
         return;
+    applyPendingPresentation(presentation);
     // A first page is published early so Home becomes useful quickly, but it
     // is not a replacement for the last committed catalog.  If a later page
     // fails or the population is cancelled, restore the presentation that was
     // valid when this fetch began, or discard the provisional frame entirely
     // when there was no authoritative Home content to restore.
-    if (m_fetchComplete.load() && !m_fetchCatalogCommitted.load()
+    if (presentation.complete && !m_fetchCatalogCommitted.load()
         && !m_fetchError.empty() && !m_fetchFailureRestored) {
         const std::string focusedLabel = focusedHomeRowLabel();
         const std::vector<TabData> previous = m_tabs;
@@ -448,9 +409,6 @@ void HomeScreen::finishFetch()
             restoreHomeRowFocus(focusedLabel);
             m_loadState = LoadState::Ready;
             clampNavigation();
-            publishCoordinatorHomeState(
-                m_tabs, m_cachedSnapshot, true, m_haveCachedSnapshot,
-                m_libraryOffline, true, false, false, m_fetchError);
         } else {
             // A cold start has no authoritative tabs or snapshot.  Do not
             // leave the first bounded page (or its rails) looking Ready.
@@ -462,10 +420,10 @@ void HomeScreen::finishFetch()
             {
                 std::lock_guard<std::mutex> lock(m_fetchMutex);
                 m_fetchResult.clear();
-                m_startupRailCW.clear();
-                m_startupRailRA.clear();
-                m_startupRailCWValid = false;
-                m_startupRailRAValid = false;
+                m_fetchRailCW.clear();
+                m_fetchRailRA.clear();
+                m_fetchRailCWValid = false;
+                m_fetchRailRAValid = false;
             }
             resetMediaPaging();
             m_activeTab = transitionTabIndex(previous, selected, m_tabs);
@@ -479,7 +437,10 @@ void HomeScreen::finishFetch()
     }
     if (!m_fetchPublished) {
         if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot && !m_offlineModeFetchPending)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
-        else {
+        // Startup rails can arrive before catalog content.  Keep Home in
+        // Loading for that intermediate presentation so the provisional page
+        // can still publish later.
+        else if (presentation.contentValid) {
             std::vector<TabData> publishedTabs;
             {
                 std::lock_guard<std::mutex> lock(m_fetchMutex);
@@ -487,7 +448,7 @@ void HomeScreen::finishFetch()
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
             const std::string focusedLabel = focusedHomeRowLabel();
-            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs (%d added, %d changed)\n",m_tabs.size(),m_fetchStats.added,m_fetchStats.changed);uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs\n",m_tabs.size());uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;
@@ -505,17 +466,10 @@ void HomeScreen::finishFetch()
     // avoid data races with the refresh thread's own rail members.
     if (m_homeRailsReady.load() && !m_homeRailsApplied) {
         m_homeRailsApplied = true;
-        std::vector<MediaItem> railCW;
-        std::vector<MediaItem> railRA;
-        bool cwValid = false;
-        bool raValid = false;
-        {
-            std::lock_guard<std::mutex> lock(m_fetchMutex);
-            railCW = std::move(m_startupRailCW);
-            railRA = std::move(m_startupRailRA);
-            cwValid = m_startupRailCWValid;
-            raValid = m_startupRailRAValid;
-        }
+        const std::vector<MediaItem> railCW = std::move(m_fetchRailCW);
+        const std::vector<MediaItem> railRA = std::move(m_fetchRailRA);
+        const bool cwValid = m_fetchRailCWValid;
+        const bool raValid = m_fetchRailRAValid;
         {
             const std::string focusedLabel = focusedHomeRowLabel();
             if (cwValid) {
@@ -531,7 +485,7 @@ void HomeScreen::finishFetch()
         queuePosterJobs(planHomeRailPosterJobs(railCW, railRA), true);
         clampNavigation();
     }
-    if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied) {
+    if (presentation.complete && !m_fetchPostFinalizeApplied) {
         m_fetchPostFinalizeApplied = true;
         // Post-finalize tab rebuild: on a cold start the initial
         // first-bounded-page publish used empty movie/show lists.
@@ -564,10 +518,6 @@ void HomeScreen::finishFetch()
                 rebuildShowsPresentation();
             }
             if (m_fetchCatalogCommitted.load()) {
-                // The final generation is now authoritative.  Replace the
-                // provisional coordinator publication only after finalize.
-                publishCoordinatorHomeState(
-                    m_tabs, {}, true, false, false, false, false, false);
             }
         }
         if (m_fetchCacheSaved) {

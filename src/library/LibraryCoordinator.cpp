@@ -1477,57 +1477,6 @@ void LibraryCoordinator::hierarchyWorker()
     }
 }
 
-bool LibraryCoordinator::publishHomeState(HomeState state)
-{
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_stopped || state.scopeEpoch != m_scopeEpoch)
-        return false;
-    if (state.catalogGeneration < m_homeStateCatalogGeneration)
-        return false;
-    if (state.revision != 0 && state.revision <= m_homeStateRevision)
-        return false;
-
-    // A status/error-only publication must not erase useful cached content.
-    // Each validity bit is independent so one failed optional rail does not
-    // discard the other rail or the library projection.
-    const auto prior = m_homeStateRetained;
-    if (prior) {
-        if (!state.contentValid) {
-            state.contentValid = prior->contentValid;
-            state.tabs = prior->tabs;
-        }
-        if (!state.cachedSnapshotValid) {
-            state.cachedSnapshotValid = prior->cachedSnapshotValid;
-            state.cachedSnapshot = prior->cachedSnapshot;
-        }
-        if (!state.continueValid) {
-            state.continueValid = prior->continueValid;
-            state.continueWatching = prior->continueWatching;
-        }
-        if (!state.recentlyAddedValid) {
-            state.recentlyAddedValid = prior->recentlyAddedValid;
-            state.recentlyAdded = prior->recentlyAdded;
-        }
-    }
-
-    state.revision = state.revision == 0
-        ? m_homeStateRevision + 1 : state.revision;
-    m_homeStateRevision = state.revision;
-    m_homeStateCatalogGeneration = state.catalogGeneration;
-    m_homeState = std::make_shared<const HomeState>(std::move(state));
-    m_homeStateRetained = m_homeState;
-    return true;
-}
-
-bool LibraryCoordinator::takeHomeState(std::shared_ptr<const HomeState> &state)
-{
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (!m_homeState)
-        return false;
-    state = std::move(m_homeState);
-    return true;
-}
-
 bool LibraryCoordinator::requestLiveChange(
     const JellyfinLibraryChangeBatch &batch)
 {

@@ -6,7 +6,6 @@
 #include "../../net/Session.hpp"
 #include "../../image/ImageDecoder.hpp"
 #include "../../cache/LibraryCache.hpp"
-#include "../../cache/SyncState.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "../../download/DownloadUi.hpp"
 #include "../../download/DownloadHierarchy.hpp"
@@ -270,6 +269,28 @@ private:
     bool m_fetchPostFinalizeApplied = false;
     bool m_fetchFailureRestored = false;
     std::mutex m_fetchMutex;
+    struct PendingPresentation {
+        std::vector<TabData> tabs;
+        LibrarySnapshot cachedSnapshot;
+        LibrarySnapshot remoteSnapshot;
+        bool haveCachedSnapshot = false;
+        bool contentValid = false;
+        bool libraryOffline = false;
+        bool cacheSaved = false;
+        bool complete = false;
+        bool catalogCommitted = false;
+        bool stale = false;
+        bool railsReady = false;
+        std::vector<MediaItem> continueWatching;
+        std::vector<MediaItem> recentlyAdded;
+        bool continueValid = false;
+        bool recentlyAddedValid = false;
+        bool offlineCacheValid = false;
+        OfflineSnapshotSignature offlineSignature;
+        LibrarySnapshot offlineSnapshotCache;
+        std::string error;
+    };
+    std::shared_ptr<const PendingPresentation> m_pendingPresentation;
     std::string m_fetchError;
     std::vector<TabData> m_fetchResult;
     LibrarySnapshot m_cachedSnapshot;
@@ -282,8 +303,11 @@ private:
     bool m_fetchPreviousLibraryOffline = false;
     bool m_fetchPreviousContentValid = false;
     std::atomic<bool> m_fetchCatalogCommitted{false};
-    ReconcileStats m_fetchStats;
     bool m_fetchCacheSaved = false;
+    std::vector<MediaItem> m_fetchRailCW;
+    std::vector<MediaItem> m_fetchRailRA;
+    bool m_fetchRailCWValid = false;
+    bool m_fetchRailRAValid = false;
     bool m_fetchOfflinePrepared = false;
     std::vector<TabData> m_fetchOfflineTabs;
     std::vector<MediaItem> m_fetchOfflineMovies;
@@ -301,7 +325,6 @@ private:
     bool m_haveOfflineSignature = false;
     LibrarySnapshot m_offlineSnapshotCache;
     bool m_haveOfflineSnapshotCache = false;
-    SyncState m_syncState;
     LibrarySyncSchedule m_syncSchedule;
     std::atomic<size_t> m_metadataCompleted{0}, m_metadataTotal{0};
     std::atomic<bool> m_metadataActive{false};
@@ -355,13 +378,9 @@ private:
     bool startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
-    void publishCoordinatorHomeState(
-        const std::vector<TabData> &tabs, const LibrarySnapshot &snapshot,
-        bool contentValid, bool cachedSnapshotValid, bool offline, bool stale,
-        bool continueValid, bool recentlyAddedValid,
-        const std::string &error = {});
-    void consumeCoordinatorHomeState();
-    void applyCoordinatorHomeState(const library::HomeState &state);
+    void publishPendingPresentation(PendingPresentation presentation);
+    bool takePendingPresentation(PendingPresentation &presentation);
+    void applyPendingPresentation(const PendingPresentation &presentation);
     void applyPresentationProjection();
     void restoreOnlinePresentation();
     void applyOfflineProjection();
@@ -408,17 +427,6 @@ private:
     /// after rails are fetched but before the full walk completes.
     std::atomic<bool> m_homeRailsReady{false};
     bool m_homeRailsApplied = false;
-    std::uint64_t m_homeStateRevision = 0;
-
-    /// Worker-owned startup rail buffer: written by the fetch worker under
-    /// m_fetchMutex, read by finishFetch() under the same mutex.  Kept
-    /// separate from the refresh-thread-owned m_homeRailContinueWatching /
-    /// m_homeRailRecentlyAdded to eliminate concurrent write/write.
-    std::vector<MediaItem> m_startupRailCW;
-    std::vector<MediaItem> m_startupRailRA;
-    bool m_startupRailCWValid = false;
-    bool m_startupRailRAValid = false;
-
     void updateLiveLibraryChanges();
     bool liveChangeAffectsHome(
         const library::LiveLibraryChangeResult &result) const;

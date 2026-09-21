@@ -9,7 +9,6 @@
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include "../ArtworkLayout.hpp"
-#include "../HomeSyncState.hpp"
 #include <cstdio>
 #include <ctime>
 
@@ -92,10 +91,6 @@ void HomeScreen::updateLiveLibraryChanges()
     if (!m_libraryCoordinator->takeLiveChangeResult(result))
         return;
 
-    if (result.lastSuccessfulMs > 0) {
-        m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
-        m_syncState.lastReconcileMs = result.lastReconcileMs;
-    }
     if (result.success && liveChangeAffectsHome(result))
         publishLiveCatalogItems(result);
 
@@ -173,6 +168,12 @@ bool HomeScreen::startFetch()
         PerformanceTelemetry &telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 1);
+        PendingPresentation pending;
+        pending.remoteSnapshot = m_fetchPreviousRemoteSnapshot;
+        pending.haveCachedSnapshot = m_fetchPreviousHaveCachedSnapshot;
+        pending.cachedSnapshot = m_fetchPreviousCachedSnapshot;
+        pending.libraryOffline = m_fetchPreviousLibraryOffline;
+        auto publish = [&]() { publishPendingPresentation(pending); };
         CatalogDbJobMetadata metadata;
         metadata.scopeEpoch = catalogScopeEpoch();
         metadata.cancellation=cancellation;
@@ -225,27 +226,29 @@ bool HomeScreen::startFetch()
                     }
                 }
             }
-            m_cachedSnapshot = OfflineLibraryQuery::build(
+            pending.cachedSnapshot = OfflineLibraryQuery::build(
                 downloads, metadataItems);
-            m_haveCachedSnapshot = true;
+            pending.haveCachedSnapshot = true;
+            pending.libraryOffline = true;
             // Cache the offline snapshot + its signature for instant
             // reuse when the user toggles offline mode again without
             // download changes.
-            m_offlineSnapshotCache = m_cachedSnapshot;
-            m_haveOfflineSnapshotCache = true;
-            m_offlineSignature = computeOfflineSignature(
+            pending.offlineSnapshotCache = pending.cachedSnapshot;
+            pending.offlineCacheValid = true;
+            pending.offlineSignature = computeOfflineSignature(
                 downloads, committedCatalogGeneration());
-            m_haveOfflineSignature = true;
-            m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
-            m_remoteSnapshot = m_cachedSnapshot;
-            m_fetchCacheSaved = true;
-            publishCoordinatorHomeState(
-                m_fetchResult, m_cachedSnapshot, true, true, true, false,
-                true, true);
+            pending.tabs = offlineTabsFromSnapshot(pending.cachedSnapshot);
+            pending.remoteSnapshot = pending.cachedSnapshot;
+            pending.cacheSaved = true;
+            pending.contentValid = true;
+            pending.continueValid = true;
+            pending.recentlyAddedValid = true;
+            pending.continueWatching = pending.cachedSnapshot.continueWatching;
+            pending.recentlyAdded = pending.cachedSnapshot.recentlyAdded;
+            pending.complete = true;
+            publish();
             m_metadataActive.store(false);
             completeTelemetry(Outcome::Success);
-            m_fetchComplete.store(true);
-            m_fetchReady.store(true);
             m_fetchDone = true;
             return;
         }
@@ -293,20 +296,20 @@ bool HomeScreen::startFetch()
                             }
                         }
                     }
-                    m_fetchResult = std::move(warmTabs);
+                    pending.tabs = std::move(warmTabs);
                 }
                 std::vector<TabData> warmTabsForState;
                 {
                     std::lock_guard<std::mutex> lock(m_fetchMutex);
-                    warmTabsForState = m_fetchResult;
+                    warmTabsForState = pending.tabs;
                 }
-                publishCoordinatorHomeState(
-                    warmTabsForState, {}, true, false, false, true,
-                    false, false);
+                pending.tabs = std::move(warmTabsForState);
+                pending.contentValid = true;
+                pending.stale = true;
+                publish();
                 uiDiagnostics().log(
                     "[HomeScreen] startup stage=warm_sqlite_catalog_ready");
                 initialPagePublished = true;
-                m_fetchReady.store(true);
             }
         }
         // Block live-change rail refreshes until the startup population
@@ -327,12 +330,12 @@ bool HomeScreen::startFetch()
         // network requests itself.
         std::vector<MediaItem> cw; std::string cwErr;
         std::vector<MediaItem> ra; std::string raErr;
-        bool cwOk = m_haveCachedSnapshot;
-        bool raOk = m_haveCachedSnapshot;
-        if (m_haveCachedSnapshot) {
-            cw = m_cachedSnapshot.continueWatching;
-            ra = m_cachedSnapshot.recentlyAdded;
-            m_remoteSnapshot = m_cachedSnapshot;
+        bool cwOk = pending.haveCachedSnapshot;
+        bool raOk = pending.haveCachedSnapshot;
+        if (pending.haveCachedSnapshot) {
+            cw = pending.cachedSnapshot.continueWatching;
+            ra = pending.cachedSnapshot.recentlyAdded;
+            pending.remoteSnapshot = pending.cachedSnapshot;
         }
         uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
         std::uint64_t railRequest = 0;
@@ -372,20 +375,14 @@ bool HomeScreen::startFetch()
         if (!railStarted || !raOk)
             { optionalRailFailed=true; printf("[HomeScreen] Recently added: %s\n", raErr.c_str()); }
         uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
-        {
-            std::lock_guard<std::mutex> lock(m_fetchMutex);
-            m_startupRailCW = cw;
-            m_startupRailRA = ra;
-            m_startupRailCWValid = cwOk;
-            m_startupRailRAValid = raOk;
-        }
-        m_homeRailsReady.store(true);
-        LibrarySnapshot railSnapshot;
-        railSnapshot.continueWatching = cw;
-        railSnapshot.recentlyAdded = ra;
-        publishCoordinatorHomeState(
-            {}, railSnapshot, false, false, false, true,
-            cwOk, raOk);
+        pending.railsReady = true;
+        pending.continueWatching = cw;
+        pending.recentlyAdded = ra;
+        pending.continueValid = cwOk;
+        pending.recentlyAddedValid = raOk;
+        pending.remoteSnapshot.continueWatching = cw;
+        pending.remoteSnapshot.recentlyAdded = ra;
+        publish();
         queuePosterJobs(planHomeRailPosterJobs(cw, ra), true);
         if (coordinatorStartupStarted) {
             for (;;) {
@@ -401,10 +398,6 @@ bool HomeScreen::startFetch()
             // existing safe fallback: only the full population path runs.
             startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
         }
-        if (startupSyncResult.lastSuccessfulMs > 0) {
-            m_syncState.lastSuccessfulMs = startupSyncResult.lastSuccessfulMs;
-            m_syncState.lastReconcileMs = startupSyncResult.lastReconcileMs;
-        }
         // Accumulate fetched items per collection type so the
         // post-finalize rebuild can populate Home tab items.
         std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
@@ -418,26 +411,23 @@ bool HomeScreen::startFetch()
         bool deltaCatchUpSucceeded = false;
         if (startupSyncResult.mode == library::StartupSyncMode::SkipFresh) {
             // Catalog is within the FRESH_MS window — skip the walk entirely.
-            if (cwOk) m_remoteSnapshot.continueWatching = cw;
-            if (raOk) m_remoteSnapshot.recentlyAdded = ra;
+            if (cwOk) pending.remoteSnapshot.continueWatching = cw;
+            if (raOk) pending.remoteSnapshot.recentlyAdded = ra;
         } else if (startupSyncResult.mode
                    == library::StartupSyncMode::DeltaCatchUp) {
             // The coordinator already performed the bounded delta catch-up.
             uiDiagnostics().log("[HomeScreen] startup stage=delta_catchup_started");
             if (startupSyncResult.success && !startupSyncResult.cancelled
                 && !startupSyncResult.superseded) {
-                if (startupSyncResult.checkpointMs > 0)
-                    m_syncState.lastSuccessfulMs =
-                        startupSyncResult.checkpointMs;
-                if (cwOk) m_remoteSnapshot.continueWatching = cw;
-                if (raOk) m_remoteSnapshot.recentlyAdded = ra;
+                if (cwOk) pending.remoteSnapshot.continueWatching = cw;
+                if (raOk) pending.remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
             } else if (startupSyncResult.cancelled
                        || startupSyncResult.superseded) {
                 // Cancellation or superseded — treat as SkipFresh: rails +
                 // warm catalog already available, no full walk, no error.
-                if (cwOk) m_remoteSnapshot.continueWatching = cw;
-                if (raOk) m_remoteSnapshot.recentlyAdded = ra;
+                if (cwOk) pending.remoteSnapshot.continueWatching = cw;
+                if (raOk) pending.remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
             } else {
                 // Catch-up failed — fall through to full reconcile.
@@ -450,14 +440,14 @@ bool HomeScreen::startFetch()
                 && !deltaCatchUpSucceeded)) {
         if (!m_libraryCoordinator) {
             catalogRefreshFailed = true;
-            m_fetchError = "Library coordinator unavailable";
+            pending.error = "Library coordinator unavailable";
         }
         if (!catalogRefreshFailed) {
             uiDiagnostics().log("[HomeScreen] startup stage=views_started");
             std::uint64_t populationRequest = 0;
             if (!m_libraryCoordinator->requestFullPopulation(populationRequest)) {
                 catalogRefreshFailed = true;
-                m_fetchError = "Library sync already in flight";
+                pending.error = "Library sync already in flight";
             } else {
                 bool populationComplete = false;
                 while (!populationComplete) {
@@ -518,9 +508,9 @@ bool HomeScreen::startFetch()
                             std::vector<TabData> firstPageTabs;
                             {
                                 std::lock_guard<std::mutex> lock(m_fetchMutex);
-                                m_fetchResult = JellyfinApi::buildTabs(
+                                pending.tabs = JellyfinApi::buildTabs(
                                     views, cw, ra, moviesByView, showsByView);
-                                firstPageTabs = m_fetchResult;
+                                firstPageTabs = pending.tabs;
                             }
                             LibrarySnapshot firstPageSnapshot;
                             firstPageSnapshot.continueWatching = cw;
@@ -529,16 +519,20 @@ bool HomeScreen::startFetch()
                             // authoritative catalog publication.  The
                             // coordinator retains the prior committed Home
                             // state until the full generation finalizes.
-                            publishCoordinatorHomeState(
-                                firstPageTabs, firstPageSnapshot, false, false,
-                                false, true, cwOk, raOk);
+                            pending.tabs = std::move(firstPageTabs);
+                            pending.remoteSnapshot = firstPageSnapshot;
+                            pending.contentValid = true;
+                            pending.continueValid = cwOk;
+                            pending.recentlyAddedValid = raOk;
+                            pending.continueWatching = cw;
+                            pending.recentlyAdded = ra;
+                            publish();
                             std::printf(
                                 "[HomeScreen] first bounded page ready views=%zu\n",
                                 views.size());
                             initialPagePublished = true;
                             uiDiagnostics().log(
                                 "[HomeScreen] startup stage=first_bounded_page_ready");
-                            m_fetchReady.store(true);
                         }
                     }
                     if (!update.terminal)
@@ -547,13 +541,9 @@ bool HomeScreen::startFetch()
                     views = std::move(update.views);
                     moviesByView = std::move(update.moviesByView);
                     showsByView = std::move(update.showsByView);
-                    if (update.lastSuccessfulMs > 0) {
-                        m_syncState.lastSuccessfulMs = update.lastSuccessfulMs;
-                        m_syncState.lastReconcileMs = update.lastReconcileMs;
-                    }
                     if (!update.success && !update.committed) {
                         catalogRefreshFailed = true;
-                        m_fetchError = update.message.empty()
+                        pending.error = update.message.empty()
                             ? (update.cancelled || update.superseded
                                 ? "Library refresh cancelled"
                                 : "Library refresh failed")
@@ -561,11 +551,9 @@ bool HomeScreen::startFetch()
                     }
                     if (update.committed)
                         m_fetchCatalogCommitted.store(true);
-                    if (update.committed) {
-                        std::lock_guard<std::mutex> lock(m_fetchMutex);
-                        m_fetchResult = JellyfinApi::buildTabs(
+                    if (update.committed)
+                        pending.tabs = JellyfinApi::buildTabs(
                             views, cw, ra, moviesByView, showsByView);
-                    }
                     if (update.success)
                         uiDiagnostics().log(
                             "[HomeScreen] startup stage=views_finished");
@@ -594,14 +582,14 @@ bool HomeScreen::startFetch()
         // low-priority artwork jobs that were held back during the
         // population walk.
         m_posterWake.notify_all();
-        if (catalogRefreshFailed && m_fetchError.empty())
-            m_fetchError = "Library refresh failed";
+        if (catalogRefreshFailed && pending.error.empty())
+            pending.error = "Library refresh failed";
         const bool artworkPlanningComplete =
             !catalogRefreshFailed && !cancellation->load();
         m_artworkPlanningComplete.store(artworkPlanningComplete);
         m_metadataActive.store(false);
-        if (cwOk) m_remoteSnapshot.continueWatching=cw;
-        if (raOk) m_remoteSnapshot.recentlyAdded=ra;
+        if (cwOk) pending.remoteSnapshot.continueWatching=cw;
+        if (raOk) pending.remoteSnapshot.recentlyAdded=ra;
         if (optionalRailFailed)
             std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
         completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
@@ -644,9 +632,14 @@ bool HomeScreen::startFetch()
         } catch (...) {
             std::printf("[HomeScreen] janitor skipped: exception\n");
         }
-        m_fetchComplete.store(true);
+        pending.cacheSaved = cacheSaved;
+        pending.complete = true;
+        pending.catalogCommitted = m_fetchCatalogCommitted.load();
+        pending.contentValid = !catalogRefreshFailed
+            || pending.catalogCommitted;
+        pending.libraryOffline = false;
+        publish();
         m_fetchDone.store(true);
-        m_fetchReady.store(true);
         m_fetchDone=true;
     });
     return true;

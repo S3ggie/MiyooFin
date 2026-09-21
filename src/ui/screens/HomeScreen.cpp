@@ -245,7 +245,6 @@ void HomeScreen::update(Uint32 dt)
         if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
         else m_logoutTimer -= dt;
     }
-    consumeCoordinatorHomeState();
     consumeHierarchyResults();
     if (m_fetchReady.load()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");

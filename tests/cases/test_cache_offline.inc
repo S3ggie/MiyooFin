@@ -99,8 +99,8 @@ static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     const auto manualOffline=source.find("if (session.manualOfflineMode)");
     CHECK(manualOffline!=std::string::npos);
-    CHECK(source.find("m_haveCachedSnapshot = true;",
-                      manualOffline)!=std::string::npos);
+    CHECK(source.find("pending.haveCachedSnapshot = true;",
+                       manualOffline)!=std::string::npos);
     CHECK(navigation.find("manual_offline_mode=")!=std::string::npos);
 }
 

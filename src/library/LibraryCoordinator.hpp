@@ -3,7 +3,6 @@
 
 #include "LibraryQuery.hpp"
 #include "LibrarySync.hpp"
-#include "../cache/LibraryCache.hpp"
 #include "../net/JellyfinApi.hpp"
 #include <atomic>
 #include <cstdint>
@@ -146,47 +145,6 @@ struct HierarchyResult {
     std::int64_t lastReconcileMs = 0;
 };
 
-/// Coordinator publication for Home content and synchronization metadata.
-/// Navigation, selection, scroll, and artwork state intentionally do not live
-/// here: those remain owned by the SDL/HomeScreen thread.
-struct HomeSyncStatus {
-    bool inFlight = false;
-    bool startupInFlight = false;
-    bool fullSyncInFlight = false;
-    bool safetyReconcileInFlight = false;
-    bool cancelRequested = false;
-    bool success = false;
-    std::uint64_t generation = 0;
-    std::uint64_t committedGeneration = 0;
-    std::int64_t lastSuccessfulMs = 0;
-    std::int64_t lastReconcileMs = 0;
-    bool safetyReconcileDue = false;
-    bool maintenanceDue = false;
-    bool manualOffline = false;
-};
-
-struct HomeState {
-    std::uint64_t scopeEpoch = 0;
-    std::uint64_t catalogGeneration = 0;
-    // Assigned by LibraryCoordinator when a publication is accepted.
-    std::uint64_t revision = 0;
-
-    HomeSyncStatus sync;
-    bool offline = false;
-    bool stale = false;
-    bool contentValid = false;
-    bool cachedSnapshotValid = false;
-    std::vector<TabData> tabs;
-    LibrarySnapshot cachedSnapshot;
-
-    bool continueValid = false;
-    bool recentlyAddedValid = false;
-    std::vector<MediaItem> continueWatching;
-    std::vector<MediaItem> recentlyAdded;
-    CatalogDbErrorCategory errorCategory = CatalogDbErrorCategory::None;
-    std::string error;
-};
-
 struct LiveChangeIdentity {
     std::uint64_t worker = 0;
     std::uint64_t generation = 0;
@@ -283,13 +241,6 @@ public:
     /// and release the request slot for the next Home lifetime.  The worker
     /// itself remains serialized while a cancelled network future unwinds.
     void cancelHierarchy() noexcept;
-
-    /// Publish and consume immutable Home content/status snapshots.  A
-    /// publication from another scope or an older catalog generation is
-    /// rejected.  Missing content/rails retain the last valid cached value so
-    /// transient failures cannot blank an already useful Home.
-    bool publishHomeState(HomeState state);
-    bool takeHomeState(std::shared_ptr<const HomeState> &state);
 
     /// Queue a live change for the next serialized consumer. Requests made
     /// during startup or full sync are retained rather than applied. The
@@ -409,10 +360,6 @@ private:
     bool m_hierarchyForceReconcile = false;
     std::int64_t m_hierarchyLastSuccessfulMs = 0;
     std::int64_t m_hierarchyLastReconcileMs = 0;
-    std::shared_ptr<const HomeState> m_homeState;
-    std::shared_ptr<const HomeState> m_homeStateRetained;
-    std::uint64_t m_homeStateRevision = 0;
-    std::uint64_t m_homeStateCatalogGeneration = 0;
 };
 
 } // namespace library

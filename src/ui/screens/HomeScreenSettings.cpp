@@ -41,13 +41,16 @@ HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Sessi
 void HomeScreen::drawSettingsTab(SDL_Surface *fb)
 {
     BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
+    const auto syncStatus = m_libraryCoordinator
+        ? m_libraryCoordinator->status()
+        : library::LibraryCoordinator::Status{};
     struct SettingRow { std::string section; std::string value; };
     std::vector<SettingRow> rows={{"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"}};
     for (const SettingsAddressRow &row:settingsAddressRows(m_session)) rows.push_back({row.section,row.value});
     rows.insert(rows.end(), {
         {"Last API Route", lastApiRouteValue()},
         {"Account", m_userName.empty() ? "Unknown" : m_userName},
-        {"LIBRARY", "Last Sync: " + compactSyncAge(m_syncState.lastSuccessfulMs)},
+        {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
         {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " + formatBytes(m_downloadSnapshot.freeBytes)},
         {"DIAGNOSTICS", "UI Stall Logger Enabled"}
     });

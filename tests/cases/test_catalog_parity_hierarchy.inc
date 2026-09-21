@@ -632,10 +632,12 @@ static void testHomePublishesAfterFirstBoundedPage()
     std::printf("[test] Home publishes after first bounded page\n");
     const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string lifecycle = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const std::string apply = readTestBytes(
+        "src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(source.find("m_fetchReady") != std::string::npos);
     CHECK(source.find("m_fetchComplete") != std::string::npos);
     CHECK(source.find("first bounded page") != std::string::npos);
-    CHECK(source.find("m_fetchReady.store(true)") != std::string::npos);
+    CHECK(apply.find("m_fetchReady.store(true)") != std::string::npos);
     CHECK(lifecycle.find("if (m_fetchReady.load())") != std::string::npos);
     CHECK(source.find("m_fetchDone.store(true);\n                    }")
           == std::string::npos);
@@ -643,9 +645,9 @@ static void testHomePublishesAfterFirstBoundedPage()
           != std::string::npos);
     CHECK(source.find("if (movies.success || shows.success)")
           == std::string::npos);
-    CHECK(source.find("m_fetchError = \"Library coordinator unavailable\"")
+    CHECK(source.find("pending.error = \"Library coordinator unavailable\"")
           != std::string::npos);
-    CHECK(source.find("m_fetchError = update.message.empty()")
+    CHECK(source.find("pending.error = update.message.empty()")
           != std::string::npos);
     CHECK(source.find("if (!update.views.empty())") != std::string::npos);
     std::printf("[test] Home publishes after first bounded page OK\n");
@@ -664,12 +666,13 @@ static void testHomeDiscardsColdProvisionalFailure()
     CHECK(!finish.empty());
     // The first page is explicitly provisional, while both a failed terminal
     // update and a cancelled/superseded update provide the failure message.
-    CHECK(sourceContains(sync,
-                         "firstPageTabs, firstPageSnapshot, false, false"));
+    CHECK(sourceContains(sync, "pending.tabs = std::move(firstPageTabs)"));
+    CHECK(sourceContains(sync, "pending.remoteSnapshot = firstPageSnapshot"));
+    CHECK(sourceContains(sync, "publish()"));
     CHECK(sourceContains(sync, "update.cancelled || update.superseded"));
     // Cold-start failure handling must not be gated on prior valid content.
     CHECK(sourceContains(finish,
-                         "if (m_fetchComplete.load() && !m_fetchCatalogCommitted.load()"));
+                         "if (presentation.complete && !m_fetchCatalogCommitted.load()"));
     CHECK(sourceContains(finish, "if (m_fetchPreviousContentValid)"));
     CHECK(sourceContains(finish, "m_tabs = emptyHomeTabs();"));
     CHECK(sourceContains(finish, "m_fetchResult.clear();"));
@@ -684,6 +687,64 @@ static void testHomeDiscardsColdProvisionalFailure()
     CHECK(sourcePos(finish, "m_fetchPostFinalizeApplied = true;")
           < sourcePos(finish, "if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied)"));
     std::printf("[test] Home discards cold provisional failure/cancel OK\n");
+}
+
+static void testHomeDoesNotPublishRailOnlyPresentation()
+{
+    std::printf("[test] Home keeps rail-only cold start loading\n");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes(
+        "src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string finish = sourceFunction(
+        apply, "void HomeScreen::finishFetch(");
+    CHECK(!sync.empty() && !finish.empty());
+
+    const auto firstPage = sync.find("pending.remoteSnapshot = firstPageSnapshot");
+    CHECK(firstPage != std::string::npos);
+    const std::string firstPageSource = sync.substr(firstPage);
+    CHECK(sourcePos(firstPageSource, "pending.contentValid = true;")
+          < sourcePos(firstPageSource, "pending.continueValid = cwOk"));
+    CHECK(sourceContains(finish, "else if (presentation.contentValid)"));
+    CHECK(sourcePos(finish, "else if (presentation.contentValid)")
+          < sourcePos(finish, "if (m_homeRailsReady.load() && !m_homeRailsApplied)"));
+    std::printf("[test] Home keeps rail-only cold start loading OK\n");
+}
+
+static void testHomePendingCompletionPublicationOrdering()
+{
+    std::printf("[test] Home pending completion publication ordering\n");
+    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string apply = readTestBytes(
+        "src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string publish = sourceFunction(
+        apply, "void HomeScreen::publishPendingPresentation(");
+    const std::string finish = sourceFunction(
+        apply, "void HomeScreen::finishFetch(");
+    CHECK(!sync.empty() && !publish.empty() && !finish.empty());
+
+    CHECK(sourceContains(publish, "const bool complete = presentation.complete;"));
+    CHECK(sourcePos(publish, "m_pendingPresentation =")
+          < sourcePos(publish, "m_fetchComplete.store(complete);"));
+    CHECK(sourcePos(publish, "m_fetchComplete.store(complete);")
+          < sourcePos(publish, "m_fetchReady.store(true);"));
+    CHECK(sourceContains(finish,
+                         "if (presentation.complete && !m_fetchPostFinalizeApplied)"));
+
+    const auto firstComplete = sourcePos(sync, "pending.complete = true;");
+    const auto firstPublish = sourcePos(sync, "publish();");
+    const auto lastComplete = sourceRPos(sync, "pending.complete = true;");
+    const auto lastPublish = sourceRPos(sync, "publish();");
+    CHECK(firstComplete != std::string::npos);
+    CHECK(firstPublish != std::string::npos);
+    CHECK(lastComplete != std::string::npos);
+    CHECK(lastPublish != std::string::npos);
+    CHECK(firstComplete < firstPublish);
+    CHECK(lastComplete < lastPublish);
+    CHECK(sourceRPos(sync, "m_fetchComplete.store(true)")
+          == std::string::npos);
+    CHECK(sourceRPos(sync, "m_fetchReady.store(true)")
+          == std::string::npos);
+    std::printf("[test] Home pending completion publication ordering OK\n");
 }
 
 static void testHomePreservesAnimeMembershipDuringBoundedReads()

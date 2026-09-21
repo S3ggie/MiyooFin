@@ -91,10 +91,7 @@ void HomeScreen::consumeHierarchyResults()
             continue;
         }
 
-        if (result.checkpointCommitted) {
-            m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
-            m_syncState.lastReconcileMs = result.lastReconcileMs;
-        } else if (!result.success && !result.cancelled
+        if (!result.checkpointCommitted && !result.success && !result.cancelled
                    && !result.superseded) {
             m_hierarchyOffline.store(true);
         }

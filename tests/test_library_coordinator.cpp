@@ -1331,9 +1331,9 @@ void testFullPopulationFailureAbortsWithoutCheckpoint()
     std::printf("[test] LibraryCoordinator full population failure OK\n");
 }
 
-void testFullPopulationRejectsStaleRequestAndHomeState()
+void testFullPopulationRejectsStaleRequest()
 {
-    std::printf("[test] LibraryCoordinator stale publication rejection\n");
+    std::printf("[test] LibraryCoordinator stale request rejection\n");
     auto coordinator = makeCoordinator();
     coordinator.start();
 
@@ -1341,72 +1341,8 @@ void testFullPopulationRejectsStaleRequestAndHomeState()
     library::FullPopulationUpdate update;
     CHECK(!coordinator.takeFullPopulationUpdate(1, update));
 
-    library::HomeState current;
-    current.scopeEpoch = 0;
-    current.catalogGeneration = 4;
-    current.revision = 8;
-    current.contentValid = true;
-    CHECK(coordinator.publishHomeState(current));
-    current.revision = 7;
-    CHECK(!coordinator.publishHomeState(current));
-    current.revision = 9;
-    current.catalogGeneration = 3;
-    CHECK(!coordinator.publishHomeState(current));
-    std::shared_ptr<const library::HomeState> published;
-    CHECK(coordinator.takeHomeState(published));
-    CHECK(published && published->revision == 8
-          && published->catalogGeneration == 4);
     coordinator.stop();
-    std::printf("[test] LibraryCoordinator stale publication rejection OK\n");
-}
-
-void testProvisionalHomePublicationRetainsCommittedContent()
-{
-    std::printf("[test] provisional Home publication retention\n");
-    auto coordinator = makeCoordinator();
-    coordinator.start();
-
-    library::HomeState committed;
-    committed.scopeEpoch = 0;
-    committed.catalogGeneration = 7;
-    committed.contentValid = true;
-    committed.tabs = {{"Movies", {{"Movies", {{"committed-movie"}}}}}};
-    CHECK(coordinator.publishHomeState(committed));
-    std::shared_ptr<const library::HomeState> state;
-    CHECK(coordinator.takeHomeState(state));
-    CHECK(state && state->tabs.front().rows.front().items.front().id
-          == "committed-movie");
-
-    // This models the first-page publication: it is consumable as a
-    // progress update without replacing the committed Home catalog.
-    library::HomeState provisional;
-    provisional.scopeEpoch = 0;
-    provisional.catalogGeneration = 7;
-    provisional.contentValid = false;
-    provisional.tabs = {{"Movies", {{"Movies", {{"partial-movie"}}}}}};
-    CHECK(coordinator.publishHomeState(provisional));
-    CHECK(coordinator.takeHomeState(state));
-    CHECK(state && state->tabs.front().rows.front().items.front().id
-          == "committed-movie");
-
-    // Later-page failure and cancellation both use the non-authoritative
-    // terminal path; neither may leave the partial first page authoritative.
-    library::HomeState failed = provisional;
-    failed.error = "later page failed";
-    CHECK(coordinator.publishHomeState(failed));
-    CHECK(coordinator.takeHomeState(state));
-    CHECK(state && state->error == "later page failed"
-          && state->tabs.front().rows.front().items.front().id
-                 == "committed-movie");
-    library::HomeState cancelled = provisional;
-    cancelled.error = "population cancelled";
-    CHECK(coordinator.publishHomeState(cancelled));
-    CHECK(coordinator.takeHomeState(state));
-    CHECK(state && state->error == "population cancelled"
-          && state->tabs.front().rows.front().items.front().id
-                 == "committed-movie");
-    coordinator.stop();
-    std::printf("[test] provisional Home publication retention OK\n");
+    std::printf("[test] LibraryCoordinator stale request rejection OK\n");
 }
 
 void testCoordinatorSerializesStartupFullSafetyAndLive()
@@ -1492,8 +1428,7 @@ int main()
     testFullPopulationAfterLiveChangeAdvancesGeneration();
     testFullPopulationCancellationAbortsStagedGeneration();
     testFullPopulationFailureAbortsWithoutCheckpoint();
-    testFullPopulationRejectsStaleRequestAndHomeState();
-    testProvisionalHomePublicationRetainsCommittedContent();
+    testFullPopulationRejectsStaleRequest();
     testCoordinatorSerializesStartupFullSafetyAndLive();
     return miyoofin_test::finish("library_coordinator");
 }

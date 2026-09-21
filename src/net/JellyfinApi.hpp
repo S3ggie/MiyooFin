@@ -7,7 +7,6 @@
 #include <map>
 #include <cstdint>
 #include "../data/MediaItem.hpp"
-#include "../ui/PresentationModels.hpp"
 
 namespace miyoofin { class HttpClient; }
 
@@ -297,14 +296,6 @@ public:
     static std::vector<std::string> jsonExtractArray(const std::string &json,
                                                      const std::string &key);
     static MediaItem jsonToMediaItem(const std::string &obj);
-
-    /// Build TabData from fetched library data.
-    static std::vector<TabData> buildTabs(
-        const std::vector<LibraryView> &views,
-        const std::vector<MediaItem> &continueWatching,
-        const std::vector<MediaItem> &recentlyAdded,
-        const std::vector<std::pair<std::string, std::vector<MediaItem>>> &moviesByView,
-        const std::vector<std::pair<std::string, std::vector<MediaItem>>> &showsByView);
 
     // ---- Auth header helper (public for HomeScreen artwork loading) --------
 

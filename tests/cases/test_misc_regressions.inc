@@ -2,6 +2,24 @@
 #include "../../src/update/AppDir.hpp"
 #include "../../src/catalog/CatalogDbInternal.hpp"
 #include "../../src/ui/HomeTabs.hpp"
+#include <filesystem>
+
+static void testNetworkLayerDoesNotDependOnPresentationModels()
+{
+    std::printf("[test] network layer has no presentation-model references\n");
+    const std::filesystem::path root("src/net");
+    CHECK(std::filesystem::exists(root));
+    if (std::filesystem::exists(root)) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(root)) {
+            if (!entry.is_regular_file()) continue;
+            const std::string source = readTestBytes(entry.path().string());
+            CHECK(sourceLacks(source, "PresentationModels"));
+            CHECK(sourceLacks(source, "TabData"));
+            CHECK(sourceLacks(source, "MediaRow"));
+        }
+    }
+    std::printf("[test] network layer has no presentation-model references OK\n");
+}
 
 static void testSourceMatcherTolerance()
 {

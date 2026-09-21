@@ -5,6 +5,42 @@
 
 namespace miyoofin {
 
+std::vector<TabData> buildTabs(
+    const std::vector<MediaItem> &continueWatching,
+    const std::vector<MediaItem> &recentlyAdded,
+    const std::vector<std::pair<std::string, std::vector<MediaItem>>> &moviesByView,
+    const std::vector<std::pair<std::string, std::vector<MediaItem>>> &showsByView)
+{
+    std::vector<TabData> tabs;
+
+    TabData home;
+    home.name = "Home";
+    if (!continueWatching.empty())
+        home.rows.push_back({"Continue Watching", continueWatching});
+    if (!recentlyAdded.empty())
+        home.rows.push_back({"Recently Added", recentlyAdded});
+    if (home.rows.empty()) home.rows.push_back({"", {}});
+    tabs.push_back(std::move(home));
+
+    TabData movies;
+    movies.name = "Movies";
+    for (const auto &pr : moviesByView)
+        if (!pr.second.empty()) movies.rows.push_back({pr.first, pr.second});
+    if (movies.rows.empty()) movies.rows.push_back({"No movies found", {}});
+    tabs.push_back(std::move(movies));
+
+    TabData shows;
+    shows.name = "Shows";
+    for (const auto &pr : showsByView)
+        if (!pr.second.empty()) shows.rows.push_back({pr.first, pr.second});
+    if (shows.rows.empty()) shows.rows.push_back({"No shows found", {}});
+    tabs.push_back(std::move(shows));
+
+    tabs.push_back({"Downloads", {{"", {}}}});
+    tabs.push_back({"Settings", {{"", {}}}});
+    return tabs;
+}
+
 void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items)
 {
     auto homeIt = std::find_if(tabs.begin(), tabs.end(), [](const TabData &tab) { return tab.name == "Home"; });

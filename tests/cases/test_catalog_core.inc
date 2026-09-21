@@ -423,6 +423,7 @@ static void testCatalogDbMediaItemCodec()
     CHECK(result.codecInvalidKind);
     CHECK(result.codecMissingId);
     CHECK(result.codecNullableRelationships);
+    CHECK(result.codecLegacyArtworkIgnored);
 }
 
 static void testCatalogDbMediaItemCollections()

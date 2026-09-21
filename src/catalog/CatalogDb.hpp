@@ -164,6 +164,7 @@ struct CatalogDbTestResult {
     bool codecInvalidKind = false;
     bool codecMissingId = false;
     bool codecNullableRelationships = false;
+    bool codecLegacyArtworkIgnored = false;
     bool collectionsZero = false;
     bool collectionsMultiple = false;
     bool collectionsUpdateRemoval = false;

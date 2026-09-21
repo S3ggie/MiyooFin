@@ -2,7 +2,7 @@
 
 static void testLegacyCacheTintBytes()
 {
-    std::printf("[test] legacy cache preserves placeholder artwork bytes\n");
+    std::printf("[test] legacy cache consumes reserved artwork bytes\n");
     std::vector<unsigned char> bytes;
     auto u32 = [&bytes](std::uint32_t value) {
         for (int shift = 0; shift < 32; shift += 8)
@@ -39,15 +39,15 @@ static void testLegacyCacheTintBytes()
         CHECK(LibraryCache::load(path, snapshot));
         CHECK(snapshot.movies.size() == 1 && snapshot.movies[0].items.size() == 1);
         if (snapshot.movies.size() == 1 && !snapshot.movies[0].items.empty()) {
-            const auto &art = snapshot.movies[0].items[0].placeholderArtwork;
-            CHECK(art.red == 0 && art.green == 1 && art.blue == 255);
+            CHECK(snapshot.movies[0].items[0].id == "legacy-id");
+            CHECK(snapshot.movies[0].items[0].title == "Legacy");
         }
         std::remove(path.c_str());
     }
 }
 
-static MediaItem cacheItem(const std::string &id) { MediaItem i; i.id=id;i.title="\xCE\xA9 \"title\"";i.overview="line one\nline two";i.year=2024;i.rating=8.5f;i.genre="Drama";i.type="movie";i.etag="etag-"+id;i.genres={"Drama","Sci-Fi"};i.played=true;i.progress=.5f;i.playbackPositionTicks=987654;i.imageTags["Primary"]="tag-"+id;i.indexNumber=2;i.parentIndexNumber=3;i.runTimeTicks=10000000;i.seriesName="series";i.seriesId="sid";i.seasonId="seid";i.placeholderArtwork.red=1;i.placeholderArtwork.green=2;i.placeholderArtwork.blue=3;return i; }
-static bool sameItem(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.etag==b.etag&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId&&a.placeholderArtwork.red==b.placeholderArtwork.red&&a.placeholderArtwork.green==b.placeholderArtwork.green&&a.placeholderArtwork.blue==b.placeholderArtwork.blue;}
+static MediaItem cacheItem(const std::string &id) { MediaItem i; i.id=id;i.title="\xCE\xA9 \"title\"";i.overview="line one\nline two";i.year=2024;i.rating=8.5f;i.genre="Drama";i.type="movie";i.etag="etag-"+id;i.genres={"Drama","Sci-Fi"};i.played=true;i.progress=.5f;i.playbackPositionTicks=987654;i.imageTags["Primary"]="tag-"+id;i.indexNumber=2;i.parentIndexNumber=3;i.runTimeTicks=10000000;i.seriesName="series";i.seriesId="sid";i.seasonId="seid";return i; }
+static bool sameItem(const MediaItem&a,const MediaItem&b){return a.id==b.id&&a.title==b.title&&a.overview==b.overview&&a.year==b.year&&a.rating==b.rating&&a.genre==b.genre&&a.type==b.type&&a.etag==b.etag&&a.genres==b.genres&&a.played==b.played&&a.progress==b.progress&&a.playbackPositionTicks==b.playbackPositionTicks&&a.imageTags==b.imageTags&&a.indexNumber==b.indexNumber&&a.parentIndexNumber==b.parentIndexNumber&&a.runTimeTicks==b.runTimeTicks&&a.seriesName==b.seriesName&&a.seriesId==b.seriesId&&a.seasonId==b.seasonId;}
 #if 0
 static void testLibraryCacheNew(){std::string d="/tmp/miyoofin-cache-test";mkdir(d.c_str(),0755);std::string p=d+"/x.bin";LibrarySnapshot s;CachedLibraryView v;v.id="v";v.name="Movies";v.collectionType="movies";for(int i=0;i<500;i++)v.items.push_back(cacheItem(std::to_string(i)));s.movies.push_back(v);s.shows.push_back({"s","Shows","tvshows",{cacheItem("show")}});CHECK(LibraryCache::save(p,s));LibrarySnapshot got;CHECK(LibraryCache::load(p,got));CHECK(got.movies.size()==1&&got.movies[0].items.size()==500&&sameItem(got.movies[0].items[0],s.movies[0].items[0]));FILE*f=fopen(p.c_str(),"r+b");fputc('X',f);fclose(f);LibrarySnapshot keep=s;CHECK(!LibraryCache::load(p,keep));CHECK(keep.movies[0].items.size()==500);}
 static void testLibraryCacheV3SaveLoad(){std::printf("[test] LibraryCache v3 save/load and needsRefresh\n");std::string d="/tmp/miyoofin-cache-v3-test-"+std::to_string((long long)getpid());mkdir(d.c_str(),0755);std::string p=d+"/snap.bin";LibrarySnapshot s;CachedLibraryView v;v.id="v";v.name="Movies";v.collectionType="movies";v.items.push_back(cacheItem("m1"));s.movies.push_back(v);s.shows.push_back({"s","Shows","tvshows",{cacheItem("show1")}});s.continueWatching.push_back(cacheItem("cw1"));s.recentlyAdded.push_back(cacheItem("ra1"));CHECK(LibraryCache::save(p,s));LibrarySnapshot got;bool needsRefresh=true;CHECK(LibraryCache::load(p,got,nullptr,&needsRefresh));CHECK(!needsRefresh);CHECK(got.movies.size()==1&&got.movies[0].items.size()==1);CHECK(sameItem(got.movies[0].items[0],s.movies[0].items[0]));CHECK(got.shows.size()==1&&got.shows[0].items.size()==1);CHECK(sameItem(got.shows[0].items[0],s.shows[0].items[0]));CHECK(got.continueWatching.size()==1);CHECK(got.recentlyAdded.size()==1);CHECK(sameItem(got.continueWatching[0],s.continueWatching[0]));CHECK(sameItem(got.recentlyAdded[0],s.recentlyAdded[0]));std::printf("[test] LibraryCache v3 save/load and needsRefresh OK\n");}

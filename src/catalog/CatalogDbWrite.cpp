@@ -345,10 +345,10 @@ void CatalogDb::processHierarchyWrite(
             "INSERT INTO media_items("
             "id, kind, title, overview, production_year, community_rating,"
             "etag, played, progress, playback_position_ticks, index_number,"
-            "parent_index_number, runtime_ticks, series_name, series_id,"
-            "season_id, art_r, art_g, art_b) "
-            "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
-            "?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+             "parent_index_number, runtime_ticks, series_name, series_id,"
+             "season_id) "
+             "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+             "?13, ?14, ?15, ?16) "
             "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
             "title=excluded.title, overview=excluded.overview, "
             "production_year=excluded.production_year, "
@@ -359,8 +359,7 @@ void CatalogDb::processHierarchyWrite(
             "parent_index_number=excluded.parent_index_number, "
             "runtime_ticks=excluded.runtime_ticks, "
             "series_name=excluded.series_name, series_id=excluded.series_id, "
-            "season_id=excluded.season_id, art_r=excluded.art_r, "
-            "art_g=excluded.art_g, art_b=excluded.art_b",
+             "season_id=excluded.season_id",
             upsert)
         || !prepareCached(
                "hierarchy_delete_seasons",
@@ -597,7 +596,7 @@ bool CatalogDb::prepareMediaPageItemStatements(sqlite3_stmt **upsert,
                                               sqlite3_stmt **insertImageTag,
                                               CatalogDbMediaPageUpsertResult &result)
 {
-    const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id,art_r=excluded.art_r,art_g=excluded.art_g,art_b=excluded.art_b";
+    const char *sql="INSERT INTO media_items(id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,overview=excluded.overview,production_year=excluded.production_year,community_rating=excluded.community_rating,etag=excluded.etag,played=excluded.played,progress=excluded.progress,playback_position_ticks=excluded.playback_position_ticks,index_number=excluded.index_number,parent_index_number=excluded.parent_index_number,runtime_ticks=excluded.runtime_ticks,series_name=excluded.series_name,series_id=excluded.series_id,season_id=excluded.season_id";
     const bool prepared=sqlite3_prepare_v2(m_db,sql,-1,upsert,nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_genres WHERE item_id=?",-1,deleteGenres,
         nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"INSERT INTO item_genres(item_id,ordinal,genre) VALUES(?,?,?)",-1,insertGenre,
         nullptr)==SQLITE_OK && sqlite3_prepare_v2(m_db,"DELETE FROM item_image_tags WHERE item_id=?",-1,deleteImageTags,

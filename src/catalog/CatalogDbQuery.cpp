@@ -388,8 +388,7 @@ void CatalogDb::processHierarchyQuery(
             "SELECT id, kind, title, overview, production_year, "
             "community_rating, etag, played, progress, "
             "playback_position_ticks, index_number, parent_index_number, "
-            "runtime_ticks, series_name, series_id, season_id, art_r, "
-            "art_g, art_b FROM media_items WHERE id IN (";
+            "runtime_ticks, series_name, series_id, season_id FROM media_items WHERE id IN (";
         for (std::size_t i = 0; i < kMaxMetadataByIdRows; ++i) {
             if (i) querySql += ",";
             querySql += "?" + std::to_string(i + 1);
@@ -400,16 +399,14 @@ void CatalogDb::processHierarchyQuery(
             "SELECT id, kind, title, overview, production_year, "
             "community_rating, etag, played, progress, "
             "playback_position_ticks, index_number, parent_index_number, "
-            "runtime_ticks, series_name, series_id, season_id, art_r, "
-            "art_g, art_b FROM media_items WHERE series_id=?1 AND kind=3 "
+            "runtime_ticks, series_name, series_id, season_id FROM media_items WHERE series_id=?1 AND kind=3 "
             "ORDER BY index_number, title, id";
     } else {
         querySql =
             "SELECT id, kind, title, overview, production_year, "
             "community_rating, etag, played, progress, "
             "playback_position_ticks, index_number, parent_index_number, "
-            "runtime_ticks, series_name, series_id, season_id, art_r, "
-            "art_g, art_b FROM media_items WHERE season_id=?1 AND kind=4 "
+            "runtime_ticks, series_name, series_id, season_id FROM media_items WHERE season_id=?1 AND kind=4 "
             "ORDER BY index_number, title, id";
     }
     if (!prepareCached(queryName, querySql.c_str(), query)
@@ -575,8 +572,8 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand> &comman
     const std::string sql =
         "SELECT id,kind,title,overview,production_year,community_rating,"
         "etag,played,progress,playback_position_ticks,index_number,"
-        "parent_index_number,runtime_ticks,series_name,series_id,season_id,"
-        "art_r,art_g,art_b FROM media_items INDEXED BY " + indexName
+         "parent_index_number,runtime_ticks,series_name,series_id,season_id "
+         "FROM media_items INDEXED BY " + indexName
         + " WHERE kind=?1 AND "
         "EXISTS (SELECT 1 FROM library_membership "
         "JOIN library_views ON library_views.id=library_membership.view_id "
@@ -690,7 +687,7 @@ void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &co
             if(command->metadata.generation!=m_generation || (command->metadata.scopeEpoch && (command->metadata.scopeEpoch!=m_requestedEpoch||!m_scopeConfigured||!m_scopeReady))){
                 result.superseded=true;result.error=CatalogDbErrorCategory::Superseded;command->result.set_value(std::move(result));return;} }
     sqlite3_stmt *views=nullptr,*items=nullptr,*home=nullptr,*sg=nullptr,*st=nullptr;
-    const char *cols="id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id,art_r,art_g,art_b";
+    const char *cols="id,kind,title,overview,production_year,community_rating,etag,played,progress,playback_position_ticks,index_number,parent_index_number,runtime_ticks,series_name,series_id,season_id";
     if(sqlite3_prepare_v2(m_db,"SELECT id,name,collection_type FROM library_views ORDER BY ordinal,id",-1,&views,nullptr)!=SQLITE_OK || sqlite3_prepare_v2(m_db,
         (std::string("SELECT ")+cols
             +" FROM media_items JOIN library_membership ON media_items.id=library_membership.item_id WHERE view_id=? ORDER BY library_membership.ordinal,library_membership.item_id").c_str(),
@@ -719,7 +716,7 @@ void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand> &co
     }
     if (!result.cancelled) while(sqlite3_step(home)==SQLITE_ROW){
         if (cancelled()) { result.cancelled=true; break; }
-        const char *kind=(const char*)sqlite3_column_text(home,19);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;
+        const char *kind=(const char*)sqlite3_column_text(home,16);MediaItem item;MediaItemSqlError e=MediaItemSqlError::None;
             if(!readMediaItemScalars(home,item,e)||!readMediaItemCollections(collections,item,e)){result.error=CatalogDbErrorCategory::SqliteError;result.message=sqlite3_errmsg(m_db);
                 sqlite3_finalize(views);sqlite3_finalize(items);sqlite3_finalize(home);sqlite3_finalize(sg);sqlite3_finalize(st);command->result.set_value(std::move(result));return;
                 }if(kind&&std::string(kind)=="continue_watching")result.snapshot.continueWatching.push_back(std::move(item));

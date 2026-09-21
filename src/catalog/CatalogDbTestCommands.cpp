@@ -392,21 +392,26 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         sqlite3_stmt *select = nullptr;
         if (!prepareNamed(
                 "media_item_scalar_insert",
-                "INSERT OR REPLACE INTO media_items("
+                 "INSERT INTO media_items("
                 "id, kind, title, overview, production_year, community_rating,"
                 "etag, played, progress, playback_position_ticks, index_number,"
                 "parent_index_number, runtime_ticks, series_name, series_id,"
-                "season_id, art_r, art_g, art_b) "
-                "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
-                "?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                 "season_id) "
+                 "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+                 "?13, ?14, ?15, ?16) ON CONFLICT(id) DO UPDATE SET "
+                 "kind=excluded.kind, title=excluded.title, overview=excluded.overview, "
+                 "production_year=excluded.production_year, community_rating=excluded.community_rating, "
+                 "etag=excluded.etag, played=excluded.played, progress=excluded.progress, "
+                 "playback_position_ticks=excluded.playback_position_ticks, index_number=excluded.index_number, "
+                 "parent_index_number=excluded.parent_index_number, runtime_ticks=excluded.runtime_ticks, "
+                 "series_name=excluded.series_name, series_id=excluded.series_id, season_id=excluded.season_id",
                 insert)
             || !prepareNamed(
                 "media_item_scalar_select",
                 "SELECT id, kind, title, overview, production_year, "
                 "community_rating, etag, played, progress, "
                 "playback_position_ticks, index_number, parent_index_number, "
-                "runtime_ticks, series_name, series_id, season_id, art_r, "
-                "art_g, art_b FROM media_items WHERE id=?1",
+                 "runtime_ticks, series_name, series_id, season_id FROM media_items WHERE id=?1",
                 select)) {
             break;
         }
@@ -479,9 +484,6 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         series.parentIndexNumber = 8;
         series.runTimeTicks = 987654321;
         series.seriesName = "Series name";
-        series.placeholderArtwork.red = 10;
-        series.placeholderArtwork.green = 20;
-        series.placeholderArtwork.blue = 30;
 
         MediaItem season = series;
         season.id = "__task08_season__";
@@ -524,10 +526,33 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         boundaries.indexNumber = std::numeric_limits<int>::min();
         boundaries.parentIndexNumber = std::numeric_limits<int>::max();
         boundaries.runTimeTicks = std::numeric_limits<long long>::max();
-        boundaries.placeholderArtwork.red = 0;
-        boundaries.placeholderArtwork.green = 1;
-        boundaries.placeholderArtwork.blue = 255;
         result.codecBoundaries = roundTrip(boundaries, false);
+
+        std::int64_t artR = 0, artG = 0, artB = 0;
+        const bool freshDefaults = scalarInt(
+            m_db, "SELECT art_r FROM media_items WHERE id='__task08_defaults__';",
+            artR, result.message) && artR == 128
+            && scalarInt(m_db,
+                         "SELECT art_g FROM media_items WHERE id='__task08_defaults__';",
+                         artG, result.message) && artG == 128
+            && scalarInt(m_db,
+                         "SELECT art_b FROM media_items WHERE id='__task08_defaults__';",
+                         artB, result.message) && artB == 128
+            && exec(m_db,
+                    "UPDATE media_items SET art_r=7, art_g=19, art_b=231 "
+                    "WHERE id='__task08_defaults__';", result.message);
+        MediaItem legacy = defaults;
+        const bool legacyUpsert = freshDefaults && roundTrip(legacy, true)
+            && scalarInt(m_db,
+                         "SELECT art_r FROM media_items WHERE id='__task08_defaults__';",
+                         artR, result.message) && artR == 7
+            && scalarInt(m_db,
+                         "SELECT art_g FROM media_items WHERE id='__task08_defaults__';",
+                         artG, result.message) && artG == 19
+            && scalarInt(m_db,
+                         "SELECT art_b FROM media_items WHERE id='__task08_defaults__';",
+                         artB, result.message) && artB == 231;
+        result.codecLegacyArtworkIgnored = legacyUpsert;
 
         MediaItem invalidKind;
         invalidKind.id = "__task08_invalid_kind__";
@@ -552,7 +577,8 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         exec(m_db, "DELETE FROM media_items WHERE id LIKE '__task08_%';",
              result.message);
         result.success = result.codecPopulatedKinds && result.codecDefaults
-            && result.codecBoundaries && result.codecInvalidKind
+             && result.codecBoundaries && result.codecLegacyArtworkIgnored
+             && result.codecInvalidKind
             && result.codecMissingId && result.codecNullableRelationships;
         if (!result.success) {
             result.error = CatalogDbErrorCategory::ConfigurationFailed;
@@ -579,9 +605,9 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
                 "id, kind, title, overview, production_year, community_rating,"
                 "etag, played, progress, playback_position_ticks, index_number,"
                 "parent_index_number, runtime_ticks, series_name, series_id,"
-                "season_id, art_r, art_g, art_b) "
-                "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
-                "?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+                 "season_id) "
+                 "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
+                 "?13, ?14, ?15, ?16) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "kind=excluded.kind, title=excluded.title, "
                 "overview=excluded.overview, "
@@ -595,17 +621,14 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
                 "runtime_ticks=excluded.runtime_ticks, "
                 "series_name=excluded.series_name, "
                 "series_id=excluded.series_id, "
-                "season_id=excluded.season_id, "
-                "art_r=excluded.art_r, art_g=excluded.art_g, "
-                "art_b=excluded.art_b",
+                 "season_id=excluded.season_id",
                 insert)
             || !prepareNamed(
                 "media_item_scalar_select",
                 "SELECT id, kind, title, overview, production_year, "
                 "community_rating, etag, played, progress, "
                 "playback_position_ticks, index_number, parent_index_number, "
-                "runtime_ticks, series_name, series_id, season_id, art_r, "
-                "art_g, art_b FROM media_items WHERE id=?1",
+                 "runtime_ticks, series_name, series_id, season_id FROM media_items WHERE id=?1",
                 select)
             || !prepareNamed(
                 "media_item_genres_delete",

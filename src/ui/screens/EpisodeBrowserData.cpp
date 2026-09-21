@@ -5,6 +5,7 @@
 #include "../../net/RouteRequest.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <thread>
 
@@ -163,12 +164,46 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
         }
         std::vector<MediaItem>v;std::string e;bool ok=false;
         if (libraryCoordinator) {
-            const library::HierarchyRefreshResult refreshed =
-                libraryCoordinator->refreshEpisodes(seriesItem, seasonItem,
-                                                    cancellation).get();
-            ok = refreshed.success;
-            v = refreshed.items;
-            e = refreshed.message;
+            std::uint64_t request = 0;
+            bool accepted = false;
+            while (!m_fetchCancelled.load(std::memory_order_acquire)
+                   && !cancellation->load(std::memory_order_acquire)) {
+                if (libraryCoordinator->requestSeasonEpisodes(
+                        seriesItem, seasonItem, request)) {
+                    accepted = true;
+                    break;
+                }
+                if (libraryCoordinator->stopped())
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            if (accepted) {
+                bool terminal = false;
+                while (!m_fetchCancelled.load(std::memory_order_acquire)
+                       && !cancellation->load(std::memory_order_acquire)
+                       && !libraryCoordinator->stopped()) {
+                    library::HierarchyResult result;
+                    if (libraryCoordinator->takeHierarchyResult(request,
+                                                                  result)) {
+                        if (result.terminal) {
+                            ok = result.success;
+                            v = std::move(result.episodes);
+                            e = result.message;
+                            terminal = true;
+                            break;
+                        }
+                    } else {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(5));
+                    }
+                }
+                if (!terminal) {
+                    libraryCoordinator->cancelHierarchyRequest(request);
+                    e = "Episode refresh cancelled";
+                }
+            } else {
+                e = "Library hierarchy scheduler unavailable";
+            }
         } else {
             e = "Library coordinator unavailable";
         }

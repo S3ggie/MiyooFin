@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -98,14 +99,20 @@ struct HomeRailResult {
     std::string error;
 };
 
-/// One serialized Home hierarchy walk.  The coordinator owns the cancellation
+enum class HierarchyTaskKind { HomePrefetch, SeriesSeasons, SeasonEpisodes };
+
+/// One serialized hierarchy task.  The coordinator owns the cancellation
 /// token after accepting the request; callers only retain the request id and
 /// consume immutable results.
 struct HierarchyRequest {
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
     bool forceReconcile = false;
+    HierarchyTaskKind kind = HierarchyTaskKind::HomePrefetch;
+    MediaItem series;
+    MediaItem season;
     std::vector<MediaItem> shows;
+    std::shared_ptr<std::atomic_bool> cancellation;
 };
 
 /// Per-series and terminal publications from the coordinator-owned hierarchy
@@ -114,6 +121,7 @@ struct HierarchyRequest {
 struct HierarchyResult {
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
+    HierarchyTaskKind kind = HierarchyTaskKind::HomePrefetch;
     bool terminal = false;
     bool cacheOnly = false;
     bool success = false;
@@ -125,6 +133,7 @@ struct HierarchyResult {
     std::string seriesId;
     std::vector<MediaItem> cachedSeasons;
     std::vector<MediaItem> seasons;
+    std::vector<MediaItem> episodes;
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
@@ -239,7 +248,15 @@ public:
     bool requestHierarchy(const std::vector<MediaItem> &shows,
                           std::uint64_t generation, bool forceReconcile,
                           std::uint64_t &request);
+    /// Queue one series-seasons or one season-episodes mutation through the
+    /// same serialized hierarchy scheduler used by Home.  Results are
+    /// immutable and are consumed with takeHierarchyResult().
+    bool requestSeriesSeasons(const MediaItem &series,
+                              std::uint64_t &request);
+    bool requestSeasonEpisodes(const MediaItem &series, const MediaItem &season,
+                               std::uint64_t &request);
     bool takeHierarchyResult(std::uint64_t request, HierarchyResult &result);
+    void cancelHierarchyRequest(std::uint64_t request) noexcept;
     /// Cancel the current Home lifetime, invalidate/discard its publications,
     /// and release the request slot for the next Home lifetime.  The worker
     /// itself remains serialized while a cancelled network future unwinds.
@@ -282,16 +299,6 @@ public:
 #endif
 
     std::shared_ptr<LibraryQuery> query() const { return m_query; }
-    /// Refresh a series hierarchy through the coordinator-owned sync service.
-    /// Callers retain ownership of the returned future and may cancel through
-    /// the supplied token.
-    std::future<HierarchyRefreshResult> refreshSeasons(
-        const MediaItem &series,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    /// Refresh a season hierarchy through the coordinator-owned sync service.
-    std::future<HierarchyRefreshResult> refreshEpisodes(
-        const MediaItem &series, const MediaItem &season,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     struct Status {
         bool inFlight = false;
         bool startupInFlight = false;
@@ -357,12 +364,14 @@ private:
     std::thread m_hierarchyThread;
     std::deque<HierarchyRequest> m_hierarchyRequests;
     std::deque<HierarchyResult> m_hierarchyResults;
-    std::shared_ptr<std::atomic_bool> m_hierarchyCancellation;
+    std::map<std::uint64_t, HierarchyRequest> m_hierarchyAccepted;
+    std::optional<HierarchyRequest> m_hierarchyActiveRequest;
+    std::shared_ptr<std::atomic_bool> m_hierarchyActiveCancellation;
     std::uint64_t m_hierarchyRequest = 0;
     std::uint64_t m_hierarchyGeneration = 0;
     std::size_t m_hierarchyCompleted = 0;
     std::size_t m_hierarchyTotal = 0;
-    bool m_hierarchyInFlight = false;
+    std::atomic_bool m_hierarchyMutationInFlight{false};
     bool m_hierarchyStop = false;
     bool m_hierarchyOffline = false;
     bool m_hierarchyForceReconcile = false;

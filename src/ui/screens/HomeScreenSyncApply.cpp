@@ -21,12 +21,24 @@ static std::vector<TabData> emptyHomeTabs()
 
 void HomeScreen::publishPendingPresentation(PendingPresentation presentation)
 {
-    std::lock_guard<std::mutex> lock(m_fetchMutex);
     const bool complete = presentation.complete;
-    m_pendingPresentation = std::make_shared<const PendingPresentation>(
-        std::move(presentation));
-    m_fetchComplete.store(complete);
-    m_fetchReady.store(true);
+    const std::string diagnostic =
+        "[HomeScreen] pending_presentation_published request="
+        + std::to_string(presentation.diagnosticRequest)
+        + " generation=" + std::to_string(presentation.diagnosticGeneration)
+        + " stage=" + (presentation.diagnosticStage.empty()
+            ? "unspecified" : presentation.diagnosticStage)
+        + " complete=" + std::to_string(complete ? 1 : 0)
+        + " content=" + std::to_string(presentation.contentValid ? 1 : 0)
+        + " error=" + std::to_string(presentation.error.empty() ? 0 : 1);
+    {
+        std::lock_guard<std::mutex> lock(m_fetchMutex);
+        m_pendingPresentation = std::make_shared<const PendingPresentation>(
+            std::move(presentation));
+        m_fetchComplete.store(complete);
+        m_fetchReady.store(true);
+    }
+    uiDiagnostics().log(diagnostic);
 }
 
 bool HomeScreen::takePendingPresentation(PendingPresentation &presentation)
@@ -372,6 +384,15 @@ void HomeScreen::finishFetch()
     PendingPresentation presentation;
     if (!takePendingPresentation(presentation))
         return;
+    uiDiagnostics().log(
+        "[HomeScreen] pending_presentation_taken request="
+        + std::to_string(presentation.diagnosticRequest)
+        + " generation=" + std::to_string(presentation.diagnosticGeneration)
+        + " stage=" + (presentation.diagnosticStage.empty()
+            ? "unspecified" : presentation.diagnosticStage)
+        + " complete=" + std::to_string(presentation.complete ? 1 : 0)
+        + " completed_pages="
+        + std::to_string(presentation.diagnosticCompletedPages));
     applyPendingPresentation(presentation);
     // A first page is published early so Home becomes useful quickly, but it
     // is not a replacement for the last committed catalog.  If a later page
@@ -434,6 +455,10 @@ void HomeScreen::finishFetch()
         }
         m_fetchPublished = true;
         m_fetchFailureRestored = true;
+        uiDiagnostics().log(
+            "[HomeScreen] terminal_sdl_application status=failure request="
+            + std::to_string(presentation.diagnosticRequest)
+            + " generation=" + std::to_string(presentation.diagnosticGeneration));
     }
     if (!m_fetchPublished) {
         if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot && !m_offlineModeFetchPending)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
@@ -448,7 +473,7 @@ void HomeScreen::finishFetch()
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
             const std::string focusedLabel = focusedHomeRowLabel();
-            const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs\n",m_tabs.size());uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+             const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs\n",m_tabs.size());uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;
@@ -539,6 +564,11 @@ void HomeScreen::finishFetch()
         // the live-change path from starting a competing top-level sync
         // prematurely.  The thread is joined later in joinAllWorkers().
         m_syncSchedule.complete(SDL_GetTicks(), m_fetchError.empty());
+        uiDiagnostics().log(
+            "[HomeScreen] terminal_sdl_application status="
+            + std::string(m_fetchError.empty() ? "library_loaded" : "failure")
+            + " request=" + std::to_string(presentation.diagnosticRequest)
+            + " generation=" + std::to_string(presentation.diagnosticGeneration));
         // If the user toggled offline mode while this fetch was in-flight,
         // the fetched tabs may not match the current session mode.  Re-fetch
         // so the worker takes the correct path (offline snapshot or full

@@ -24,6 +24,7 @@ int main()
     testRefreshMovieFilterHomeNavPreserved();     testLivePublicationNoopEmptyResult();
     testSqliteTempDirPath();
     testPageTransactionShouldRetry();
+    testDiagnosticPageKindClassification();
     testPageTransactionCleanupInvariants();
     testOfflineModeToggleDrivesFetchPath();
     testOfflineSnapshotSignatureStability();

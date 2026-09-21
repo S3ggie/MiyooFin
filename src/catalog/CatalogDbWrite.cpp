@@ -212,14 +212,59 @@ std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(
 #else
     (void)injection;
 #endif // MIYOOFIN_TEST_BUILD
+    command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     auto future=command->result.get_future(); std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_stopping || m_pendingJobs >= kMaxPendingJobs) { CatalogDbMediaPageUpsertResult r; r.error=CatalogDbErrorCategory::ScopeNotReady;
-            r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full"; command->result.set_value(std::move(r)); return future; }
+    if (m_stopping || m_pendingJobs >= kMaxPendingJobs) {
+        CatalogDbMediaPageUpsertResult r;
+        r.error=CatalogDbErrorCategory::ScopeNotReady;
+        r.message=m_stopping ? "CatalogDb page queue stopped" : "CatalogDb page queue full";
+        logMediaPageTransition(command, "page_complete", &r);
+        command->result.set_value(std::move(r));
+        return future;
+    }
     command->metadata.generation=command->metadata.generation?command->metadata.generation:m_generation;
     command->metadata.scopeEpoch=command->metadata.scopeEpoch?command->metadata.scopeEpoch:m_requestedEpoch;
     m_mediaPageUpsertCommands.push_back(command); ++m_pendingJobs;
+    catalogDiagnostic("page_enqueue request=" + std::to_string(page.request)
+        + " generation=" + std::to_string(command->metadata.generation)
+        + " page_kind=" + (page.collectionType == "movies" ? "movies"
+            : page.collectionType == "tvshows" ? "tvshows" : "unknown")
+        + " page_index=" + std::to_string(page.ordinalStart)
+        + " view_ordinal=" + std::to_string(page.viewOrdinal)
+        + " final=" + std::to_string(page.finalPage ? 1 : 0)
+        + " queue_depth=" + std::to_string(m_pendingJobs));
     catalogDiagnostic("page_submit_enqueued");
     m_wake.notify_one(); return future;
+}
+void CatalogDb::logMediaPageTransition(
+    const std::shared_ptr<MediaPageUpsertCommand> &command,
+    const char *event, const CatalogDbMediaPageUpsertResult *result,
+    std::size_t attempt)
+{
+    const auto &page = command->page;
+    std::string line = std::string(event)
+        + " request=" + std::to_string(page.request)
+        + " generation=" + std::to_string(command->metadata.generation)
+        + " page_kind=" + (page.collectionType == "movies" ? "movies"
+            : page.collectionType == "tvshows" ? "tvshows" : "unknown")
+        + " page_index=" + std::to_string(page.ordinalStart)
+        + " view_ordinal=" + std::to_string(page.viewOrdinal)
+        + " final=" + std::to_string(page.finalPage ? 1 : 0);
+    if (attempt != 0)
+        line += " attempt=" + std::to_string(attempt);
+    if (command->enqueuedMonotonicUs != 0) {
+        const std::uint64_t now = telemetryNowIfEnabled();
+        if (now >= command->enqueuedMonotonicUs)
+            line += " elapsed_us="
+                + std::to_string(now - command->enqueuedMonotonicUs);
+    }
+    if (result) {
+        line += " success=" + std::to_string(result->success ? 1 : 0)
+            + " cancelled=" + std::to_string(result->cancelled ? 1 : 0)
+            + " superseded=" + std::to_string(result->superseded ? 1 : 0)
+            + " error=" + std::to_string(static_cast<unsigned>(result->error));
+    }
+    catalogDiagnostic(line);
 }
 void CatalogDb::processHierarchyWrite(
     const std::shared_ptr<HierarchyWriteCommand> &command)
@@ -710,16 +755,19 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
 {
     result = CatalogDbMediaPageUpsertResult{};
     result.workerOwned = true;
+    logMediaPageTransition(command, "page_transaction_begin", &result, attempt + 1);
     catalogDiagnostic("page_transaction_begin");
     if (sqlite3_exec(m_db,"BEGIN IMMEDIATE;",nullptr,nullptr,nullptr)!=SQLITE_OK) {
         const int rc = sqlite3_errcode(m_db);
         if (pageTransactionShouldRetry(rc, attempt, kPageTransactionMaxAttempts)) {
+            logMediaPageTransition(command, "page_retry", &result, attempt + 1);
             catalogDiagnostic("page_transaction_retry_begin sqlite_rc=" + std::to_string(rc));
             return MediaPageAttemptOutcome::Retry;
         }
         result.error=CatalogDbErrorCategory::SqliteError; result.message="CatalogDb transaction begin failed";
         catalogDiagnostic("page_transaction_rollback reason=begin_failed sqlite_rc=" + std::to_string(rc));
         markMediaPagePopulationFailed(result);
+        logMediaPageTransition(command, "page_complete", &result, attempt + 1);
         command->result.set_value(std::move(result));
         return MediaPageAttemptOutcome::Complete;
     }
@@ -734,6 +782,7 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
                                        insertImageTagGuard.receive(), result)) {
         sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr);
         markMediaPagePopulationFailed(result);
+        logMediaPageTransition(command, "page_complete", &result, attempt + 1);
         command->result.set_value(std::move(result));
         return MediaPageAttemptOutcome::Complete;
     }
@@ -748,21 +797,25 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
     if (itemOutcome == MediaPageItemLoopOutcome::Fatal) {
         sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         markMediaPagePopulationFailed(result);
+        logMediaPageTransition(command, "page_complete", &result, attempt + 1);
         command->result.set_value(std::move(result));
         return MediaPageAttemptOutcome::Complete;
     }
     if (itemOutcome == MediaPageItemLoopOutcome::Retryable) {
+        logMediaPageTransition(command, "page_retry", &result, attempt + 1);
         return MediaPageAttemptOutcome::Retry;
     }
     if (result.error==CatalogDbErrorCategory::None && mediaPageUpsertStillValid(command, result)) {
-        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; catalogDiagnostic("page_transaction_commit");
+        if (sqlite3_exec(m_db,"COMMIT;",nullptr,nullptr,nullptr)==SQLITE_OK) { result.success=true; logMediaPageTransition(command, "page_transaction_commit", &result, attempt + 1); catalogDiagnostic("page_transaction_commit");
                 std::lock_guard<std::mutex> lock(m_mutex); ++m_populationStatus.pages; m_populationStatus.rows+=result.rowsWritten;
                 m_populationStatus.state=command->page.finalPage
                     ? (result.rowsWritten ? CatalogDbPopulationState::Ready : CatalogDbPopulationState::GenuinelyEmpty)
                     : CatalogDbPopulationState::Populating;
+                logMediaPageTransition(command, "page_complete", &result, attempt + 1);
                 command->result.set_value(std::move(result)); return MediaPageAttemptOutcome::Complete; }
         const int commitRc = sqlite3_errcode(m_db);
         if (pageTransactionShouldRetry(commitRc, attempt, kPageTransactionMaxAttempts)) {
+            logMediaPageTransition(command, "page_retry", &result, attempt + 1);
             catalogDiagnostic("page_transaction_retry_commit sqlite_rc=" + std::to_string(commitRc));
             sqlite3_exec(m_db,"ROLLBACK;",nullptr,nullptr,nullptr);
             return MediaPageAttemptOutcome::Retry;
@@ -779,13 +832,16 @@ CatalogDb::MediaPageAttemptOutcome CatalogDb::attemptMediaPageUpsert(
         sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         markMediaPagePopulationFailed(result);
     }
+    logMediaPageTransition(command, "page_complete", &result, attempt + 1);
     command->result.set_value(std::move(result));
     return MediaPageAttemptOutcome::Complete;
 }
 void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command)
 {
     CatalogDbMediaPageUpsertResult result; result.workerOwned=true;
+    logMediaPageTransition(command, "page_dequeue", nullptr);
     if (!mediaPageUpsertStillValid(command, result)) { result.error=CatalogDbErrorCategory::Superseded;
+            logMediaPageTransition(command, "page_complete", &result);
             catalogDiagnostic(result.cancelled ? "page_submit_rejected reason=cancelled" : "page_submit_rejected reason=stale_or_not_ready"); command->result.set_value(std::move(result));
             return; }
     catalogDiagnostic("page_submit_dequeued");
@@ -796,6 +852,7 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
             result.superseded = true;
             result.error = CatalogDbErrorCategory::Superseded;
             result.message = "top-level sync generation is not active";
+            logMediaPageTransition(command, "page_complete", &result);
             command->result.set_value(std::move(result));
             return;
         }
@@ -812,6 +869,7 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
                     result.cancelled = true;
                     result.error = CatalogDbErrorCategory::Superseded;
                     result.message = "page transaction cancelled during retry backoff";
+                    logMediaPageTransition(command, "page_complete", &result, attempt + 1);
                     command->result.set_value(std::move(result));
                     return;
                 }
@@ -829,6 +887,8 @@ void CatalogDb::processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertComm
     result.message = "page transaction failed after retries";
     catalogDiagnostic("page_transaction_exhausted attempts=" + std::to_string(kPageTransactionMaxAttempts));
     { std::lock_guard<std::mutex> lock(m_mutex); m_populationStatus.state = CatalogDbPopulationState::Failed; }
+    logMediaPageTransition(command, "page_complete", &result,
+                           kPageTransactionMaxAttempts);
     command->result.set_value(std::move(result));
 }
 } // namespace miyoofin

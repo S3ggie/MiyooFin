@@ -278,6 +278,9 @@ struct CatalogDbMediaPageWrite {
     std::string viewId;
     std::string viewName;
     std::string collectionType;
+    // Diagnostic-only identity supplied by the coordinator.  It is not
+    // persisted and does not participate in page validation or ordering.
+    std::uint64_t request = 0;
     std::size_t ordinalStart = 0;
     int viewOrdinal = 0;
     std::uint64_t syncGeneration = 0;
@@ -496,6 +499,10 @@ private:
     void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
     void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
     void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command);
+    void logMediaPageTransition(
+        const std::shared_ptr<MediaPageUpsertCommand> &command,
+        const char *event, const CatalogDbMediaPageUpsertResult *result = nullptr,
+        std::size_t attempt = 0);
     // Media-page upsert write-path helpers (CatalogDbWrite.cpp). The per-item
     // SQL text and bind order must stay identical to the original inline body.
     enum class MediaPageItemLoopOutcome : unsigned char {

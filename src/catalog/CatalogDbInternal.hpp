@@ -130,6 +130,7 @@ struct CatalogDb::HierarchyWriteCommand {
 struct CatalogDb::MediaPageUpsertCommand {
     CatalogDbMediaPageWrite page;
     CatalogDbJobMetadata metadata;
+    std::uint64_t enqueuedMonotonicUs = 0;
 #ifdef MIYOOFIN_TEST_BUILD
     CatalogDbFailureSpec injection;
 #endif

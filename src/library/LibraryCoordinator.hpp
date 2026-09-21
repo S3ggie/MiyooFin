@@ -276,6 +276,11 @@ public:
         bool inFlight = false;
         bool startupInFlight = false;
         bool fullSyncInFlight = false;
+        // Diagnostic-only publication identity/depth for bounded Home
+        // consumer transition logging.
+        std::uint64_t fullPopulationRequest = 0;
+        std::uint64_t fullPopulationGeneration = 0;
+        std::size_t fullPopulationQueueDepth = 0;
         bool safetyReconcileInFlight = false;
         bool cancelRequested = false;
         bool success = false;
@@ -314,6 +319,7 @@ private:
     std::shared_ptr<std::atomic_bool> m_fullPopulationCancellation;
     std::deque<FullPopulationUpdate> m_fullPopulationUpdates;
     std::uint64_t m_fullPopulationRequest = 0;
+    std::uint64_t m_fullPopulationGeneration = 0;
     std::thread m_safetyReconcileThread;
     std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     SafetyReconcileResult m_safetyReconcileResult;

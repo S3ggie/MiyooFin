@@ -288,6 +288,12 @@ private:
         OfflineSnapshotSignature offlineSignature;
         LibrarySnapshot offlineSnapshotCache;
         std::string error;
+        // Diagnostic-only handoff identity; these fields do not participate
+        // in presentation selection or fetch completion.
+        std::uint64_t diagnosticRequest = 0;
+        std::uint64_t diagnosticGeneration = 0;
+        std::size_t diagnosticCompletedPages = 0;
+        std::string diagnosticStage;
     };
     std::shared_ptr<const PendingPresentation> m_pendingPresentation;
     std::string m_fetchError;

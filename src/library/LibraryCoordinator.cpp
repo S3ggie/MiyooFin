@@ -55,7 +55,7 @@ LibraryCoordinator::LibraryCoordinator(Session session,
     : m_session(session)
     , m_sync(std::make_shared<LibrarySync>(std::move(session), db,
                                               scopeEpoch))
-    , m_query(std::make_shared<LibraryQuery>(db, scopeEpoch))
+    , m_query(std::shared_ptr<LibraryQuery>(new LibraryQuery(db, scopeEpoch)))
     , m_db(std::move(db))
     , m_scopeEpoch(scopeEpoch)
 {

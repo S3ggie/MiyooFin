@@ -17,6 +17,8 @@ class CatalogDb;
 
 namespace library {
 
+class LibraryCoordinator;
+
 enum class LibraryQueryErrorCategory : unsigned char {
     None,
     InvalidIdentity,
@@ -66,7 +68,6 @@ struct HierarchyPage {
 
 class LibraryQuery {
 public:
-    LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);
     std::future<MediaPage> movies(int alphabetLetter, std::size_t limit,
                                    const LibraryPageCursor &after = {},
                                    const std::shared_ptr<std::atomic_bool> &cancellation = {});
@@ -88,6 +89,10 @@ public:
     bool scopeReady() const;
 
 private:
+    friend class LibraryCoordinator;
+
+    LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);
+
     std::shared_ptr<CatalogDb> m_db;
     std::uint64_t m_scopeEpoch;
 };

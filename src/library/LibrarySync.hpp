@@ -27,15 +27,6 @@ struct OfflineRebuildResult {
     std::size_t containersSynthesized = 0;
 };
 
-struct HierarchyRefreshResult {
-    bool success = false;
-    bool cancelled = false;
-    bool superseded = false;
-    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
-    std::string message;
-    std::vector<MediaItem> items;
-};
-
 struct ChangedCatalogResult {
     bool success = false;
     bool cancelled = false;
@@ -100,12 +91,6 @@ public:
         const CatalogDbMediaPageWrite &page);
     std::future<CatalogDbTopLevelSyncResult> finalize(std::uint64_t generation);
     std::future<CatalogDbTopLevelSyncResult> abort(std::uint64_t generation);
-    std::future<HierarchyRefreshResult> refreshSeasons(
-        const MediaItem &series,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<HierarchyRefreshResult> refreshEpisodes(
-        const MediaItem &series, const MediaItem &season,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
     std::future<ChangedCatalogResult> catchUpChangedCatalog(
         std::int64_t sinceMs,
         const std::shared_ptr<std::atomic_bool> &cancellation = {});

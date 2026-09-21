@@ -451,12 +451,19 @@ static void testLibrarySyncRefreshSeasonsUsesValidPartialHierarchy()
     session.userId = user;
     session.accessToken = "season-refresh-token";
     session.deviceId = "season-refresh-device";
-    library::LibrarySync sync(session, db, epoch);
-    const auto refreshed = sync.refreshSeasons(series).get();
+    session.manualOfflineMode = true;
+    library::LibraryCoordinator coordinator(session, db, epoch);
+    coordinator.start();
+    std::uint64_t request = 0;
+    CHECK(coordinator.requestSeriesSeasons(series, request));
+    library::HierarchyResult refreshed;
+    while (!coordinator.takeHierarchyResult(request, refreshed))
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    coordinator.stop();
     server.join();
     ::close(listener);
 
-    CHECK(refreshed.success && refreshed.items.size() == 2);
+    CHECK(refreshed.success && refreshed.seasons.size() == 2);
     const auto seasons = db->getSeasons(series.id).get();
     CHECK(seasons.success && seasons.items.size() == 2);
     const auto retained = db->getEpisodes(seasonOne.id).get();
@@ -468,7 +475,7 @@ static void testLibrarySyncRefreshSeasonsUsesValidPartialHierarchy()
                                   complete, generation));
     CHECK(!complete && generation == 0);
     removeCatalogMigrationTestPaths(paths);
-    std::printf("[test] LibrarySync season refresh preserves partial hierarchy OK\n");
+    std::printf("[test] coordinator season hierarchy preserves partial hierarchy OK\n");
 }
 
 static void testCatalogDbJellyfinHierarchyStaging()

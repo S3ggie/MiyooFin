@@ -6,6 +6,8 @@
 #include "DownloadSupport.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
+#include <chrono>
+#include <thread>
 
 namespace miyoofin {
 namespace {
@@ -205,48 +207,107 @@ void DownloadManager::planner()
             return !episodes.empty();
         };
 
-        auto refreshEpisodes = [&](const MediaItem &series,
-                                   const MediaItem &season,
-                                   std::vector<MediaItem> &episodes) {
+        auto loadEpisodesThroughCoordinator = [&](const MediaItem &series,
+                                                   const MediaItem &season,
+                                                   std::vector<MediaItem> &episodes) {
             if (!job.libraryCoordinator) {
                 error = "Library coordinator unavailable";
                 return false;
             }
-            const library::HierarchyRefreshResult result =
-                job.libraryCoordinator->refreshEpisodes(series, season,
-                                                        cancellation).get();
-            if (result.superseded || result.cancelled) {
-                hierarchySuperseded = true;
-                return false;
+            std::uint64_t request = 0;
+            for (;;) {
+                if (cancellation->load(std::memory_order_acquire)
+                    || job.libraryCoordinator->stopped()) {
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                if (job.libraryCoordinator->requestSeasonEpisodes(
+                        series, season, request)) {
+                    break;
+                }
+                if (job.libraryCoordinator->stopped()) {
+                    error = "Library hierarchy scheduler stopped";
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
-            if (!result.success) {
-                error = result.message.empty()
-                    ? "LibrarySync episode refresh failed" : result.message;
-                return false;
+            for (;;) {
+                if (cancellation->load(std::memory_order_acquire)
+                    || job.libraryCoordinator->stopped()) {
+                    job.libraryCoordinator->cancelHierarchyRequest(request);
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                library::HierarchyResult result;
+                if (!job.libraryCoordinator->takeHierarchyResult(request,
+                                                                   result)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                if (!result.terminal)
+                    continue;
+                if (result.cancelled || result.superseded) {
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                if (!result.success) {
+                    error = result.message.empty()
+                        ? "LibrarySync episode refresh failed" : result.message;
+                    return false;
+                }
+                episodes = std::move(result.episodes);
+                return true;
             }
-            episodes = result.items;
-            return true;
         };
 
-        auto refreshSeasons = [&](const MediaItem &series,
-                                  std::vector<MediaItem> &refreshed) {
+        auto loadSeasonsThroughCoordinator = [&](const MediaItem &series,
+                                                  std::vector<MediaItem> &refreshed) {
             if (!job.libraryCoordinator) {
                 error = "Library coordinator unavailable";
                 return false;
             }
-            const library::HierarchyRefreshResult result =
-                job.libraryCoordinator->refreshSeasons(series, cancellation).get();
-            if (result.superseded || result.cancelled) {
-                hierarchySuperseded = true;
-                return false;
+            std::uint64_t request = 0;
+            for (;;) {
+                if (cancellation->load(std::memory_order_acquire)) {
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                if (job.libraryCoordinator->requestSeriesSeasons(series,
+                                                                  request)) {
+                    break;
+                }
+                if (job.libraryCoordinator->stopped()) {
+                    error = "Library hierarchy scheduler stopped";
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
-            if (!result.success) {
-                error = result.message.empty()
-                    ? "LibrarySync season refresh failed" : result.message;
-                return false;
+            for (;;) {
+                if (cancellation->load(std::memory_order_acquire)) {
+                    job.libraryCoordinator->cancelHierarchyRequest(request);
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                library::HierarchyResult result;
+                if (!job.libraryCoordinator->takeHierarchyResult(request,
+                                                                   result)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                if (!result.terminal)
+                    continue;
+                if (result.cancelled || result.superseded) {
+                    hierarchySuperseded = true;
+                    return false;
+                }
+                if (!result.success) {
+                    error = result.message.empty()
+                        ? "LibrarySync season refresh failed" : result.message;
+                    return false;
+                }
+                refreshed = std::move(result.seasons);
+                return true;
             }
-            refreshed = result.items;
-            return true;
         };
 
         if (!job.seriesId.empty() && !job.seasonId.empty()) {
@@ -265,7 +326,8 @@ void DownloadManager::planner()
                 MediaItem season = job.season;
                 season.id = job.seasonId;
                 season.seriesId = job.seriesId;
-                hierarchyReady = refreshEpisodes(job.series, season, media);
+                hierarchyReady = loadEpisodesThroughCoordinator(
+                    job.series, season, media);
                 if (hierarchyReady) {
                     seasons.push_back(std::move(season));
                     hierarchy[job.seasonId] = media;
@@ -300,11 +362,13 @@ void DownloadManager::planner()
                 seasons.clear();
                 media.clear();
                 hierarchy.clear();
-                hierarchyReady = refreshSeasons(job.series, seasons);
+                hierarchyReady = loadSeasonsThroughCoordinator(
+                    job.series, seasons);
                 if (hierarchyReady) {
                     for (const auto &season : seasons) {
                         std::vector<MediaItem> episodes;
-                        if (!refreshEpisodes(job.series, season, episodes)) {
+                        if (!loadEpisodesThroughCoordinator(
+                                job.series, season, episodes)) {
                             hierarchyReady = false;
                             break;
                         }

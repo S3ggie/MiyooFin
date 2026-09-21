@@ -394,6 +394,125 @@ void testHierarchyCancellationAllowsHomeReentry()
     std::printf("[test] hierarchy cancellation allows Home re-entry OK\n");
 }
 
+void testHierarchyMutationSerializesLiveChanges()
+{
+    std::printf("[test] hierarchy mutation serializes live changes\n");
+    const auto scope = hierarchyScope("live-serialization");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    HierarchyServer server({
+        {200, R"({"Items":[]})"},
+        {200, R"({"Items":[]})"}}, 0);
+    Session session;
+    session.serverUrl = server.url();
+    session.userId = scope.user;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(coordinator->requestSeriesSeasons(
+        hierarchySeries("series-live-serialization"), hierarchyRequest));
+    for (int i = 0; i < 500 && !server.connected(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(server.connected());
+
+    JellyfinLibraryChangeBatch batch;
+    batch.itemsUpdated.push_back("live-item");
+    CHECK(coordinator->requestLiveChange(batch));
+
+    library::LiveLibraryChangeResult liveResult;
+    bool livePublishedBeforeHierarchyFinished = false;
+    for (int i = 0; i < 100; ++i) {
+        if (coordinator->takeLiveChangeResult(liveResult)) {
+            livePublishedBeforeHierarchyFinished = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(!livePublishedBeforeHierarchyFinished);
+
+    server.release();
+    library::HierarchyResult hierarchyResult;
+    bool hierarchyFinished = false;
+    for (int i = 0; i < 1000 && !hierarchyFinished; ++i) {
+        if (coordinator->takeHierarchyResult(hierarchyRequest,
+                                             hierarchyResult)) {
+            hierarchyFinished = hierarchyResult.terminal;
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    CHECK(hierarchyFinished && hierarchyResult.success);
+
+    bool livePublishedAfterHierarchyFinished = false;
+    for (int i = 0; i < 1000 && !livePublishedAfterHierarchyFinished; ++i) {
+        livePublishedAfterHierarchyFinished =
+            coordinator->takeLiveChangeResult(liveResult);
+        if (!livePublishedAfterHierarchyFinished)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(livePublishedAfterHierarchyFinished);
+
+    coordinator->stop();
+    db.reset();
+    removeHierarchyScope(scope);
+    std::printf("[test] hierarchy mutation serializes live changes OK\n");
+}
+
+void testHierarchyStopPublishesQueuedCancellation()
+{
+    std::printf("[test] hierarchy stop publishes queued cancellation\n");
+    const auto scope = hierarchyScope("queued-stop");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    HierarchyServer server({
+        {200, R"({"Items":[]})"}}, 0);
+    Session session;
+    session.serverUrl = server.url();
+    session.userId = scope.user;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    std::uint64_t activeRequest = 0;
+    CHECK(coordinator->requestSeriesSeasons(
+        hierarchySeries("series-active"), activeRequest));
+    for (int i = 0; i < 500 && !server.connected(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(server.connected());
+
+    std::uint64_t queuedRequest = 0;
+    CHECK(coordinator->requestSeriesSeasons(
+        hierarchySeries("series-queued"), queuedRequest));
+
+    std::thread stopper([&] { coordinator->stop(); });
+    library::HierarchyResult queuedResult;
+    bool queuedTerminal = false;
+    for (int i = 0; i < 500 && !queuedTerminal; ++i) {
+        if (coordinator->takeHierarchyResult(queuedRequest, queuedResult))
+            queuedTerminal = queuedResult.terminal;
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(queuedTerminal && queuedResult.cancelled);
+
+    server.release();
+    stopper.join();
+    CHECK(coordinator->stopped());
+
+    coordinator.reset();
+    db.reset();
+    removeHierarchyScope(scope);
+    std::printf("[test] hierarchy stop publishes queued cancellation OK\n");
+}
+
 void testHomeHierarchyLateRequestRace()
 {
     std::printf("[test] Home hierarchy late-request race guard\n");
@@ -474,6 +593,8 @@ int main()
     testHierarchyCheckpointRequiresCompleteSuccessAndRejectsStaleGeneration();
     testHierarchyStopJoinsActiveWork();
     testHierarchyCancellationAllowsHomeReentry();
+    testHierarchyMutationSerializesLiveChanges();
+    testHierarchyStopPublishesQueuedCancellation();
     testHomeHierarchyLateRequestRace();
     return miyoofin_test::finish("library_hierarchy");
 }

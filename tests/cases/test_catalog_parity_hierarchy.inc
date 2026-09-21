@@ -291,11 +291,25 @@ void testLibraryCacheHomeParityHarness()
     CHECK(coordinatorSource.find("hierarchyWorker") != std::string::npos);
     CHECK(coordinatorSource.find("m_query->seasons") != std::string::npos);
     CHECK(coordinatorSource.find("m_sync->refreshSeasons")
-          != std::string::npos);
+          == std::string::npos);
     CHECK(coordinatorSource.find("m_sync->refreshEpisodes")
+          == std::string::npos);
+    CHECK(coordinatorSource.find("JellyfinApi::getSeasons")
+          != std::string::npos);
+    CHECK(coordinatorSource.find("JellyfinApi::getEpisodes")
           != std::string::npos);
     CHECK(coordinatorSource.find("m_sync->writeSyncState")
           != std::string::npos);
+    const std::string librarySyncSource =
+        readTestBytes("src/library/LibrarySync.cpp");
+    CHECK(librarySyncSource.find("LibrarySync::refreshSeasons")
+          == std::string::npos);
+    CHECK(librarySyncSource.find("LibrarySync::refreshEpisodes")
+          == std::string::npos);
+    const std::string librarySyncHeader =
+        readTestBytes("src/library/LibrarySync.hpp");
+    CHECK(librarySyncHeader.find("refreshSeasons") == std::string::npos);
+    CHECK(librarySyncHeader.find("refreshEpisodes") == std::string::npos);
     const std::string lifecycleSource =
         readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string homeHeader =

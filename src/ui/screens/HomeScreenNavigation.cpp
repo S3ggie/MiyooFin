@@ -380,6 +380,9 @@ bool HomeScreen::handleAction(Action action)
             switch (settingsRowAction(m_settingsSelected,m_session)) {
             case SettingsRowAction::OfflineMode: {
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
+                if (m_libraryCoordinator)
+                    m_libraryCoordinator->setManualOfflineMode(
+                        m_session.manualOfflineMode);
                 const bool sessionSaved = m_session.save();
                 std::printf("[HomeScreen] manual_offline_mode=%s saved=%s\n",
                             m_session.manualOfflineMode ? "ON" : "OFF",

@@ -16,7 +16,8 @@ namespace library {
 std::future<library::ChangedCatalogResult>
 library::LibrarySync::catchUpChangedCatalog(
     std::int64_t sinceMs,
-    const std::shared_ptr<std::atomic_bool> &cancellation)
+    const std::shared_ptr<std::atomic_bool> &cancellation,
+    std::uint64_t committedGeneration)
 {
     const Session session = m_session;
     const auto db = m_db;
@@ -25,7 +26,7 @@ library::LibrarySync::catchUpChangedCatalog(
     const auto operationCancellation = cancellation;
     return std::async(std::launch::async,
         [session, db, metadata, serviceCancellation, operationCancellation,
-         sinceMs] {
+          sinceMs, committedGeneration] {
             ChangedCatalogResult result;
             const auto effectiveCancellation = operationCancellation
                 ? operationCancellation : serviceCancellation;
@@ -106,7 +107,9 @@ library::LibrarySync::catchUpChangedCatalog(
                 ? nowMs : state.lastSuccessfulMs;
             const auto checkpoint = db->writeSyncState(
                 checkpointMs, state.lastReconcileMs,
-                state.committedGeneration, checkpointMetadata).get();
+                committedGeneration != 0 ? committedGeneration
+                    : state.committedGeneration,
+                checkpointMetadata).get();
             if (!checkpoint.success) {
                 result.error = checkpoint.error;
                 result.message = checkpoint.message;
@@ -120,7 +123,9 @@ library::LibrarySync::catchUpChangedCatalog(
 
 std::future<library::MembershipReconcileResult>
 library::LibrarySync::reconcileAuthoritativeMembership(
-    const std::shared_ptr<std::atomic_bool> &cancellation)
+    const std::shared_ptr<std::atomic_bool> &cancellation,
+    std::uint64_t transactionGeneration,
+    std::uint64_t committedGeneration)
 {
     // Coalesce: at most one authoritative reconcile may be in flight.
     // Concurrent callers receive a superseded result immediately.
@@ -139,7 +144,8 @@ library::LibrarySync::reconcileAuthoritativeMembership(
     const CatalogDbJobMetadata metadata = m_metadata;
     const auto serviceCancellation = m_cancel;
     const auto operationCancellation = cancellation;
-    const std::uint64_t generation = nextGeneration();
+    const std::uint64_t generation = transactionGeneration != 0
+        ? transactionGeneration : nextTransactionGeneration();
     // The m_authoritativeSyncInFlight flag was set by compare_exchange_strong
     // above and will be cleared by FlagGuard when the async worker exits.
     // If the launch itself fails (thread/resource exhaustion), clear the flag
@@ -147,7 +153,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
     try {
         return std::async(std::launch::async,
             [session, db, metadata, serviceCancellation, operationCancellation,
-             generation, this] {
+             generation, committedGeneration, this] {
             // Scope guard: clear the authoritative-sync in-flight flag
             // when this async worker exits, regardless of outcome.
             struct FlagGuard {
@@ -295,6 +301,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
             }
             result.success = true;
             result.generation = generation;
+            result.committedGeneration = committedGeneration;
             return result;
         });
     } catch (...) {
@@ -306,7 +313,8 @@ library::LibrarySync::reconcileAuthoritativeMembership(
 std::future<library::LiveLibraryChangeResult>
 library::LibrarySync::applyLibraryChanges(
     const JellyfinLibraryChangeBatch &batch,
-    const std::shared_ptr<std::atomic_bool> &cancellation)
+    const std::shared_ptr<std::atomic_bool> &cancellation,
+    std::uint64_t committedGeneration)
 {
     const Session session = m_session;
     const auto db = m_db;
@@ -315,9 +323,11 @@ library::LibrarySync::applyLibraryChanges(
     const auto operationCancellation = cancellation;
     return std::async(std::launch::async,
         [session, db, metadata, serviceCancellation, operationCancellation,
-         batch] {
+             batch, committedGeneration] {
             LiveLibraryChangeResult result;
             result.catchUpRequired = batch.catchUpRequired;
+            result.generation = committedGeneration;
+            result.committedGeneration = committedGeneration;
             const auto effectiveCancellation = operationCancellation
                 ? operationCancellation : serviceCancellation;
             const auto cancelled = [&] {

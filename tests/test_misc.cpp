@@ -12,7 +12,7 @@ int main()
     testShowsFocusPreservedDuringIncrementalRefresh(); testHomeGridPositionHelpers();
     testRecentlyAddedWarmPublication(); testWarmHomeCatalogWindows();
     testWarmMediaWindowsExtraction(); testAnimeSelectionSurvivesSharedWindowTrim();
-    testHomeUsesDedicatedAnimeCatalogPage(); testTopLevelSyncEpochMaxIsAtomic(); testHomeRefreshPreservesActiveGridSelection();
+    testHomeUsesDedicatedAnimeCatalogPage(); testCoordinatorCommittedGenerationStatus(); testHomeRefreshPreservesActiveGridSelection();
     testHomeBoundedPagesCanRewind(); testHomeUsesSharedGridRewindEdge();
     testHomeUsesSharedDownIntentAcrossPageLoads(); testShowsPresentation();
     testShouldShowClockErrorTrue(); testShouldShowClockErrorFalseModernEpoch();

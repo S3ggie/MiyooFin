@@ -40,11 +40,14 @@ library::LibrarySync::~LibrarySync()
 {
     stop();
 }
-std::uint64_t library::LibrarySync::nextGeneration() { return ++m_generation; }
-void library::LibrarySync::seedGeneration(std::uint64_t gen) {
-    const auto cur = m_generation.load();
+std::uint64_t library::LibrarySync::nextTransactionGeneration()
+{
+    return ++m_transactionGeneration;
+}
+void library::LibrarySync::seedTransactionGeneration(std::uint64_t gen) {
+    const auto cur = m_transactionGeneration.load();
     if (gen > cur)
-        m_generation.store(gen);
+        m_transactionGeneration.store(gen);
 }
 std::future<CatalogDbTopLevelSyncResult> library::LibrarySync::begin(std::uint64_t generation) {
     m_inFlight = true; m_success = false;

@@ -33,7 +33,7 @@ bool library::LibrarySync::takeLiveChange(JellyfinLibraryChangeBatch &batch)
 }
 
 library::LibrarySync::Status library::LibrarySync::status() const {
-    return {m_inFlight.load(), m_generation.load(), m_success.load()};
+    return {m_inFlight.load(), m_transactionGeneration.load(), m_success.load()};
 }
 }
 } // namespace miyoofin

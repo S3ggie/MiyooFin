@@ -154,8 +154,7 @@ public:
         // metadata (titles, artwork tags, playback state) backing the
         // snapshot.  Bumped at each top-level sync commit, so a
         // metadata-only sync cannot compare equal against an older cache.
-        // (Hierarchy-only season/episode commits are not covered; see
-        // m_topLevelSyncGeneration.)
+         // (Hierarchy-only season/episode commits are not covered.)
         std::uint64_t catalogGeneration = 0;
         std::set<std::string> availableItemIds;
         bool operator==(const OfflineSnapshotSignature &o) const {
@@ -218,7 +217,6 @@ private:
     // whose later step fails).  Atomic so the SDL thread can read it for
     // the offline-snapshot signature without a DB query.  Hierarchy-only
     // commits (seasons/episodes) do NOT advance this epoch.
-    std::atomic<std::uint64_t> m_topLevelSyncGeneration{0};
     std::string m_userName;
 
     struct MediaPageState {
@@ -391,7 +389,6 @@ private:
     void startDownloadRefresh();
     void finishDownloadRefresh();
 
-    std::int64_t m_lastSafetyReconcileMs = 0;
     bool m_safetyReconcileInFlight = false;
     bool m_homeSyncActive = false;
     std::atomic<bool> m_homeRailRefreshDone{false};
@@ -432,6 +429,7 @@ private:
     void finishSafetyReconcile();
 
     std::uint64_t catalogScopeEpoch() const;
+    std::uint64_t committedCatalogGeneration() const;
     bool catalogScopeReady() const;
 
     // Helpers

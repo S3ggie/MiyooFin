@@ -24,6 +24,9 @@ namespace library {
 ///
 enum class StartupSyncMode { SkipFresh, DeltaCatchUp, FullReconcile };
 
+inline constexpr std::int64_t kSafetyReconcileIntervalMs =
+    24LL * 60 * 60 * 1000;
+
 struct StartupSyncResult {
     bool success = false;
     bool cancelled = false;
@@ -32,6 +35,7 @@ struct StartupSyncResult {
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
@@ -44,6 +48,7 @@ struct StartupSyncResult {
 struct FullPopulationUpdate {
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     bool terminal = false;
     bool cacheOnly = false;
     bool success = false;
@@ -80,6 +85,7 @@ struct SafetyReconcileResult {
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
@@ -121,6 +127,7 @@ struct HierarchyRequest {
 struct HierarchyResult {
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     HierarchyTaskKind kind = HierarchyTaskKind::HomePrefetch;
     bool terminal = false;
     bool cacheOnly = false;
@@ -150,8 +157,12 @@ struct HomeSyncStatus {
     bool cancelRequested = false;
     bool success = false;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
+    bool safetyReconcileDue = false;
+    bool maintenanceDue = false;
+    bool manualOffline = false;
 };
 
 struct HomeState {
@@ -233,6 +244,14 @@ public:
     /// the checkpoint decision, worker, committed-generation policy, and
     /// cancellation lifetime.
     bool requestSafetyReconcile();
+    /// Apply the coordinator-owned maintenance policy before starting safety
+    /// reconciliation.  This alias keeps callers independent of the worker's
+    /// implementation name.
+    bool requestMaintenance() { return requestSafetyReconcile(); }
+    /// Keep the maintenance policy in step with the session's current offline
+    /// mode.  The coordinator, not HomeScreen, decides whether maintenance is
+    /// due or suppressed.
+    void setManualOfflineMode(bool manualOffline) noexcept;
     bool takeSafetyReconcileResult(SafetyReconcileResult &result);
     void cancelSafetyReconcile() noexcept;
 
@@ -307,6 +326,12 @@ public:
         bool cancelRequested = false;
         bool success = false;
         std::uint64_t generation = 0;
+        std::uint64_t committedGeneration = 0;
+        std::int64_t lastSuccessfulMs = 0;
+        std::int64_t lastReconcileMs = 0;
+        bool safetyReconcileDue = false;
+        bool maintenanceDue = false;
+        bool manualOffline = false;
     };
     Status status() const;
 
@@ -340,6 +365,9 @@ private:
     bool m_safetyReconcileResultReady = false;
     bool m_safetyReconcileInFlight = false;
     std::uint64_t m_catalogGeneration = 0;
+    std::int64_t m_lastSuccessfulMs = 0;
+    std::int64_t m_lastReconcileMs = 0;
+    bool m_manualOfflineMode = false;
     JellyfinLibraryEventQueue m_liveChangeRequests;
     std::optional<LiveLibraryChangeResult> m_liveChangeResult;
     std::optional<LiveChangeIdentity> m_liveChangeActive;

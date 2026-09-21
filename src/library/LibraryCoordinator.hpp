@@ -240,14 +240,17 @@ public:
         std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
         std::uint64_t committedGeneration);
 
-    /// Start one serialized safety catch-up/reconcile.  The coordinator owns
-    /// the checkpoint decision, worker, committed-generation policy, and
+    /// Apply the coordinator-owned maintenance policy and, when due, start
+    /// one serialized safety catch-up/reconcile.  The coordinator owns the
+    /// checkpoint decision, worker, committed-generation policy, and
     /// cancellation lifetime.
-    bool requestSafetyReconcile();
-    /// Apply the coordinator-owned maintenance policy before starting safety
-    /// reconciliation.  This alias keeps callers independent of the worker's
-    /// implementation name.
-    bool requestMaintenance() { return requestSafetyReconcile(); }
+    bool requestMaintenance();
+#ifdef MIYOOFIN_TEST_BUILD
+    // Test-only seam for exercising the lower-level worker and its
+    // serialization behavior.  Production callers must use requestMaintenance
+    // so they cannot bypass the maintenance policy.
+    bool requestSafetyReconcileForTest();
+#endif
     /// Keep the maintenance policy in step with the session's current offline
     /// mode.  The coordinator, not HomeScreen, decides whether maintenance is
     /// due or suppressed.
@@ -336,6 +339,7 @@ public:
     Status status() const;
 
 private:
+    bool requestSafetyReconcile(bool requireMaintenanceDue);
     void liveChangeWorker();
     void hierarchyWorker();
 

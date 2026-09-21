@@ -425,7 +425,6 @@ private:
     void publishLiveCatalogItems(const library::LiveLibraryChangeResult &result);
     void startHomeRailRefresh();
     void finishHomeRailRefresh();
-    void startSafetyReconcile();
     void finishSafetyReconcile();
 
     std::uint64_t catalogScopeEpoch() const;

@@ -3,7 +3,9 @@
 #include "../src/net/JellyfinLibraryEvents.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -23,6 +25,7 @@ struct CoordinatorTestScope {
     std::string url;
     std::string user;
     std::string scope;
+    std::uint64_t epoch = 0;
 };
 
 CoordinatorTestScope coordinatorTestScope(const char *name)
@@ -55,6 +58,53 @@ void removeCoordinatorTestScope(const CoordinatorTestScope &scope)
     for (const auto &file : files)
         std::remove(file.c_str());
     ::rmdir(libraryDirectory.c_str());
+}
+
+std::int64_t coordinatorTestNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::unique_ptr<library::LibraryCoordinator> makeMaintenanceCoordinator(
+    const char *name, std::shared_ptr<CatalogDb> &db,
+    CoordinatorTestScope &scope, bool manualOffline = false,
+    const std::string &serverUrl = "http://127.0.0.1:1")
+{
+    scope = coordinatorTestScope(name);
+    db = std::make_shared<CatalogDb>();
+    scope.epoch = db->configureScope(scope.url, scope.user);
+    CHECK(scope.epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    Session session;
+    session.serverUrl = serverUrl;
+    session.userId = scope.user;
+    session.manualOfflineMode = manualOffline;
+    return std::make_unique<library::LibraryCoordinator>(
+        session, db, scope.epoch);
+}
+
+void seedMaintenanceCheckpoint(const std::shared_ptr<CatalogDb> &db,
+                               std::uint64_t epoch, std::int64_t timestamp)
+{
+    const auto seeded = db->writeSyncState(
+        timestamp, timestamp, 1, {0, epoch, {}}).get();
+    CHECK(seeded.success);
+}
+
+library::StartupSyncResult takeStartupResult(
+    library::LibraryCoordinator &coordinator)
+{
+    library::StartupSyncResult result;
+    bool took = false;
+    for (int i = 0; i < 500 && !took; ++i) {
+        took = coordinator.takeStartupSyncResult(result);
+        if (!took)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(took);
+    return result;
 }
 
 int coordinatorTestListener()
@@ -598,8 +648,8 @@ void testSafetyReconcilePublishesCoordinatorResult()
         session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
-    CHECK(coordinator.requestSafetyReconcile());
-    CHECK(!coordinator.requestSafetyReconcile());
+    CHECK(coordinator.requestSafetyReconcileForTest());
+    CHECK(!coordinator.requestSafetyReconcileForTest());
     library::SafetyReconcileResult result;
     for (int i = 0; i < 200 && !coordinator.takeSafetyReconcileResult(result);
          ++i)
@@ -613,10 +663,20 @@ void testSafetyReconcilePublishesCoordinatorResult()
         "src/ui/screens/HomeScreenSync.cpp");
     const auto homeApply = miyoofin_test::readTestBytes(
         "src/ui/screens/HomeScreenSyncApply.cpp");
+    const auto homeUpdate = miyoofin_test::readTestBytes(
+        "src/ui/screens/HomeScreen.cpp");
     CHECK(miyoofin_test::sourceContains(
-        homeSync, "requestSafetyReconcile()"));
+        homeUpdate, "requestMaintenance()"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeUpdate, "maintenanceDue"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeUpdate, "requestSafetyReconcile"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeSync, "requestSafetyReconcile"));
     CHECK(miyoofin_test::sourceContains(
         homeApply, "takeSafetyReconcileResult(result)"));
+    CHECK(!miyoofin_test::sourceContains(
+        homeApply, "requestSafetyReconcile"));
     CHECK(!miyoofin_test::sourceContains(
         homeHeader, "m_safetyReconcileThread"));
     CHECK(!miyoofin_test::sourceContains(
@@ -634,7 +694,7 @@ void testSafetyReconcileStopPublishesCompletion()
         session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
-    CHECK(coordinator.requestSafetyReconcile());
+    CHECK(coordinator.requestSafetyReconcileForTest());
     coordinator.stop();
 
     library::SafetyReconcileResult result;
@@ -642,6 +702,235 @@ void testSafetyReconcileStopPublishesCompletion()
     CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
     coordinator.stop();
     std::printf("[test] LibraryCoordinator safety reconcile stop OK\n");
+}
+
+void testMaintenanceDueStartsReconcile()
+{
+    std::printf("[test] LibraryCoordinator maintenance due\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-due", db,
+                                                   scope);
+    coordinator->start();
+
+    CHECK(coordinator->status().maintenanceDue);
+    CHECK(coordinator->requestMaintenance());
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance due OK\n");
+}
+
+void testMaintenanceNotDueRejectsRequest()
+{
+    std::printf("[test] LibraryCoordinator maintenance not due\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-not-due", db,
+                                                   scope);
+    const auto now = coordinatorTestNowMs();
+    seedMaintenanceCheckpoint(db, scope.epoch, now - 1000);
+    coordinator->start();
+    CHECK(coordinator->startStartupSync(true));
+    const auto startup = takeStartupResult(*coordinator);
+    CHECK(startup.success && startup.mode == library::StartupSyncMode::SkipFresh);
+    CHECK(!coordinator->status().maintenanceDue);
+    CHECK(!coordinator->requestMaintenance());
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance not due OK\n");
+}
+
+void testMaintenanceElapsedStartsReconcile()
+{
+    std::printf("[test] LibraryCoordinator maintenance elapsed\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-elapsed", db,
+                                                   scope);
+    const auto elapsed = coordinatorTestNowMs()
+        - library::kSafetyReconcileIntervalMs - 1000;
+    seedMaintenanceCheckpoint(db, scope.epoch, elapsed);
+    coordinator->start();
+    CHECK(coordinator->startStartupSync(true));
+    const auto startup = takeStartupResult(*coordinator);
+    CHECK(startup.success && startup.mode == library::StartupSyncMode::FullReconcile);
+    CHECK(coordinator->status().maintenanceDue);
+    CHECK(coordinator->requestMaintenance());
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance elapsed OK\n");
+}
+
+void testMaintenanceManualOfflineSuppressesRequest()
+{
+    std::printf("[test] LibraryCoordinator maintenance manual offline\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-offline", db,
+                                                   scope, true);
+    coordinator->start();
+    CHECK(coordinator->status().manualOffline);
+    CHECK(!coordinator->status().maintenanceDue);
+    CHECK(!coordinator->requestMaintenance());
+    coordinator->setManualOfflineMode(false);
+    CHECK(coordinator->requestMaintenance());
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance manual offline OK\n");
+}
+
+void testMaintenanceRepeatedRequestRejectsActiveWorker()
+{
+    std::printf("[test] LibraryCoordinator maintenance repeated request\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-repeated", db,
+                                                   scope);
+    coordinator->start();
+    db->setWorkerPausedForTest(true);
+    CHECK(coordinator->requestMaintenance());
+    CHECK(!coordinator->requestMaintenance());
+    CHECK(coordinator->status().safetyReconcileInFlight);
+    coordinator->cancelSafetyReconcile();
+    db->setWorkerPausedForTest(false);
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance repeated request OK\n");
+}
+
+void testConcurrentMaintenanceRequestsReserveExactlyOnce()
+{
+    std::printf("[test] LibraryCoordinator concurrent maintenance requests\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-concurrent", db,
+                                                   scope);
+    coordinator->start();
+    db->setWorkerPausedForTest(true);
+
+    std::mutex startMutex;
+    std::condition_variable startCondition;
+    int ready = 0;
+    bool release = false;
+    bool firstAccepted = false;
+    bool secondAccepted = false;
+    const auto request = [&](bool &accepted) {
+        {
+            std::unique_lock<std::mutex> lock(startMutex);
+            ++ready;
+            startCondition.notify_all();
+            startCondition.wait(lock, [&] { return release; });
+        }
+        accepted = coordinator->requestMaintenance();
+    };
+
+    std::thread first(request, std::ref(firstAccepted));
+    std::thread second(request, std::ref(secondAccepted));
+    {
+        std::unique_lock<std::mutex> lock(startMutex);
+        CHECK(startCondition.wait_for(lock, std::chrono::seconds(2), [&] {
+            return ready == 2;
+        }));
+        release = true;
+        startCondition.notify_all();
+    }
+    first.join();
+    second.join();
+
+    CHECK(firstAccepted != secondAccepted);
+    CHECK(coordinator->status().safetyReconcileInFlight);
+    coordinator->cancelSafetyReconcile();
+    db->setWorkerPausedForTest(false);
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator concurrent maintenance requests OK\n");
+}
+
+void testMaintenanceRejectsActiveStartup()
+{
+    std::printf("[test] LibraryCoordinator maintenance active startup\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-active", db,
+                                                   scope);
+    coordinator->start();
+    db->setWorkerPausedForTest(true);
+    CHECK(coordinator->startStartupSync(false));
+    CHECK(!coordinator->requestMaintenance());
+    CHECK(coordinator->status().startupInFlight);
+    coordinator->cancelStartupSync();
+    db->setWorkerPausedForTest(false);
+    (void)takeStartupResult(*coordinator);
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance active startup OK\n");
+}
+
+void testMaintenanceRejectsIncompatibleHierarchyMutation()
+{
+    std::printf("[test] LibraryCoordinator maintenance hierarchy mutation\n");
+    const int listener = coordinatorTestListener();
+    if (listener < 0)
+        return;
+    const auto serverUrl = coordinatorTestUrl(listener);
+    std::thread server([&] {
+        const int client = coordinatorAccept(listener);
+        if (client < 0)
+            return;
+        coordinatorReadRequest(client);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        ::close(client);
+    });
+
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator(
+        "maintenance-mutation", db, scope, false, serverUrl);
+    coordinator->start();
+    MediaItem series;
+    series.id = "mutation-series";
+    std::uint64_t request = 0;
+    CHECK(coordinator->requestSeriesSeasons(series, request));
+    CHECK(!coordinator->requestMaintenance());
+    coordinator->cancelHierarchyRequest(request);
+    coordinator->stop();
+    server.join();
+    coordinator.reset();
+    db.reset();
+    ::close(listener);
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance hierarchy mutation OK\n");
+}
+
+void testMaintenanceDefersUntilCoordinatorStarts()
+{
+    std::printf("[test] LibraryCoordinator maintenance deferred start\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-deferred", db,
+                                                   scope);
+    CHECK(!coordinator->requestMaintenance());
+    coordinator->start();
+    CHECK(coordinator->requestMaintenance());
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator maintenance deferred start OK\n");
 }
 
 void testHomeRailStopPublishesCompletion()
@@ -1141,7 +1430,7 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     CHECK(coordinator->startStartupSync(false));
     std::uint64_t request = 0;
     CHECK(!coordinator->requestFullPopulation(request));
-    CHECK(!coordinator->requestSafetyReconcile());
+    CHECK(!coordinator->requestSafetyReconcileForTest());
     JellyfinLibraryChangeBatch batch;
     batch.itemsUpdated.push_back("startup-queued-live");
     CHECK(coordinator->requestLiveChange(batch));
@@ -1160,7 +1449,7 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     // A paused safety worker similarly blocks startup, population, and live
     // consumption while retaining the queued event.
     db->setWorkerPausedForTest(true);
-    CHECK(coordinator->requestSafetyReconcile());
+    CHECK(coordinator->requestSafetyReconcileForTest());
     CHECK(!coordinator->startStartupSync(false));
     CHECK(!coordinator->requestFullPopulation(request));
     CHECK(!coordinator->takeLiveChangeResult(liveResult));
@@ -1186,6 +1475,15 @@ int main()
     testLiveChangesWaitForSerializedSyncSlots();
     testSafetyReconcilePublishesCoordinatorResult();
     testSafetyReconcileStopPublishesCompletion();
+    testMaintenanceDueStartsReconcile();
+    testMaintenanceNotDueRejectsRequest();
+    testMaintenanceElapsedStartsReconcile();
+    testMaintenanceManualOfflineSuppressesRequest();
+    testMaintenanceRepeatedRequestRejectsActiveWorker();
+    testConcurrentMaintenanceRequestsReserveExactlyOnce();
+    testMaintenanceRejectsActiveStartup();
+    testMaintenanceRejectsIncompatibleHierarchyMutation();
+    testMaintenanceDefersUntilCoordinatorStarts();
     testHomeRailStopPublishesCompletion();
     testHomeRailSuccessPublishesBothRails();
     testHomeRailCachedFailureRetainsInvalidRail();

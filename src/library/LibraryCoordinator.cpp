@@ -621,11 +621,19 @@ void LibraryCoordinator::finishFullSync() noexcept
     m_fullSyncInFlight = false;
 }
 
-bool LibraryCoordinator::requestSafetyReconcile()
+bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
 {
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (requireMaintenanceDue) {
+            const auto nowMs = coordinatorWallClockMs();
+            const bool due = m_lastReconcileMs <= 0
+                || nowMs < m_lastReconcileMs
+                || nowMs - m_lastReconcileMs >= kSafetyReconcileIntervalMs;
+            if (!due)
+                return false;
+        }
         if (m_stopped || !m_running || !m_sync || m_manualOfflineMode
             || m_startupInFlight || m_startupResultReady
             || m_fullSyncInFlight || !m_fullPopulationUpdates.empty()
@@ -822,6 +830,18 @@ bool LibraryCoordinator::requestSafetyReconcile()
     }
     return true;
 }
+
+bool LibraryCoordinator::requestMaintenance()
+{
+    return requestSafetyReconcile(true);
+}
+
+#ifdef MIYOOFIN_TEST_BUILD
+bool LibraryCoordinator::requestSafetyReconcileForTest()
+{
+    return requestSafetyReconcile(false);
+}
+#endif
 
 bool LibraryCoordinator::takeSafetyReconcileResult(
     SafetyReconcileResult &result)

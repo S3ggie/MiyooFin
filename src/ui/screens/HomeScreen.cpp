@@ -272,8 +272,8 @@ void HomeScreen::update(Uint32 dt)
         if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
         finishSafetyReconcile();
         if (m_libraryCoordinator
-            && m_libraryCoordinator->status().maintenanceDue)
-            startSafetyReconcile();
+            && m_libraryCoordinator->requestMaintenance())
+            m_safetyReconcileInFlight = true;
     }
     if (m_loadState == LoadState::Ready)
         updateMediaPaging();

@@ -479,9 +479,9 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         series.parentIndexNumber = 8;
         series.runTimeTicks = 987654321;
         series.seriesName = "Series name";
-        series.artR = 10;
-        series.artG = 20;
-        series.artB = 30;
+        series.placeholderArtwork.red = 10;
+        series.placeholderArtwork.green = 20;
+        series.placeholderArtwork.blue = 30;
 
         MediaItem season = series;
         season.id = "__task08_season__";
@@ -524,9 +524,9 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand> &command)
         boundaries.indexNumber = std::numeric_limits<int>::min();
         boundaries.parentIndexNumber = std::numeric_limits<int>::max();
         boundaries.runTimeTicks = std::numeric_limits<long long>::max();
-        boundaries.artR = 0;
-        boundaries.artG = 1;
-        boundaries.artB = 255;
+        boundaries.placeholderArtwork.red = 0;
+        boundaries.placeholderArtwork.green = 1;
+        boundaries.placeholderArtwork.blue = 255;
         result.codecBoundaries = roundTrip(boundaries, false);
 
         MediaItem invalidKind;

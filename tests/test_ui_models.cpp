@@ -7,7 +7,7 @@
 
 int main()
 {
-    testHomeSyncSchedule(); testShowsSyncProgress(); testHomeSyncStatusStrings();
+    testPresentationArtworkAdapter(); testHomeSyncSchedule(); testShowsSyncProgress(); testHomeSyncStatusStrings();
     testHomeSettingsModel(); testHomeTabsProjection(); testHomeTabRowUpdates();
     testHomeRowIndexByLabel();
     testTransitionTabIndex(); testHomeArtworkPlan();

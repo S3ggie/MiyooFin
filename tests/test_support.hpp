@@ -45,6 +45,7 @@
 #include "../src/net/ServerAddress.hpp"
 #include "../src/net/ClockCheck.hpp"
 #include "../src/ui/ArtworkLayout.hpp"
+#include "../src/ui/ArtworkPresentation.hpp"
 #include "../src/data/MovieTitle.hpp"
 #include "../src/ui/ShowsBrowser.hpp"
 #include "../src/ui/screens/EpisodeBrowserScreen.hpp"

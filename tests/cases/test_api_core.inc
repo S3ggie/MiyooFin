@@ -27,7 +27,7 @@ static void testMediaItemDefaults()
     CHECK(item.played == false);
     CHECK(item.progress == 0.0f);
     CHECK(item.imageTags.empty());
-    CHECK(item.artR == 128);
+    CHECK(item.placeholderArtwork.red == 128);
     std::printf("[test] MediaItem defaults OK\n");
 }
 

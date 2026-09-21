@@ -12,6 +12,14 @@ static MediaItem makeHomeItem(const std::string &id, const std::string &title,
     return item;
 }
 
+static void testPresentationArtworkAdapter()
+{
+    MediaItem item;
+    item.placeholderArtwork = {0, 1, 255};
+    const SDL_Color color = presentationArtworkColor(item);
+    CHECK(color.r == 0 && color.g == 1 && color.b == 255 && color.a == 255);
+}
+
 static void testHomeSyncSchedule()
 {
     std::printf("[test] Home library sync schedule coalesce/throttle\n");

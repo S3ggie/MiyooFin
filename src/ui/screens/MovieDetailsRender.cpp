@@ -1,5 +1,6 @@
 #include "MovieDetailsScreen.hpp"
 #include "MovieDetailsScreenInternal.hpp"
+#include "../ArtworkPresentation.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
@@ -24,9 +25,10 @@ void MovieDetailsScreen::render(SDL_Surface *fb)
 
 void MovieDetailsScreen::renderContent(SDL_Surface *fb)
 {
-    // 1. Draw movie poster placeholder (artR/artG/artB tint)
+    // 1. Draw movie poster placeholder colour.
+    const SDL_Color color = presentationArtworkColor(m_movie);
     BitmapFont::fillRect(fb, POSTER_X, POSTER_Y, POSTER_W, POSTER_H,
-        m_movie.artR, m_movie.artG, m_movie.artB, 255);
+        color.r, color.g, color.b, color.a);
 
     // 2. Draw decoded artwork (aspect-fit, centered, no crop/stretch)
     SDL_Surface *artworkSurface=m_movieArtworkSurface?m_movieArtworkSurface:m_gridArtworkSurface;

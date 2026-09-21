@@ -30,8 +30,10 @@ bool catalogParityItemEqual(const MediaItem &expected,
         && expected.runTimeTicks == actual.runTimeTicks
         && expected.seriesName == actual.seriesName
         && expected.seriesId == actual.seriesId
-        && expected.seasonId == actual.seasonId && expected.artR == actual.artR
-        && expected.artG == actual.artG && expected.artB == actual.artB;
+        && expected.seasonId == actual.seasonId
+        && expected.placeholderArtwork.red == actual.placeholderArtwork.red
+        && expected.placeholderArtwork.green == actual.placeholderArtwork.green
+        && expected.placeholderArtwork.blue == actual.placeholderArtwork.blue;
     if (!equal) {
         std::printf("[catalog parity] MediaItem mismatch for synthetic id %s\n",
                     expected.id.c_str());
@@ -72,9 +74,9 @@ MediaItem catalogParityItem(const std::string &id, const std::string &type,
     item.parentIndexNumber = 2;
     item.runTimeTicks = 9876543;
     item.seriesName = "Parity 世界 Series";
-    item.artR = 11;
-    item.artG = 22;
-    item.artB = 33;
+    item.placeholderArtwork.red = 11;
+    item.placeholderArtwork.green = 22;
+    item.placeholderArtwork.blue = 33;
     return item;
 }
 
@@ -117,4 +119,3 @@ static std::vector<std::string> collectCatalogPageIds(
 }
 
 } // namespace
-

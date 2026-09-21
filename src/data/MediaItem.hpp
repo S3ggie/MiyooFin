@@ -4,9 +4,17 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <SDL2/SDL.h>
+#include <cstdint>
 
 namespace miyoofin {
+
+/// Persisted placeholder artwork colour.  The UI adapts this portable
+/// catalog representation to its presentation type.
+struct PlaceholderArtwork {
+    std::uint8_t red = 128;
+    std::uint8_t green = 128;
+    std::uint8_t blue = 128;
+};
 
 /// Represents a single movie, show, or episode.
 struct MediaItem {
@@ -34,20 +42,8 @@ struct MediaItem {
     std::string seriesId;              // Jellyfin SeriesId
     std::string seasonId;              // Jellyfin SeasonId
 
-    // Placeholder artwork tint colour (for the coloured rectangle)
-    Uint8 artR = 128, artG = 128, artB = 128;
-};
-
-/// A horizontal row of media items (one section on the home screen).
-struct MediaRow {
-    std::string            label;
-    std::vector<MediaItem> items;
-};
-
-/// A top-level tab with its rows.
-struct TabData {
-    std::string           name;
-    std::vector<MediaRow> rows;
+    // Placeholder artwork colour (for the coloured rectangle).
+    PlaceholderArtwork placeholderArtwork;
 };
 
 /// Convert Jellyfin RunTimeTicks (10,000,000 ticks/sec) to whole minutes.

@@ -1,5 +1,6 @@
 #include "SeriesScreen.hpp"
 #include "SeriesScreenInternal.hpp"
+#include "../ArtworkPresentation.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include <cstdio>
@@ -91,8 +92,9 @@ void SeriesScreen::drawSeasonPoster(SDL_Surface *fb, int x, int y, int w, int h,
                                     const PreparedArtwork *artwork)
 {
     // Placeholder colour fill (always drawn as fallback)
+    const SDL_Color color = presentationArtworkColor(season);
     BitmapFont::fillRect(fb, x, y, w, h,
-        season.artR, season.artG, season.artB, 255);
+        color.r, color.g, color.b, color.a);
 
     if (artwork && artwork->surface) {
         SDL_Rect dstRect = {x + artwork->x, y + artwork->y, 0, 0};
@@ -217,8 +219,9 @@ void SeriesScreen::render(SDL_Surface *fb)
     }
 
     // 3. Right-side show poster placeholder
+    const SDL_Color color = presentationArtworkColor(m_series);
     BitmapFont::fillRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H,
-        m_series.artR, m_series.artG, m_series.artB, 255);
+        color.r, color.g, color.b, color.a);
 
     if (m_seriesArtworkSurface.surface) {
         SDL_Rect dstRect = {m_seriesArtworkSurface.x, m_seriesArtworkSurface.y, 0, 0};

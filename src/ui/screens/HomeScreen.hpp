@@ -10,7 +10,6 @@
 #include "../../download/DownloadUi.hpp"
 #include "../../download/DownloadHierarchy.hpp"
 #include "../../playback/OfflinePlaybackJournal.hpp"
-#include "../../library/LibrarySync.hpp"
 #include "../../library/LibraryQuery.hpp"
 #include "../../library/LibraryCoordinator.hpp"
 #include "../../net/JellyfinLibraryEvents.hpp"

@@ -1,4 +1,5 @@
 #include "test_support.hpp"
+#include "../src/library/LibrarySync.hpp"
 #include <filesystem>
 #include "cases/test_catalog_core.inc"
 #include "cases/test_catalog_migration.inc"

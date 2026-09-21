@@ -59,6 +59,23 @@ unless explicitly requested.
 
 MiyooFin targets the Miyoo Mini Plus running OnionOS.
 
+### Current library and UI ownership boundaries
+
+* `LibraryCoordinator` is the singular production authority for `LibrarySync`,
+  `LibraryQuery` lifecycle, synchronization, catalog mutation, and publication.
+  Production application/UI code must not construct, include, or call the raw
+  `LibrarySync` service.
+* `LibraryQuery` is constructed only by `LibraryCoordinator`. Consumers use the
+  coordinator-published results and the coordinator-exposed query; its public
+  types remain domain-neutral.
+* Home presentation state, including `Home*` models, rows, tabs, navigation,
+  and offline presentation state, is owned by the UI. `src/net` produces API
+  and domain data and does not construct Home models.
+* `MediaItem` is a domain value type independent of SDL, UI frameworks, and
+  presentation state.
+* Tests for synchronization and catalog behavior use deterministic local
+  fixtures. Do not make correctness depend on public-network timing.
+
 Keep the SDL/UI thread responsive.
 
 Never perform blocking work on the UI thread such as:

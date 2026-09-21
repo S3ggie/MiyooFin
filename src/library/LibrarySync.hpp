@@ -1,6 +1,7 @@
 #ifndef MIYOOFIN_LIBRARY_SYNC_HPP
 #define MIYOOFIN_LIBRARY_SYNC_HPP
 
+#include "LibraryChangeTypes.hpp"
 #include "../catalog/CatalogDb.hpp"
 #include "../net/JellyfinLibraryEvents.hpp"
 #include "../net/Session.hpp"
@@ -47,26 +48,6 @@ struct MembershipReconcileResult {
     std::uint64_t committedGeneration = 0;
     std::size_t pagesRead = 0;
     std::size_t itemsStaged = 0;
-};
-
-struct LiveLibraryChangeResult {
-    bool success = false;
-    bool cancelled = false;
-    bool superseded = false;
-    bool catchUpRequired = false;
-    bool userDataChanged = false;
-    CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
-    std::string message;
-    std::uint64_t generation = 0;
-    std::uint64_t committedGeneration = 0;
-    std::int64_t checkpointMs = 0;
-    std::int64_t lastSuccessfulMs = 0;
-    std::int64_t lastReconcileMs = 0;
-    std::size_t itemsFetched = 0;
-    std::size_t itemsUpserted = 0;
-    std::size_t itemsRemoved = 0;
-    std::vector<MediaItem> items;
-    std::vector<std::string> removedIds;
 };
 
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The

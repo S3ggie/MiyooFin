@@ -48,7 +48,7 @@ src/
     HomeScreenSettings.cpp       Settings-tab behavior
     HomeScreenArtwork.cpp        Artwork/decode worker work
     HomeScreenHierarchy.cpp      Series/season hierarchy work
-    HomeScreenSync.cpp           Library synchronization worker
+    HomeScreenSync.cpp           Coordinator publication consumption and Home sync state
     HomeScreenOffline.cpp        Offline projection preparation/application
     HomeScreenSyncApply.cpp      UI-thread sync result publication
     HomeScreenRefresh.cpp        Lightweight refresh work
@@ -74,9 +74,12 @@ src/
     CatalogDbHierarchy.cpp       Hierarchy persistence and reconciliation
     CatalogDbTestCommands.cpp    Test-only command queue/dispatch (MIYOOFIN_TEST_BUILD)
   library/
-    LibrarySync.cpp              Synchronization owner and orchestration
-    LibrarySyncIncremental.cpp  Incremental and authoritative changes
-    LibrarySyncEvents.cpp        Live event queue plumbing
+    LibraryCoordinator.*         Session-scoped sync/query lifecycle and publication
+    LibraryChangeTypes.hpp       Domain library-change publication types
+    LibraryQuery.*               Domain-neutral bounded catalog reads and result types
+    LibrarySync.cpp              Lower-level sync primitive used by the coordinator
+    LibrarySyncIncremental.cpp  Incremental and authoritative sync operations
+    LibrarySyncEvents.cpp        Live event queue plumbing for the coordinator
   net/
     JellyfinApi.cpp              JellyfinApi core/coordinator
     JellyfinApiJson.cpp          JSON parsing and media conversion
@@ -104,10 +107,19 @@ output/                           Gitignored build artifacts
 
 ## Responsibility boundaries
 
-`HomeScreen` is the lifecycle and coordination point. Navigation, rendering, settings, downloads,
-artwork decoding, hierarchy/poster work, library synchronization, and lightweight refresh workers
-are implemented in concern-specific translation units. Small Home projections and planning helpers
-are independent modules that can be tested without the screen.
+`LibraryCoordinator` is the singular production owner of the shared library services. It constructs
+and owns `LibrarySync` and `LibraryQuery`, serializes synchronization and catalog mutations, and
+publishes immutable startup, population, maintenance, hierarchy, live-change, and Home-rail results.
+The application creates the coordinator for the active catalog scope and passes its published
+boundary/query to consumers. Production UI code does not construct or use raw `LibrarySync`, and
+`LibraryQuery` is constructed only by the coordinator.
+
+`HomeScreen` is a presentation consumer and lifecycle point for Home. It submits coordinator
+requests and consumes coordinator-published results; it owns navigation, tabs, rows, artwork state,
+and offline/Home presentation state. Home projections and planning helpers remain independent
+modules that can be tested without the screen. `src/net` converts Jellyfin responses to API/domain
+values and does not construct Home models. `MediaItem` remains a domain-neutral value type with no
+SDL, UI-framework, or presentation state.
 
 `EpisodeBrowserScreen` keeps its navigation and lifecycle coordination while rendering, thumbnail
 prefetch, playback handoff, and download planning/actions live in separate translation units.
@@ -136,10 +148,15 @@ remaining `*ForTest` helpers are small guarded definitions inside their owning m
 Module includes flow low-to-high: `data/` and `diagnostics/` are leaves; `net/`, `catalog/`,
 `cache/`, `download/`, `library/`, and `playback/` build on them; `app/` and `ui/` consume the rest.
 `tools/refactor-check.sh` enforces the CatalogDb boundary, the render-only MovieDetails boundary,
-test-only source registration, and the absence of stale include paths. One peer edge is intentional:
-download planning reads library contents through `LibraryQuery`/`LibrarySync`, while library
-synchronization reads the durable `DownloadStore` for offline-catalog reconciliation. That
-download/library crossing is deliberate; no other upward crossing is.
+test-only source registration, the production UI boundary around `LibrarySync`, and the absence of
+stale include paths. Download planning receives the coordinator-exposed `LibraryQuery` and
+coordinator services/results; it does not construct or consume raw production `LibrarySync`.
+Library synchronization reads the durable `DownloadStore` for offline-catalog reconciliation. These
+download/library crossings are deliberate; no other upward crossing is.
+
+The deterministic test boundary uses local catalog/database and loopback fixtures. Focused tests
+must not rely on public-network timing or availability to prove synchronization, publication, or
+presentation behavior; public-network behavior is covered only by the runtime integration path.
 
 ## Performance telemetry architecture
 
@@ -217,6 +234,7 @@ fallback remain behavior-facing boundaries.
 ```
 main.cpp
   └─ App / ScreenStack / InputManager
+       ├─ LibraryCoordinator (LibrarySync + LibraryQuery lifecycle/publication)
        └─ screen classes and their concern-specific implementation units
             ├─ HomeScreen + Home models and HomeScreen units
             ├─ EpisodeBrowserScreen + rendering/artwork/playback/download units

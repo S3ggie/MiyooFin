@@ -51,6 +51,50 @@ jobs:
         # Sequential on purpose: flows share the /tmp screenshot flag file.
         run: xvfb-run -a make ui-script-test
 
+      - name: Print failed scripted-flow diagnostics
+        if: ${{ failure() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          found=0
+          for scenario in smoke series login-400; do
+            dir="output/ui-script/$scenario"
+            if [[ ! -d "$dir" ]]; then
+              continue
+            fi
+            found=1
+            echo "::group::ui-script/$scenario/result.txt"
+            if [[ -f "$dir/result.txt" ]]; then
+              cat "$dir/result.txt"
+            else
+              echo "(missing $dir/result.txt)"
+            fi
+            echo "::endgroup::"
+            for log in app.log stub.log; do
+              path="$dir/$log"
+              echo "::group::ui-script/$scenario/$log (last 200 lines)"
+              if [[ -f "$path" ]]; then
+                tail -n 200 -- "$path"
+              else
+                echo "(missing $path)"
+              fi
+              echo "::endgroup::"
+            done
+          done
+          if [[ "$found" -eq 0 ]]; then
+            echo "ui-script: no scenario diagnostics were produced"
+          fi
+
+      - name: Upload ui-script failure diagnostics
+        if: ${{ failure() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-script-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/ui-script/**
+          if-no-files-found: warn
+
   sanitizers:
     # Runs the host test suite under AddressSanitizer + UndefinedBehaviorSanitizer
     # to catch memory errors, UB, and leaks in first-party code. A ThreadSanitizer

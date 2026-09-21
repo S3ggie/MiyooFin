@@ -80,7 +80,7 @@ bool HomeScreen::tryApplyCachedOfflineSnapshot()
     // state) advances the generation, so the stale cache misses here and
     // the snapshot is rebuilt instead of showing stale metadata forever.
     const auto sig = computeOfflineSignature(
-        downloads, m_topLevelSyncGeneration.load());
+        downloads, committedCatalogGeneration());
     if (sig != m_offlineSignature)
         return false;
     // Cache hit — apply the snapshot directly on the UI thread.

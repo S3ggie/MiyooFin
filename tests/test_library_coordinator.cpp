@@ -513,6 +513,83 @@ void testLiveChangeCatchUpApplyFailureRetainsBarrier()
     std::printf("[test] LibraryCoordinator catch-up apply failure retry OK\n");
 }
 
+void testLiveChangeCatchUpAndApplyPublishExactlyOnce()
+{
+    std::printf("[test] LibraryCoordinator catch-up plus apply publication\n");
+    const auto scope = coordinatorTestScope("live-catch-up-apply-once");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    const auto seeded = db->writeSyncState(
+        1000, 0, 0, {0, epoch, {}}).get();
+    CHECK(seeded.success);
+
+    const int listener = coordinatorTestListener();
+    if (listener < 0) {
+        removeCoordinatorTestScope(scope);
+        return;
+    }
+    std::atomic<int> requestCount{0};
+    std::thread server([&] {
+        const std::string bodies[] = {
+            R"({"Items":[]})",
+            R"({"Items":[{"Id":"applied-once","Type":"movie","Name":"Applied Once"}]})",
+        };
+        for (const auto &body : bodies) {
+            const int client = coordinatorAccept(listener);
+            if (client < 0)
+                return;
+            coordinatorReadRequest(client);
+            ++requestCount;
+            coordinatorSendJson(client, body);
+            ::close(client);
+        }
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.accessToken = "test-token";
+    session.userId = scope.user;
+    session.manualOfflineMode = true;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    JellyfinLibraryChangeBatch batch;
+    batch.catchUpRequired = true;
+    batch.itemsUpdated.push_back("applied-once");
+    CHECK(coordinator->requestLiveChange(batch));
+
+    library::LiveLibraryChangeResult result;
+    bool tookResult = false;
+    for (int i = 0; i < 1000 && !tookResult; ++i) {
+        tookResult = coordinator->takeLiveChangeResult(result);
+        if (!tookResult)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookResult);
+    CHECK(result.success && result.catchUpRequired);
+    CHECK(result.itemsFetched == 1 && result.itemsUpserted == 1);
+    CHECK(result.generation == 1);
+
+    // Catch-up and item application are one coordinator operation: Home gets
+    // exactly one success publication, not a catch-up publication followed by
+    // a second apply publication.
+    library::LiveLibraryChangeResult duplicate;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(!coordinator->takeLiveChangeResult(duplicate));
+    server.join();
+    CHECK(requestCount == 2);
+
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    ::close(listener);
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator catch-up plus apply publication OK\n");
+}
+
 void testSafetyReconcilePublishesCoordinatorResult()
 {
     std::printf("[test] LibraryCoordinator safety reconcile result\n");
@@ -775,6 +852,86 @@ void testFullPopulationSuccessCommitsCheckpoint()
     std::printf("[test] LibraryCoordinator full population success OK\n");
 }
 
+void testFullPopulationAfterLiveChangeAdvancesGeneration()
+{
+    std::printf("[test] LibraryCoordinator full-after-live generation\n");
+    const auto scope = coordinatorTestScope("full-after-live-generation");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    const int listener = coordinatorTestListener();
+    if (listener < 0) {
+        removeCoordinatorTestScope(scope);
+        return;
+    }
+    const std::string viewsBody =
+        R"({"Items":[{"Id":"movies","Name":"Movies","CollectionType":"movies"}]})";
+    const std::string pageBody =
+        R"({"StartIndex":0,"TotalRecordCount":1,"Items":[{"Id":"full-after-live","Type":"Movie","Name":"Full After Live"}]})";
+    std::thread server([&] {
+        const std::string bodies[] = {
+            R"({"Items":[{"Id":"live-before-full","Type":"movie","Name":"Live Before Full"}]})",
+            viewsBody,
+            pageBody,
+        };
+        for (const auto &body : bodies) {
+            const int client = coordinatorAccept(listener);
+            if (client < 0)
+                return;
+            coordinatorReadRequest(client);
+            coordinatorSendJson(client, body);
+            ::close(client);
+        }
+    });
+
+    Session session;
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.accessToken = "test-token";
+    session.userId = scope.user;
+    session.manualOfflineMode = true;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(
+        session, db, epoch);
+    coordinator->start();
+
+    JellyfinLibraryChangeBatch liveBatch;
+    liveBatch.itemsUpdated.push_back("live-before-full");
+    CHECK(coordinator->requestLiveChange(liveBatch));
+    library::LiveLibraryChangeResult liveResult;
+    bool tookLiveResult = false;
+    for (int i = 0; i < 1000 && !tookLiveResult; ++i) {
+        tookLiveResult = coordinator->takeLiveChangeResult(liveResult);
+        if (!tookLiveResult)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(tookLiveResult);
+    CHECK(liveResult.success && liveResult.generation > 0);
+
+    std::uint64_t request = 0;
+    CHECK(coordinator->requestFullPopulation(request));
+    bool sawPage = false;
+    library::FullPopulationUpdate terminal;
+    CHECK(takeFullUpdate(*coordinator, request, terminal, sawPage));
+    server.join();
+
+    CHECK(sawPage && terminal.success && terminal.committed);
+    CHECK(terminal.generation == liveResult.generation + 1);
+    CHECK(terminal.committedGeneration == terminal.generation);
+    const auto status = coordinator->status();
+    CHECK(status.committedGeneration == terminal.generation);
+    const auto state = db->readSyncState(
+        false, 0, 0, {0, epoch, {}}).get();
+    CHECK(state.success && state.committedGeneration == terminal.generation);
+
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    ::close(listener);
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator full-after-live generation OK\n");
+}
+
 void testFullPopulationCancellationAbortsStagedGeneration()
 {
     std::printf("[test] LibraryCoordinator full population cancellation\n");
@@ -1025,6 +1182,7 @@ int main()
     testLiveChangeQueueFullDrainFallsBackToCatchUp();
     testLiveChangeCatchUpFailureIsRetriedByCoordinator();
     testLiveChangeCatchUpApplyFailureRetainsBarrier();
+    testLiveChangeCatchUpAndApplyPublishExactlyOnce();
     testLiveChangesWaitForSerializedSyncSlots();
     testSafetyReconcilePublishesCoordinatorResult();
     testSafetyReconcileStopPublishesCompletion();
@@ -1033,6 +1191,7 @@ int main()
     testHomeRailCachedFailureRetainsInvalidRail();
     testHomeRailCoalescesAndRerunsAfterConsumption();
     testFullPopulationSuccessCommitsCheckpoint();
+    testFullPopulationAfterLiveChangeAdvancesGeneration();
     testFullPopulationCancellationAbortsStagedGeneration();
     testFullPopulationFailureAbortsWithoutCheckpoint();
     testFullPopulationRejectsStaleRequestAndHomeState();

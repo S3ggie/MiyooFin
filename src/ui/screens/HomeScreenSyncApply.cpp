@@ -28,7 +28,7 @@ void HomeScreen::publishCoordinatorHomeState(
         return;
     library::HomeState state;
     state.scopeEpoch = catalogScopeEpoch();
-    state.catalogGeneration = m_topLevelSyncGeneration.load();
+    state.catalogGeneration = committedCatalogGeneration();
     state.offline = offline;
     state.stale = stale;
     state.contentValid = contentValid;
@@ -47,8 +47,12 @@ void HomeScreen::publishCoordinatorHomeState(
     state.sync.cancelRequested = sync.cancelRequested;
     state.sync.success = sync.success;
     state.sync.generation = sync.generation;
-    state.sync.lastSuccessfulMs = m_syncState.lastSuccessfulMs;
-    state.sync.lastReconcileMs = m_syncState.lastReconcileMs;
+    state.sync.committedGeneration = sync.committedGeneration;
+    state.sync.lastSuccessfulMs = sync.lastSuccessfulMs;
+    state.sync.lastReconcileMs = sync.lastReconcileMs;
+    state.sync.safetyReconcileDue = sync.safetyReconcileDue;
+    state.sync.maintenanceDue = sync.maintenanceDue;
+    state.sync.manualOffline = sync.manualOffline;
     (void)m_libraryCoordinator->publishHomeState(std::move(state));
 }
 
@@ -388,14 +392,10 @@ void HomeScreen::finishSafetyReconcile()
     // Thread join deferred to LibraryCoordinator teardown; the UI thread only
     // consumes the completed result here.
     m_safetyReconcileInFlight = false;
-    if (result.generation > m_topLevelSyncGeneration.load())
-        m_topLevelSyncGeneration.store(result.generation);
     if (result.lastSuccessfulMs > 0) {
         m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
         m_syncState.lastReconcileMs = result.lastReconcileMs;
     }
-    m_lastSafetyReconcileMs = result.lastReconcileMs > 0
-        ? result.lastReconcileMs : wallClockMs();
     if (!result.success && !result.message.empty())
         std::printf("[HomeScreen] safety reconciliation failed: %s\n",
                     result.message.c_str());
@@ -589,11 +589,6 @@ void HomeScreen::finishFetch()
         // the live-change path from starting a competing top-level sync
         // prematurely.  The thread is joined later in joinAllWorkers().
         m_syncSchedule.complete(SDL_GetTicks(), m_fetchError.empty());
-        if (m_fetchError.empty()) {
-            m_lastSafetyReconcileMs = wallClockMs();
-        } else {
-            m_lastSafetyReconcileMs = 0;
-        }
         // If the user toggled offline mode while this fetch was in-flight,
         // the fetched tabs may not match the current session mode.  Re-fetch
         // so the worker takes the correct path (offline snapshot or full

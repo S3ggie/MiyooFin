@@ -64,7 +64,12 @@ static void testHomeIncrementalPublicationPolicy()
     CHECK(sourceContains(sync, "updateLiveLibraryChanges()"));
     CHECK(sourceContains(coordinator, "catchUpChangedCatalog"));
     CHECK(sourceContains(coordinator, "reconcileAuthoritativeMembership"));
-    CHECK(sourceContains(apply, "m_lastSafetyReconcileMs"));
+    CHECK(sourceContains(apply,
+                         "state.sync.committedGeneration = sync.committedGeneration"));
+    CHECK(sourceContains(coordinator,
+                         "status.committedGeneration = m_catalogGeneration"));
+    CHECK(sourceContains(coordinator,
+                         "status.maintenanceDue = status.safetyReconcileDue"));
     CHECK(sourceContains(apply, "m_cachedSnapshot.continueWatching"));
     std::printf("[test] Home incremental publication policy OK\n");
 }
@@ -488,20 +493,32 @@ static void testAnimeSelectionSurvivesSharedWindowTrim()
     std::printf("[test] Anime selection survives shared window trim OK\n");
 }
 
-static void testTopLevelSyncEpochMaxIsAtomic()
+static void testCoordinatorCommittedGenerationStatus()
 {
-    std::printf("[test] top-level sync epoch max is atomic\n");
+    std::printf("[test] coordinator committed generation/status\n");
     const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string home=readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const std::string coordinator=readTestBytes(
+        "src/library/LibraryCoordinator.cpp");
+    const std::string header=readTestBytes(
+        "src/library/LibraryCoordinator.hpp");
     CHECK(!sync.empty());
-    // Structural: the catalog-seed site runs on the fetch worker while
-    // live-change rail refreshes increment the same epoch, so a
-    // load-then-store max can lose an increment — both remaining top-level
-    // epoch seeds must be CAS loops.  Hierarchy generation is now owned by
-    // LibraryCoordinator, so its former two CAS loops are intentionally gone.
-    CHECK(sourceCount(sync,"compare_exchange_weak")==2);
-    CHECK(sourceLacks(sync,"m_topLevelSyncGeneration = gen"));
-    CHECK(sourceLacks(sync,"m_hierarchyGeneration.store(gen)"));
-    std::printf("[test] top-level sync epoch max is atomic OK\n");
+    CHECK(!home.empty());
+    CHECK(!coordinator.empty());
+    CHECK(!header.empty());
+    // The committed catalog generation and maintenance policy are coordinator
+    // state.  Home only projects the coordinator status and uses the same
+    // committed generation for its cache and hierarchy guards.
+    CHECK(sourceContains(header, "std::uint64_t committedGeneration = 0"));
+    CHECK(sourceContains(coordinator,
+                         "status.committedGeneration = m_catalogGeneration"));
+    CHECK(sourceContains(coordinator,
+                         "status.maintenanceDue = status.safetyReconcileDue"));
+    CHECK(sourceContains(home,
+                         "m_libraryCoordinator->status().committedGeneration"));
+    CHECK(sourceContains(sync, "committedCatalogGeneration()"));
+    CHECK(sourceLacks(sync,"m_topLevelSyncGeneration"));
+    std::printf("[test] coordinator committed generation/status OK\n");
 }
 
 static void testHomeUsesDedicatedAnimeCatalogPage()
@@ -1344,10 +1361,9 @@ static void testOfflineSnapshotSignatureStability()
     CHECK(sourceContains(hdr, "m_offlineSignature"));
     CHECK(sourceContains(hdr, "m_haveOfflineSignature"));
     CHECK(sourceContains(hdr, "m_haveOfflineSnapshotCache"));
-    // The signature must carry the catalog epoch, backed by an atomic
-    // counter the UI thread can read without a database query.
+    // The signature must carry the coordinator's committed catalog generation.
     CHECK(sourceContains(hdr, "catalogGeneration"));
-    CHECK(sourceContains(hdr, "std::atomic<std::uint64_t> m_topLevelSyncGeneration"));
+    CHECK(sourceContains(hdr, "std::uint64_t committedCatalogGeneration() const"));
 
     std::printf("[test] Offline snapshot signature stability/change detection OK\n");
 }
@@ -1412,7 +1428,7 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(sync, "m_offlineSnapshotCache = m_cachedSnapshot"));
         CHECK(sourceContains(sync, "m_haveOfflineSnapshotCache = true"));
         CHECK(sourceContains(sync, "m_offlineSignature = computeOfflineSignature(downloads,"));
-        CHECK(sourceContains(sync, "m_topLevelSyncGeneration.load()"));
+        CHECK(sourceContains(sync, "committedCatalogGeneration()"));
         CHECK(sourceContains(sync, "m_haveOfflineSignature = true"));
     }
 
@@ -1422,7 +1438,7 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(offline, "m_haveOfflineSignature"));
         CHECK(sourceContains(offline, "m_haveOfflineSnapshotCache"));
         CHECK(sourceContains(offline, "computeOfflineSignature(downloads,"));
-        CHECK(sourceContains(offline, "m_topLevelSyncGeneration.load()"));
+        CHECK(sourceContains(offline, "committedCatalogGeneration()"));
         CHECK(sourceContains(offline, "m_offlineSnapshotCache"));
         CHECK(sourceContains(offline, "applyPresentationProjection()"));
     }

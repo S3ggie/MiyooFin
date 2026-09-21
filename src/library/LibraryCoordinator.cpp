@@ -59,6 +59,7 @@ LibraryCoordinator::LibraryCoordinator(Session session,
     , m_db(std::move(db))
     , m_scopeEpoch(scopeEpoch)
 {
+    m_manualOfflineMode = m_session.manualOfflineMode;
 }
 
 LibraryCoordinator::~LibraryCoordinator()
@@ -150,14 +151,17 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                     result.mode = StartupSyncMode::FullReconcile;
                 } else {
                     result.generation = state.committedGeneration;
+                    result.committedGeneration = state.committedGeneration;
                     result.lastSuccessfulMs = state.lastSuccessfulMs;
                     result.lastReconcileMs = state.lastReconcileMs;
                     if (result.generation > 0)
-                        sync->seedGeneration(result.generation);
+                        sync->seedTransactionGeneration(result.generation);
                     {
                         std::lock_guard<std::mutex> lock(m_startupMutex);
                         if (result.generation > m_catalogGeneration)
                             m_catalogGeneration = result.generation;
+                        m_lastSuccessfulMs = result.lastSuccessfulMs;
+                        m_lastReconcileMs = result.lastReconcileMs;
                     }
 
                     const bool validCheckpoint = catalogHasRows
@@ -184,14 +188,29 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                     result.error = CatalogDbErrorCategory::Superseded;
                     result.message = "startup sync cancelled";
                 } else if (result.mode == StartupSyncMode::DeltaCatchUp) {
+                    std::uint64_t committedGeneration = 0;
+                    {
+                        std::lock_guard<std::mutex> lock(m_startupMutex);
+                        committedGeneration = m_catalogGeneration + 1;
+                    }
                     const auto catchUp = sync->catchUpChangedCatalog(
-                        state.lastSuccessfulMs, cancellation).get();
+                        state.lastSuccessfulMs, cancellation,
+                        committedGeneration).get();
                     result.success = catchUp.success;
                     result.cancelled = catchUp.cancelled;
                     result.superseded = catchUp.superseded;
                     result.error = catchUp.error;
                     result.message = catchUp.message;
                     result.checkpointMs = catchUp.checkpointMs;
+                    if (catchUp.success) {
+                        result.committedGeneration = committedGeneration;
+                        result.generation = committedGeneration;
+                        result.lastSuccessfulMs = catchUp.checkpointMs;
+                        std::lock_guard<std::mutex> lock(m_startupMutex);
+                        m_catalogGeneration = std::max(
+                            m_catalogGeneration, committedGeneration);
+                        m_lastSuccessfulMs = result.lastSuccessfulMs;
+                    }
                 } else {
                     // SkipFresh and FullReconcile are both successful policy
                     // decisions.  Home owns only the still-unmigrated full
@@ -268,7 +287,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             FullPopulationUpdate terminal;
             terminal.request = requestId;
             terminal.terminal = true;
-            std::uint64_t generation = 0;
+            std::uint64_t transactionGeneration = 0;
+            std::uint64_t committedGeneration = 0;
             bool transactionStarted = false;
             bool transactionCommitted = false;
             std::vector<LibraryView> views;
@@ -299,7 +319,10 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             };
             const auto publishTerminal = [&](FullPopulationUpdate value) {
                 value.request = requestId;
-                value.generation = generation;
+                value.generation = transactionCommitted
+                    ? committedGeneration : m_catalogGeneration;
+                value.committedGeneration = transactionCommitted
+                    ? committedGeneration : m_catalogGeneration;
                 value.terminal = true;
                 value.committed = transactionCommitted;
                 value.views = views;
@@ -331,8 +354,12 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                     return;
                 }
 
-                generation = sync->nextGeneration();
-                const auto begin = sync->begin(generation).get();
+                {
+                    std::lock_guard<std::mutex> guard(m_startupMutex);
+                    committedGeneration = m_catalogGeneration + 1;
+                }
+                transactionGeneration = sync->nextTransactionGeneration();
+                const auto begin = sync->begin(transactionGeneration).get();
                 if (!begin.success) {
                     terminal.error = begin.error;
                     terminal.message = begin.message;
@@ -352,7 +379,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         }, viewsError)) {
                     terminal.message = viewsError.empty()
                         ? "Failed to fetch libraries" : viewsError;
-                    sync->abort(generation).get();
+                    sync->abort(transactionGeneration).get();
                     transactionStarted = false;
                     publishTerminal(std::move(terminal));
                     return;
@@ -371,7 +398,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                     bool firstPageForView = true;
                     for (;;) {
                         if (cancelled()) {
-                            sync->abort(generation).get();
+                            sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             failForCancellation();
                             return;
@@ -395,7 +422,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                                 : CatalogDbErrorCategory::None;
                             terminal.message = pageError.empty()
                                 ? "Failed to fetch library page" : pageError;
-                            sync->abort(generation).get();
+                            sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             publishTerminal(std::move(terminal));
                             return;
@@ -417,7 +444,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         writePage.collectionType = view.collectionType;
                         writePage.ordinalStart = static_cast<std::size_t>(start);
                         writePage.viewOrdinal = static_cast<int>(viewOrdinal);
-                        writePage.syncGeneration = generation;
+                        writePage.syncGeneration = transactionGeneration;
                         writePage.finalPage = !page.hasMore;
                         const auto written = sync->stage(writePage).get();
                         if (!written.success) {
@@ -427,7 +454,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                             terminal.message = written.message.empty()
                                 ? "Failed to persist library page"
                                 : written.message;
-                            sync->abort(generation).get();
+                            sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             publishTerminal(std::move(terminal));
                             return;
@@ -448,7 +475,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         }
 
                         FullPopulationUpdate update;
-                        update.generation = generation;
+                        update.generation = committedGeneration;
                         update.pageValid = true;
                         update.firstPage = firstPage;
                         update.view = view;
@@ -470,12 +497,12 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 }
 
                 if (cancelled()) {
-                    sync->abort(generation).get();
+                    sync->abort(transactionGeneration).get();
                     transactionStarted = false;
                     failForCancellation();
                     return;
                 }
-                const auto finalized = sync->finalize(generation).get();
+                const auto finalized = sync->finalize(transactionGeneration).get();
                 transactionStarted = false;
                 if (!finalized.success) {
                     terminal.error = finalized.error;
@@ -484,18 +511,18 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                     return;
                 }
                 transactionCommitted = true;
+                const std::int64_t nowMs = coordinatorWallClockMs();
                 {
                     std::lock_guard<std::mutex> guard(m_startupMutex);
-                    if (generation > m_catalogGeneration)
-                        m_catalogGeneration = generation;
+                    if (committedGeneration > m_catalogGeneration)
+                        m_catalogGeneration = committedGeneration;
                 }
                 terminal.committed = true;
-                const std::int64_t nowMs = coordinatorWallClockMs();
                 // Once finalize has committed the authoritative membership,
                 // the checkpoint is not cancellable: restart must not regress
                 // to the previous committed boundary.
                 const auto checkpoint = sync->writeSyncState(
-                    nowMs, nowMs, generation).get();
+                    nowMs, nowMs, committedGeneration).get();
                 terminal.checkpointCommitted = checkpoint.success;
                 terminal.checkpointMs = checkpoint.lastSuccessfulMs;
                 terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
@@ -507,14 +534,20 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         : checkpoint.message;
                 }
                 terminal.success = checkpoint.success;
+                if (checkpoint.success) {
+                    std::lock_guard<std::mutex> guard(m_startupMutex);
+                    m_lastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                    m_lastReconcileMs = checkpoint.lastReconcileMs;
+                }
                 publishTerminal(std::move(terminal));
             } catch (const std::exception &error) {
                 if (transactionStarted) {
-                    try { sync->abort(generation).get(); } catch (...) { }
+                    try { sync->abort(transactionGeneration).get(); } catch (...) { }
                 }
                 FullPopulationUpdate failure;
                 failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled && generation != 0;
+                failure.superseded = !failure.cancelled
+                    && transactionGeneration != 0;
                 failure.error = failure.cancelled
                     ? CatalogDbErrorCategory::Superseded
                     : CatalogDbErrorCategory::SqliteError;
@@ -522,11 +555,12 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 publishTerminal(std::move(failure));
             } catch (...) {
                 if (transactionStarted) {
-                    try { sync->abort(generation).get(); } catch (...) { }
+                    try { sync->abort(transactionGeneration).get(); } catch (...) { }
                 }
                 FullPopulationUpdate failure;
                 failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled && generation != 0;
+                failure.superseded = !failure.cancelled
+                    && transactionGeneration != 0;
                 failure.error = failure.cancelled
                     ? CatalogDbErrorCategory::Superseded
                     : CatalogDbErrorCategory::SqliteError;
@@ -592,7 +626,7 @@ bool LibraryCoordinator::requestSafetyReconcile()
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || m_session.manualOfflineMode
+        if (m_stopped || !m_running || !m_sync || m_manualOfflineMode
             || m_startupInFlight || m_startupResultReady
             || m_fullSyncInFlight || !m_fullPopulationUpdates.empty()
             || m_safetyReconcileInFlight
@@ -625,12 +659,18 @@ bool LibraryCoordinator::requestSafetyReconcile()
             [this, cancellation, sync, db, scopeEpoch] {
             SafetyReconcileResult result;
             std::uint64_t committedGeneration = 0;
+            std::uint64_t operationGeneration = 0;
             const auto cancelled = [&] {
                 return cancellation && cancellation->load();
             };
-            const auto advanceCommittedGeneration = [&] {
+            const auto nextCommittedGeneration = [&] {
                 std::lock_guard<std::mutex> guard(m_startupMutex);
-                committedGeneration = ++m_catalogGeneration;
+                return m_catalogGeneration + 1;
+            };
+            const auto commitGeneration = [&](std::uint64_t generation) {
+                std::lock_guard<std::mutex> guard(m_startupMutex);
+                m_catalogGeneration = std::max(m_catalogGeneration, generation);
+                committedGeneration = m_catalogGeneration;
                 return committedGeneration;
             };
             const auto publish = [this](SafetyReconcileResult value) {
@@ -657,11 +697,13 @@ bool LibraryCoordinator::requestSafetyReconcile()
                         result.error = state.error;
                         result.message = state.message;
                     } else {
-                        sync->seedGeneration(state.committedGeneration);
+                        sync->seedTransactionGeneration(state.committedGeneration);
                         {
                             std::lock_guard<std::mutex> guard(m_startupMutex);
                             if (state.committedGeneration > m_catalogGeneration)
                                 m_catalogGeneration = state.committedGeneration;
+                            m_lastSuccessfulMs = state.lastSuccessfulMs;
+                            m_lastReconcileMs = state.lastReconcileMs;
                             result.lastSuccessfulMs = state.lastSuccessfulMs;
                             result.lastReconcileMs = state.lastReconcileMs;
                         }
@@ -670,9 +712,13 @@ bool LibraryCoordinator::requestSafetyReconcile()
                             result.error = CatalogDbErrorCategory::Superseded;
                             result.message = "safety reconcile cancelled";
                         } else {
+                            operationGeneration = nextCommittedGeneration();
                             if (state.lastSuccessfulMs > 0) {
+                                const auto catchUpGeneration =
+                                    operationGeneration;
                                 const auto catchUp = sync->catchUpChangedCatalog(
-                                    state.lastSuccessfulMs, cancellation).get();
+                                    state.lastSuccessfulMs, cancellation,
+                                    catchUpGeneration).get();
                                 if (!catchUp.success) {
                                     result.cancelled = catchUp.cancelled;
                                     result.superseded = catchUp.superseded;
@@ -684,8 +730,16 @@ bool LibraryCoordinator::requestSafetyReconcile()
                                 result.checkpointMs = catchUp.checkpointMs;
                                 result.lastSuccessfulMs = catchUp.checkpointMs;
                                 committedGeneration =
-                                    advanceCommittedGeneration();
+                                    commitGeneration(catchUpGeneration);
                                 result.generation = committedGeneration;
+                                result.committedGeneration =
+                                    committedGeneration;
+                                {
+                                    std::lock_guard<std::mutex> guard(
+                                        m_startupMutex);
+                                    m_lastSuccessfulMs =
+                                        result.lastSuccessfulMs;
+                                }
                             }
 
                             if (cancelled()) {
@@ -693,9 +747,13 @@ bool LibraryCoordinator::requestSafetyReconcile()
                                 result.error = CatalogDbErrorCategory::Superseded;
                                 result.message = "safety reconcile cancelled";
                             } else {
+                                committedGeneration = operationGeneration;
+                                const auto transactionGeneration =
+                                    sync->nextTransactionGeneration();
                                 const auto reconciled =
                                     sync->reconcileAuthoritativeMembership(
-                                        cancellation).get();
+                                        cancellation, transactionGeneration,
+                                        committedGeneration).get();
                                 if (!reconciled.success) {
                                     result.cancelled = reconciled.cancelled;
                                     result.superseded = reconciled.superseded;
@@ -703,15 +761,17 @@ bool LibraryCoordinator::requestSafetyReconcile()
                                     result.message = reconciled.message;
                                 } else {
                                     committedGeneration =
-                                        advanceCommittedGeneration();
+                                        commitGeneration(committedGeneration);
                                     result.generation = committedGeneration;
+                                    result.committedGeneration =
+                                        committedGeneration;
                                     const auto nowMs = coordinatorWallClockMs();
                                     // The authoritative commit is already
                                     // durable.  Finish its checkpoint without
                                     // cancellation so restart cannot regress
                                     // to the prior committed boundary.
                                     auto checkpoint = sync->writeSyncState(
-                                        nowMs, nowMs, reconciled.generation)
+                                        nowMs, nowMs, committedGeneration)
                                         .get();
                                     result.success = true;
                                     result.checkpointMs = checkpoint.success
@@ -725,6 +785,14 @@ bool LibraryCoordinator::requestSafetyReconcile()
                                         checkpoint.success
                                             ? checkpoint.lastReconcileMs
                                             : result.lastReconcileMs;
+                                    if (checkpoint.success) {
+                                        std::lock_guard<std::mutex> guard(
+                                            m_startupMutex);
+                                        m_lastSuccessfulMs =
+                                            result.lastSuccessfulMs;
+                                        m_lastReconcileMs =
+                                            result.lastReconcileMs;
+                                    }
                                     if (!checkpoint.success
                                         && result.message.empty()) {
                                         result.error = checkpoint.error;
@@ -744,6 +812,8 @@ bool LibraryCoordinator::requestSafetyReconcile()
             }
             result.generation = std::max(result.generation,
                                          committedGeneration);
+            result.committedGeneration = std::max(
+                result.committedGeneration, committedGeneration);
             publish(std::move(result));
             });
     } catch (...) {
@@ -769,7 +839,7 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || m_session.manualOfflineMode
+        if (m_stopped || !m_running || m_manualOfflineMode
             || m_homeRailInFlight || m_homeRailResultReady)
             return false;
         if (m_homeRailThread.joinable())
@@ -1532,14 +1602,25 @@ void LibraryCoordinator::liveChangeWorker()
         result.catchUpRequired = batch.catchUpRequired;
         result.userDataChanged = batch.userDataChanged;
         std::uint64_t committedGeneration = identity.generation;
+        std::uint64_t operationGeneration = 0;
         bool catchUpSucceeded = !batch.catchUpRequired;
         const auto cancelled = [&] {
             return cancellation && cancellation->load();
         };
-        const auto advanceCommittedGeneration = [&] {
+        const auto nextCommittedGeneration = [&] {
             std::lock_guard<std::mutex> lock(m_startupMutex);
-            committedGeneration = ++m_catalogGeneration;
+            return m_catalogGeneration + 1;
+        };
+        const auto commitGeneration = [&](std::uint64_t generation) {
+            std::lock_guard<std::mutex> lock(m_startupMutex);
+            m_catalogGeneration = std::max(m_catalogGeneration, generation);
+            committedGeneration = m_catalogGeneration;
             return committedGeneration;
+        };
+        const auto nextOperationGeneration = [&] {
+            if (operationGeneration == 0)
+                operationGeneration = nextCommittedGeneration();
+            return operationGeneration;
         };
         const auto publish = [&](LiveLibraryChangeResult value) {
             std::lock_guard<std::mutex> lock(m_startupMutex);
@@ -1589,8 +1670,11 @@ void LibraryCoordinator::liveChangeWorker()
                         result.error = CatalogDbErrorCategory::Superseded;
                         result.message = "live library change cancelled";
                     } else if (state.lastSuccessfulMs > 0) {
+                        const auto catchUpGeneration =
+                            nextOperationGeneration();
                         const auto catchUp = m_sync->catchUpChangedCatalog(
-                            state.lastSuccessfulMs, cancellation).get();
+                            state.lastSuccessfulMs, cancellation,
+                            catchUpGeneration).get();
                         if (!catchUp.success) {
                             result.cancelled = catchUp.cancelled;
                             result.superseded = catchUp.superseded;
@@ -1600,26 +1684,39 @@ void LibraryCoordinator::liveChangeWorker()
                             catchUpSucceeded = true;
                             result.checkpointMs = catchUp.checkpointMs;
                             result.lastSuccessfulMs = catchUp.checkpointMs;
-                            result.generation = advanceCommittedGeneration();
+                            result.generation = commitGeneration(
+                                catchUpGeneration);
+                            result.committedGeneration = result.generation;
+                            {
+                                std::lock_guard<std::mutex> lock(
+                                    m_startupMutex);
+                                m_lastSuccessfulMs = result.lastSuccessfulMs;
+                            }
                         }
                     } else {
+                        committedGeneration = nextOperationGeneration();
+                        const auto transactionGeneration =
+                            m_sync->nextTransactionGeneration();
                         const auto reconciled =
                             m_sync->reconcileAuthoritativeMembership(
-                                cancellation).get();
+                                cancellation, transactionGeneration,
+                                committedGeneration).get();
                         if (!reconciled.success) {
                             result.cancelled = reconciled.cancelled;
                             result.superseded = reconciled.superseded;
                             result.error = reconciled.error;
                             result.message = reconciled.message;
                         } else {
-                            result.generation = advanceCommittedGeneration();
+                            result.generation = commitGeneration(
+                                committedGeneration);
+                            result.committedGeneration = result.generation;
                             const std::int64_t nowMs =
                                 coordinatorWallClockMs();
                             // The authoritative membership commit is already
                             // durable. Finish this checkpoint even if the
                             // caller requested cancellation meanwhile.
                             const auto checkpoint = m_sync->writeSyncState(
-                                nowMs, nowMs, reconciled.generation).get();
+                                nowMs, nowMs, committedGeneration).get();
                             if (checkpoint.success) {
                                 catchUpSucceeded = true;
                                 result.checkpointMs = checkpoint.lastSuccessfulMs;
@@ -1627,6 +1724,10 @@ void LibraryCoordinator::liveChangeWorker()
                                     checkpoint.lastSuccessfulMs;
                                 result.lastReconcileMs =
                                     checkpoint.lastReconcileMs;
+                                std::lock_guard<std::mutex> lock(
+                                    m_startupMutex);
+                                m_lastSuccessfulMs = result.lastSuccessfulMs;
+                                m_lastReconcileMs = result.lastReconcileMs;
                             } else if (result.message.empty()) {
                                 result.error = checkpoint.error;
                                 result.message = checkpoint.message;
@@ -1646,7 +1747,7 @@ void LibraryCoordinator::liveChangeWorker()
                     result.success = true;
                 } else {
                     auto applied = m_sync->applyLibraryChanges(
-                        batch, cancellation).get();
+                        batch, cancellation, nextOperationGeneration()).get();
                     const bool userDataChanged = result.userDataChanged;
                     const auto priorGeneration = result.generation;
                     result = std::move(applied);
@@ -1655,8 +1756,11 @@ void LibraryCoordinator::liveChangeWorker()
                                                  priorGeneration);
                     result.catchUpRequired = batch.catchUpRequired
                         || result.catchUpRequired;
-                    if (result.success)
-                        result.generation = advanceCommittedGeneration();
+                    if (result.success) {
+                        result.generation = commitGeneration(
+                            nextOperationGeneration());
+                        result.committedGeneration = result.generation;
+                    }
                 }
             }
         } catch (const std::exception &error) {
@@ -1693,6 +1797,8 @@ void LibraryCoordinator::liveChangeWorker()
             }
         }
         result.generation = std::max(result.generation, committedGeneration);
+        result.committedGeneration = std::max(
+            result.committedGeneration, committedGeneration);
         publish(std::move(result));
     }
 }
@@ -1709,6 +1815,12 @@ void LibraryCoordinator::cancelSafetyReconcile() noexcept
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (m_safetyReconcileCancellation)
         m_safetyReconcileCancellation->store(true);
+}
+
+void LibraryCoordinator::setManualOfflineMode(bool manualOffline) noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    m_manualOfflineMode = manualOffline;
 }
 
 void LibraryCoordinator::stop() noexcept
@@ -1801,6 +1913,16 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     status.startupInFlight = m_startupInFlight;
     status.fullSyncInFlight = m_fullSyncInFlight;
     status.safetyReconcileInFlight = m_safetyReconcileInFlight;
+    status.committedGeneration = m_catalogGeneration;
+    status.lastSuccessfulMs = m_lastSuccessfulMs;
+    status.lastReconcileMs = m_lastReconcileMs;
+    status.manualOffline = m_manualOfflineMode;
+    const auto nowMs = coordinatorWallClockMs();
+    status.safetyReconcileDue = status.lastReconcileMs <= 0
+        || nowMs < status.lastReconcileMs
+        || nowMs - status.lastReconcileMs >= kSafetyReconcileIntervalMs;
+    status.maintenanceDue = status.safetyReconcileDue
+        && !status.manualOffline;
     status.cancelRequested = m_startupCancellation
         && m_startupCancellation->load();
     status.inFlight = status.inFlight || status.startupInFlight

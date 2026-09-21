@@ -44,6 +44,7 @@ struct MembershipReconcileResult {
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     std::size_t pagesRead = 0;
     std::size_t itemsStaged = 0;
 };
@@ -57,6 +58,7 @@ struct LiveLibraryChangeResult {
     CatalogDbErrorCategory error = CatalogDbErrorCategory::None;
     std::string message;
     std::uint64_t generation = 0;
+    std::uint64_t committedGeneration = 0;
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
@@ -80,11 +82,12 @@ public:
     LibrarySync(const LibrarySync&) = delete;
     LibrarySync& operator=(const LibrarySync&) = delete;
 
-    std::uint64_t nextGeneration();
-    /// Seed the generation counter so session writes start at or above the
-    /// persisted committed_generation.  Only has an effect when `gen` exceeds
-    /// the current counter.
-    void seedGeneration(std::uint64_t gen);
+    /// Allocate a CatalogDb transaction identity.  This is deliberately
+    /// separate from the coordinator-owned committed catalog generation.
+    std::uint64_t nextTransactionGeneration();
+    /// Seed transaction identities after restoring persisted state.  This
+    /// counter is never published as an authoritative catalog generation.
+    void seedTransactionGeneration(std::uint64_t gen);
     std::shared_ptr<std::atomic_bool> cancellation() const { return m_cancel; }
     std::future<CatalogDbTopLevelSyncResult> begin(std::uint64_t generation);
     std::future<CatalogDbMediaPageUpsertResult> stage(
@@ -93,12 +96,16 @@ public:
     std::future<CatalogDbTopLevelSyncResult> abort(std::uint64_t generation);
     std::future<ChangedCatalogResult> catchUpChangedCatalog(
         std::int64_t sinceMs,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+        const std::shared_ptr<std::atomic_bool> &cancellation = {},
+        std::uint64_t committedGeneration = 0);
     std::future<MembershipReconcileResult> reconcileAuthoritativeMembership(
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+        const std::shared_ptr<std::atomic_bool> &cancellation = {},
+        std::uint64_t transactionGeneration = 0,
+        std::uint64_t committedGeneration = 0);
     std::future<LiveLibraryChangeResult> applyLibraryChanges(
         const JellyfinLibraryChangeBatch &batch,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
+        const std::shared_ptr<std::atomic_bool> &cancellation = {},
+        std::uint64_t committedGeneration = 0);
     /// Start the long-lived Jellyfin event receiver. The receiver only owns
     /// its bounded queue; all catalog writes remain in LibrarySync methods.
     void startLiveEvents();
@@ -129,7 +136,7 @@ private:
     std::shared_ptr<CatalogDb> m_db;
     CatalogDbJobMetadata m_metadata;
     std::shared_ptr<std::atomic_bool> m_cancel;
-    std::atomic<std::uint64_t> m_generation{0};
+    std::atomic<std::uint64_t> m_transactionGeneration{0};
     std::shared_ptr<std::atomic<std::uint64_t>> m_offlineGeneration;
     std::shared_ptr<std::atomic_bool> m_offlineCancellation;
     mutable std::mutex m_offlineMutex;

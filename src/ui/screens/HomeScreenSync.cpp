@@ -92,8 +92,6 @@ void HomeScreen::updateLiveLibraryChanges()
     if (!m_libraryCoordinator->takeLiveChangeResult(result))
         return;
 
-    if (result.generation > m_topLevelSyncGeneration.load())
-        m_topLevelSyncGeneration.store(result.generation);
     if (result.lastSuccessfulMs > 0) {
         m_syncState.lastSuccessfulMs = result.lastSuccessfulMs;
         m_syncState.lastReconcileMs = result.lastReconcileMs;
@@ -250,7 +248,7 @@ bool HomeScreen::startFetch()
             m_offlineSnapshotCache = m_cachedSnapshot;
             m_haveOfflineSnapshotCache = true;
             m_offlineSignature = computeOfflineSignature(
-                downloads, m_topLevelSyncGeneration.load());
+                downloads, committedCatalogGeneration());
             m_haveOfflineSignature = true;
             m_fetchResult = offlineTabsFromSnapshot(m_cachedSnapshot);
             m_remoteSnapshot = m_cachedSnapshot;
@@ -417,13 +415,6 @@ bool HomeScreen::startFetch()
             // existing safe fallback: only the full population path runs.
             startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
         }
-        if (startupSyncResult.generation > 0) {
-            auto topLevel = m_topLevelSyncGeneration.load();
-            while (startupSyncResult.generation > topLevel
-                && !m_topLevelSyncGeneration.compare_exchange_weak(
-                    topLevel, startupSyncResult.generation)) {
-            }
-        }
         if (startupSyncResult.lastSuccessfulMs > 0) {
             m_syncState.lastSuccessfulMs = startupSyncResult.lastSuccessfulMs;
             m_syncState.lastReconcileMs = startupSyncResult.lastReconcileMs;
@@ -452,9 +443,6 @@ bool HomeScreen::startFetch()
                 if (startupSyncResult.checkpointMs > 0)
                     m_syncState.lastSuccessfulMs =
                         startupSyncResult.checkpointMs;
-                // Delta catch-up committed catalog metadata: advance the
-                // epoch so a cached offline snapshot is rebuilt, not reused.
-                ++m_topLevelSyncGeneration;
                 if (cwOk) m_remoteSnapshot.continueWatching = cw;
                 if (raOk) m_remoteSnapshot.recentlyAdded = ra;
                 deltaCatchUpSucceeded = true;
@@ -573,13 +561,6 @@ bool HomeScreen::startFetch()
                     views = std::move(update.views);
                     moviesByView = std::move(update.moviesByView);
                     showsByView = std::move(update.showsByView);
-                    if (update.generation > 0 && update.committed) {
-                        auto topLevel = m_topLevelSyncGeneration.load();
-                        while (update.generation > topLevel
-                            && !m_topLevelSyncGeneration.compare_exchange_weak(
-                                topLevel, update.generation)) {
-                        }
-                    }
                     if (update.lastSuccessfulMs > 0) {
                         m_syncState.lastSuccessfulMs = update.lastSuccessfulMs;
                         m_syncState.lastReconcileMs = update.lastReconcileMs;
@@ -663,7 +644,7 @@ bool HomeScreen::startFetch()
                             seriesIds.size(), resolvedCount);
                 if (!cancellation->load() && m_libraryCoordinator)
                     (void)requestHierarchy(
-                        resolvedItems, m_topLevelSyncGeneration.load(),
+                        resolvedItems, committedCatalogGeneration(),
                         forceHierarchyReconcile);
             } catch (...) {
                 std::printf("[HomeScreen] season prefetch skipped: exception\n");

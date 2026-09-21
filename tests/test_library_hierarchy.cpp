@@ -529,7 +529,7 @@ void testHomeHierarchyLateRequestRace()
     // and before a successful series can enter the prefetched set.
     const auto stale = miyoofin_test::sourcePos(
         hierarchySource,
-        "if (result.generation != m_topLevelSyncGeneration.load())");
+        "if (result.generation != committedCatalogGeneration())");
     CHECK(stale < miyoofin_test::sourcePos(
         hierarchySource,
         "queuePosterJobs(collectSeasonPosterJobs(result.cachedSeasons))"));
@@ -544,6 +544,8 @@ void testHomeHierarchyLateRequestRace()
         hierarchySource, "m_hierarchySubmissionClosed"));
     CHECK(miyoofin_test::sourceContains(
         hierarchySource, "m_fetchCancellation && m_fetchCancellation->load()"));
+    CHECK(miyoofin_test::sourceContains(
+        homeSource, "m_libraryCoordinator->status().committedGeneration"));
     const auto closeGate = miyoofin_test::sourcePos(
         homeSource, "m_hierarchySubmissionClosed = true");
     const auto fetchCancel = miyoofin_test::sourcePos(

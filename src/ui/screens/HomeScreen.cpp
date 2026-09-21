@@ -3,14 +3,8 @@
 #include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../update/AppDir.hpp"
 #include <cstdio>
-#include <ctime>
 
 namespace miyoofin {
-
-static std::int64_t homeWallClockMs()
-{
-    return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
-}
 
 HomeScreen::HomeScreen(const Session &session,
                        std::shared_ptr<DownloadManager> downloads,
@@ -24,6 +18,9 @@ HomeScreen::HomeScreen(const Session &session,
     , m_libraryCoordinator(std::move(libraryCoordinator))
     , m_userName(session.userName)
 {
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->setManualOfflineMode(
+            session.manualOfflineMode);
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
@@ -45,6 +42,12 @@ HomeScreen::HomeScreen(const Session &session,
 std::uint64_t HomeScreen::catalogScopeEpoch() const
 {
     return m_libraryQuery ? m_libraryQuery->scopeEpoch() : 0;
+}
+
+std::uint64_t HomeScreen::committedCatalogGeneration() const
+{
+    return m_libraryCoordinator
+        ? m_libraryCoordinator->status().committedGeneration : 0;
 }
 
 bool HomeScreen::catalogScopeReady() const
@@ -268,9 +271,8 @@ void HomeScreen::update(Uint32 dt)
         }
         if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
         finishSafetyReconcile();
-        if (!m_session.manualOfflineMode && m_lastSafetyReconcileMs > 0
-            && homeWallClockMs() - m_lastSafetyReconcileMs
-                >= 24LL * 60 * 60 * 1000)
+        if (m_libraryCoordinator
+            && m_libraryCoordinator->status().maintenanceDue)
             startSafetyReconcile();
     }
     if (m_loadState == LoadState::Ready)

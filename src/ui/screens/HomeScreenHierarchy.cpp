@@ -60,7 +60,7 @@ void HomeScreen::consumeHierarchyResults()
         // against the previous catalog epoch.  Do not queue stale artwork or
         // record a stale successful series as prefetched.  A stale terminal
         // still closes the local request so the next fetch can submit work.
-        if (result.generation != m_topLevelSyncGeneration.load()) {
+        if (result.generation != committedCatalogGeneration()) {
             if (result.terminal) {
                 m_hierarchyActive.store(false);
                 m_hierarchyRequestReady.store(false);

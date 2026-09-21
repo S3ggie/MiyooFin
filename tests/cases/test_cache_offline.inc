@@ -427,18 +427,25 @@ static void testOfflineLibraryQuery(){
     seriesPage.viewOrdinal = 0;
     seriesPage.finalPage = true;
     CHECK(catalogDb->upsertMediaPage(seriesPage).get().success);
-    library::LibraryQuery query(catalogDb, epoch);
-    const auto catalogPage = query.movies(-1, 8).get();
-    CHECK(catalogPage.success && catalogPage.items.size() == 2);
-    const auto metadataPage = query.itemsByIds(
-        {physicalMovie.itemId, physicalEpisode.seriesId}).get();
-    CHECK(metadataPage.success && metadataPage.items.size() == 2);
-    std::vector<std::string> oversizedMetadataIds(65, "unused");
-    const auto oversizedMetadata = query.itemsByIds(oversizedMetadataIds).get();
-    CHECK(!oversizedMetadata.success
-          && oversizedMetadata.error
-                 == library::LibraryQueryErrorCategory::ConfigurationFailed);
-    std::vector<MediaItem> metadata = metadataPage.items;
+    Session session;
+    session.serverUrl = catalogUrl;
+    session.userId = catalogUser;
+    std::vector<MediaItem> metadata;
+    {
+        library::LibraryCoordinator coordinator(session, catalogDb, epoch);
+        const auto query = coordinator.query();
+        const auto catalogPage = query->movies(-1, 8).get();
+        CHECK(catalogPage.success && catalogPage.items.size() == 2);
+        const auto metadataPage = query->itemsByIds(
+            {physicalMovie.itemId, physicalEpisode.seriesId}).get();
+        CHECK(metadataPage.success && metadataPage.items.size() == 2);
+        std::vector<std::string> oversizedMetadataIds(65, "unused");
+        const auto oversizedMetadata = query->itemsByIds(oversizedMetadataIds).get();
+        CHECK(!oversizedMetadata.success
+              && oversizedMetadata.error
+                     == library::LibraryQueryErrorCategory::ConfigurationFailed);
+        metadata = metadataPage.items;
+    }
     const auto offlineRoot = OfflineLibraryQuery::build(
         DownloadSnapshot{loaded}, metadata);
     CHECK(offlineRoot.movies.size() == 1

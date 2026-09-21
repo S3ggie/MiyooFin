@@ -139,8 +139,9 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(sync->stage(anime).get().success);
         CHECK(sync->finalize(50).get().success);
 
-        library::LibraryQuery query(db, epoch);
-        const auto page = query.shows(-1, 8).get();
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto page = query->shows(-1, 8).get();
         CHECK(page.success && page.items.size() == 4 && !page.hasMore);
         std::map<std::string, MediaItem> items;
         for (const auto &item : page.items) items[item.id] = item;
@@ -168,7 +169,7 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(animeFor(items.at(shared.id)));
         CHECK(page.membershipsByItem.at(shared.id).size() == 2);
 
-        const auto animePage = query.anime(-1, 8).get();
+        const auto animePage = query->anime(-1, 8).get();
         CHECK(animePage.success && animePage.items.size() == 3
               && !animePage.hasMore);
         std::set<std::string> animeIds;
@@ -229,9 +230,10 @@ static void testCatalogDbMediaPagePreservesViewMembership()
         CHECK(sync->stage(tv).get().success);
         CHECK(sync->finalize(60).get().success);
 
-        library::LibraryQuery query(db, epoch);
-        const auto moviePage = query.movies(-1, 8).get();
-        const auto showPage = query.shows(-1, 8).get();
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto moviePage = query->movies(-1, 8).get();
+        const auto showPage = query->shows(-1, 8).get();
         CHECK(moviePage.success && moviePage.items.size() == 1
               && moviePage.items[0].id == movie.id);
         CHECK(showPage.success && showPage.items.size() == 1
@@ -495,9 +497,10 @@ static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
         CHECK(sync->stage(shows).get().success);
         CHECK(sync->finalize(70).get().success);
 
-        library::LibraryQuery query(db, epoch);
-        const auto moviePage = query.movies(-1, 8).get();
-        const auto showPage = query.shows(-1, 8).get();
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto moviePage = query->movies(-1, 8).get();
+        const auto showPage = query->shows(-1, 8).get();
         CHECK(moviePage.success && moviePage.items.size() == 1
               && moviePage.items[0].id == "__task26_catalog_movie__");
         CHECK(showPage.success && showPage.items.size() == 1
@@ -603,9 +606,10 @@ static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
         CHECK(sync->stage(shows).get().success);
         CHECK(sync->finalize(80).get().success);
 
-        library::LibraryQuery query(db, epoch);
-        const auto moviePage = query.movies(-1, 8).get();
-        const auto showPage = query.shows(-1, 8).get();
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto moviePage = query->movies(-1, 8).get();
+        const auto showPage = query->shows(-1, 8).get();
         CHECK(moviePage.success && moviePage.items.size() == 1
               && moviePage.items[0].id == "__task27_catalog_movie__");
         CHECK(showPage.success && showPage.items.size() == 1

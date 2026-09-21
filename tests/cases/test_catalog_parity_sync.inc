@@ -459,9 +459,10 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
         CHECK(sync->stage(generationAShows).get().success);
         CHECK(sync->finalize(200).get().success);
 
-        library::LibraryQuery query(rollbackDb, rollbackEpoch);
-        const auto beforeMovies = query.movies(-1, 8).get();
-        const auto beforeShows = query.shows(-1, 8).get();
+        library::LibraryCoordinator coordinator(session, rollbackDb, rollbackEpoch);
+        const auto query = coordinator.query();
+        const auto beforeMovies = query->movies(-1, 8).get();
+        const auto beforeShows = query->shows(-1, 8).get();
         CHECK(beforeMovies.success && beforeMovies.items.size() == 2);
         CHECK(beforeShows.success && beforeShows.items.size() == 1
               && beforeShows.items[0].id == "__task28_a_show__");
@@ -476,8 +477,8 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
         CHECK(sync->stage(generationB).get().success);
         CHECK(sync->abort(201).get().success);
 
-        const auto afterCancelMovies = query.movies(-1, 8).get();
-        const auto afterCancelShows = query.shows(-1, 8).get();
+        const auto afterCancelMovies = query->movies(-1, 8).get();
+        const auto afterCancelShows = query->shows(-1, 8).get();
         CHECK(afterCancelMovies.success && afterCancelMovies.items.size() == 2);
         CHECK(afterCancelShows.success && afterCancelShows.items.size() == 1
               && afterCancelShows.items[0].id == "__task28_a_show__");
@@ -496,7 +497,7 @@ void testCatalogDbTopLevelSyncStagingLifecycle()
         generationC.syncGeneration = 202;
         CHECK(sync->stage(generationC).get().success);
         CHECK(sync->finalize(202).get().success);
-        const auto afterC = query.movies(-1, 8).get();
+        const auto afterC = query->movies(-1, 8).get();
         CHECK(afterC.success && afterC.items.size() == 1
               && afterC.items[0].id == "__task28_c_movie__");
     }
@@ -580,15 +581,18 @@ void testLibrarySyncTeardownDuringStagedGeneration()
     auto reopened = std::make_shared<CatalogDb>();
     const auto reopenedEpoch = reopened->configureScope(url, user);
     CHECK(reopened->waitForIdleForTest(std::chrono::seconds(2)));
-    library::LibraryQuery query(reopened, reopenedEpoch);
-    const auto movies = query.movies(-1, 8).get();
-    CHECK(movies.success && movies.items.size() == 1
-          && movies.items[0].id == "__task30_committed_movie__");
-    const auto syncState = reopened->readSyncState(
-        false, 0, 0, {0, reopenedEpoch, {}}).get();
-    CHECK(syncState.success && syncState.lastSuccessfulMs == 300
-          && syncState.lastReconcileMs == 300
-          && syncState.committedGeneration == 300);
+    {
+        library::LibraryCoordinator coordinator(session, reopened, reopenedEpoch);
+        const auto query = coordinator.query();
+        const auto movies = query->movies(-1, 8).get();
+        CHECK(movies.success && movies.items.size() == 1
+              && movies.items[0].id == "__task30_committed_movie__");
+        const auto syncState = reopened->readSyncState(
+            false, 0, 0, {0, reopenedEpoch, {}}).get();
+        CHECK(syncState.success && syncState.lastSuccessfulMs == 300
+              && syncState.lastReconcileMs == 300
+              && syncState.committedGeneration == 300);
+    }
     reopened.reset();
     removeCatalogMigrationTestPaths(paths);
 
@@ -685,25 +689,28 @@ static void testLibrarySyncChangedMetadataCatchUp()
     server.join();
     ::close(listener);
     CHECK(result.success && result.itemsUpserted == 1);
-    library::LibraryQuery query(db, epoch);
-    const auto page = query.movies(-1, 8).get();
-    CHECK(page.success && page.items.size() == 2);
-    if (page.success && page.items.size() == 2) {
-        const auto changed = std::find_if(
-            page.items.begin(), page.items.end(), [&](const MediaItem &item) {
-                return item.id == original.id;
-            });
-        const auto kept = std::find_if(
-            page.items.begin(), page.items.end(), [&](const MediaItem &item) {
-                return item.id == unrelated.id;
-            });
-        CHECK(changed != page.items.end() && changed->title == "Updated Movie");
-        CHECK(changed != page.items.end()
-              && changed->imageTags.at("Primary") == "updated-primary");
-        CHECK(kept != page.items.end() && kept->title == unrelated.title);
+    {
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto page = query->movies(-1, 8).get();
+        CHECK(page.success && page.items.size() == 2);
+        if (page.success && page.items.size() == 2) {
+            const auto changed = std::find_if(
+                page.items.begin(), page.items.end(), [&](const MediaItem &item) {
+                    return item.id == original.id;
+                });
+            const auto kept = std::find_if(
+                page.items.begin(), page.items.end(), [&](const MediaItem &item) {
+                    return item.id == unrelated.id;
+                });
+            CHECK(changed != page.items.end() && changed->title == "Updated Movie");
+            CHECK(changed != page.items.end()
+                  && changed->imageTags.at("Primary") == "updated-primary");
+            CHECK(kept != page.items.end() && kept->title == unrelated.title);
+        }
+        const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
+        CHECK(state.success && state.lastSuccessfulMs > 0);
     }
-    const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
-    CHECK(state.success && state.lastSuccessfulMs > 0);
     sync.reset();
     db.reset();
     removeCatalogMigrationTestPaths(paths);
@@ -795,15 +802,18 @@ static void testLibrarySyncAuthoritativeMembershipReconcile()
     server.join();
     ::close(listener);
     CHECK(result.success && result.pagesRead == 2);
-    library::LibraryQuery query(db, epoch);
-    const auto movies = query.movies(-1, 8).get();
-    const auto shows = query.shows(-1, 8).get();
-    CHECK(movies.success && movies.items.size() == 1
-          && movies.items[0].id == movedMovie.id);
-    CHECK(shows.success && shows.items.empty());
-    CHECK(movies.membershipsByItem.at(movedMovie.id).size() == 1);
-    CHECK(movies.membershipsByItem.at(movedMovie.id)[0].viewId
-          == "current-movies");
+    {
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const auto movies = query->movies(-1, 8).get();
+        const auto shows = query->shows(-1, 8).get();
+        CHECK(movies.success && movies.items.size() == 1
+              && movies.items[0].id == movedMovie.id);
+        CHECK(shows.success && shows.items.empty());
+        CHECK(movies.membershipsByItem.at(movedMovie.id).size() == 1);
+        CHECK(movies.membershipsByItem.at(movedMovie.id)[0].viewId
+              == "current-movies");
+    }
     sync.reset();
     db.reset();
     removeCatalogMigrationTestPaths(paths);
@@ -1026,5 +1036,4 @@ static void testLibrarySyncAuthoritativeReconcileCoalescing()
     sync.reset();
     std::printf("[test] LibrarySync authoritative reconcile coalescing OK\n");
 }
-
 

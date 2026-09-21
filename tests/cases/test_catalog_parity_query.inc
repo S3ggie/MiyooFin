@@ -415,26 +415,29 @@ static void testHomeUsesCatalogBeforeNetworkRefresh()
         const auto epoch = reopened->configureScope(url, user);
         CHECK(reopened->waitForIdleForTest(std::chrono::seconds(2)));
         CHECK(reopened->scopeState().openState == CatalogDbOpenState::SupportedV3);
-        library::LibraryQuery query(reopened, epoch);
-        const auto movies = query.movies(-1, 8).get();
-        const auto shows = query.shows(-1, 8).get();
-        CHECK(movies.success && movies.items.size() == 1
-              && movies.items[0].id == "__task19_warm_movie__");
-        CHECK(shows.success && shows.items.size() == 1
-              && shows.items[0].id == "__task19_warm_show__");
-        CHECK(movies.membershipsByItem.at("__task19_warm_movie__").size() == 1);
-        CHECK(shows.membershipsByItem.at("__task19_warm_show__").size() == 1);
-
         Session session;
         session.serverUrl = url;
         session.userId = user;
-        auto sync = std::make_shared<library::LibrarySync>(
-            session, reopened, epoch);
-        CHECK(sync->begin(2).get().success);
-        CHECK(sync->abort(2).get().success);
-        const auto afterFailure = query.movies(-1, 8).get();
-        CHECK(afterFailure.success && afterFailure.items.size() == 1
-              && afterFailure.items[0].id == "__task19_warm_movie__");
+        {
+            library::LibraryCoordinator coordinator(session, reopened, epoch);
+            const auto query = coordinator.query();
+            const auto movies = query->movies(-1, 8).get();
+            const auto shows = query->shows(-1, 8).get();
+            CHECK(movies.success && movies.items.size() == 1
+                  && movies.items[0].id == "__task19_warm_movie__");
+            CHECK(shows.success && shows.items.size() == 1
+                  && shows.items[0].id == "__task19_warm_show__");
+            CHECK(movies.membershipsByItem.at("__task19_warm_movie__").size() == 1);
+            CHECK(shows.membershipsByItem.at("__task19_warm_show__").size() == 1);
+
+            auto sync = std::make_shared<library::LibrarySync>(
+                session, reopened, epoch);
+            CHECK(sync->begin(2).get().success);
+            CHECK(sync->abort(2).get().success);
+            const auto afterFailure = query->movies(-1, 8).get();
+            CHECK(afterFailure.success && afterFailure.items.size() == 1
+                  && afterFailure.items[0].id == "__task19_warm_movie__");
+        }
     }
     removeCatalogMigrationTestPaths(paths);
     std::printf("[test] Home uses CatalogDb before network refresh OK\n");
@@ -444,6 +447,11 @@ static void testLibraryQueryDomainBoundary()
 {
     std::printf("[test] LibraryQuery domain boundary\n");
     const std::string header = readTestBytes("src/library/LibraryQuery.hpp");
+    static_assert(!std::is_constructible<library::LibraryQuery,
+                                         std::shared_ptr<CatalogDb>,
+                                         std::uint64_t>::value,
+                  "ordinary consumers must not construct LibraryQuery");
+    CHECK(sourceContains(header, "friend class LibraryCoordinator"));
     for (const char *leaked : {"CatalogDbPageCursor",
                                "CatalogDbMediaPageMembership",
                                "CatalogDbErrorCategory",
@@ -455,6 +463,28 @@ static void testLibraryQueryDomainBoundary()
     CHECK(header.find("LibraryPageCursor") != std::string::npos);
     CHECK(header.find("LibraryMembership") != std::string::npos);
     CHECK(header.find("LibraryQueryErrorCategory") != std::string::npos);
+    const std::string coordinatorSource =
+        readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(sourceCount(coordinatorSource, "new LibraryQuery(") == 1);
+    CHECK(sourceContains(coordinatorSource,
+                         "m_query(std::shared_ptr<LibraryQuery>(new LibraryQuery(db, scopeEpoch)))"));
+    const std::string querySource = readTestBytes("src/library/LibraryQuery.cpp");
+    CHECK(sourceCount(querySource, "LibraryQuery::LibraryQuery(") == 1);
+    for (const auto &entry : std::filesystem::recursive_directory_iterator("src")) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".cpp")
+            continue;
+        const std::string path = entry.path().generic_string();
+        if (path == "src/library/LibraryCoordinator.cpp"
+            || path == "src/library/LibraryQuery.cpp")
+            continue;
+        const std::string source = stripSourceComments(readTestBytes(path));
+        CHECK(sourceLacks(source, "make_shared<LibraryQuery>"));
+        CHECK(sourceLacks(source, "make_shared<library::LibraryQuery>"));
+        CHECK(sourceLacks(source, "new LibraryQuery"));
+        CHECK(sourceLacks(source, "new library::LibraryQuery"));
+        CHECK(sourceLacks(source, "library::LibraryQuery query("));
+        CHECK(sourceLacks(source, "miyoofin::library::LibraryQuery query("));
+    }
     static_assert(!std::is_same<library::LibraryPageCursor,
                                 CatalogDbPageCursor>::value,
                   "LibraryQuery cursor must be a domain type");
@@ -481,31 +511,37 @@ static void testLibraryQueryDomainBoundary()
     CHECK(CatalogCompatibility::seedLibrarySnapshot(
               *db, snapshot, {0, epoch, {}}).get().success);
 
-    library::LibraryQuery query(db, epoch);
-    const library::LibraryPageCursor initial;
-    const auto first = query.movies(-1, 1, initial).get();
-    CHECK(first.success && first.items.size() == 1 && first.hasMore
-          && first.next.valid);
-    CHECK(first.membershipsByItem.at(first.items.front().id).size() == 1);
-    if (!first.items.empty()) {
-        const auto &membership = first.membershipsByItem.at(first.items.front().id).front();
-        CHECK(membership.viewId == "movies");
-        CHECK(membership.viewName == "Movies");
-        CHECK(membership.collectionType == "movies");
+    Session session;
+    session.serverUrl = url;
+    session.userId = user;
+    {
+        library::LibraryCoordinator coordinator(session, db, epoch);
+        const auto query = coordinator.query();
+        const library::LibraryPageCursor initial;
+        const auto first = query->movies(-1, 1, initial).get();
+        CHECK(first.success && first.items.size() == 1 && first.hasMore
+              && first.next.valid);
+        CHECK(first.membershipsByItem.at(first.items.front().id).size() == 1);
+        if (!first.items.empty()) {
+            const auto &membership = first.membershipsByItem.at(first.items.front().id).front();
+            CHECK(membership.viewId == "movies");
+            CHECK(membership.viewName == "Movies");
+            CHECK(membership.collectionType == "movies");
+        }
+
+        const auto second = query->movies(-1, 1, first.next).get();
+        CHECK(second.success && second.items.size() == 1 && !second.hasMore
+              && second.next.valid);
+        CHECK(second.items.front().id != first.items.front().id);
+
+        const auto invalid = query->movies(-1, 0).get();
+        CHECK(!invalid.success
+              && invalid.error == library::LibraryQueryErrorCategory::SqliteError);
+        auto cancellation = std::make_shared<std::atomic_bool>(true);
+        const auto cancelled = query->itemsByIds({first.items.front().id}, cancellation).get();
+        CHECK(cancelled.cancelled && !cancelled.success
+              && cancelled.error == library::LibraryQueryErrorCategory::Superseded);
     }
-
-    const auto second = query.movies(-1, 1, first.next).get();
-    CHECK(second.success && second.items.size() == 1 && !second.hasMore
-          && second.next.valid);
-    CHECK(second.items.front().id != first.items.front().id);
-
-    const auto invalid = query.movies(-1, 0).get();
-    CHECK(!invalid.success
-          && invalid.error == library::LibraryQueryErrorCategory::SqliteError);
-    auto cancellation = std::make_shared<std::atomic_bool>(true);
-    const auto cancelled = query.itemsByIds({first.items.front().id}, cancellation).get();
-    CHECK(cancelled.cancelled && !cancelled.success
-          && cancelled.error == library::LibraryQueryErrorCategory::Superseded);
 
     db.reset();
     removeCatalogMigrationTestPaths(paths);

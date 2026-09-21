@@ -216,14 +216,15 @@ static void testCatalogDbFreshAuthoritativeLibraryGeneration()
     const auto scope = db->scopeState();
     CHECK(scope.ready && scope.openState == CatalogDbOpenState::CreatedV3);
 
-    library::LibraryQuery query(db, epoch);
-    CHECK(query.scopeReady());
-    library::LibraryQuery staleQuery(db, epoch + 1);
-    CHECK(!staleQuery.scopeReady());
-
     Session session;
     session.serverUrl = url;
     session.userId = user;
+    library::LibraryCoordinator coordinator(session, db, epoch);
+    const auto query = coordinator.query();
+    CHECK(query->scopeReady());
+    library::LibraryCoordinator staleCoordinator(session, db, epoch + 1);
+    const auto staleQuery = staleCoordinator.query();
+    CHECK(!staleQuery->scopeReady());
     auto sync = std::make_shared<library::LibrarySync>(session, db, epoch);
     const std::uint64_t generation = 1;
     CHECK(sync->begin(generation).get().success);
@@ -256,16 +257,16 @@ static void testCatalogDbFreshAuthoritativeLibraryGeneration()
     const auto finalized = sync->finalize(generation).get();
     CHECK(finalized.success && finalized.workerOwned);
 
-    const auto movies = query.movies(-1, 8).get();
-    const auto shows = query.shows(-1, 8).get();
+    const auto movies = query->movies(-1, 8).get();
+    const auto shows = query->shows(-1, 8).get();
     CHECK(movies.success && movies.items.size() == 1
           && movies.items[0].id == "__task18_fresh_movie__");
     CHECK(shows.success && shows.items.size() == 1
           && shows.items[0].id == "__task18_fresh_show__");
 
     const auto cancellation = std::make_shared<std::atomic_bool>(true);
-    const auto cancelledMovies = query.movies(-1, 8, {}, cancellation).get();
-    const auto cancelledShows = query.shows(-1, 8, {}, cancellation).get();
+    const auto cancelledMovies = query->movies(-1, 8, {}, cancellation).get();
+    const auto cancelledShows = query->shows(-1, 8, {}, cancellation).get();
     CHECK(cancelledMovies.cancelled && cancelledShows.cancelled);
 
     const auto sqlite = db->runSqliteDiagnosticsForTest();

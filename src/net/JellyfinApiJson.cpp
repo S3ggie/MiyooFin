@@ -405,13 +405,6 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string &obj)
         }
     }
 
-    // Placeholder art colour
-    std::uint8_t r = static_cast<std::uint8_t>((item.title.size()*37+80)&0xFF);
-    std::uint8_t g = static_cast<std::uint8_t>((item.title.size()*53+160)&0xFF);
-    std::uint8_t b = static_cast<std::uint8_t>((item.title.size()*71+240)&0xFF);
-    item.placeholderArtwork.red = static_cast<std::uint8_t>(80+r%120);
-    item.placeholderArtwork.green = static_cast<std::uint8_t>(80+g%120);
-    item.placeholderArtwork.blue = static_cast<std::uint8_t>(80+b%120);
     return item;
 }
 

@@ -15,9 +15,18 @@ static MediaItem makeHomeItem(const std::string &id, const std::string &title,
 static void testPresentationArtworkAdapter()
 {
     MediaItem item;
-    item.placeholderArtwork = {0, 1, 255};
     const SDL_Color color = presentationArtworkColor(item);
-    CHECK(color.r == 0 && color.g == 1 && color.b == 255 && color.a == 255);
+    CHECK(color.r == 160 && color.g == 120 && color.b == 80 && color.a == 255);
+    item.title = "aaaa";
+    const SDL_Color repeated = presentationArtworkColor(item);
+    CHECK(repeated.r == 188 && repeated.g == 196 && repeated.b == 92);
+    item.title = "bbbb";
+    const SDL_Color sameLength = presentationArtworkColor(item);
+    CHECK(sameLength.r == repeated.r && sameLength.g == repeated.g
+          && sameLength.b == repeated.b && sameLength.a == 255);
+    item.title.assign(300, 'x');
+    const SDL_Color longTitle = presentationArtworkColor(item);
+    CHECK(longTitle.r == 132 && longTitle.g == 148 && longTitle.b == 116);
 }
 
 static void testHomeSyncSchedule()

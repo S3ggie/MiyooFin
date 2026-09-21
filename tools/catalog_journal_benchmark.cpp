@@ -297,9 +297,9 @@ const char *kUpsertSql =
     "id, kind, title, overview, production_year, community_rating,"
     "etag, played, progress, playback_position_ticks, index_number,"
     "parent_index_number, runtime_ticks, series_name, series_id,"
-    "season_id, art_r, art_g, art_b) "
+    "season_id) "
     "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, "
-    "?13, ?14, ?15, ?16, ?17, ?18, ?19) "
+    "?13, ?14, ?15, ?16) "
     "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
     "title=excluded.title, overview=excluded.overview, "
     "production_year=excluded.production_year, "
@@ -310,8 +310,7 @@ const char *kUpsertSql =
     "parent_index_number=excluded.parent_index_number, "
     "runtime_ticks=excluded.runtime_ticks, "
     "series_name=excluded.series_name, series_id=excluded.series_id, "
-    "season_id=excluded.season_id, art_r=excluded.art_r, "
-    "art_g=excluded.art_g, art_b=excluded.art_b";
+    "season_id=excluded.season_id";
 
 bool writeItems(sqlite3 *db, const std::vector<MediaItem> &items,
                 std::size_t &rows, std::string &error)

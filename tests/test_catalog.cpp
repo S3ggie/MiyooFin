@@ -31,6 +31,7 @@ int main()
     testCatalogScopeConfiguredBeforeHomePopulation();
     testHomePublishesAfterFirstBoundedPage();
     testHomeDiscardsColdProvisionalFailure();
+    testHomeDoesNotPublishRailOnlyPresentation();
     testHomePreservesAnimeMembershipDuringBoundedReads();
     testHomeUsesCatalogBeforeNetworkRefresh(); testLibraryCacheHomeParityHarness();
     testCatalogDbDownloadFallbackParity();

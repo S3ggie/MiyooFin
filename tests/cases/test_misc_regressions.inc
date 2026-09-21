@@ -64,13 +64,27 @@ static void testHomeIncrementalPublicationPolicy()
     CHECK(sourceContains(sync, "updateLiveLibraryChanges()"));
     CHECK(sourceContains(coordinator, "catchUpChangedCatalog"));
     CHECK(sourceContains(coordinator, "reconcileAuthoritativeMembership"));
-    CHECK(sourceContains(apply,
-                         "state.sync.committedGeneration = sync.committedGeneration"));
     CHECK(sourceContains(coordinator,
                          "status.committedGeneration = m_catalogGeneration"));
     CHECK(sourceContains(coordinator,
                          "status.maintenanceDue = status.safetyReconcileDue"));
     CHECK(sourceContains(apply, "m_cachedSnapshot.continueWatching"));
+    CHECK(sourceContains(apply, "PendingPresentation"));
+    CHECK(sourceContains(apply, "publishPendingPresentation"));
+    CHECK(sourceContains(apply, "takePendingPresentation"));
+    CHECK(sourceContains(apply, "std::make_shared<const PendingPresentation>"));
+    CHECK(sourceLacks(sync, "m_syncState"));
+    CHECK(sourceLacks(sync, "m_fetchStats"));
+    CHECK(sourceLacks(sync, "m_tabs ="));
+    CHECK(sourceLacks(sync, "m_cachedSnapshot ="));
+    CHECK(sourceLacks(sync, "m_fetchResult ="));
+    const std::string settings = readTestBytes(
+        "src/ui/screens/HomeScreenSettings.cpp");
+    CHECK(sourceContains(settings, "m_libraryCoordinator->status()"));
+    CHECK(sourceLacks(settings, "m_syncState"));
+    CHECK(sourceLacks(coordinator, "HomeState"));
+    CHECK(sourceLacks(coordinator, "publishHomeState"));
+    CHECK(sourceLacks(coordinator, "revision"));
     std::printf("[test] Home incremental publication policy OK\n");
 }
 
@@ -666,17 +680,17 @@ static void testHomeStartupSyncSourceOrder()
     CHECK(beginPos != std::string::npos);
     CHECK(beginPos < railsRequestPos);
     // ImageCache::runJanitor and season prefetch must appear before the
-    // main m_fetchComplete.store(true) (after the population walk) so they
-    // don't block the UI thread.  Use rfind to skip the early-offline
-    // branch's store.
-    const auto fetchCompletePos = sourceRPos(sync, "m_fetchComplete.store(true)");
+    // terminal pending publication (after the population walk) so they don't
+    // block the UI thread.  Use rfind to skip the earlier incremental
+    // publications.
+    const auto terminalPublishPos = sourceRPos(sync, "publish();");
     const auto janitorPos = sourcePos(sync, "ImageCache::runJanitor()");
     const auto prefetchPos = sourcePos(sync, "collectBoundedSeriesIds");
-    CHECK(fetchCompletePos != std::string::npos);
+    CHECK(terminalPublishPos != std::string::npos);
     CHECK(janitorPos != std::string::npos);
     CHECK(prefetchPos != std::string::npos);
-    CHECK(janitorPos < fetchCompletePos);
-    CHECK(prefetchPos < fetchCompletePos);
+    CHECK(janitorPos < terminalPublishPos);
+    CHECK(prefetchPos < terminalPublishPos);
     // Incremental rail-apply must be gated on m_homeRailsReady, not
     // m_fetchComplete
     CHECK(sourceContains(apply, "m_homeRailsReady.load() && !m_homeRailsApplied"));
@@ -686,10 +700,11 @@ static void testHomeStartupSyncSourceOrder()
     CHECK(sourceContains(sync, "planHomeRailPosterJobs(cw, ra)"));
     CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
     CHECK(sourceContains(sync, "update.firstPage"));
-    // Startup-rail buffer: fetch worker writes m_startupRailCW under
-    // m_fetchMutex, finishFetch reads under the same mutex.
-    CHECK(sourceContains(sync, "m_startupRailCW"));
-    CHECK(sourceContains(apply, "m_startupRailCW"));
+    // Startup rails are fields of the immutable pending presentation.  The
+    // worker publishes them and finishFetch consumes them on the SDL thread.
+    CHECK(sourceContains(sync, "pending.railsReady = true"));
+    CHECK(sourceContains(sync, "pending.continueWatching = cw"));
+    CHECK(sourceContains(apply, "m_fetchRailCW"));
     // m_initialPopulationInProgress must be set before the startup rails
     // fetch so a queued UserDataChanged cannot start a competing rail
     // refresh during the startup window.
@@ -1237,9 +1252,12 @@ static void testOfflineModeToggleDrivesFetchPath()
     CHECK(sourceContains(apply, "m_offlineModeFetchPending"));
     CHECK(sourceContains(apply, "startFetch()"));
 
-    // The offline worker path must populate m_haveCachedSnapshot.
-    CHECK(sourceContains(sync, "m_haveCachedSnapshot = true"));
-    CHECK(sourceContains(sync, "m_fetchCacheSaved = true"));
+    // The worker publishes the offline snapshot through PendingPresentation;
+    // the SDL thread applies it to the live presentation fields.
+    CHECK(sourceContains(sync, "pending.haveCachedSnapshot = true"));
+    CHECK(sourceContains(sync, "pending.cacheSaved = true"));
+    CHECK(sourceContains(apply, "m_haveCachedSnapshot = true"));
+    CHECK(sourceContains(apply, "m_fetchCacheSaved = presentation.cacheSaved"));
 
     std::printf("[test] Offline mode toggle drives fetch path OK\n");
 }
@@ -1422,14 +1440,18 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(apply, "!m_haveCachedSnapshot && !m_offlineModeFetchPending"));
     }
 
-    // Offline worker path must store the cached snapshot + signature,
-    // with the current catalog generation folded into the signature.
+    // Offline worker path must publish the cached snapshot + signature,
+    // with the current catalog generation folded into the signature.  The
+    // SDL thread applies those fields after taking the immutable handoff.
     {
-        CHECK(sourceContains(sync, "m_offlineSnapshotCache = m_cachedSnapshot"));
-        CHECK(sourceContains(sync, "m_haveOfflineSnapshotCache = true"));
-        CHECK(sourceContains(sync, "m_offlineSignature = computeOfflineSignature(downloads,"));
+        CHECK(sourceContains(sync, "pending.offlineSnapshotCache = pending.cachedSnapshot"));
+        CHECK(sourceContains(sync, "pending.offlineCacheValid = true"));
+        CHECK(sourceContains(sync, "pending.offlineSignature = computeOfflineSignature(downloads,"));
         CHECK(sourceContains(sync, "committedCatalogGeneration()"));
-        CHECK(sourceContains(sync, "m_haveOfflineSignature = true"));
+        CHECK(sourceContains(apply, "m_offlineSnapshotCache = presentation.offlineSnapshotCache"));
+        CHECK(sourceContains(apply, "m_haveOfflineSnapshotCache = true"));
+        CHECK(sourceContains(apply, "m_offlineSignature = presentation.offlineSignature"));
+        CHECK(sourceContains(apply, "m_haveOfflineSignature = true"));
     }
 
     // tryApplyCachedOfflineSnapshot must exist and use the cache.

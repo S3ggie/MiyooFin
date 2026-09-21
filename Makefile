@@ -132,6 +132,7 @@ CA_BUNDLE_TEST := tests/test_ca_bundle.sh
 TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 MEDIA_ITEM_HEADER_TEST := tests/test_media_item_header.sh
+LIBRARY_SYNC_GUARD_TEST := tests/test_library_sync_guard.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
@@ -152,6 +153,7 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@sh $(CA_BUNDLE_TEST)
 	@sh $(ONION_REMOTE_LAUNCH_TEST)
 	@sh $(MEDIA_ITEM_HEADER_TEST)
+	@sh $(LIBRARY_SYNC_GUARD_TEST)
 	@python3 $(TELEMETRY_DECODER_TEST)
 
 # Convenience entry point for the sanitizer run: rebuilds and runs the host

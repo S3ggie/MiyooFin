@@ -16,6 +16,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +50,17 @@ struct StartupSyncResult
     std::int64_t checkpointMs = 0;
     std::int64_t lastSuccessfulMs = 0;
     std::int64_t lastReconcileMs = 0;
+};
+
+/// Outcome of a coordinator-owned blocking result wait.  Ready always means a
+/// result was atomically consumed while holding the result domain mutex.
+enum class WaitStatus
+{
+    Ready,
+    Cancelled,
+    Stopped,
+    InvalidRequest,
+    Superseded
 };
 
 /// Immutable incremental publication from the coordinator-owned full library
@@ -197,6 +209,8 @@ class LibraryCoordinator
     /// startup catch-up.
     bool startStartupSync(bool catalogHasRows);
     bool takeStartupSyncResult(StartupSyncResult& result);
+    WaitStatus waitStartupSyncResult(StartupSyncResult& result,
+                                     const std::atomic_bool* consumerCancellation = nullptr);
     /// Cancel and join the startup operation without stopping session scope.
     void cancelStartupSync() noexcept;
 
@@ -205,6 +219,8 @@ class LibraryCoordinator
     /// terminal publication releases the serialized full-sync gate.
     bool requestFullPopulation(std::uint64_t& request);
     bool takeFullPopulationUpdate(std::uint64_t request, FullPopulationUpdate& update);
+    WaitStatus waitFullPopulationUpdate(std::uint64_t request, FullPopulationUpdate& update,
+                                        const std::atomic_bool* consumerCancellation = nullptr);
     void cancelFullPopulation() noexcept;
 
     /// Reserve/release the legacy full population slot.  Kept for callers
@@ -241,6 +257,8 @@ class LibraryCoordinator
     /// a refresh never mutates HomeScreen state directly.
     bool requestHomeRailRefresh(std::uint64_t& request);
     bool takeHomeRailResult(std::uint64_t request, HomeRailResult& result);
+    WaitStatus waitHomeRailResult(std::uint64_t request, HomeRailResult& result,
+                                  const std::atomic_bool* consumerCancellation = nullptr);
     void cancelHomeRailRefresh() noexcept;
 
     /// Queue one serialized hierarchy walk for Home.  Results are published
@@ -254,6 +272,8 @@ class LibraryCoordinator
     bool requestSeasonEpisodes(const MediaItem& series, const MediaItem& season,
                                std::uint64_t& request);
     bool takeHierarchyResult(std::uint64_t request, HierarchyResult& result);
+    WaitStatus waitHierarchyResult(std::uint64_t request, HierarchyResult& result,
+                                   const std::atomic_bool* consumerCancellation = nullptr);
     void cancelHierarchyRequest(std::uint64_t request) noexcept;
     /// Cancel the current Home lifetime, invalidate/discard its publications,
     /// and release the request slot for the next Home lifetime.  The worker
@@ -320,6 +340,10 @@ class LibraryCoordinator
     Status status() const;
 
   private:
+    bool takeStartupSyncResultLocked(StartupSyncResult& result);
+    bool takeFullPopulationUpdateLocked(std::uint64_t request, FullPopulationUpdate& update);
+    bool takeHomeRailResultLocked(std::uint64_t request, HomeRailResult& result);
+    bool takeHierarchyResultLocked(std::uint64_t request, HierarchyResult& result);
     bool requestSafetyReconcile(bool requireMaintenanceDue);
     void liveChangeWorker();
     void hierarchyWorker();
@@ -379,6 +403,7 @@ class LibraryCoordinator
     std::deque<HierarchyRequest> m_hierarchyRequests;
     std::deque<HierarchyResult> m_hierarchyResults;
     std::map<std::uint64_t, HierarchyRequest> m_hierarchyAccepted;
+    std::set<std::uint64_t> m_hierarchySupersededRequests;
     std::optional<HierarchyRequest> m_hierarchyActiveRequest;
     std::shared_ptr<std::atomic_bool> m_hierarchyActiveCancellation;
     std::uint64_t m_hierarchyRequest = 0;

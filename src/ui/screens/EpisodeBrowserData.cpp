@@ -175,27 +175,31 @@ void EpisodeBrowserScreen::fetchEpisodes(bool loadCachedEpisodes)
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
             if (accepted) {
+                m_hierarchyRequest.store(request, std::memory_order_release);
+                // leave() can race request admission before the request ID is
+                // published to the screen.  Close that gap before waiting.
+                if (cancellation->load(std::memory_order_acquire))
+                    libraryCoordinator->cancelHierarchyRequest(request);
                 bool terminal = false;
-                while (!m_fetchCancelled.load(std::memory_order_acquire) &&
-                       !cancellation->load(std::memory_order_acquire) &&
-                       !libraryCoordinator->stopped()) {
+                for (;;) {
                     library::HierarchyResult result;
-                    if (libraryCoordinator->takeHierarchyResult(request, result)) {
-                        if (result.terminal) {
-                            ok = result.success;
-                            v = std::move(result.episodes);
-                            e = result.message;
-                            terminal = true;
-                            break;
-                        }
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    const auto waitStatus = libraryCoordinator->waitHierarchyResult(
+                        request, result, cancellation.get());
+                    if (waitStatus != library::WaitStatus::Ready)
+                        break;
+                    if (result.terminal) {
+                        ok = result.success;
+                        v = std::move(result.episodes);
+                        e = result.message;
+                        terminal = true;
+                        break;
                     }
                 }
                 if (!terminal) {
                     libraryCoordinator->cancelHierarchyRequest(request);
                     e = "Episode refresh cancelled";
                 }
+                m_hierarchyRequest.store(0, std::memory_order_release);
             } else {
                 e = "Library hierarchy scheduler unavailable";
             }

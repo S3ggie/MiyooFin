@@ -212,6 +212,9 @@ void EpisodeBrowserScreen::leave()
     printf("[EpisodeBrowserScreen] leave\n");
     m_fetchCancelled.store(true, std::memory_order_release);
     m_catalogCancellation->store(true, std::memory_order_release);
+    const auto hierarchyRequest = m_hierarchyRequest.load(std::memory_order_acquire);
+    if (hierarchyRequest != 0 && m_libraryCoordinator)
+        m_libraryCoordinator->cancelHierarchyRequest(hierarchyRequest);
     m_workerCancelled.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);

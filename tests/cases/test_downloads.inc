@@ -892,6 +892,12 @@ static void testDownloadPipelineIoGuards()
     CHECK(sourceContains(manager,"statvfsFreeBytes"));
     CHECK(sourceContains(manager,"selectCachedFreeBytes(cached"));
     CHECK(sourceContains(manager,"probeOk"));
+    const std::string planner = readTestBytes("src/download/DownloadManagerPlanning.cpp");
+    CHECK(!planner.empty());
+    CHECK(sourceCount(planner, "waitHierarchyResult") == 2);
+    CHECK(sourceCount(planner, "cancelHierarchyRequest(request)") >= 4);
+    CHECK(sourceContains(planner, "m_activePlanHierarchyRequest.store(request"));
+    CHECK(sourceContains(manager, "cancelHierarchyRequest(hierarchyRequest)"));
     const std::string tls=readTestBytes("src/net/TlsConfig.hpp");
     CHECK(!tls.empty());
     CHECK(sourceContains(tls,"tlsCaBundleReady"));

@@ -130,6 +130,8 @@ class DownloadManager
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::shared_ptr<std::atomic_bool> m_activePlanCancellation;
+    std::shared_ptr<library::LibraryCoordinator> m_activePlanCoordinator;
+    std::atomic<std::uint64_t> m_activePlanHierarchyRequest{0};
     struct PlanJob
     {
         std::uint64_t id, generation;

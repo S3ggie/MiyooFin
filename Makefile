@@ -133,7 +133,7 @@ TELEMETRY_DECODER_TEST := tests/test_telemetry_decoder.py
 ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 MEDIA_ITEM_HEADER_TEST := tests/test_media_item_header.sh
 LIBRARY_SYNC_GUARD_TEST := tests/test_library_sync_guard.sh
-TEST_GROUPS := catalog api_session ui_foundation ui_models cache_offline \
+TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
                imagecache update library_coordinator library_hierarchy
@@ -197,6 +197,7 @@ $(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc
 $(TEST_DIR)/test_session: tests/cases/test_session.inc
 $(TEST_DIR)/test_ui_foundation: tests/cases/test_ui_foundation.inc
 $(TEST_DIR)/test_ui_models: tests/cases/test_ui_models.inc
+$(TEST_DIR)/test_home_artwork_controller: tests/test_home_artwork_controller.cpp
 $(TEST_DIR)/test_cache_offline: tests/cases/test_cache_offline.inc
 $(TEST_DIR)/test_artwork_episode: tests/cases/test_artwork_episode.inc
 $(TEST_DIR)/test_downloads: tests/cases/test_downloads.inc

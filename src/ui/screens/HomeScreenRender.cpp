@@ -162,9 +162,11 @@ std::string HomeScreen::syncStatusText() const
         return "";
     if (m_homeSyncActive)
         return homeSyncStatus(true);
+    const auto artworkProgress = m_artworkController ? m_artworkController->artworkProgress()
+                                                     : HomeArtworkController::ArtworkProgress{};
     const std::string artworkStatus = artworkSyncStatus(
-        m_artworkActive.load(), m_libraryFetch && m_libraryFetch->artworkPlanningComplete(),
-        ShowsSyncProgress{m_artworkCompleted.load(), m_artworkTotal.load()});
+        artworkProgress.active, m_libraryFetch && m_libraryFetch->artworkPlanningComplete(),
+        ShowsSyncProgress{artworkProgress.completed, artworkProgress.total});
     if (!artworkStatus.empty())
         return artworkStatus;
     const std::size_t hierarchyCompleted = m_hierarchyCompleted.load();

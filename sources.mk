@@ -80,6 +80,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/ui/HomeTabs.cpp \
     $(SRC_DIR)/ui/HomeArtworkPlan.cpp \
     $(SRC_DIR)/ui/screens/HomeScreen.cpp \
+    $(SRC_DIR)/ui/screens/HomeArtworkController.cpp \
     $(SRC_DIR)/ui/screens/HomeLibraryController.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenNavigation.cpp \
     $(SRC_DIR)/ui/screens/HomeScreenRefresh.cpp \

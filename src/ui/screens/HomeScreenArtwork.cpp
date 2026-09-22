@@ -1,9 +1,7 @@
 #include "HomeScreen.hpp"
 #include "../ArtworkLayout.hpp"
-#include "../ShowsBrowser.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
-#include "../../cache/ImageCache.hpp"
 
 namespace miyoofin {
 
@@ -15,34 +13,6 @@ static constexpr int MOVIE_GRID_ROWS = 3;
 // surfaces at several box sizes; this cap prevents unbounded growth when
 // distinct keys accumulate faster than row-eviction cleans them up.
 static constexpr int MAX_CARD_SURFACES = 128;
-
-/// Parse a row-artwork key ("itemId:imageType:imageTag:WxH") back into a
-/// PosterJob suitable for ImageCache::removeCached().  Returns a zeroed
-/// job when the key format is unrecognised (width == 0).
-static HomePosterJob buildPosterJobFromKey(const std::string& key)
-{
-    // Format: "itemId:Primary:imageTag:WxH"
-    auto p1 = key.find(':');
-    if (p1 == std::string::npos)
-        return {};
-    auto p2 = key.find(':', p1 + 1);
-    if (p2 == std::string::npos)
-        return {};
-    auto p3 = key.find(':', p2 + 1);
-    if (p3 == std::string::npos)
-        return {};
-    auto px = key.find('x', p3 + 1);
-    if (px == std::string::npos)
-        return {};
-    HomePosterJob job;
-    job.itemId = key.substr(0, p1);
-    const std::string typeName = key.substr(p1 + 1, p2 - p1 - 1);
-    job.imageType = (typeName == "Thumb") ? ImageType::Thumb : ImageType::Primary;
-    job.imageTag = key.substr(p2 + 1, p3 - p2 - 1);
-    job.width = std::atoi(key.substr(p3 + 1, px - p3 - 1).c_str());
-    job.height = std::atoi(key.substr(px + 1).c_str());
-    return job;
-}
 
 void HomeScreen::tryLoadSelectedArtwork()
 {
@@ -65,6 +35,15 @@ void HomeScreen::tryLoadSelectedArtwork()
 
     std::string key = rowArtworkKey(*item);
 
+    // A terminal worker tombstone applies to the selected preview as well as
+    // its row card; do not resubmit the same identity every UI frame.
+    const auto rowState = m_rowArtwork.find(key);
+    if (rowState != m_rowArtwork.end() && rowState->second.status == RowArtworkStatus::Failed) {
+        m_selectedArtworkAttempted = true;
+        m_selectedArtworkId = key;
+        return;
+    }
+
     // Shows artwork is always decoded by the background worker.  The selected
     // key is first in its working set, and the preview reads the same RAM
     // image as the grid card once it arrives.
@@ -84,11 +63,12 @@ void HomeScreen::tryLoadSelectedArtwork()
     m_selectedArtwork = {};
     m_selectedArtworkId = key;
     // Local library artwork remains retryable until the poster worker writes
-    // it; Home retains its historical one-shot network behavior below.
+    // it or the controller reaches the bounded failure tombstone.
     m_selectedArtworkAttempted = false;
 
     // Cache probing, reads and JPEG decode run on the existing bounded decode
-    // worker.  A missing poster remains retryable after poster sync completes.
+    // worker.  A missing poster remains retryable on the existing update
+    // cadence until the controller's bounded tombstone is reached.
     submitDecode(*item, true, false);
 }
 
@@ -99,6 +79,19 @@ void HomeScreen::tryLoadSelectedArtwork()
 std::string HomeScreen::rowArtworkKey(const MediaItem& item)
 {
     return homeArtworkKey(item);
+}
+
+bool HomeScreen::acceptsShowsArtworkResult(const HomeArtworkController::DecodeResult& result,
+                                           std::uint64_t currentGeneration,
+                                           const std::set<std::string>& activeKeys,
+                                           const std::set<std::string>& protectedKeys)
+{
+    if (result.context != ArtworkContext::HomeShows)
+        return true;
+    const std::string key = HomeArtworkController::identityKey(result.identity);
+    return result.showsWorkingSetGeneration == currentGeneration &&
+           (activeKeys.find(key) != activeKeys.end() ||
+            protectedKeys.find(key) != protectedKeys.end());
 }
 
 void HomeScreen::evictRowArtworkIfNeeded()
@@ -226,108 +219,50 @@ void HomeScreen::submitDecode(const MediaItem& item, bool highPriority, bool sho
 {
     std::string key = rowArtworkKey(item);
     DisplayArtwork a = displayArtworkForItem(item);
-    if (key.empty() || !a.valid())
+    if (key.empty() || !a.valid() || !m_artworkController)
         return;
-    std::lock_guard<std::mutex> lock(m_decodeMutex);
-    if (!m_decodeOutstanding.insert(key).second)
-        return;
-    if (m_decodeJobs.size() >= 32) {
-        m_decodeOutstanding.erase(key);
-        performanceTelemetry().addWorkerFailed(WorkerId::HomeDecode);
-        return;
-    }
     const ArtworkContext context =
         shows ? ArtworkContext::HomeShows
               : (highPriority ? ArtworkContext::HomeSelected : ArtworkContext::HomeGrid);
-    DecodeJob job{key, {item.id, a.imageType, a.tag, a.width, a.height}, shows, context};
-    if (highPriority)
-        m_decodeJobs.push_front(std::move(job));
-    else
-        m_decodeJobs.push_back(std::move(job));
-    performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode,
-                                               static_cast<uint32_t>(m_decodeJobs.size()));
-    m_decodeWake.notify_one();
-}
-
-void HomeScreen::decodeWorker()
-{
-    for (;;) {
-        DecodeJob job;
-        {
-            std::unique_lock<std::mutex> lock(m_decodeMutex);
-            m_decodeWake.wait(lock, [&] { return m_stopDecodeWorker || !m_decodeJobs.empty(); });
-            if (m_stopDecodeWorker) {
-                performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, false);
-                performanceTelemetry().setWorkerQueueDepth(
-                    WorkerId::HomeDecode, static_cast<uint32_t>(m_decodeJobs.size()));
-                return;
-            }
-            job = std::move(m_decodeJobs.front());
-            m_decodeJobs.pop_front();
-            performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode,
-                                                       static_cast<uint32_t>(m_decodeJobs.size()));
-            performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, true);
-        }
-        TelemetryArtworkScope artwork(job.context);
-        auto bytes =
-            ImageCache::readCached(job.artwork.itemId, job.artwork.imageType, job.artwork.imageTag,
-                                   job.artwork.width, job.artwork.height);
-        DecodedImage image =
-            bytes.empty() ? DecodedImage{} : ImageDecoder::decodeJpeg(bytes.data(), bytes.size());
-        std::lock_guard<std::mutex> lock(m_decodeMutex);
-        m_decodeResults.push_back(
-            {std::move(job.key), std::move(image), job.shows, !bytes.empty()});
-        performanceTelemetry().setWorkerActive(WorkerId::HomeDecode, false);
-    }
+    HomeArtworkController::DecodeRequest request;
+    request.identity = {item.id, a.imageType, a.tag, a.width, a.height};
+    request.highPriority = highPriority;
+    request.context = context;
+    request.showsWorkingSetGeneration = shows ? m_showsArtworkGeneration : 0;
+    m_artworkController->requestDecode(std::move(request));
 }
 
 void HomeScreen::drainDecodedArtwork()
 {
-    std::deque<DecodeResult> results;
-    {
-        std::lock_guard<std::mutex> lock(m_decodeMutex);
-        results.swap(m_decodeResults);
-        for (const auto& result : results)
-            m_decodeOutstanding.erase(result.key);
-    }
+    if (!m_artworkController)
+        return;
+    std::deque<HomeArtworkController::DecodeResult> results;
+    m_artworkController->takeDecodeResults(results);
     const std::set<std::string> protectedKeys = protectedRowArtworkKeys();
     for (auto& result : results) {
+        const std::string key = HomeArtworkController::identityKey(result.identity);
         // A job already being decoded cannot be cancelled.  Its result is not
-        // allowed to displace current Shows artwork after a scroll, though.
-        if (result.shows &&
-            m_activeShowsDecodeKeys.find(result.key) == m_activeShowsDecodeKeys.end() &&
-            protectedKeys.find(result.key) == protectedKeys.end()) {
+        // allowed to displace current Shows artwork after a scroll.  Home owns
+        // this freshness decision; the controller only returns value results.
+        if (!acceptsShowsArtworkResult(result, m_showsArtworkGeneration, m_activeShowsDecodeKeys,
+                                       protectedKeys)) {
+            m_artworkController->completeDecodeResult(result, false);
             performanceTelemetry().addWorkerCancelled(WorkerId::HomeDecode);
             continue;
         }
-        if (!result.cachePresent) {
-            // Poster sync may populate this key later; do not make a cache miss
-            // a permanent failure.
-            continue;
-        }
+        m_artworkController->completeDecodeResult(result, true);
         if (result.image.empty()) {
-            // Corrupt/undecodable cached file.  Delete it so poster sync can
-            // re-download, and only set a permanent Failed tombstone after
-            // kMaxDecodeAttempts retries to bound infinite retry loops.
-            // Parse the key to extract parameters for removeCached.
-            // Key format: "itemId:imageType:imageTag:WxH"
-            const auto artwork = buildPosterJobFromKey(result.key);
-            if (artwork.width > 0)
-                ImageCache::removeCached(artwork.itemId, artwork.imageType, artwork.imageTag,
-                                         artwork.width, artwork.height);
-            int& attempts = m_rowArtworkAttempts[result.key];
-            ++attempts;
-            if (attempts >= kMaxDecodeAttempts)
-                m_rowArtwork[result.key].status = RowArtworkStatus::Failed;
-            // else: entry is NOT added/kept in m_rowArtwork, so
-            // tryLoadOneRowArtwork will resubmit the decode on the next cycle.
+            // The controller owns miss/corrupt-cache retry counting and
+            // corrupt-cache deletion; Home applies only its terminal UI
+            // tombstone.
+            if (result.terminalFailure)
+                m_rowArtwork[key].status = RowArtworkStatus::Failed;
         } else {
-            if (result.key == m_selectedArtworkId) {
+            if (key == m_selectedArtworkId) {
                 m_selectedArtwork = result.image;
                 m_selectedArtworkAttempted = true;
             }
-            storeDecodedRowArtwork(result.key, std::move(result.image));
-            m_rowArtworkAttempts.erase(result.key);
+            storeDecodedRowArtwork(key, std::move(result.image));
         }
     }
 }
@@ -392,18 +327,11 @@ void HomeScreen::updateShowsDecodeWorkingSet()
     std::vector<const MediaItem*> desired;
     std::set<std::string> keys;
     if (!activeTabNamed("Shows")) {
+        if (!m_activeShowsDecodeKeys.empty())
+            ++m_showsArtworkGeneration;
         m_activeShowsDecodeKeys.clear();
-        std::lock_guard<std::mutex> lock(m_decodeMutex);
-        for (auto it = m_decodeJobs.begin(); it != m_decodeJobs.end();) {
-            if (it->shows) {
-                m_decodeOutstanding.erase(it->key);
-                it = m_decodeJobs.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode,
-                                                   static_cast<uint32_t>(m_decodeJobs.size()));
+        if (m_artworkController)
+            m_artworkController->setShowsWorkingSet(m_showsArtworkGeneration, {});
         return;
     }
     auto add = [&](const MediaItem& item) {
@@ -426,21 +354,11 @@ void HomeScreen::updateShowsDecodeWorkingSet()
         addGrid(m_filteredShows, m_showScroll);
         addGrid(m_filteredAnime, m_animeScroll);
     }
+    if (keys != m_activeShowsDecodeKeys)
+        ++m_showsArtworkGeneration;
     m_activeShowsDecodeKeys.swap(keys);
-    {
-        std::lock_guard<std::mutex> lock(m_decodeMutex);
-        for (auto it = m_decodeJobs.begin(); it != m_decodeJobs.end();) {
-            if (it->shows &&
-                m_activeShowsDecodeKeys.find(it->key) == m_activeShowsDecodeKeys.end()) {
-                m_decodeOutstanding.erase(it->key);
-                it = m_decodeJobs.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        performanceTelemetry().setWorkerQueueDepth(WorkerId::HomeDecode,
-                                                   static_cast<uint32_t>(m_decodeJobs.size()));
-    }
+    if (m_artworkController)
+        m_artworkController->setShowsWorkingSet(m_showsArtworkGeneration, m_activeShowsDecodeKeys);
     for (size_t i = 0; i < desired.size(); ++i) {
         const std::string key = rowArtworkKey(*desired[i]);
         if (m_rowArtwork.find(key) == m_rowArtwork.end())

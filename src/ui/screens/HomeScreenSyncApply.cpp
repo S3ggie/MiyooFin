@@ -50,7 +50,8 @@ void HomeScreen::applyPendingPresentation(const PendingPresentation& presentatio
     m_remoteSnapshot = presentation.remoteSnapshot;
     m_animeItemIds.insert(presentation.animeItemIds.begin(), presentation.animeItemIds.end());
     for (const auto& artwork : presentation.artwork)
-        queuePosterJobs(artwork.jobs, artwork.highPriority);
+        if (m_artworkController)
+            m_artworkController->queuePosterJobs(std::move(artwork.jobs), artwork.highPriority);
     if (presentation.offlinePrepared) {
         m_offlineSnapshotCache = presentation.preparedOfflineSnapshot;
         m_offlineSnapshot = presentation.preparedOfflineSnapshot;
@@ -129,7 +130,8 @@ void HomeScreen::finishMediaPage(MediaPageState& state)
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;
-    queuePosterJobs(planMediaPagePosterJobs(result.items), true);
+    if (m_artworkController)
+        m_artworkController->queuePosterJobs(planMediaPagePosterJobs(result.items), true);
     if (!m_firstMediaPageReadCompletedLogged) {
         m_firstMediaPageReadCompletedLogged = true;
         uiDiagnostics().log("[HomeScreen] startup stage=first_read_media_page_ready");
@@ -278,8 +280,9 @@ void HomeScreen::finishHomeRailRefresh()
             m_cachedSnapshot.recentlyAdded = m_homeRailRecentlyAdded;
         }
         restoreHomeRowFocus(focusedLabel);
-        queuePosterJobs(planHomeRailPosterJobs(m_homeRailContinueWatching, m_homeRailRecentlyAdded),
-                        true);
+        if (m_artworkController)
+            m_artworkController->queuePosterJobs(
+                planHomeRailPosterJobs(m_homeRailContinueWatching, m_homeRailRecentlyAdded), true);
     } else if (!m_homeRailRefreshError.empty()) {
         std::printf("[HomeScreen] live Home rail refresh failed: %s\n",
                     m_homeRailRefreshError.c_str());
@@ -460,7 +463,8 @@ void HomeScreen::finishFetch()
             }
             restoreHomeRowFocus(focusedLabel);
         }
-        queuePosterJobs(planHomeRailPosterJobs(railCW, railRA), true);
+        if (m_artworkController)
+            m_artworkController->queuePosterJobs(planHomeRailPosterJobs(railCW, railRA), true);
         clampNavigation();
     }
     if (presentation.complete && !m_fetchPostFinalizeApplied) {

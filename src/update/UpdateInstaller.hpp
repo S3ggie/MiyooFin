@@ -13,11 +13,11 @@ namespace miyoofin {
 // -------------------------------------------------------------------
 
 /// Return true if the first 5 bytes match the ELF magic: 0x7f 'E' 'L' 'F'.
-bool isElfMagic(const unsigned char *buf, std::size_t len);
+bool isElfMagic(const unsigned char* buf, std::size_t len);
 
 /// Return true if the ELF header indicates ARM (e_machine == 0x28).
 /// Expects the raw ELF header bytes; returns false if too short.
-bool isElfArm(const unsigned char *buf, std::size_t len);
+bool isElfArm(const unsigned char* buf, std::size_t len);
 
 // -------------------------------------------------------------------
 // Tar listing parser — exposed for unit testing
@@ -26,8 +26,8 @@ bool isElfArm(const unsigned char *buf, std::size_t len);
 /// Parse one `tar -tv` listing line.  `filename` receives the stripped path
 /// (before any " -> " / " link to " target).  Returns false if unparseable.
 /// Exposed for unit testing.
-bool parseTarListingLine(const std::string &line, std::string &filename,
-                         bool &isSymlink, bool &isHardlink);
+bool parseTarListingLine(const std::string& line, std::string& filename, bool& isSymlink,
+                         bool& isHardlink);
 
 // -------------------------------------------------------------------
 // installUpdate — the OTA install engine
@@ -57,12 +57,10 @@ bool parseTarListingLine(const std::string &line, std::string &filename,
 /// @param cancelled       Cooperative cancellation flag (checked between steps).
 /// @param progress        Progress callback (0-100 percent).
 /// @return true on success.
-bool installUpdate(const std::string &appDir,
-                   const std::string &tarGzPath,
-                   const std::string &targetVersion,
-                   std::string &error,
-                   const std::atomic<bool> *cancelled = nullptr,
-                   const std::function<void(int percent)> &progress = {});
+bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
+                   const std::string& targetVersion, std::string& error,
+                   const std::atomic<bool>* cancelled = nullptr,
+                   const std::function<void(int percent)>& progress = {});
 
 } // namespace miyoofin
 

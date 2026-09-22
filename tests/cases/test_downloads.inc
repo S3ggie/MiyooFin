@@ -1052,10 +1052,11 @@ static void testWorkerPersistMatchesLiveState()
     // pins deliberately carry the coverage instead.
     const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
     CHECK(!transfer.empty());
-    const std::string::size_type w0=transfer.find("void DownloadManager::worker()");
-    const std::string::size_type w1=transfer.find("bool DownloadManager::transfer(");
+    const std::string transferTokens=sourceTokenString(transfer);
+    const std::string::size_type w0=transferTokens.find(sourceTokenString("void DownloadManager::worker()"));
+    const std::string::size_type w1=transferTokens.find(sourceTokenString("bool DownloadManager::transfer("));
     CHECK(w0!=std::string::npos&&w1!=std::string::npos&&w1>w0);
-    const std::string worker=transfer.substr(w0,w1-w0);
+    const std::string worker=transferTokens.substr(w0,w1-w0);
     // Id-set pass persists only the pending ids (read live) plus the live
     // index; the dequeue path persists only its own manifest.
     CHECK(sourceContains(worker,"pending.swap(m_persistPendingIds)"));
@@ -1071,7 +1072,7 @@ static void testWorkerPersistMatchesLiveState()
     // or index write after the lock scope closes (before transfer starts).
     CHECK(sourceLacks(worker,"snapshot"));
     CHECK(sourceLacks(worker,"persistRevision"));
-    const std::string::size_type tail=worker.find("if(persistOnly)continue");
+    const std::string::size_type tail=worker.find(sourceTokenString("if(persistOnly)continue"));
     CHECK(tail!=std::string::npos);
     const std::string afterLock=worker.substr(tail);
     CHECK(sourceLacks(afterLock,"saveManifest"));
@@ -1116,6 +1117,7 @@ static void testStalePlaylistDiscoverySuppressed()
     // covered behaviourally.
     const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
     CHECK(!transfer.empty());
+    const std::string transferTokens=sourceTokenString(transfer);
     CHECK(sourceCount(transfer,"transferSourceChanged(")>=5);
     CHECK(sourceContains(transfer,"DownloadState::Paused&&i.state!=DownloadState::PausedForPlayback"));
     // The discovery guard must precede the LIVE-item reconcile: the early
@@ -1123,12 +1125,12 @@ static void testStalePlaylistDiscoverySuppressed()
     // no reconcile of the stale worker-local copy may remain.
     // (Anchors are a comment and an identifier, which reformatting cannot
     // alter; the code patterns inside the region match tolerantly.)
-    const std::string::size_type d0=transfer.find("Persist discovery before fetching segment zero");
-    const std::string::size_type d1=transfer.find("firstIncompleteSegment");
+    const std::string::size_type d0=transferTokens.find(sourceTokenString("Persist discovery before fetching segment zero"));
+    const std::string::size_type d1=transferTokens.find(sourceTokenString("firstIncompleteSegment"));
     CHECK(d0!=std::string::npos&&d1!=std::string::npos&&d1>d0);
-    const std::string discovery=transfer.substr(d0,d1-d0);
+    const std::string discovery=transferTokens.substr(d0,d1-d0);
     CHECK(sourceContains(discovery,"transferSourceChanged(i,transferSourceId,transferEtag))return false"));
-    CHECK(discovery.find("return false")<discovery.find("m_store.reconcile(scope,i"));
+    CHECK(sourcePos(discovery,"return false")<sourcePos(discovery,"m_store.reconcile(scope,i"));
     CHECK(sourceLacks(transfer,"m_store.reconcile(scope,item"));
     std::printf("[test] stale playlist-discovery publish suppressed OK\n");
 }
@@ -1142,23 +1144,25 @@ static void testAbandonedDeleteFlagConsumed()
     // by testTransferFinishDecision.
     const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
     CHECK(!transfer.empty());
+    const std::string transferTokens=sourceTokenString(transfer);
     // Loop-top abort consumes the flag exactly like the segment-failure
     // path: erase + removeItem + drop from m_items, then stop.
     // (Region anchors are a stable call signature; matching inside the
     // region is whitespace-insensitive.)
-    const std::string::size_type abort=transfer.find("if(shouldAbort(item.itemId,scope,generation))");
+    const std::string::size_type abort=transferTokens.find(sourceTokenString("if(shouldAbort(item.itemId,scope,generation))"));
     CHECK(abort!=std::string::npos);
-    const std::string loopTop=transfer.substr(abort,900);
+    const std::string loopTop=transferTokens.substr(abort,900);
     CHECK(sourceContains(loopTop,"m_deleteRequested.erase(item.itemId)"));
     CHECK(sourceContains(loopTop,"removeItem(scope,item.itemId"));
     CHECK(sourceContains(loopTop,"m_items.erase(p)"));
     const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
     CHECK(!manager.empty());
+    const std::string managerTokens=sourceTokenString(manager);
     // Immediate-erase path clears any abandoned flag before removing, so a
     // later re-enqueue of the same id starts without a pending delete.
-    const std::string::size_type erase=manager.find("bool DownloadManager::erase");
+    const std::string::size_type erase=sourceTokenString(manager).find(sourceTokenString("bool DownloadManager::erase"));
     CHECK(erase!=std::string::npos);
-    const std::string eraseBody=manager.substr(erase,700);
+    const std::string eraseBody=managerTokens.substr(erase,700);
     CHECK(sourceContains(eraseBody,"m_deleteRequested.erase(id)"));
     CHECK(eraseBody.find("m_deleteRequested.erase(id)")<eraseBody.find("removeItem(m_scope,id"));
     std::printf("[test] abandoned delete flag consumed OK\n");
@@ -1179,12 +1183,13 @@ static void testStaleSegmentRemovalUnderLock()
     // Ordering: within the per-segment publish region the removal precedes
     // the progress publish, i.e. it runs while the mutex is still held.
     // (Anchors are stable call signatures; matching is tolerant.)
-    const std::string::size_type s0=transfer.find("applyHlsSegmentCompleted(item,k,bytes)");
-    const std::string::size_type s1=transfer.find("validateCompletedDownload(scope,item,&validationError)");
+    const std::string transferTokens=sourceTokenString(transfer);
+    const std::string::size_type s0=transferTokens.find(sourceTokenString("applyHlsSegmentCompleted(item,k,bytes)"));
+    const std::string::size_type s1=transferTokens.find(sourceTokenString("validateCompletedDownload(scope,item,&validationError)"));
     CHECK(s0!=std::string::npos&&s1!=std::string::npos&&s1>s0);
-    const std::string segment=transfer.substr(s0,s1-s0);
+    const std::string segment=transferTokens.substr(s0,s1-s0);
     CHECK(sourceContains(segment,"std::remove(done.c_str())"));
-    CHECK(segment.find("std::remove(done.c_str())")<segment.find("publishTransferProgress(i,item)"));
+    CHECK(sourcePos(segment,"std::remove(done.c_str())")<sourcePos(segment,"publishTransferProgress(i,item)"));
     std::printf("[test] stale segment removal under lock OK\n");
 }
 
@@ -1213,8 +1218,8 @@ static void testDequeuePersistIsPerItem()
     // call ordering/profiling on device, so this bound is pinned
     // structurally (unlock -> per-item write -> relock ordering), not timed.
     CHECK(sourceContains(worker,"l.unlock()"));
-    CHECK(worker.find("l.unlock()")<worker.find("saveManifest(scope,*q"));
-    CHECK(worker.find("saveManifest(scope,*q")<worker.find("l.lock()"));
+    CHECK(sourcePos(worker,"l.unlock()")<sourcePos(worker,"saveManifest(scope,*q"));
+    CHECK(sourcePos(worker,"saveManifest(scope,*q")<sourcePos(worker,"l.lock()"));
     std::printf("[test] dequeue persist is per-item OK\n");
 }
 

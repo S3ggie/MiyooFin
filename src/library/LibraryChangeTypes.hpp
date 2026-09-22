@@ -11,7 +11,8 @@
 namespace miyoofin {
 namespace library {
 
-struct LiveLibraryChangeResult {
+struct LiveLibraryChangeResult
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;

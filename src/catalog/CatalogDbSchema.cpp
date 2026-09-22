@@ -31,7 +31,7 @@ void CatalogDb::finalizeStatements()
     // BEGIN IMMEDIATE, migrate, set user_version, COMMIT, and rebuild the
     // registry before publishing the new schema-ready state.
     assert(std::this_thread::get_id() == m_worker.get_id());
-    for (auto &entry : m_statements) {
+    for (auto& entry : m_statements) {
         sqlite3_finalize(entry.second);
     }
     m_statements.clear();
@@ -39,10 +39,10 @@ void CatalogDb::finalizeStatements()
     m_preparedStatementCount = 0;
 }
 
-bool CatalogDb::openConnection(const ScopeCommand &command)
+bool CatalogDb::openConnection(const ScopeCommand& command)
 {
     assert(std::this_thread::get_id() == m_worker.get_id());
-    const auto scopeStage = [&](const char *stage) {
+    const auto scopeStage = [&](const char* stage) {
         catalogDiagnostic(std::string("scope_stage=") + stage);
     };
     {
@@ -54,8 +54,7 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
 
     scopeStage("path_state_inspect_started");
     const std::string path = catalogPath(command.scopeKey);
-    CatalogDbMigrationState migrationState =
-        inspectMigrationState(command.scopeKey);
+    CatalogDbMigrationState migrationState = inspectMigrationState(command.scopeKey);
     scopeStage("path_state_inspect_completed");
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -108,9 +107,8 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
                 m_lastError = CatalogDbErrorCategory::CorruptOrIo;
                 m_openState = CatalogDbOpenState::CorruptOrIo;
             }
-            catalogDiagnostic(std::string("bootstrap_failed reason=")
-                              + (bootstrapError.empty() ? "unknown"
-                                                         : bootstrapError));
+            catalogDiagnostic(std::string("bootstrap_failed reason=") +
+                              (bootstrapError.empty() ? "unknown" : bootstrapError));
             catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
                                    CatalogDbErrorCategory::CorruptOrIo,
                                    CatalogDbOpenState::CorruptOrIo);
@@ -134,16 +132,15 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     }
 
     scopeStage("sqlite_open_started");
-    catalogDiagnostic(std::string("sqlite_open_attempt db_dir=")
-                      + scopeDirectory(command.scopeKey));
-    sqlite3 *db = nullptr;
-    const int openRc = sqlite3_open_v2(
-        path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
+    catalogDiagnostic(std::string("sqlite_open_attempt db_dir=") +
+                      scopeDirectory(command.scopeKey));
+    sqlite3* db = nullptr;
+    const int openRc =
+        sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
     {
         char line[128];
-        const char *message = db ? sqlite3_errmsg(db) : "no_handle";
-        std::snprintf(line, sizeof(line),
-                      "sqlite_open_returned rc=%d handle=%d errmsg=%s", openRc,
+        const char* message = db ? sqlite3_errmsg(db) : "no_handle";
+        std::snprintf(line, sizeof(line), "sqlite_open_returned rc=%d handle=%d errmsg=%s", openRc,
                       db != nullptr ? 1 : 0, message ? message : "none");
         catalogDiagnostic(line);
     }
@@ -165,20 +162,18 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
 
     sqlite3_extended_result_codes(db, 1);
     const int busyRc = sqlite3_busy_timeout(db, 250);
-    catalogDiagnostic("busy_timeout rc=" + std::to_string(busyRc)
-                      + " ms=250");
-    const auto setupPragma = [&](const char *sql, const char *name) {
+    catalogDiagnostic("busy_timeout rc=" + std::to_string(busyRc) + " ms=250");
+    const auto setupPragma = [&](const char* sql, const char* name) {
         const int rc = execResult(db, sql, error);
-        catalogDiagnostic(std::string("setup_pragma name=") + name
-                          + " rc=" + std::to_string(rc)
-                          + " errmsg=" + (db ? sqlite3_errmsg(db) : "none"));
+        catalogDiagnostic(std::string("setup_pragma name=") + name + " rc=" + std::to_string(rc) +
+                          " errmsg=" + (db ? sqlite3_errmsg(db) : "none"));
         return rc == SQLITE_OK;
     };
-    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys")
-        || !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema")
-        || !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode")
-        || !setupPragma("PRAGMA synchronous = FULL;", "synchronous")
-        || !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
+    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys") ||
+        !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema") ||
+        !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode") ||
+        !setupPragma("PRAGMA synchronous = FULL;", "synchronous") ||
+        !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
         sqlite3_close(db);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
@@ -198,14 +193,13 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
     std::string journalMode;
     std::string synchronous;
     std::string lockingMode;
-    if (!scalar(db, "PRAGMA foreign_keys;", foreignKeys, error)
-        || !scalar(db, "PRAGMA trusted_schema;", trustedSchema, error)
-        || !scalar(db, "PRAGMA journal_mode;", journalMode, error)
-        || !scalar(db, "PRAGMA synchronous;", synchronous, error)
-        || !scalar(db, "PRAGMA locking_mode;", lockingMode, error)
-        || foreignKeys != "1" || trustedSchema != "0"
-        || journalMode != "delete" || synchronous != "2"
-        || lockingMode != "normal") {
+    if (!scalar(db, "PRAGMA foreign_keys;", foreignKeys, error) ||
+        !scalar(db, "PRAGMA trusted_schema;", trustedSchema, error) ||
+        !scalar(db, "PRAGMA journal_mode;", journalMode, error) ||
+        !scalar(db, "PRAGMA synchronous;", synchronous, error) ||
+        !scalar(db, "PRAGMA locking_mode;", lockingMode, error) || foreignKeys != "1" ||
+        trustedSchema != "0" || journalMode != "delete" || synchronous != "2" ||
+        lockingMode != "normal") {
         sqlite3_close(db);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (command.epoch == m_requestedEpoch) {
@@ -229,46 +223,47 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
             m_scopeStatus = CatalogDbScopeStatus::OpenFailed;
             m_openState = openState;
             m_lastError = openState == CatalogDbOpenState::WrongApplicationId
-                ? CatalogDbErrorCategory::WrongApplicationId
-                : openState == CatalogDbOpenState::UnsupportedVersion
-                    ? CatalogDbErrorCategory::UnsupportedVersion
-                    : CatalogDbErrorCategory::CorruptOrIo;
+                              ? CatalogDbErrorCategory::WrongApplicationId
+                          : openState == CatalogDbOpenState::UnsupportedVersion
+                              ? CatalogDbErrorCategory::UnsupportedVersion
+                              : CatalogDbErrorCategory::CorruptOrIo;
         }
         const CatalogDbErrorCategory errorCategory =
             openState == CatalogDbOpenState::WrongApplicationId
                 ? CatalogDbErrorCategory::WrongApplicationId
-                : openState == CatalogDbOpenState::UnsupportedVersion
-                    ? CatalogDbErrorCategory::UnsupportedVersion
-                    : CatalogDbErrorCategory::CorruptOrIo;
+            : openState == CatalogDbOpenState::UnsupportedVersion
+                ? CatalogDbErrorCategory::UnsupportedVersion
+                : CatalogDbErrorCategory::CorruptOrIo;
         char line[256];
         std::snprintf(line, sizeof(line),
                       "sqlite_open_failed stage=schema error_category=%s(%u) open_state=%s(%u)",
-                      errorCategoryName(errorCategory),
-                      static_cast<unsigned>(errorCategory),
+                      errorCategoryName(errorCategory), static_cast<unsigned>(errorCategory),
                       openStateName(openState), static_cast<unsigned>(openState));
         catalogDiagnostic(line);
-        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed,
-                               errorCategory, openState);
+        catalogFinalDiagnostic(false, CatalogDbScopeStatus::OpenFailed, errorCategory, openState);
         return false;
     }
-    catalogDiagnostic(std::string("schema_validate_migrate_completed open_state=")
-                      + openStateName(openState));
+    catalogDiagnostic(std::string("schema_validate_migrate_completed open_state=") +
+                      openStateName(openState));
     if (needsBackfill) {
         scopeStage("sort_key_backfill_started");
-        if (!backfillOrganizationalSortKeys(db, error)) { sqlite3_close(db); return false; }
+        if (!backfillOrganizationalSortKeys(db, error)) {
+            sqlite3_close(db);
+            return false;
+        }
         scopeStage("sort_key_backfill_completed");
     } else {
         catalogDiagnostic("sort_key_backfill_skipped reason=schema_has_canonical_keys");
     }
     scopeStage("scope_setup_completed");
-    if (bootstrapped) openState = CatalogDbOpenState::CreatedV3;
+    if (bootstrapped)
+        openState = CatalogDbOpenState::CreatedV3;
 
     if (migrationState.migratingPresent) {
         const std::string temporaryPath = migratingPath(command.scopeKey);
-        const std::string sidecars[] = {
-            temporaryPath, temporaryPath + "-journal",
-            temporaryPath + "-wal", temporaryPath + "-shm"};
-        for (const auto &candidate : sidecars) {
+        const std::string sidecars[] = {temporaryPath, temporaryPath + "-journal",
+                                        temporaryPath + "-wal", temporaryPath + "-shm"};
+        for (const auto& candidate : sidecars) {
             if (std::remove(candidate.c_str()) != 0 && errno != ENOENT) {
                 sqlite3_close(db);
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -303,31 +298,29 @@ bool CatalogDb::openConnection(const ScopeCommand &command)
         m_lastError = CatalogDbErrorCategory::None;
         m_openState = openState;
     }
-    catalogFinalDiagnostic(true, CatalogDbScopeStatus::Ready,
-                           CatalogDbErrorCategory::None, openState);
+    catalogFinalDiagnostic(true, CatalogDbScopeStatus::Ready, CatalogDbErrorCategory::None,
+                           openState);
     scopeStage("scope_ready");
     return true;
 }
 
-bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
-                                                std::string &error)
+bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand& command, std::string& error)
 {
     assert(std::this_thread::get_id() == m_worker.get_id());
-    const auto bootstrapStage = [&](const char *stage) {
+    const auto bootstrapStage = [&](const char* stage) {
         catalogDiagnostic(std::string("bootstrap_stage=") + stage);
     };
     const auto scopeIsCurrent = [&] {
         std::lock_guard<std::mutex> lock(m_mutex);
-        return !m_stopping && command.epoch == m_requestedEpoch
-            && command.scopeKey == m_requestedScopeKey;
+        return !m_stopping && command.epoch == m_requestedEpoch &&
+               command.scopeKey == m_requestedScopeKey;
     };
     const std::string finalPath = catalogPath(command.scopeKey);
     const std::string temporaryPath = migratingPath(command.scopeKey);
-    const std::string sidecars[] = {
-        temporaryPath, temporaryPath + "-journal",
-        temporaryPath + "-wal", temporaryPath + "-shm"};
+    const std::string sidecars[] = {temporaryPath, temporaryPath + "-journal",
+                                    temporaryPath + "-wal", temporaryPath + "-shm"};
     const auto removeTemporaryFamily = [&] {
-        for (const auto &candidate : sidecars) {
+        for (const auto& candidate : sidecars) {
             if (std::remove(candidate.c_str()) != 0 && errno != ENOENT) {
                 error = "could not remove stale temporary catalog";
                 return false;
@@ -335,8 +328,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         }
         return true;
     };
-    const CatalogDbMigrationState initialState =
-        inspectMigrationState(command.scopeKey);
+    const CatalogDbMigrationState initialState = inspectMigrationState(command.scopeKey);
     if (initialState.pathError) {
         error = "catalog database paths are not accessible";
         return false;
@@ -353,23 +345,20 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     }
 
     const std::size_t slash = temporaryPath.find_last_of('/');
-    if (slash == std::string::npos
-        || !makeDirectories(temporaryPath.substr(0, slash))) {
+    if (slash == std::string::npos || !makeDirectories(temporaryPath.substr(0, slash))) {
         error = "could not create catalog database directory";
         return false;
     }
     catalogDiagnostic("bootstrap_temp_open_started");
-    sqlite3 *temporary = nullptr;
-    const int openRc = sqlite3_open_v2(
-        temporaryPath.c_str(), &temporary,
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
+    sqlite3* temporary = nullptr;
+    const int openRc = sqlite3_open_v2(temporaryPath.c_str(), &temporary,
+                                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
     if (openRc != SQLITE_OK || !temporary) {
         if (temporary) {
             sqlite3_close(temporary);
         }
         char line[96];
-        std::snprintf(line, sizeof(line),
-                      "bootstrap_temp_create_failed rc=%d", openRc);
+        std::snprintf(line, sizeof(line), "bootstrap_temp_create_failed rc=%d", openRc);
         catalogDiagnostic(line);
         error = "could not open temporary catalog database";
         return false;
@@ -383,20 +372,18 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         }
     };
     const int busyRc = sqlite3_busy_timeout(temporary, 250);
-    catalogDiagnostic("bootstrap_busy_timeout rc=" + std::to_string(busyRc)
-                      + " ms=250");
-    const auto setupPragma = [&](const char *sql, const char *name) {
+    catalogDiagnostic("bootstrap_busy_timeout rc=" + std::to_string(busyRc) + " ms=250");
+    const auto setupPragma = [&](const char* sql, const char* name) {
         const int rc = execResult(temporary, sql, error);
-        catalogDiagnostic(std::string("bootstrap_pragma name=") + name
-                          + " rc=" + std::to_string(rc)
-                          + " errmsg=" + sqlite3_errmsg(temporary));
+        catalogDiagnostic(std::string("bootstrap_pragma name=") + name +
+                          " rc=" + std::to_string(rc) + " errmsg=" + sqlite3_errmsg(temporary));
         return rc == SQLITE_OK;
     };
-    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys")
-        || !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema")
-        || !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode")
-        || !setupPragma("PRAGMA synchronous = FULL;", "synchronous")
-        || !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
+    if (!setupPragma("PRAGMA foreign_keys = ON;", "foreign_keys") ||
+        !setupPragma("PRAGMA trusted_schema = OFF;", "trusted_schema") ||
+        !setupPragma("PRAGMA journal_mode = DELETE;", "journal_mode") ||
+        !setupPragma("PRAGMA synchronous = FULL;", "synchronous") ||
+        !setupPragma("PRAGMA locking_mode = NORMAL;", "locking_mode")) {
         closeTemporary();
         removeTemporaryFamily();
         return false;
@@ -404,8 +391,8 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     bootstrapStage("schema_validate_migrate_started");
     CatalogDbOpenState openState = CatalogDbOpenState::NotAttempted;
     bool needsBackfill = false;
-    if (!ensureSchema(temporary, openState, needsBackfill, error)
-        || openState != CatalogDbOpenState::CreatedV3) {
+    if (!ensureSchema(temporary, openState, needsBackfill, error) ||
+        openState != CatalogDbOpenState::CreatedV3) {
         if (error.empty()) {
             error = "fresh catalog schema creation failed";
         }
@@ -419,14 +406,13 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     std::string journalMode;
     std::string synchronous;
     std::string lockingMode;
-    if (!scalar(temporary, "PRAGMA foreign_keys;", foreignKeys, error)
-        || !scalar(temporary, "PRAGMA trusted_schema;", trustedSchema, error)
-        || !scalar(temporary, "PRAGMA journal_mode;", journalMode, error)
-        || !scalar(temporary, "PRAGMA synchronous;", synchronous, error)
-        || !scalar(temporary, "PRAGMA locking_mode;", lockingMode, error)
-        || foreignKeys != "1" || trustedSchema != "0"
-        || journalMode != "delete" || synchronous != "2"
-        || lockingMode != "normal") {
+    if (!scalar(temporary, "PRAGMA foreign_keys;", foreignKeys, error) ||
+        !scalar(temporary, "PRAGMA trusted_schema;", trustedSchema, error) ||
+        !scalar(temporary, "PRAGMA journal_mode;", journalMode, error) ||
+        !scalar(temporary, "PRAGMA synchronous;", synchronous, error) ||
+        !scalar(temporary, "PRAGMA locking_mode;", lockingMode, error) || foreignKeys != "1" ||
+        trustedSchema != "0" || journalMode != "delete" || synchronous != "2" ||
+        lockingMode != "normal") {
         if (error.empty()) {
             error = "fresh catalog configuration validation failed";
         }
@@ -435,8 +421,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         return false;
     }
     std::string quickCheck;
-    if (!scalar(temporary, "PRAGMA quick_check;", quickCheck, error)
-        || quickCheck != "ok") {
+    if (!scalar(temporary, "PRAGMA quick_check;", quickCheck, error) || quickCheck != "ok") {
         if (error.empty()) {
             error = "fresh catalog quick_check failed";
         }
@@ -444,12 +429,10 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         removeTemporaryFamily();
         return false;
     }
-    sqlite3_stmt *foreignKeyCheck = nullptr;
-    const bool foreignKeyPrepared = sqlite3_prepare_v2(
-        temporary, "PRAGMA foreign_key_check;", -1, &foreignKeyCheck, nullptr)
-        == SQLITE_OK;
-    const int foreignKeyRc = foreignKeyPrepared
-        ? sqlite3_step(foreignKeyCheck) : SQLITE_ERROR;
+    sqlite3_stmt* foreignKeyCheck = nullptr;
+    const bool foreignKeyPrepared = sqlite3_prepare_v2(temporary, "PRAGMA foreign_key_check;", -1,
+                                                       &foreignKeyCheck, nullptr) == SQLITE_OK;
+    const int foreignKeyRc = foreignKeyPrepared ? sqlite3_step(foreignKeyCheck) : SQLITE_ERROR;
     if (foreignKeyCheck) {
         sqlite3_finalize(foreignKeyCheck);
     }
@@ -481,8 +464,7 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
         removeTemporaryFamily();
         return false;
     }
-    const CatalogDbMigrationState beforePromotion =
-        inspectMigrationState(command.scopeKey);
+    const CatalogDbMigrationState beforePromotion = inspectMigrationState(command.scopeKey);
     if (beforePromotion.pathError) {
         error = "catalog database paths became inaccessible";
         removeTemporaryFamily();
@@ -494,15 +476,14 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
     if (::rename(temporaryPath.c_str(), finalPath.c_str()) != 0) {
         const int renameError = errno;
         char line[128];
-        std::snprintf(line, sizeof(line),
-                      "bootstrap_temp_finalize_failed errno=%d", renameError);
+        std::snprintf(line, sizeof(line), "bootstrap_temp_finalize_failed errno=%d", renameError);
         catalogDiagnostic(line);
         error = "fresh catalog promotion failed";
         removeTemporaryFamily();
         return false;
     }
-    const int directoryFd = ::open(finalPath.substr(0, finalPath.find_last_of('/')).c_str(),
-                                   O_RDONLY);
+    const int directoryFd =
+        ::open(finalPath.substr(0, finalPath.find_last_of('/')).c_str(), O_RDONLY);
     if (directoryFd >= 0) {
         ::fsync(directoryFd);
         ::close(directoryFd);
@@ -512,4 +493,3 @@ bool CatalogDb::bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
 }
 
 } // namespace miyoofin
-

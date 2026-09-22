@@ -17,45 +17,51 @@ library::LibraryCoordinator makeCoordinator()
 {
     Session session;
     session.manualOfflineMode = true;
-    return library::LibraryCoordinator(
-        session, std::make_shared<CatalogDb>(), 0);
+    return library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
 }
 
-struct CoordinatorTestScope {
+struct CoordinatorTestScope
+{
     std::string url;
     std::string user;
     std::string scope;
     std::uint64_t epoch = 0;
 };
 
-CoordinatorTestScope coordinatorTestScope(const char *name)
+CoordinatorTestScope coordinatorTestScope(const char* name)
 {
     CoordinatorTestScope scope;
-    scope.url = std::string("https://coordinator-") + name + "-"
-        + std::to_string(static_cast<long long>(::getpid())) + ".example";
+    scope.url = std::string("https://coordinator-") + name + "-" +
+                std::to_string(static_cast<long long>(::getpid())) + ".example";
     scope.user = std::string("coordinator-") + name + "-user";
     scope.scope = LibraryCache::scopeKey(scope.url, scope.user);
     const std::string base = "cache/library/" + scope.scope + "/catalog.sqlite3";
-    const std::string files[] = {base, base + "-journal", base + "-wal",
-                                 base + "-shm", base + ".migrating",
+    const std::string files[] = {base,
+                                 base + "-journal",
+                                 base + "-wal",
+                                 base + "-shm",
+                                 base + ".migrating",
                                  base + ".migrating-journal",
                                  base + ".migrating-wal",
                                  base + ".migrating-shm"};
-    for (const auto &file : files)
+    for (const auto& file : files)
         std::remove(file.c_str());
     return scope;
 }
 
-void removeCoordinatorTestScope(const CoordinatorTestScope &scope)
+void removeCoordinatorTestScope(const CoordinatorTestScope& scope)
 {
     const std::string libraryDirectory = "cache/library/" + scope.scope;
     const std::string base = libraryDirectory + "/catalog.sqlite3";
-    const std::string files[] = {base, base + "-journal", base + "-wal",
-                                 base + "-shm", base + ".migrating",
+    const std::string files[] = {base,
+                                 base + "-journal",
+                                 base + "-wal",
+                                 base + "-shm",
+                                 base + ".migrating",
                                  base + ".migrating-journal",
                                  base + ".migrating-wal",
                                  base + ".migrating-shm"};
-    for (const auto &file : files)
+    for (const auto& file : files)
         std::remove(file.c_str());
     ::rmdir(libraryDirectory.c_str());
 }
@@ -63,13 +69,14 @@ void removeCoordinatorTestScope(const CoordinatorTestScope &scope)
 std::int64_t coordinatorTestNowMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
 }
 
-std::unique_ptr<library::LibraryCoordinator> makeMaintenanceCoordinator(
-    const char *name, std::shared_ptr<CatalogDb> &db,
-    CoordinatorTestScope &scope, bool manualOffline = false,
-    const std::string &serverUrl = "http://127.0.0.1:1")
+std::unique_ptr<library::LibraryCoordinator>
+makeMaintenanceCoordinator(const char* name, std::shared_ptr<CatalogDb>& db,
+                           CoordinatorTestScope& scope, bool manualOffline = false,
+                           const std::string& serverUrl = "http://127.0.0.1:1")
 {
     scope = coordinatorTestScope(name);
     db = std::make_shared<CatalogDb>();
@@ -81,20 +88,17 @@ std::unique_ptr<library::LibraryCoordinator> makeMaintenanceCoordinator(
     session.serverUrl = serverUrl;
     session.userId = scope.user;
     session.manualOfflineMode = manualOffline;
-    return std::make_unique<library::LibraryCoordinator>(
-        session, db, scope.epoch);
+    return std::make_unique<library::LibraryCoordinator>(session, db, scope.epoch);
 }
 
-void seedMaintenanceCheckpoint(const std::shared_ptr<CatalogDb> &db,
-                               std::uint64_t epoch, std::int64_t timestamp)
+void seedMaintenanceCheckpoint(const std::shared_ptr<CatalogDb>& db, std::uint64_t epoch,
+                               std::int64_t timestamp)
 {
-    const auto seeded = db->writeSyncState(
-        timestamp, timestamp, 1, {0, epoch, {}}).get();
+    const auto seeded = db->writeSyncState(timestamp, timestamp, 1, {0, epoch, {}}).get();
     CHECK(seeded.success);
 }
 
-library::StartupSyncResult takeStartupResult(
-    library::LibraryCoordinator &coordinator)
+library::StartupSyncResult takeStartupResult(library::LibraryCoordinator& coordinator)
 {
     library::StartupSyncResult result;
     bool took = false;
@@ -119,8 +123,7 @@ int coordinatorTestListener()
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(0);
-    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
-                 sizeof(address)) == 0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
     CHECK(::listen(listener, 4) == 0);
     return listener;
 }
@@ -129,10 +132,8 @@ std::string coordinatorTestUrl(int listener)
 {
     sockaddr_in address{};
     socklen_t addressSize = sizeof(address);
-    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
-                        &addressSize) == 0);
-    return "http://127.0.0.1:" +
-        std::to_string(ntohs(address.sin_port));
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &addressSize) == 0);
+    return "http://127.0.0.1:" + std::to_string(ntohs(address.sin_port));
 }
 
 int coordinatorAccept(int listener)
@@ -158,21 +159,18 @@ void coordinatorReadRequest(int client)
     }
 }
 
-void coordinatorSendJson(int client, const std::string &body,
-                         int status = 200)
+void coordinatorSendJson(int client, const std::string& body, int status = 200)
 {
-    const char *statusText = status == 200 ? "OK" : "Internal Server Error";
-    const std::string response = "HTTP/1.1 " + std::to_string(status) + " "
-        + statusText + "\r\nContent-Type: application/json\r\n"
-        + "Content-Length: " + std::to_string(body.size())
-        + "\r\nConnection: close\r\n\r\n" + body;
+    const char* statusText = status == 200 ? "OK" : "Internal Server Error";
+    const std::string response = "HTTP/1.1 " + std::to_string(status) + " " + statusText +
+                                 "\r\nContent-Type: application/json\r\n" +
+                                 "Content-Length: " + std::to_string(body.size()) +
+                                 "\r\nConnection: close\r\n\r\n" + body;
     (void)::send(client, response.data(), response.size(), 0);
 }
 
-bool takeFullUpdate(library::LibraryCoordinator &coordinator,
-                    std::uint64_t request,
-                    library::FullPopulationUpdate &terminal,
-                    bool &sawPage)
+bool takeFullUpdate(library::LibraryCoordinator& coordinator, std::uint64_t request,
+                    library::FullPopulationUpdate& terminal, bool& sawPage)
 {
     for (int i = 0; i < 1000; ++i) {
         library::FullPopulationUpdate update;
@@ -189,14 +187,14 @@ bool takeFullUpdate(library::LibraryCoordinator &coordinator,
     return false;
 }
 
-struct HomeRailResponse {
+struct HomeRailResponse
+{
     std::string body;
     int status = 200;
 };
 
-bool takeHomeRailResult(library::LibraryCoordinator &coordinator,
-                        std::uint64_t request,
-                        library::HomeRailResult &result)
+bool takeHomeRailResult(library::LibraryCoordinator& coordinator, std::uint64_t request,
+                        library::HomeRailResult& result)
 {
     for (int i = 0; i < 1000; ++i) {
         if (coordinator.takeHomeRailResult(request, result))
@@ -206,10 +204,9 @@ bool takeHomeRailResult(library::LibraryCoordinator &coordinator,
     return false;
 }
 
-void serveHomeRailResponses(int listener,
-                            const std::vector<HomeRailResponse> &responses)
+void serveHomeRailResponses(int listener, const std::vector<HomeRailResponse>& responses)
 {
-    for (const auto &response : responses) {
+    for (const auto& response : responses) {
         const int client = coordinatorAccept(listener);
         if (client < 0)
             return;
@@ -249,46 +246,33 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     // With startup disabled there is no worker/result thread to join. Keep a
     // source-level assertion on the enabled seam's lock-safe join ordering so
     // this test still guards the deadlock regression before that path opens.
-    const auto source = miyoofin_test::readTestBytes(
-        "src/library/LibraryCoordinator.cpp");
-    CHECK(miyoofin_test::sourceContains(
-        source, "kCoordinatorStartupSyncEnabled = true"));
-    CHECK(miyoofin_test::sourceContains(
-        source, "if (priorThread.joinable()) priorThread.join();"));
-    CHECK(miyoofin_test::sourceContains(
-        source, "if (startupThread.joinable()) startupThread.join();"));
-    const auto priorMove = miyoofin_test::sourcePos(
-        source, "priorThread = std::move(m_startupThread)");
-    const auto priorJoin = miyoofin_test::sourcePos(
-        source, "priorThread.join()");
-    const auto startupLockReacquire = miyoofin_test::sourcePos(
-        source, "const auto cancellation = m_startupCancellation");
+    const auto source = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(miyoofin_test::sourceContains(source, "kCoordinatorStartupSyncEnabled = true"));
+    CHECK(miyoofin_test::sourceContains(source, "if (priorThread.joinable()) priorThread.join();"));
+    CHECK(miyoofin_test::sourceContains(source,
+                                        "if (startupThread.joinable()) startupThread.join();"));
+    const auto priorMove =
+        miyoofin_test::sourcePos(source, "priorThread = std::move(m_startupThread)");
+    const auto priorJoin = miyoofin_test::sourcePos(source, "priorThread.join()");
+    const auto startupLockReacquire =
+        miyoofin_test::sourcePos(source, "const auto cancellation = m_startupCancellation");
     CHECK(priorMove < priorJoin && priorJoin < startupLockReacquire);
-    const auto homeSync = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenSync.cpp");
-    CHECK(miyoofin_test::sourceContains(
-        homeSync, "startStartupSync(initialPagePublished)"));
-    CHECK(miyoofin_test::sourceContains(
-        homeSync, "takeStartupSyncResult"));
-    CHECK(miyoofin_test::sourceContains(
-        homeSync, "requestFullPopulation(populationRequest)"));
-    CHECK(miyoofin_test::sourceContains(
-        homeSync, "takeFullPopulationUpdate"));
-    CHECK(miyoofin_test::sourceContains(
-        homeSync, "cancelFullPopulation"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeSync, "decideHomeStartupSync("));
-    CHECK(!miyoofin_test::sourceContains(
-        homeSync, "JellyfinApi::getViews"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeSync, "JellyfinApi::getLibraryItemsPage"));
+    const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(miyoofin_test::sourceContains(homeSync, "startStartupSync(initialPagePublished)"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "takeStartupSyncResult"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "requestFullPopulation(populationRequest)"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "takeFullPopulationUpdate"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "cancelFullPopulation"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "decideHomeStartupSync("));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "JellyfinApi::getViews"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "JellyfinApi::getLibraryItemsPage"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->begin("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->stage("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->finalize("));
-    const auto startupGuard = miyoofin_test::sourcePos(
-        homeSync, "m_initialPopulationInProgress = true");
-    const auto coordinatorStart = miyoofin_test::sourcePos(
-        homeSync, "startStartupSync(initialPagePublished)");
+    const auto startupGuard =
+        miyoofin_test::sourcePos(homeSync, "m_initialPopulationInProgress = true");
+    const auto coordinatorStart =
+        miyoofin_test::sourcePos(homeSync, "startStartupSync(initialPagePublished)");
     CHECK(startupGuard != std::string::npos);
     CHECK(coordinatorStart != std::string::npos);
     CHECK(startupGuard < coordinatorStart);
@@ -336,8 +320,7 @@ void testLiveChangesWaitForSerializedSyncSlots()
     queued.itemsUpdated.push_back("item-2");
     CHECK(coordinator.requestLiveChange(queued));
     library::LiveLibraryChangeResult liveResult;
-    for (int i = 0; i < 200
-         && !coordinator.takeLiveChangeResult(liveResult); ++i)
+    for (int i = 0; i < 200 && !coordinator.takeLiveChangeResult(liveResult); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     CHECK(!liveResult.success);
     CHECK(liveResult.error == CatalogDbErrorCategory::ScopeNotReady);
@@ -345,22 +328,17 @@ void testLiveChangesWaitForSerializedSyncSlots()
     // A published result holds the serialized slot until Home consumes it;
     // the queued second change is then published afterward.
     library::LiveLibraryChangeResult nextResult;
-    for (int i = 0; i < 200
-         && !coordinator.takeLiveChangeResult(nextResult); ++i)
+    for (int i = 0; i < 200 && !coordinator.takeLiveChangeResult(nextResult); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     CHECK(!nextResult.success);
     coordinator.stop();
 
     // Home consumes coordinator publications and no longer owns a live-change
     // worker or identity/publish handshake.
-    const auto homeSync = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenSync.cpp");
-    CHECK(miyoofin_test::sourcePos(
-              homeSync, "takeLiveChangeResult(result)") != std::string::npos);
-    CHECK(miyoofin_test::sourcePos(
-              homeSync, "m_liveChangeThread") == std::string::npos);
-    CHECK(miyoofin_test::sourcePos(
-              homeSync, "startLiveChangeApply") == std::string::npos);
+    const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    CHECK(miyoofin_test::sourcePos(homeSync, "takeLiveChangeResult(result)") != std::string::npos);
+    CHECK(miyoofin_test::sourcePos(homeSync, "m_liveChangeThread") == std::string::npos);
+    CHECK(miyoofin_test::sourcePos(homeSync, "startLiveChangeApply") == std::string::npos);
     std::printf("[test] LibraryCoordinator live-change result seam OK\n");
 }
 
@@ -400,14 +378,11 @@ void testLiveChangeQueueFullDrainFallsBackToCatchUp()
     // Pin the coordinator-side failure handling so a future refactor cannot
     // reintroduce a discarded source pop while preserving the queue test
     // above's coalescing/overflow contract.
-    const auto coordinator = miyoofin_test::readTestBytes(
-        "src/library/LibraryCoordinator.cpp");
-    CHECK(miyoofin_test::sourcePos(
-              coordinator, "m_liveChangeRequests.push(incoming)")
-          != std::string::npos);
-    CHECK(miyoofin_test::sourcePos(
-              coordinator, "m_liveChangeDrainPendingCatchUp")
-          != std::string::npos);
+    const auto coordinator = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(miyoofin_test::sourcePos(coordinator, "m_liveChangeRequests.push(incoming)") !=
+          std::string::npos);
+    CHECK(miyoofin_test::sourcePos(coordinator, "m_liveChangeDrainPendingCatchUp") !=
+          std::string::npos);
     std::printf("[test] LibraryCoordinator live-change queue-full drain OK\n");
 }
 
@@ -419,8 +394,7 @@ void testLiveChangeCatchUpFailureIsRetriedByCoordinator()
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
-    const auto seeded = db->writeSyncState(
-        1000, 0, 0, {0, epoch, {}}).get();
+    const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
     const int listener = coordinatorTestListener();
@@ -435,10 +409,8 @@ void testLiveChangeCatchUpFailureIsRetriedByCoordinator()
             if (client < 0)
                 return;
             coordinatorReadRequest(client);
-            coordinatorSendJson(client,
-                                status == 200 ? R"({"Items":[]})"
-                                              : R"({"Error":"transient"})",
-                                status);
+            coordinatorSendJson(
+                client, status == 200 ? R"({"Items":[]})" : R"({"Error":"transient"})", status);
             ::close(client);
         }
     });
@@ -448,8 +420,7 @@ void testLiveChangeCatchUpFailureIsRetriedByCoordinator()
     session.accessToken = "test-token";
     session.userId = scope.user;
     session.manualOfflineMode = true;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     JellyfinLibraryChangeBatch overflow;
@@ -493,8 +464,7 @@ void testLiveChangeCatchUpApplyFailureRetainsBarrier()
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
-    const auto seeded = db->writeSyncState(
-        1000, 0, 0, {0, epoch, {}}).get();
+    const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
     const int listener = coordinatorTestListener();
@@ -511,10 +481,8 @@ void testLiveChangeCatchUpApplyFailureRetainsBarrier()
                 return;
             coordinatorReadRequest(client);
             ++requestCount;
-            coordinatorSendJson(client,
-                                status == 500 ? R"({"Error":"transient"})"
-                                              : R"({"Items":[]})",
-                                status);
+            coordinatorSendJson(
+                client, status == 500 ? R"({"Error":"transient"})" : R"({"Items":[]})", status);
             ::close(client);
         }
     });
@@ -524,8 +492,7 @@ void testLiveChangeCatchUpApplyFailureRetainsBarrier()
     session.accessToken = "test-token";
     session.userId = scope.user;
     session.manualOfflineMode = true;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     JellyfinLibraryChangeBatch overflow;
@@ -571,8 +538,7 @@ void testLiveChangeCatchUpAndApplyPublishExactlyOnce()
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
-    const auto seeded = db->writeSyncState(
-        1000, 0, 0, {0, epoch, {}}).get();
+    const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
     const int listener = coordinatorTestListener();
@@ -586,7 +552,7 @@ void testLiveChangeCatchUpAndApplyPublishExactlyOnce()
             R"({"Items":[]})",
             R"({"Items":[{"Id":"applied-once","Type":"movie","Name":"Applied Once"}]})",
         };
-        for (const auto &body : bodies) {
+        for (const auto& body : bodies) {
             const int client = coordinatorAccept(listener);
             if (client < 0)
                 return;
@@ -602,8 +568,7 @@ void testLiveChangeCatchUpAndApplyPublishExactlyOnce()
     session.accessToken = "test-token";
     session.userId = scope.user;
     session.manualOfflineMode = true;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     JellyfinLibraryChangeBatch batch;
@@ -644,45 +609,30 @@ void testSafetyReconcilePublishesCoordinatorResult()
 {
     std::printf("[test] LibraryCoordinator safety reconcile result\n");
     Session session;
-    auto coordinator = library::LibraryCoordinator(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator = library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
     CHECK(coordinator.requestSafetyReconcileForTest());
     CHECK(!coordinator.requestSafetyReconcileForTest());
     library::SafetyReconcileResult result;
-    for (int i = 0; i < 200 && !coordinator.takeSafetyReconcileResult(result);
-         ++i)
+    for (int i = 0; i < 200 && !coordinator.takeSafetyReconcileResult(result); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
     CHECK(!coordinator.status().safetyReconcileInFlight);
 
-    const auto homeHeader = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreen.hpp");
-    const auto homeSync = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenSync.cpp");
-    const auto homeApply = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenSyncApply.cpp");
-    const auto homeUpdate = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreen.cpp");
-    CHECK(miyoofin_test::sourceContains(
-        homeUpdate, "requestMaintenance()"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeUpdate, "maintenanceDue"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeUpdate, "requestSafetyReconcile"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeSync, "requestSafetyReconcile"));
-    CHECK(miyoofin_test::sourceContains(
-        homeApply, "takeSafetyReconcileResult(result)"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeApply, "requestSafetyReconcile"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeHeader, "m_safetyReconcileThread"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeHeader, "m_safetyReconcileCancellation"));
-    CHECK(!miyoofin_test::sourceContains(
-        homeHeader, "m_safetyReconcileDone"));
+    const auto homeHeader = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.hpp");
+    const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const auto homeApply = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const auto homeUpdate = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
+    CHECK(miyoofin_test::sourceContains(homeUpdate, "requestMaintenance()"));
+    CHECK(!miyoofin_test::sourceContains(homeUpdate, "maintenanceDue"));
+    CHECK(!miyoofin_test::sourceContains(homeUpdate, "requestSafetyReconcile"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "requestSafetyReconcile"));
+    CHECK(miyoofin_test::sourceContains(homeApply, "takeSafetyReconcileResult(result)"));
+    CHECK(!miyoofin_test::sourceContains(homeApply, "requestSafetyReconcile"));
+    CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileThread"));
+    CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileCancellation"));
+    CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileDone"));
     std::printf("[test] LibraryCoordinator safety reconcile result OK\n");
 }
 
@@ -690,8 +640,7 @@ void testSafetyReconcileStopPublishesCompletion()
 {
     std::printf("[test] LibraryCoordinator safety reconcile stop\n");
     Session session;
-    auto coordinator = library::LibraryCoordinator(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator = library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
     CHECK(coordinator.requestSafetyReconcileForTest());
@@ -709,8 +658,7 @@ void testMaintenanceDueStartsReconcile()
     std::printf("[test] LibraryCoordinator maintenance due\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-due", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-due", db, scope);
     coordinator->start();
 
     CHECK(coordinator->status().maintenanceDue);
@@ -727,8 +675,7 @@ void testMaintenanceNotDueRejectsRequest()
     std::printf("[test] LibraryCoordinator maintenance not due\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-not-due", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-not-due", db, scope);
     const auto now = coordinatorTestNowMs();
     seedMaintenanceCheckpoint(db, scope.epoch, now - 1000);
     coordinator->start();
@@ -749,10 +696,8 @@ void testMaintenanceElapsedStartsReconcile()
     std::printf("[test] LibraryCoordinator maintenance elapsed\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-elapsed", db,
-                                                   scope);
-    const auto elapsed = coordinatorTestNowMs()
-        - library::kSafetyReconcileIntervalMs - 1000;
+    auto coordinator = makeMaintenanceCoordinator("maintenance-elapsed", db, scope);
+    const auto elapsed = coordinatorTestNowMs() - library::kSafetyReconcileIntervalMs - 1000;
     seedMaintenanceCheckpoint(db, scope.epoch, elapsed);
     coordinator->start();
     CHECK(coordinator->startStartupSync(true));
@@ -772,8 +717,7 @@ void testMaintenanceManualOfflineSuppressesRequest()
     std::printf("[test] LibraryCoordinator maintenance manual offline\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-offline", db,
-                                                   scope, true);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-offline", db, scope, true);
     coordinator->start();
     CHECK(coordinator->status().manualOffline);
     CHECK(!coordinator->status().maintenanceDue);
@@ -792,8 +736,7 @@ void testMaintenanceRepeatedRequestRejectsActiveWorker()
     std::printf("[test] LibraryCoordinator maintenance repeated request\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-repeated", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-repeated", db, scope);
     coordinator->start();
     db->setWorkerPausedForTest(true);
     CHECK(coordinator->requestMaintenance());
@@ -813,8 +756,7 @@ void testConcurrentMaintenanceRequestsReserveExactlyOnce()
     std::printf("[test] LibraryCoordinator concurrent maintenance requests\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-concurrent", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-concurrent", db, scope);
     coordinator->start();
     db->setWorkerPausedForTest(true);
 
@@ -824,7 +766,7 @@ void testConcurrentMaintenanceRequestsReserveExactlyOnce()
     bool release = false;
     bool firstAccepted = false;
     bool secondAccepted = false;
-    const auto request = [&](bool &accepted) {
+    const auto request = [&](bool& accepted) {
         {
             std::unique_lock<std::mutex> lock(startMutex);
             ++ready;
@@ -838,9 +780,7 @@ void testConcurrentMaintenanceRequestsReserveExactlyOnce()
     std::thread second(request, std::ref(secondAccepted));
     {
         std::unique_lock<std::mutex> lock(startMutex);
-        CHECK(startCondition.wait_for(lock, std::chrono::seconds(2), [&] {
-            return ready == 2;
-        }));
+        CHECK(startCondition.wait_for(lock, std::chrono::seconds(2), [&] { return ready == 2; }));
         release = true;
         startCondition.notify_all();
     }
@@ -863,8 +803,7 @@ void testMaintenanceRejectsActiveStartup()
     std::printf("[test] LibraryCoordinator maintenance active startup\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-active", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-active", db, scope);
     coordinator->start();
     db->setWorkerPausedForTest(true);
     CHECK(coordinator->startStartupSync(false));
@@ -898,8 +837,8 @@ void testMaintenanceRejectsIncompatibleHierarchyMutation()
 
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator(
-        "maintenance-mutation", db, scope, false, serverUrl);
+    auto coordinator =
+        makeMaintenanceCoordinator("maintenance-mutation", db, scope, false, serverUrl);
     coordinator->start();
     MediaItem series;
     series.id = "mutation-series";
@@ -921,8 +860,7 @@ void testMaintenanceDefersUntilCoordinatorStarts()
     std::printf("[test] LibraryCoordinator maintenance deferred start\n");
     CoordinatorTestScope scope;
     std::shared_ptr<CatalogDb> db;
-    auto coordinator = makeMaintenanceCoordinator("maintenance-deferred", db,
-                                                   scope);
+    auto coordinator = makeMaintenanceCoordinator("maintenance-deferred", db, scope);
     CHECK(!coordinator->requestMaintenance());
     coordinator->start();
     CHECK(coordinator->requestMaintenance());
@@ -938,8 +876,7 @@ void testHomeRailStopPublishesCompletion()
     std::printf("[test] LibraryCoordinator Home rail lifecycle\n");
     Session session;
     session.serverUrl = "http://127.0.0.1:1";
-    auto coordinator = library::LibraryCoordinator(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator = library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
     std::uint64_t request = 0;
@@ -952,13 +889,10 @@ void testHomeRailStopPublishesCompletion()
     CHECK(coordinator.takeHomeRailResult(request, result));
     CHECK(result.request == request);
 
-    const auto source = miyoofin_test::readTestBytes(
-        "src/library/LibraryCoordinator.cpp");
-    const auto publish = miyoofin_test::sourcePos(
-        source, "if (requestId == m_homeRailRequest)");
+    const auto source = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
+    const auto publish = miyoofin_test::sourcePos(source, "if (requestId == m_homeRailRequest)");
     CHECK(publish != std::string::npos);
-    CHECK(miyoofin_test::sourceContains(
-        source, "m_homeRailResultReady = true;"));
+    CHECK(miyoofin_test::sourceContains(source, "m_homeRailResultReady = true;"));
     std::printf("[test] LibraryCoordinator Home rail lifecycle OK\n");
 }
 
@@ -969,17 +903,18 @@ void testHomeRailSuccessPublishesBothRails()
     if (listener < 0)
         return;
     std::thread server([&] {
-        serveHomeRailResponses(listener, {
-            {R"({"Items":[{"Id":"continue-1","Type":"Episode","Name":"Continue"}]})"},
-            {R"({"Items":[{"Id":"recent-1","Type":"Movie","Name":"Recent"}]})"},
-        });
+        serveHomeRailResponses(
+            listener, {
+                          {R"({"Items":[{"Id":"continue-1","Type":"Episode","Name":"Continue"}]})"},
+                          {R"({"Items":[{"Id":"recent-1","Type":"Movie","Name":"Recent"}]})"},
+                      });
     });
 
     Session session;
     session.serverUrl = coordinatorTestUrl(listener);
     session.userId = "home-rail-user";
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator =
+        std::make_unique<library::LibraryCoordinator>(session, std::make_shared<CatalogDb>(), 0);
     coordinator->start();
     std::uint64_t request = 0;
     CHECK(coordinator->requestHomeRailRefresh(request));
@@ -1007,17 +942,19 @@ void testHomeRailCachedFailureRetainsInvalidRail()
     if (listener < 0)
         return;
     std::thread server([&] {
-        serveHomeRailResponses(listener, {
-            {R"({"Error":"resume unavailable"})", 500},
-            {R"({"Items":[{"Id":"recent-after-failure","Type":"Movie","Name":"Recent"}]})"},
-        });
+        serveHomeRailResponses(
+            listener,
+            {
+                {R"({"Error":"resume unavailable"})", 500},
+                {R"({"Items":[{"Id":"recent-after-failure","Type":"Movie","Name":"Recent"}]})"},
+            });
     });
 
     Session session;
     session.serverUrl = coordinatorTestUrl(listener);
     session.userId = "home-rail-cache-user";
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator =
+        std::make_unique<library::LibraryCoordinator>(session, std::make_shared<CatalogDb>(), 0);
     coordinator->start();
     std::uint64_t request = 0;
     CHECK(coordinator->requestHomeRailRefresh(request));
@@ -1045,16 +982,18 @@ void testHomeRailCoalescesAndRerunsAfterConsumption()
         return;
     std::thread server([&] {
         serveHomeRailResponses(listener, {
-            {R"({"Items":[]})"}, {R"({"Items":[]})"},
-            {R"({"Items":[]})"}, {R"({"Items":[]})"},
-        });
+                                             {R"({"Items":[]})"},
+                                             {R"({"Items":[]})"},
+                                             {R"({"Items":[]})"},
+                                             {R"({"Items":[]})"},
+                                         });
     });
 
     Session session;
     session.serverUrl = coordinatorTestUrl(listener);
     session.userId = "home-rail-coalesce-user";
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, std::make_shared<CatalogDb>(), 0);
+    auto coordinator =
+        std::make_unique<library::LibraryCoordinator>(session, std::make_shared<CatalogDb>(), 0);
     coordinator->start();
     std::uint64_t firstRequest = 0;
     std::uint64_t duplicateRequest = 0;
@@ -1099,7 +1038,7 @@ void testFullPopulationSuccessCommitsCheckpoint()
         R"({"StartIndex":0,"TotalRecordCount":1,"Items":[{"Id":"coordinator-movie","Type":"Movie","Name":"Coordinator Movie"}]})";
     std::thread server([&] {
         const std::string bodies[] = {viewsBody, pageBody};
-        for (const auto &body : bodies) {
+        for (const auto& body : bodies) {
             const int client = coordinatorAccept(listener);
             if (client < 0)
                 return;
@@ -1112,8 +1051,7 @@ void testFullPopulationSuccessCommitsCheckpoint()
     Session session;
     session.serverUrl = serverUrl;
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
     std::uint64_t request = 0;
     CHECK(coordinator->requestFullPopulation(request));
@@ -1123,16 +1061,13 @@ void testFullPopulationSuccessCommitsCheckpoint()
     server.join();
 
     CHECK(sawPage);
-    CHECK(terminal.success && terminal.committed
-          && terminal.checkpointCommitted);
+    CHECK(terminal.success && terminal.committed && terminal.checkpointCommitted);
     CHECK(!terminal.cancelled && !terminal.superseded);
     CHECK(terminal.generation > 0 && terminal.mediaCount == 1);
     CHECK(terminal.metadataTotal == 1 && terminal.metadataCompleted == 1);
-    const auto state = db->readSyncState(
-        false, 0, 0, {0, epoch, {}}).get();
+    const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
     CHECK(state.success && state.committedGeneration == terminal.generation);
-    CHECK(state.lastSuccessfulMs == terminal.checkpointMs
-          && state.lastSuccessfulMs > 0);
+    CHECK(state.lastSuccessfulMs == terminal.checkpointMs && state.lastSuccessfulMs > 0);
     coordinator->stop();
     coordinator.reset();
     db.reset();
@@ -1165,7 +1100,7 @@ void testFullPopulationAfterLiveChangeAdvancesGeneration()
             viewsBody,
             pageBody,
         };
-        for (const auto &body : bodies) {
+        for (const auto& body : bodies) {
             const int client = coordinatorAccept(listener);
             if (client < 0)
                 return;
@@ -1180,8 +1115,7 @@ void testFullPopulationAfterLiveChangeAdvancesGeneration()
     session.accessToken = "test-token";
     session.userId = scope.user;
     session.manualOfflineMode = true;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     JellyfinLibraryChangeBatch liveBatch;
@@ -1209,8 +1143,7 @@ void testFullPopulationAfterLiveChangeAdvancesGeneration()
     CHECK(terminal.committedGeneration == terminal.generation);
     const auto status = coordinator->status();
     CHECK(status.committedGeneration == terminal.generation);
-    const auto state = db->readSyncState(
-        false, 0, 0, {0, epoch, {}}).get();
+    const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
     CHECK(state.success && state.committedGeneration == terminal.generation);
 
     coordinator->stop();
@@ -1257,8 +1190,7 @@ void testFullPopulationCancellationAbortsStagedGeneration()
     Session session;
     session.serverUrl = serverUrl;
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
     std::uint64_t request = 0;
     CHECK(coordinator->requestFullPopulation(request));
@@ -1273,8 +1205,8 @@ void testFullPopulationCancellationAbortsStagedGeneration()
     server.join();
 
     CHECK(terminal.terminal && terminal.cancelled);
-    CHECK(terminal.error == CatalogDbErrorCategory::Superseded
-          && !terminal.success && !terminal.committed);
+    CHECK(terminal.error == CatalogDbErrorCategory::Superseded && !terminal.success &&
+          !terminal.committed);
     CHECK(!terminal.checkpointCommitted);
     coordinator->stop();
     coordinator.reset();
@@ -1307,8 +1239,7 @@ void testFullPopulationFailureAbortsWithoutCheckpoint()
     Session session;
     session.serverUrl = coordinatorTestUrl(listener);
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
     std::uint64_t request = 0;
     CHECK(coordinator->requestFullPopulation(request));
@@ -1320,8 +1251,7 @@ void testFullPopulationFailureAbortsWithoutCheckpoint()
     CHECK(terminal.terminal && !terminal.success && !terminal.cancelled);
     CHECK(!terminal.committed && !terminal.checkpointCommitted);
     CHECK(!terminal.message.empty());
-    const auto state = db->readSyncState(
-        false, 0, 0, {0, epoch, {}}).get();
+    const auto state = db->readSyncState(false, 0, 0, {0, epoch, {}}).get();
     CHECK(state.success && state.committedGeneration == 0);
     coordinator->stop();
     coordinator.reset();
@@ -1356,8 +1286,7 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     Session session;
     session.serverUrl = "http://127.0.0.1:1";
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     // Hold the startup DB read so all other top-level work is observed while
@@ -1375,12 +1304,10 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     coordinator->cancelStartupSync();
     db->setWorkerPausedForTest(false);
     library::StartupSyncResult startupResult;
-    for (int i = 0; i < 500
-         && !coordinator->takeStartupSyncResult(startupResult); ++i)
+    for (int i = 0; i < 500 && !coordinator->takeStartupSyncResult(startupResult); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(startupResult.cancelled || startupResult.error
-          == CatalogDbErrorCategory::ScopeNotReady
-          || startupResult.success);
+    CHECK(startupResult.cancelled || startupResult.error == CatalogDbErrorCategory::ScopeNotReady ||
+          startupResult.success);
 
     // A paused safety worker similarly blocks startup, population, and live
     // consumption while retaining the queued event.

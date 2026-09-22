@@ -7,14 +7,16 @@
 namespace miyoofin {
 
 /// A single download asset referenced by the manifest.
-struct UpdateAsset {
+struct UpdateAsset
+{
     std::string url;
-    std::string sha256;  // 64-char lowercase hex
+    std::string sha256; // 64-char lowercase hex
     std::uint64_t size = 0;
 };
 
 /// Parsed OTA update manifest.
-struct UpdateManifest {
+struct UpdateManifest
+{
     std::string name;
     std::string version;
     std::string tag;
@@ -34,7 +36,7 @@ struct UpdateManifest {
 /// When `allowNonHttpsAssets` is true, the defense-in-depth check requiring
 /// HTTPS URLs on github.com/objects.githubusercontent.com is skipped.
 /// This is DEV-ONLY; production callers must pass false (the default).
-bool parseUpdateManifest(const std::string &json, UpdateManifest &out,
+bool parseUpdateManifest(const std::string& json, UpdateManifest& out,
                          bool allowNonHttpsAssets = false);
 
 } // namespace miyoofin

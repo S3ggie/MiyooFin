@@ -7,10 +7,10 @@
 
 namespace miyoofin {
 
-static void recordDecodeTelemetry(TelemetryTimer &timer, size_t inputBytes,
-                                   bool success, size_t outputBytes) noexcept
+static void recordDecodeTelemetry(TelemetryTimer& timer, size_t inputBytes, bool success,
+                                  size_t outputBytes) noexcept
 {
-    PerformanceTelemetry &telemetry = performanceTelemetry();
+    PerformanceTelemetry& telemetry = performanceTelemetry();
     if (!timer.active() || !telemetry.enabledFast())
         return;
 
@@ -18,17 +18,16 @@ static void recordDecodeTelemetry(TelemetryTimer &timer, size_t inputBytes,
     telemetry.recordArtworkDecode(success, durationUs);
     TelemetryRecord record{};
     record.header.record_type = RecordType::ArtworkDecode;
-    record.payload.artwork_decode.context = static_cast<uint8_t>(
-        currentArtworkContext());
-    record.payload.artwork_decode.outcome = static_cast<uint8_t>(
-        success ? Outcome::Success : Outcome::Failure);
+    record.payload.artwork_decode.context = static_cast<uint8_t>(currentArtworkContext());
+    record.payload.artwork_decode.outcome =
+        static_cast<uint8_t>(success ? Outcome::Success : Outcome::Failure);
     record.payload.artwork_decode.duration_us = durationUs;
     record.payload.artwork_decode.compressed_input_bytes = inputBytes;
     record.payload.artwork_decode.decoded_rgba_bytes = outputBytes;
     telemetry.emitRecord(record);
 }
 
-DecodedImage ImageDecoder::decodeJpeg(const unsigned char *data, size_t size)
+DecodedImage ImageDecoder::decodeJpeg(const unsigned char* data, size_t size)
 {
     TelemetryTimer timer;
     if (!data || size == 0) {
@@ -39,12 +38,12 @@ DecodedImage ImageDecoder::decodeJpeg(const unsigned char *data, size_t size)
     int w = 0, h = 0, channels = 0;
 
     // Request 4 channels (RGBA) regardless of source format.
-    unsigned char *pixels = stbi_load_from_memory(
-        data, static_cast<int>(size),
-        &w, &h, &channels, 4);
+    unsigned char* pixels =
+        stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &channels, 4);
 
     if (!pixels || w <= 0 || h <= 0) {
-        if (pixels) stbi_image_free(pixels);
+        if (pixels)
+            stbi_image_free(pixels);
         recordDecodeTelemetry(timer, size, false, 0);
         return {};
     }
@@ -52,8 +51,8 @@ DecodedImage ImageDecoder::decodeJpeg(const unsigned char *data, size_t size)
     // Copy into our own vector so the caller owns the memory.
     const size_t width = static_cast<size_t>(w);
     const size_t height = static_cast<size_t>(h);
-    const bool outputSizeFits = width <= std::numeric_limits<size_t>::max() / 4
-        && height <= (std::numeric_limits<size_t>::max() / 4) / width;
+    const bool outputSizeFits = width <= std::numeric_limits<size_t>::max() / 4 &&
+                                height <= (std::numeric_limits<size_t>::max() / 4) / width;
     if (!outputSizeFits) {
         stbi_image_free(pixels);
         recordDecodeTelemetry(timer, size, false, 0);
@@ -70,12 +69,12 @@ DecodedImage ImageDecoder::decodeJpeg(const unsigned char *data, size_t size)
     return img;
 }
 
-DecodedImage ImageDecoder::decodeJpegFile(const char *path)
+DecodedImage ImageDecoder::decodeJpegFile(const char* path)
 {
     if (!path)
         return {};
 
-    FILE *f = std::fopen(path, "rb");
+    FILE* f = std::fopen(path, "rb");
     if (!f)
         return {};
 

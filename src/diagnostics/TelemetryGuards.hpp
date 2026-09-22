@@ -12,7 +12,7 @@ namespace miyoofin {
 
 class TelemetryRequestScope
 {
-public:
+  public:
     explicit TelemetryRequestScope(RequestKind request) noexcept
     {
         if (!performanceTelemetry().enabledFast())
@@ -28,14 +28,14 @@ public:
             telemetryContext().requestKind = m_previous;
     }
 
-private:
+  private:
     bool m_active = false;
     RequestKind m_previous = RequestKind::Unknown;
 };
 
 class TelemetryRouteScope
 {
-public:
+  public:
     TelemetryRouteScope(RouteKind route, uint8_t attempt, bool fallback) noexcept
     {
         if (!performanceTelemetry().enabledFast())
@@ -58,7 +58,7 @@ public:
         telemetryContext().routeFallback = m_previousFallback;
     }
 
-private:
+  private:
     bool m_active = false;
     RouteKind m_previousRoute = RouteKind::Unknown;
     uint8_t m_previousAttempt = 0;
@@ -67,7 +67,7 @@ private:
 
 class TelemetryArtworkScope
 {
-public:
+  public:
     explicit TelemetryArtworkScope(ArtworkContext artwork) noexcept
     {
         if (!performanceTelemetry().enabledFast())
@@ -83,14 +83,14 @@ public:
             telemetryContext().artworkContext = m_previous;
     }
 
-private:
+  private:
     bool m_active = false;
     ArtworkContext m_previous = ArtworkContext::Unknown;
 };
 
 class TelemetryTimer
 {
-public:
+  public:
     TelemetryTimer() noexcept
     {
         if (!performanceTelemetry().enabledFast())
@@ -99,7 +99,10 @@ public:
         m_startUs = TelemetryClock::monotonicUs();
     }
 
-    bool active() const noexcept { return m_active; }
+    bool active() const noexcept
+    {
+        return m_active;
+    }
 
     uint64_t elapsedUs() const noexcept
     {
@@ -109,7 +112,7 @@ public:
         return nowUs >= m_startUs ? nowUs - m_startUs : 0;
     }
 
-private:
+  private:
     bool m_active = false;
     uint64_t m_startUs = 0;
 };
@@ -118,28 +121,34 @@ private:
 
 class TelemetryRequestScope
 {
-public:
+  public:
     explicit TelemetryRequestScope(RequestKind) noexcept {}
 };
 
 class TelemetryRouteScope
 {
-public:
+  public:
     TelemetryRouteScope(RouteKind, uint8_t, bool) noexcept {}
 };
 
 class TelemetryArtworkScope
 {
-public:
+  public:
     explicit TelemetryArtworkScope(ArtworkContext) noexcept {}
 };
 
 class TelemetryTimer
 {
-public:
+  public:
     TelemetryTimer() noexcept {}
-    bool active() const noexcept { return false; }
-    uint64_t elapsedUs() const noexcept { return 0; }
+    bool active() const noexcept
+    {
+        return false;
+    }
+    uint64_t elapsedUs() const noexcept
+    {
+        return 0;
+    }
 };
 
 #endif

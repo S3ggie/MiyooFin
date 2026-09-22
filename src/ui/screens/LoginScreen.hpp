@@ -14,51 +14,77 @@ namespace miyoofin {
 /// on-screen keyboard. The password is masked while typing.
 /// On success, fills the session data and sets finished().
 /// On failure, shows a useful error message and lets the user retry.
-class LoginScreen : public Screen {
-public:
-    LoginScreen(const std::string &serverUrl,
-                const std::string &serverName,
-                const std::string &deviceId,
-                const std::string &initialMessage = {});
+class LoginScreen : public Screen
+{
+  public:
+    LoginScreen(const std::string& serverUrl, const std::string& serverName,
+                const std::string& deviceId, const std::string& initialMessage = {});
     ~LoginScreen() override;
 
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
-    void render(SDL_Surface *fb) override;
+    void render(SDL_Surface* fb) override;
 
     /// True when the user successfully authenticated.
-    bool finished() const { return m_finished; }
+    bool finished() const
+    {
+        return m_finished;
+    }
 
     /// True if authentication succeeded (implies finished()).
-    bool success() const { return m_success; }
+    bool success() const
+    {
+        return m_success;
+    }
 
     /// The populated session data (valid only when success()).
-    const AuthResult &result() const { return m_result; }
+    const AuthResult& result() const
+    {
+        return m_result;
+    }
 
     /// The server URL used for this login.
-    const std::string &serverUrl() const { return m_serverUrl; }
+    const std::string& serverUrl() const
+    {
+        return m_serverUrl;
+    }
 
     /// True when the user pressed Back on the field row: App should return
     /// to the server-URL entry screen (the stack holds only this screen,
     /// so there is nothing beneath to pop to).
-    bool wantsServerEntry() const { return m_wantsServerEntry; }
+    bool wantsServerEntry() const
+    {
+        return m_wantsServerEntry;
+    }
 
     // Keyboard state accessors support deterministic host tests.
-    bool capsEnabled() const { return m_keyboard.capsEnabled(); }
-    const std::string &username() const { return m_username; }
-    const std::string &password() const { return m_password; }
-    bool keyboardSelectionValid() const { return m_keyboard.selectionValid(); }
+    bool capsEnabled() const
+    {
+        return m_keyboard.capsEnabled();
+    }
+    const std::string& username() const
+    {
+        return m_username;
+    }
+    const std::string& password() const
+    {
+        return m_password;
+    }
+    bool keyboardSelectionValid() const
+    {
+        return m_keyboard.selectionValid();
+    }
 
-private:
+  private:
     OnScreenKeyboard m_keyboard;
 
     // Fields
     std::string m_username;
     std::string m_password;
-    int m_activeField = 0;   // 0 = username, 1 = password
-    bool m_inFields = true;  // true when focus is on the field row
+    int m_activeField = 0;  // 0 = username, 1 = password
+    bool m_inFields = true; // true when focus is on the field row
 
     std::string m_serverUrl;
     std::string m_serverName;
@@ -79,15 +105,15 @@ private:
 
     void submitLogin();
     void finishLogin();
-    std::string &activeText();
+    std::string& activeText();
 
     // Drawing helpers
-    void drawTitle(SDL_Surface *fb);
-    void drawField(SDL_Surface *fb, int y, const char *label,
-                   const std::string &display, bool selected, bool masked);
-    void drawInputFields(SDL_Surface *fb);
-    void drawStatus(SDL_Surface *fb);
-    void drawHints(SDL_Surface *fb);
+    void drawTitle(SDL_Surface* fb);
+    void drawField(SDL_Surface* fb, int y, const char* label, const std::string& display,
+                   bool selected, bool masked);
+    void drawInputFields(SDL_Surface* fb);
+    void drawStatus(SDL_Surface* fb);
+    void drawHints(SDL_Surface* fb);
 };
 
 } // namespace miyoofin

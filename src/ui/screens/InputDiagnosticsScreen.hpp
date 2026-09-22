@@ -9,17 +9,18 @@ namespace miyoofin {
 
 /// Displays raw SDL input events so the real Miyoo button mapping
 /// can be determined on-device.
-class InputDiagnosticsScreen : public Screen {
-public:
-    explicit InputDiagnosticsScreen(InputManager *input);
+class InputDiagnosticsScreen : public Screen
+{
+  public:
+    explicit InputDiagnosticsScreen(InputManager* input);
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
-    void render(SDL_Surface *fb) override;
+    void render(SDL_Surface* fb) override;
 
-private:
-    InputManager *m_input;
+  private:
+    InputManager* m_input;
     std::vector<RawEvent> m_displayedEvents;
     int m_scrollOffset = 0;
 };

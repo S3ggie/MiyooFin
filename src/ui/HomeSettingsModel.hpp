@@ -7,13 +7,30 @@
 
 namespace miyoofin {
 
-enum class HomeSettingsRowAction { None, OfflineMode, ChangeServer, LocalAddress, PublicAddress, Logout, CheckForUpdates };
-struct HomeSettingsAddressRow { std::string section; std::string value; HomeSettingsRowAction action; };
+enum class HomeSettingsRowAction
+{
+    None,
+    OfflineMode,
+    ChangeServer,
+    LocalAddress,
+    PublicAddress,
+    Logout,
+    CheckForUpdates
+};
+struct HomeSettingsAddressRow
+{
+    std::string section;
+    std::string value;
+    HomeSettingsRowAction action;
+};
 
-constexpr int homeSettingsBaseRowCount() { return 10; }
-std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session &session);
-int homeSettingsRowCount(const Session &session);
-HomeSettingsRowAction homeSettingsRowAction(int row, const Session &session);
+constexpr int homeSettingsBaseRowCount()
+{
+    return 10;
+}
+std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session);
+int homeSettingsRowCount(const Session& session);
+HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session);
 
 } // namespace miyoofin
 

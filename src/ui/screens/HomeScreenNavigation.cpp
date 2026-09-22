@@ -57,36 +57,37 @@ void HomeScreen::refreshMovieFilter()
     if (movies < 0)
         return;
     const bool moviesActive = activeTabNamed("Movies");
-    const MediaItem *previousItem = currentItem();
-    const std::string selectedId = previousItem ? previousItem->id
-                                                : m_moviePreviewId;
+    const MediaItem* previousItem = currentItem();
+    const std::string selectedId = previousItem ? previousItem->id : m_moviePreviewId;
     const int previousSelected = m_activeCard;
     const int previousScroll = m_rowScroll;
     std::vector<MediaItem> displayed;
-    for (const auto &item : m_movieWindow) {
+    for (const auto& item : m_movieWindow) {
         if (movieMatchesAlphabetFilter(item.title, m_movieActiveLetter))
             displayed.push_back(item);
     }
     m_tabs[movies].rows = {{"Movies", std::move(displayed)}};
-    if (!moviesActive) return;
+    if (!moviesActive)
+        return;
     m_activeRow = 0;
-    m_activeCard = restoreSelectionIndex(m_tabs[movies].rows[0].items,
-                                         selectedId, previousSelected);
-    m_rowScroll = preserveGridScroll(m_activeCard,
-                                     static_cast<int>(m_tabs[movies].rows[0].items.size()),
-                                     previousScroll, MOVIE_GRID_COLUMNS, MOVIE_GRID_ROWS);
+    m_activeCard =
+        restoreSelectionIndex(m_tabs[movies].rows[0].items, selectedId, previousSelected);
+    m_rowScroll =
+        preserveGridScroll(m_activeCard, static_cast<int>(m_tabs[movies].rows[0].items.size()),
+                           previousScroll, MOVIE_GRID_COLUMNS, MOVIE_GRID_ROWS);
     m_cardScroll = 0;
-    const MediaItem *current = currentItem();
+    const MediaItem* current = currentItem();
     if (!current || current->id != selectedId) {
         m_selectedArtwork = {};
         m_selectedArtworkId.clear();
         m_selectedArtworkAttempted = false;
     }
-    if (current) m_moviePreviewId = current->id;
+    if (current)
+        m_moviePreviewId = current->id;
 }
 
-HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
-    ShowsFocusState previous, bool hasShows, bool hasAnime)
+HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(ShowsFocusState previous,
+                                                               bool hasShows, bool hasAnime)
 {
     if (previous == ShowsFocusState::AnimeGrid && hasAnime)
         return ShowsFocusState::AnimeGrid;
@@ -99,9 +100,8 @@ HomeScreen::ShowsFocusState HomeScreen::showsFocusAfterRefresh(
     return ShowsFocusState::AlphabetRail;
 }
 
-int HomeScreen::restoreSelectionIndex(const std::vector<MediaItem> &items,
-                                      const std::string &selectedId,
-                                      int fallback)
+int HomeScreen::restoreSelectionIndex(const std::vector<MediaItem>& items,
+                                      const std::string& selectedId, int fallback)
 {
     if (items.empty())
         return 0;
@@ -111,12 +111,11 @@ int HomeScreen::restoreSelectionIndex(const std::vector<MediaItem> &items,
                 return i;
         }
     }
-    return std::max(0, std::min(
-        fallback, static_cast<int>(items.size()) - 1));
+    return std::max(0, std::min(fallback, static_cast<int>(items.size()) - 1));
 }
 
-int HomeScreen::preserveGridScroll(int selected, int count, int currentScroll,
-                                   int columns, int rows)
+int HomeScreen::preserveGridScroll(int selected, int count, int currentScroll, int columns,
+                                   int rows)
 {
     if (count <= 0 || columns <= 0 || rows <= 0)
         return 0;
@@ -135,10 +134,10 @@ int HomeScreen::preserveGridScroll(int selected, int count, int currentScroll,
 void HomeScreen::refreshShowsFilter()
 {
     const ShowsFocusState previousFocus =
-        m_showsFocus == ShowsFocus::AnimeGrid ? ShowsFocusState::AnimeGrid
+        m_showsFocus == ShowsFocus::AnimeGrid   ? ShowsFocusState::AnimeGrid
         : m_showsFocus == ShowsFocus::ShowsGrid ? ShowsFocusState::ShowsGrid
-        : ShowsFocusState::AlphabetRail;
-    const MediaItem *previousItem = showsSelectedItem();
+                                                : ShowsFocusState::AlphabetRail;
+    const MediaItem* previousItem = showsSelectedItem();
     const std::string selectedId = previousItem ? previousItem->id : m_showsPreviewId;
     const int previousShowSelected = m_showSelected;
     const int previousAnimeSelected = m_animeSelected;
@@ -146,44 +145,38 @@ void HomeScreen::refreshShowsFilter()
     const int previousAnimeScroll = m_animeScroll;
     m_filteredShows.clear();
     m_filteredAnime.clear();
-    for (const auto &item : m_showWindow)
+    for (const auto& item : m_showWindow)
         if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
             m_filteredShows.push_back(item);
-    for (const auto &item : m_animeWindow)
+    for (const auto& item : m_animeWindow)
         if (matchesAlphabetFilter(item.title, m_showsActiveLetter))
             m_filteredAnime.push_back(item);
-    const ShowsFocusState nextFocus = showsFocusAfterRefresh(
-        previousFocus, !m_filteredShows.empty(), !m_filteredAnime.empty());
-    m_showsFocus = nextFocus == ShowsFocusState::AnimeGrid ? ShowsFocus::AnimeGrid
-        : nextFocus == ShowsFocusState::ShowsGrid ? ShowsFocus::ShowsGrid
-        : ShowsFocus::AlphabetRail;
-    m_showSelected = restoreSelectionIndex(
-        m_filteredShows, selectedId, previousShowSelected);
-    m_animeSelected = restoreSelectionIndex(
-        m_filteredAnime, selectedId, previousAnimeSelected);
-    m_showScroll = preserveGridScroll(
-        m_showSelected, static_cast<int>(m_filteredShows.size()),
-        previousShowScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
-    m_animeScroll = preserveGridScroll(
-        m_animeSelected, static_cast<int>(m_filteredAnime.size()),
-        previousAnimeScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
-    if (const MediaItem *item = showsSelectedItem())
+    const ShowsFocusState nextFocus =
+        showsFocusAfterRefresh(previousFocus, !m_filteredShows.empty(), !m_filteredAnime.empty());
+    m_showsFocus = nextFocus == ShowsFocusState::AnimeGrid   ? ShowsFocus::AnimeGrid
+                   : nextFocus == ShowsFocusState::ShowsGrid ? ShowsFocus::ShowsGrid
+                                                             : ShowsFocus::AlphabetRail;
+    m_showSelected = restoreSelectionIndex(m_filteredShows, selectedId, previousShowSelected);
+    m_animeSelected = restoreSelectionIndex(m_filteredAnime, selectedId, previousAnimeSelected);
+    m_showScroll = preserveGridScroll(m_showSelected, static_cast<int>(m_filteredShows.size()),
+                                      previousShowScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
+    m_animeScroll = preserveGridScroll(m_animeSelected, static_cast<int>(m_filteredAnime.size()),
+                                       previousAnimeScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
+    if (const MediaItem* item = showsSelectedItem())
         m_showsPreviewId = item->id;
 }
-const MediaItem *HomeScreen::showsSelectedItem() const
+const MediaItem* HomeScreen::showsSelectedItem() const
 {
-    const std::vector<MediaItem> *items =
-        m_showsFocus == ShowsFocus::AnimeGrid ? &m_filteredAnime
-                                              : &m_filteredShows;
-    const int selected = m_showsFocus == ShowsFocus::AnimeGrid
-        ? m_animeSelected : m_showSelected;
+    const std::vector<MediaItem>* items =
+        m_showsFocus == ShowsFocus::AnimeGrid ? &m_filteredAnime : &m_filteredShows;
+    const int selected = m_showsFocus == ShowsFocus::AnimeGrid ? m_animeSelected : m_showSelected;
     if (selected >= 0 && selected < static_cast<int>(items->size()))
         return &(*items)[selected];
-    for (const auto &item : m_filteredShows) {
+    for (const auto& item : m_filteredShows) {
         if (item.id == m_showsPreviewId)
             return &item;
     }
-    for (const auto &item : m_filteredAnime) {
+    for (const auto& item : m_filteredAnime) {
         if (item.id == m_showsPreviewId)
             return &item;
     }
@@ -193,59 +186,61 @@ const MediaItem *HomeScreen::showsSelectedItem() const
 void HomeScreen::clampShowsNavigation()
 {
     if (!m_filteredShows.empty()) {
-        m_showSelected = std::max(
-            0, std::min(m_showSelected,
-                        static_cast<int>(m_filteredShows.size()) - 1));
-        m_showScroll = clampShowsGridScroll(
-            m_showSelected, m_filteredShows.size(), m_showScroll);
+        m_showSelected =
+            std::max(0, std::min(m_showSelected, static_cast<int>(m_filteredShows.size()) - 1));
+        m_showScroll = clampShowsGridScroll(m_showSelected, m_filteredShows.size(), m_showScroll);
     } else {
         m_showSelected = 0;
         m_showScroll = 0;
     }
     if (!m_filteredAnime.empty()) {
-        m_animeSelected = std::max(
-            0, std::min(m_animeSelected,
-                        static_cast<int>(m_filteredAnime.size()) - 1));
-        m_animeScroll = clampShowsGridScroll(
-            m_animeSelected, m_filteredAnime.size(), m_animeScroll);
+        m_animeSelected =
+            std::max(0, std::min(m_animeSelected, static_cast<int>(m_filteredAnime.size()) - 1));
+        m_animeScroll =
+            clampShowsGridScroll(m_animeSelected, m_filteredAnime.size(), m_animeScroll);
     } else {
         m_animeSelected = 0;
         m_animeScroll = 0;
     }
-    if (const MediaItem *item = showsSelectedItem())
+    if (const MediaItem* item = showsSelectedItem())
         m_showsPreviewId = item->id;
 }
 
 int HomeScreen::moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const
 {
-    if (count <= 0) return 0;
-    if (index < 0) index = 0;
-    if (index >= count) index = count - 1;
+    if (count <= 0)
+        return 0;
+    if (index < 0)
+        index = 0;
+    if (index >= count)
+        index = count - 1;
     int row = index / MOVIE_GRID_COLUMNS + deltaRow;
     int col = index % MOVIE_GRID_COLUMNS + deltaCol;
-    if (col < 0 || col >= MOVIE_GRID_COLUMNS || row < 0) return index;
+    if (col < 0 || col >= MOVIE_GRID_COLUMNS || row < 0)
+        return index;
     int target = row * MOVIE_GRID_COLUMNS + col;
-    if (target >= count) return deltaRow > 0 ? count - 1 : index;
+    if (target >= count)
+        return deltaRow > 0 ? count - 1 : index;
     return target;
 }
 
-const TabData &HomeScreen::currentTab() const
+const TabData& HomeScreen::currentTab() const
 {
     static const TabData empty{"", {}};
-    return m_activeTab>=0 && m_activeTab<(int)m_tabs.size() ? m_tabs[m_activeTab] : empty;
+    return m_activeTab >= 0 && m_activeTab < (int)m_tabs.size() ? m_tabs[m_activeTab] : empty;
 }
 
-const char *HomeScreen::diagnosticTabName() const
+const char* HomeScreen::diagnosticTabName() const
 {
     return currentTab().name.empty() ? "other" : currentTab().name.c_str();
 }
 
-bool HomeScreen::activeTabNamed(const char *name) const
+bool HomeScreen::activeTabNamed(const char* name) const
 {
     return currentTab().name == name;
 }
 
-int HomeScreen::tabIndex(const char *name) const
+int HomeScreen::tabIndex(const char* name) const
 {
     for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i) {
         if (m_tabs[i].name == name)
@@ -254,7 +249,7 @@ int HomeScreen::tabIndex(const char *name) const
     return -1;
 }
 
-int HomeScreen::tabIndexAtPoint(const std::vector<TabData> &tabs, int x, int y)
+int HomeScreen::tabIndexAtPoint(const std::vector<TabData>& tabs, int x, int y)
 {
     static constexpr int TAB_Y = 0;
     static constexpr int TAB_H = 24;
@@ -263,8 +258,7 @@ int HomeScreen::tabIndexAtPoint(const std::vector<TabData> &tabs, int x, int y)
 
     int tabX = 8;
     for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
-        const int tabWidth = static_cast<int>(tabs[i].name.size())
-            * BitmapFont::GLYPH_W + 16;
+        const int tabWidth = static_cast<int>(tabs[i].name.size()) * BitmapFont::GLYPH_W + 16;
         if (x >= tabX && x < tabX + tabWidth)
             return i;
         tabX += tabWidth;
@@ -292,17 +286,17 @@ void HomeScreen::activateTab(int index)
     }
 }
 
-const MediaRow *HomeScreen::currentRow() const
+const MediaRow* HomeScreen::currentRow() const
 {
-    const auto &rows = currentTab().rows;
+    const auto& rows = currentTab().rows;
     if (m_activeRow < (int)rows.size())
         return &rows[m_activeRow];
     return nullptr;
 }
 
-const MediaItem *HomeScreen::currentItem() const
+const MediaItem* HomeScreen::currentItem() const
 {
-    const MediaRow *row = currentRow();
+    const MediaRow* row = currentRow();
     if (row && m_activeCard < (int)row->items.size())
         return &row->items[m_activeCard];
     return nullptr;
@@ -310,14 +304,15 @@ const MediaItem *HomeScreen::currentItem() const
 
 std::string HomeScreen::focusedHomeRowLabel() const
 {
-    const MediaRow *r = currentRow();
+    const MediaRow* r = currentRow();
     return r ? r->label : "";
 }
 
-void HomeScreen::restoreHomeRowFocus(const std::string &label)
+void HomeScreen::restoreHomeRowFocus(const std::string& label)
 {
-    if (!activeTabNamed("Home")) return;
-    const auto &rows = currentTab().rows;
+    if (!activeTabNamed("Home"))
+        return;
+    const auto& rows = currentTab().rows;
     if (rows.empty()) {
         m_activeRow = 0;
         return;
@@ -326,7 +321,8 @@ void HomeScreen::restoreHomeRowFocus(const std::string &label)
     if (idx >= 0) {
         m_activeRow = idx;
     } else {
-        if (m_activeRow < 0) m_activeRow = 0;
+        if (m_activeRow < 0)
+            m_activeRow = 0;
         if (m_activeRow >= static_cast<int>(rows.size()))
             m_activeRow = static_cast<int>(rows.size()) - 1;
         m_activeCard = 0;
@@ -336,7 +332,7 @@ void HomeScreen::restoreHomeRowFocus(const std::string &label)
 
 void HomeScreen::clampNavigation()
 {
-    const auto &rows = currentTab().rows;
+    const auto& rows = currentTab().rows;
     if (rows.empty()) {
         m_activeRow = 0;
         m_activeCard = 0;
@@ -346,20 +342,20 @@ void HomeScreen::clampNavigation()
     }
     if (activeTabNamed("Movies")) {
         m_activeRow = 0;
-        const auto &items = rows[0].items;
+        const auto& items = rows[0].items;
         if (items.empty()) {
             m_activeCard = 0;
             m_rowScroll = 0;
             m_cardScroll = 0;
             return;
         }
-        if (m_activeCard < 0) m_activeCard = 0;
+        if (m_activeCard < 0)
+            m_activeCard = 0;
         if (m_activeCard >= (int)items.size())
             m_activeCard = (int)items.size() - 1;
-        m_rowScroll = clampMovieGridScrollCompact(
-            m_activeCard, (int)items.size(), m_rowScroll);
+        m_rowScroll = clampMovieGridScrollCompact(m_activeCard, (int)items.size(), m_rowScroll);
         m_cardScroll = 0;
-        if (const MediaItem *item = currentItem())
+        if (const MediaItem* item = currentItem())
             m_moviePreviewId = item->id;
         return;
     }
@@ -367,22 +363,26 @@ void HomeScreen::clampNavigation()
         clampShowsNavigation();
         return;
     }
-    if (m_activeRow < 0) m_activeRow = 0;
-    if (m_activeRow >= (int)rows.size()) m_activeRow = (int)rows.size() - 1;
-    const auto &items = rows[m_activeRow].items;
+    if (m_activeRow < 0)
+        m_activeRow = 0;
+    if (m_activeRow >= (int)rows.size())
+        m_activeRow = (int)rows.size() - 1;
+    const auto& items = rows[m_activeRow].items;
     if (items.empty()) {
         m_activeCard = 0;
         m_cardScroll = 0;
         return;
     }
-    if (m_activeCard < 0) m_activeCard = 0;
-    if (m_activeCard >= (int)items.size()) m_activeCard = (int)items.size() - 1;
-    if (m_activeRow < m_rowScroll) m_rowScroll = m_activeRow;
+    if (m_activeCard < 0)
+        m_activeCard = 0;
+    if (m_activeCard >= (int)items.size())
+        m_activeCard = (int)items.size() - 1;
+    if (m_activeRow < m_rowScroll)
+        m_rowScroll = m_activeRow;
     if (m_activeRow >= m_rowScroll + VISIBLE_ROWS)
         m_rowScroll = m_activeRow - VISIBLE_ROWS + 1;
     static constexpr int HMARGIN = 4;
-    m_cardScroll = clampCardScroll(items, m_activeCard, m_cardScroll,
-                                    640, HMARGIN, CARD_GAP);
+    m_cardScroll = clampCardScroll(items, m_activeCard, m_cardScroll, 640, HMARGIN, CARD_GAP);
 }
 
 bool HomeScreen::handlePointerClick(int x, int y)
@@ -453,24 +453,23 @@ bool HomeScreen::handleAction(Action action)
             const int previous = m_settingsSelected;
             if (action == Action::Up && m_settingsSelected > 0) {
                 --m_settingsSelected;
-            } else if (action == Action::Down
-                       && m_settingsSelected < settingsRowCount(m_session) - 1) {
+            } else if (action == Action::Down &&
+                       m_settingsSelected < settingsRowCount(m_session) - 1) {
                 ++m_settingsSelected;
             }
             if (m_settingsSelected != previous)
                 m_settingsConfirmation = SettingsConfirmation::None;
-            m_settingsScroll = std::max(
-                0, std::min(m_settingsSelected,
-                            settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
+            m_settingsScroll =
+                std::max(0, std::min(m_settingsSelected,
+                                     settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
             return true;
         }
         if (action == Action::Confirm) {
-            switch (settingsRowAction(m_settingsSelected,m_session)) {
+            switch (settingsRowAction(m_settingsSelected, m_session)) {
             case SettingsRowAction::OfflineMode: {
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
                 if (m_libraryCoordinator)
-                    m_libraryCoordinator->setManualOfflineMode(
-                        m_session.manualOfflineMode);
+                    m_libraryCoordinator->setManualOfflineMode(m_session.manualOfflineMode);
                 const bool sessionSaved = m_session.save();
                 std::printf("[HomeScreen] manual_offline_mode=%s saved=%s\n",
                             m_session.manualOfflineMode ? "ON" : "OFF",
@@ -482,8 +481,7 @@ bool HomeScreen::handleAction(Action action)
                     m_fetchCancellation->store(true);
                 // When entering offline mode, try the instant cached path
                 // first — avoids a full fetch when downloads haven't changed.
-                if (m_session.manualOfflineMode
-                    && tryApplyCachedOfflineSnapshot()) {
+                if (m_session.manualOfflineMode && tryApplyCachedOfflineSnapshot()) {
                     return true;
                 }
                 // Drive the existing manual-offline fetch path via startFetch().
@@ -504,8 +502,8 @@ bool HomeScreen::handleAction(Action action)
             case SettingsRowAction::ChangeServer:
             case SettingsRowAction::Logout: {
                 const SettingsConfirmation requested =
-                    settingsRowAction(m_settingsSelected, m_session)
-                            == SettingsRowAction::ChangeServer
+                    settingsRowAction(m_settingsSelected, m_session) ==
+                            SettingsRowAction::ChangeServer
                         ? SettingsConfirmation::ChangeServer
                         : SettingsConfirmation::Logout;
                 if (m_settingsConfirmation == requested) {
@@ -526,15 +524,13 @@ bool HomeScreen::handleAction(Action action)
                 if (stage == UpdateStage::ReadyToRestart) {
                     m_updateExitRequested = true;
                 } else if (stage == UpdateStage::Available) {
-                    if (m_settingsConfirmation
-                        == SettingsConfirmation::CheckForUpdates) {
+                    if (m_settingsConfirmation == SettingsConfirmation::CheckForUpdates) {
                         m_updateManager.confirmInstall();
                         m_settingsConfirmation = SettingsConfirmation::None;
                     } else {
                         m_settingsConfirmation = SettingsConfirmation::CheckForUpdates;
                     }
-                } else if (stage == UpdateStage::Idle ||
-                           stage == UpdateStage::UpToDate ||
+                } else if (stage == UpdateStage::Idle || stage == UpdateStage::UpToDate ||
                            stage == UpdateStage::Error) {
                     m_updateManager.checkForUpdates();
                 }
@@ -550,11 +546,9 @@ bool HomeScreen::handleAction(Action action)
         if (action != Action::NextTab && action != Action::PrevTab)
             return true;
         m_settingsScroll = std::max(
-            0, std::min(m_settingsSelected,
-                        settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
+            0, std::min(m_settingsSelected, settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
     }
-    auto queueDownAtPageEdge = [this](MediaPageState &page, int selected,
-                                      int count, int columns) {
+    auto queueDownAtPageEdge = [this](MediaPageState& page, int selected, int count, int columns) {
         if (!gridAtBottomRow(selected, count, columns) || !page.hasMore)
             return false;
         page.pendingDown = true;
@@ -572,14 +566,12 @@ bool HomeScreen::handleAction(Action action)
                 if (gridAtTopRow(m_showSelected, SHOWS_GRID_COLUMNS))
                     requestEarlierMediaPage(m_showPage);
                 else
-                    m_showSelected = moveShowsGrid(
-                        m_showSelected, m_filteredShows.size(), -1, 0);
+                    m_showSelected = moveShowsGrid(m_showSelected, m_filteredShows.size(), -1, 0);
             } else {
                 if (gridAtTopRow(m_animeSelected, SHOWS_GRID_COLUMNS))
                     requestEarlierMediaPage(m_animePage);
                 else
-                    m_animeSelected = moveShowsGrid(
-                        m_animeSelected, m_filteredAnime.size(), -1, 0);
+                    m_animeSelected = moveShowsGrid(m_animeSelected, m_filteredAnime.size(), -1, 0);
             }
             clampShowsNavigation();
             return true;
@@ -593,8 +585,7 @@ bool HomeScreen::handleAction(Action action)
                     requestEarlierMediaPage(m_moviePage);
                 else
                     m_activeCard = moveMovieGridCompact(
-                        m_activeCard, static_cast<int>(currentRow()->items.size()),
-                        -1, 0);
+                        m_activeCard, static_cast<int>(currentRow()->items.size()), -1, 0);
             }
         } else {
             const int previousRow = m_activeRow;
@@ -614,18 +605,14 @@ bool HomeScreen::handleAction(Action action)
                     ++m_showsAlphabetFocus;
             } else if (m_showsFocus == ShowsFocus::ShowsGrid) {
                 const bool heldForPage = queueDownAtPageEdge(
-                    m_showPage, m_showSelected, m_filteredShows.size(),
-                    SHOWS_GRID_COLUMNS);
+                    m_showPage, m_showSelected, m_filteredShows.size(), SHOWS_GRID_COLUMNS);
                 if (!heldForPage)
-                    m_showSelected = moveShowsGrid(
-                        m_showSelected, m_filteredShows.size(), 1, 0);
+                    m_showSelected = moveShowsGrid(m_showSelected, m_filteredShows.size(), 1, 0);
             } else {
                 const bool heldForPage = queueDownAtPageEdge(
-                    m_animePage, m_animeSelected, m_filteredAnime.size(),
-                    SHOWS_GRID_COLUMNS);
+                    m_animePage, m_animeSelected, m_filteredAnime.size(), SHOWS_GRID_COLUMNS);
                 if (!heldForPage)
-                    m_animeSelected = moveShowsGrid(
-                        m_animeSelected, m_filteredAnime.size(), 1, 0);
+                    m_animeSelected = moveShowsGrid(m_animeSelected, m_filteredAnime.size(), 1, 0);
             }
             clampShowsNavigation();
             return true;
@@ -636,11 +623,10 @@ bool HomeScreen::handleAction(Action action)
                     ++m_movieAlphabetFocus;
             } else if (currentRow()) {
                 const int count = static_cast<int>(currentRow()->items.size());
-                const bool heldForPage = queueDownAtPageEdge(
-                    m_moviePage, m_activeCard, count, MOVIE_GRID_COLUMNS);
+                const bool heldForPage =
+                    queueDownAtPageEdge(m_moviePage, m_activeCard, count, MOVIE_GRID_COLUMNS);
                 if (!heldForPage)
-                    m_activeCard = moveMovieGridCompact(
-                        m_activeCard, count, 1, 0);
+                    m_activeCard = moveMovieGridCompact(m_activeCard, count, 1, 0);
             }
         } else {
             const int previousRow = m_activeRow;
@@ -662,16 +648,17 @@ bool HomeScreen::handleAction(Action action)
                     --m_showSelected;
                 } else {
                     m_showsFocus = ShowsFocus::AlphabetRail;
-                    m_showsAlphabetFocus = m_showsActiveLetter >= 0
-                        ? m_showsActiveLetter
-                        : alphabetFocus(m_filteredShows[m_showSelected].title);
+                    m_showsAlphabetFocus =
+                        m_showsActiveLetter >= 0
+                            ? m_showsActiveLetter
+                            : alphabetFocus(m_filteredShows[m_showSelected].title);
                 }
             } else if (m_animeSelected % 4) {
                 --m_animeSelected;
             } else if (!m_filteredShows.empty()) {
                 m_showsFocus = ShowsFocus::ShowsGrid;
-                m_showSelected = crossShowsGridIndex(
-                    m_animeSelected, m_filteredShows.size(), false);
+                m_showSelected =
+                    crossShowsGridIndex(m_animeSelected, m_filteredShows.size(), false);
             } else {
                 m_showsFocus = ShowsFocus::AlphabetRail;
             }
@@ -679,16 +666,15 @@ bool HomeScreen::handleAction(Action action)
             return true;
         }
         if (activeTabNamed("Movies")) {
-            if (!m_movieRailFocused
-                && (!currentRow() || m_activeCard % MOVIE_GRID_COLUMNS == 0)) {
+            if (!m_movieRailFocused && (!currentRow() || m_activeCard % MOVIE_GRID_COLUMNS == 0)) {
                 m_movieRailFocused = true;
-                m_movieAlphabetFocus = m_movieActiveLetter >= 0
-                    ? m_movieActiveLetter
-                    : movieAlphabetFocus(currentItem() ? currentItem()->title : std::string());
+                m_movieAlphabetFocus =
+                    m_movieActiveLetter >= 0
+                        ? m_movieActiveLetter
+                        : movieAlphabetFocus(currentItem() ? currentItem()->title : std::string());
             } else if (!m_movieRailFocused && currentRow()) {
                 m_activeCard = moveMovieGridCompact(
-                    m_activeCard, static_cast<int>(currentRow()->items.size()),
-                    0, -1);
+                    m_activeCard, static_cast<int>(currentRow()->items.size()), 0, -1);
             }
         } else {
             --m_activeCard;
@@ -707,8 +693,8 @@ bool HomeScreen::handleAction(Action action)
                     ++m_showSelected;
                 } else if (!m_filteredAnime.empty()) {
                     m_showsFocus = ShowsFocus::AnimeGrid;
-                    m_animeSelected = crossShowsGridIndex(
-                        m_showSelected, m_filteredAnime.size(), true);
+                    m_animeSelected =
+                        crossShowsGridIndex(m_showSelected, m_filteredAnime.size(), true);
                 }
             } else if (m_animeSelected % 4 < 3) {
                 ++m_animeSelected;
@@ -721,8 +707,7 @@ bool HomeScreen::handleAction(Action action)
                 m_movieRailFocused = false;
             } else if (currentRow()) {
                 m_activeCard = moveMovieGridCompact(
-                    m_activeCard, static_cast<int>(currentRow()->items.size()),
-                    0, 1);
+                    m_activeCard, static_cast<int>(currentRow()->items.size()), 0, 1);
             }
         } else {
             ++m_activeCard;
@@ -733,9 +718,7 @@ bool HomeScreen::handleAction(Action action)
         activateTab((m_activeTab + 1) % static_cast<int>(m_tabs.size()));
         return true;
     case Action::PrevTab:
-        activateTab(m_activeTab > 0
-                         ? m_activeTab - 1
-                         : static_cast<int>(m_tabs.size()) - 1);
+        activateTab(m_activeTab > 0 ? m_activeTab - 1 : static_cast<int>(m_tabs.size()) - 1);
         return true;
     case Action::Search:
         return false;
@@ -751,42 +734,37 @@ bool HomeScreen::handleAction(Action action)
         if (activeTabNamed("Shows")) {
             if (m_showsFocus == ShowsFocus::AlphabetRail) {
                 m_showsActiveLetter =
-                    m_showsActiveLetter == m_showsAlphabetFocus
-                        ? -1 : m_showsAlphabetFocus;
+                    m_showsActiveLetter == m_showsAlphabetFocus ? -1 : m_showsAlphabetFocus;
                 resetMediaPaging();
                 return true;
             }
-            if (const MediaItem *show = showsSelectedItem()) {
+            if (const MediaItem* show = showsSelectedItem()) {
                 m_stack->push(std::make_unique<SeriesScreen>(
-                    m_session, *show, m_downloads, m_libraryOffline,
-                    std::vector<MediaItem>{}, presentationOffline(),
-                    m_libraryCoordinator, m_libraryQuery));
+                    m_session, *show, m_downloads, m_libraryOffline, std::vector<MediaItem>{},
+                    presentationOffline(), m_libraryCoordinator, m_libraryQuery));
                 return true;
             }
             return true;
         }
         if (activeTabNamed("Movies") && m_movieRailFocused) {
-            m_movieActiveLetter = m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
+            m_movieActiveLetter =
+                m_movieActiveLetter == m_movieAlphabetFocus ? -1 : m_movieAlphabetFocus;
             resetMediaPaging();
             return true;
         }
-        if (activeTabNamed("Shows")
-            && m_showsFocus == ShowsFocus::AlphabetRail) {
-            m_showsFocus = !m_filteredShows.empty()
-                ? ShowsFocus::ShowsGrid
-                : !m_filteredAnime.empty() ? ShowsFocus::AnimeGrid
-                                            : ShowsFocus::AlphabetRail;
+        if (activeTabNamed("Shows") && m_showsFocus == ShowsFocus::AlphabetRail) {
+            m_showsFocus = !m_filteredShows.empty()   ? ShowsFocus::ShowsGrid
+                           : !m_filteredAnime.empty() ? ShowsFocus::AnimeGrid
+                                                      : ShowsFocus::AlphabetRail;
             return true;
         }
-        const MediaItem *item = currentItem();
+        const MediaItem* item = currentItem();
         if (item) {
-            printf("[HomeScreen] Select: %s (%s)\n",
-                   item->title.c_str(), item->type.c_str());
+            printf("[HomeScreen] Select: %s (%s)\n", item->title.c_str(), item->type.c_str());
             if (item->type == "show") {
                 m_stack->push(std::make_unique<SeriesScreen>(
-                    m_session, *item, m_downloads, m_libraryOffline,
-                    std::vector<MediaItem>{}, presentationOffline(),
-                    m_libraryCoordinator, m_libraryQuery));
+                    m_session, *item, m_downloads, m_libraryOffline, std::vector<MediaItem>{},
+                    presentationOffline(), m_libraryCoordinator, m_libraryQuery));
                 return true;
             }
             if (item->type == "movie") {
@@ -796,10 +774,9 @@ bool HomeScreen::handleAction(Action action)
                     UiDiagnostics::Scope constructionScope("MovieDetailsScreen::construction");
                     std::shared_ptr<const DecodedImage> gridArtwork;
                     const auto artwork = m_rowArtwork.find(rowArtworkKey(*item));
-                    if (artwork != m_rowArtwork.end()
-                        && artwork->second.status == RowArtworkStatus::Loaded
-                        && artwork->second.image
-                        && !artwork->second.image->empty()) {
+                    if (artwork != m_rowArtwork.end() &&
+                        artwork->second.status == RowArtworkStatus::Loaded &&
+                        artwork->second.image && !artwork->second.image->empty()) {
                         gridArtwork = artwork->second.image;
                     }
                     movieScreen = std::make_unique<MovieDetailsScreen>(
@@ -822,17 +799,15 @@ bool HomeScreen::handleAction(Action action)
                     season.indexNumber = item->parentIndexNumber;
                     if (item->parentIndexNumber > 0) {
                         char buf[32];
-                        std::snprintf(buf, sizeof(buf), "Season %d",
-                                      item->parentIndexNumber);
+                        std::snprintf(buf, sizeof(buf), "Season %d", item->parentIndexNumber);
                         season.title = buf;
                     } else {
                         season.title = "Season";
                     }
 
                     m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-                        m_session, series, season, item->id, m_downloads,
-                        m_libraryOffline, presentationOffline(),
-                        m_libraryCoordinator, m_libraryQuery));
+                        m_session, series, season, item->id, m_downloads, m_libraryOffline,
+                        presentationOffline(), m_libraryCoordinator, m_libraryQuery));
                     return true;
                 }
                 printf("[HomeScreen] Cannot open episode browser: "
@@ -857,16 +832,16 @@ bool HomeScreen::handleAction(Action action)
     }
 }
 
-void HomeScreen::applyPendingDown(MediaPageState &state)
+void HomeScreen::applyPendingDown(MediaPageState& state)
 {
     if (!state.pendingDown)
         return;
     state.pendingDown = false;
     if (state.type == "movie") {
         if (activeTabNamed("Movies")) {
-            if (const MediaRow *row = currentRow())
-                m_activeCard = moveMovieGridCompact(
-                    m_activeCard, static_cast<int>(row->items.size()), 1, 0);
+            if (const MediaRow* row = currentRow())
+                m_activeCard =
+                    moveMovieGridCompact(m_activeCard, static_cast<int>(row->items.size()), 1, 0);
             clampNavigation();
         }
         return;
@@ -874,11 +849,9 @@ void HomeScreen::applyPendingDown(MediaPageState &state)
     if (!activeTabNamed("Shows"))
         return;
     if (state.type == "anime")
-        m_animeSelected = moveShowsGrid(
-            m_animeSelected, m_filteredAnime.size(), 1, 0);
+        m_animeSelected = moveShowsGrid(m_animeSelected, m_filteredAnime.size(), 1, 0);
     else
-        m_showSelected = moveShowsGrid(
-            m_showSelected, m_filteredShows.size(), 1, 0);
+        m_showSelected = moveShowsGrid(m_showSelected, m_filteredShows.size(), 1, 0);
     clampShowsNavigation();
 }
 

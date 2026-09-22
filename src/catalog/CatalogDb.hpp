@@ -30,14 +30,16 @@ struct CatalogCompatibilitySeedResult;
 struct CatalogCompatibilityReadResult;
 struct MediaItemCollectionStatements;
 
-enum class CatalogDbPriority : unsigned char {
+enum class CatalogDbPriority : unsigned char
+{
     InteractiveRead,
     ForegroundMetadataWrite,
     BackgroundSync,
     Maintenance,
 };
 
-enum class CatalogDbEnqueueResult : unsigned char {
+enum class CatalogDbEnqueueResult : unsigned char
+{
     Accepted,
     RejectedFull,
     RejectedStopping,
@@ -45,29 +47,38 @@ enum class CatalogDbEnqueueResult : unsigned char {
     RejectedScopeNotReady,
 };
 
-enum class CatalogDbJobDisposition : unsigned char {
+enum class CatalogDbJobDisposition : unsigned char
+{
     Completed,
     Cancelled,
     Superseded,
 };
 
-enum class CatalogDbScopeStatus : unsigned char {
+enum class CatalogDbScopeStatus : unsigned char
+{
     Unconfigured,
     Pending,
     Ready,
     InvalidIdentity,
     OpenFailed,
 };
-enum class CatalogDbPopulationState : unsigned char {
-    Opening, Populating, Ready, GenuinelyEmpty, Failed
+enum class CatalogDbPopulationState : unsigned char
+{
+    Opening,
+    Populating,
+    Ready,
+    GenuinelyEmpty,
+    Failed
 };
-struct CatalogDbPopulationStatus {
+struct CatalogDbPopulationStatus
+{
     CatalogDbPopulationState state = CatalogDbPopulationState::Opening;
     std::size_t pages = 0;
     std::size_t rows = 0;
 };
 
-enum class CatalogDbErrorCategory : unsigned char {
+enum class CatalogDbErrorCategory : unsigned char
+{
     None,
     InvalidIdentity,
     ScopeNotReady,
@@ -80,7 +91,8 @@ enum class CatalogDbErrorCategory : unsigned char {
     Superseded,
 };
 
-enum class CatalogDbOpenState : unsigned char {
+enum class CatalogDbOpenState : unsigned char
+{
     NotAttempted,
     CreatedV1,
     SupportedV1,
@@ -93,7 +105,8 @@ enum class CatalogDbOpenState : unsigned char {
     CorruptOrIo,
 };
 
-enum class CatalogDbMigrationFileState : unsigned char {
+enum class CatalogDbMigrationFileState : unsigned char
+{
     NoFiles,
     FinalOnly,
     MigratingOnly,
@@ -101,7 +114,8 @@ enum class CatalogDbMigrationFileState : unsigned char {
     PathError,
 };
 
-enum class CatalogDbMigrationDecision : unsigned char {
+enum class CatalogDbMigrationDecision : unsigned char
+{
     CreateEmptyFinal,
     RebuildMigratingAtMigrationStart,
     FinalDatabaseWins,
@@ -109,10 +123,10 @@ enum class CatalogDbMigrationDecision : unsigned char {
     PathError,
 };
 
-struct CatalogDbMigrationState {
+struct CatalogDbMigrationState
+{
     CatalogDbMigrationFileState files = CatalogDbMigrationFileState::NoFiles;
-    CatalogDbMigrationDecision decision =
-        CatalogDbMigrationDecision::CreateEmptyFinal;
+    CatalogDbMigrationDecision decision = CatalogDbMigrationDecision::CreateEmptyFinal;
     bool finalPresent = false;
     bool migratingPresent = false;
     bool finalWins = false;
@@ -122,7 +136,8 @@ struct CatalogDbMigrationState {
     bool succeeded = false;
 };
 
-struct CatalogDbScopeState {
+struct CatalogDbScopeState
+{
     std::uint64_t requestedEpoch = 0;
     bool configured = false;
     bool ready = false;
@@ -132,25 +147,29 @@ struct CatalogDbScopeState {
     CatalogDbMigrationState migration;
 };
 
-struct CatalogDbJobMetadata {
+struct CatalogDbJobMetadata
+{
     std::uint64_t generation = 0;
     std::uint64_t scopeEpoch = 0;
     std::shared_ptr<std::atomic_bool> cancellation;
 };
 
-struct CatalogDbJobReport {
+struct CatalogDbJobReport
+{
     CatalogDbPriority priority;
     CatalogDbJobMetadata metadata;
     CatalogDbJobDisposition disposition;
 };
 
-struct CatalogDbConnectionState {
+struct CatalogDbConnectionState
+{
     bool open = false;
     bool workerOwned = false;
     std::size_t preparedStatements = 0;
 };
 
-struct CatalogDbTestResult {
+struct CatalogDbTestResult
+{
     bool success = false;
     bool workerOwned = false;
     bool statementReused = false;
@@ -187,7 +206,8 @@ struct CatalogDbTestResult {
     std::int64_t userVersion = 0;
 };
 
-struct CatalogDbHierarchyResult {
+struct CatalogDbHierarchyResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -197,7 +217,8 @@ struct CatalogDbHierarchyResult {
     std::vector<MediaItem> items;
 };
 
-struct CatalogDbHierarchyWriteResult {
+struct CatalogDbHierarchyWriteResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -207,7 +228,8 @@ struct CatalogDbHierarchyWriteResult {
     std::size_t rowsWritten = 0;
 };
 
-struct CatalogDbReconcileResult {
+struct CatalogDbReconcileResult
+{
     bool success = false;
     bool workerOwned = false;
     bool authoritative = false;
@@ -220,7 +242,8 @@ struct CatalogDbReconcileResult {
     std::size_t seriesDeleted = 0;
 };
 
-struct CatalogDbSyncState {
+struct CatalogDbSyncState
+{
     bool success = false;
     bool workerOwned = false;
     bool migrated = false;
@@ -233,25 +256,29 @@ struct CatalogDbSyncState {
     std::uint64_t committedGeneration = 0;
 };
 
-struct CatalogDbPageCursor {
+struct CatalogDbPageCursor
+{
     std::string sortKey;
     std::string title;
     std::string id;
     bool valid = false;
 };
 
-enum class CatalogDbMediaPageFilter {
+enum class CatalogDbMediaPageFilter
+{
     Supported,
     Anime,
 };
 
-struct CatalogDbMediaPageMembership {
+struct CatalogDbMediaPageMembership
+{
     std::string viewId;
     std::string viewName;
     std::string collectionType;
 };
 
-struct CatalogDbMediaPageResult {
+struct CatalogDbMediaPageResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -264,7 +291,8 @@ struct CatalogDbMediaPageResult {
     CatalogDbPageCursor next;
 };
 
-struct CatalogDbMediaPageUpsertResult {
+struct CatalogDbMediaPageUpsertResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -273,7 +301,8 @@ struct CatalogDbMediaPageUpsertResult {
     std::string message;
     std::size_t rowsWritten = 0;
 };
-struct CatalogDbMediaPageWrite {
+struct CatalogDbMediaPageWrite
+{
     std::vector<MediaItem> items;
     std::string viewId;
     std::string viewName;
@@ -287,7 +316,8 @@ struct CatalogDbMediaPageWrite {
     bool finalPage = false;
 };
 
-struct CatalogDbTopLevelSyncResult {
+struct CatalogDbTopLevelSyncResult
+{
     bool success = false;
     bool workerOwned = false;
     bool superseded = false;
@@ -299,8 +329,9 @@ struct CatalogDbTopLevelSyncResult {
 /// App-scoped owner for worker-side scoped catalog bootstrap, population, and
 /// reconciliation. Callers provide already-fetched metadata; the worker owns
 /// all SQLite operations and scope publication.
-class CatalogDb {
-public:
+class CatalogDb
+{
+  public:
     static constexpr std::size_t kMaxPendingJobs = 32;
 
     CatalogDb();
@@ -311,30 +342,27 @@ public:
 
 #ifdef MIYOOFIN_TEST_BUILD
     /// Queue a lifecycle-only job for focused host tests.
-    CatalogDbEnqueueResult enqueueNoopForTest(
-        CatalogDbPriority priority,
-        const CatalogDbJobMetadata &metadata = {});
+    CatalogDbEnqueueResult enqueueNoopForTest(CatalogDbPriority priority,
+                                              const CatalogDbJobMetadata& metadata = {});
 
 #endif // MIYOOFIN_TEST_BUILD
     /// Request a scope transition without doing the transition on the caller
     /// thread. Every request deliberately refreshes the epoch, including an
     /// exact repeat of the current server/user identity.
-    std::uint64_t configureScope(const std::string &serverUrl,
-                                 const std::string &userId);
+    std::uint64_t configureScope(const std::string& serverUrl, const std::string& userId);
     std::uint64_t deconfigureScope();
     CatalogDbScopeState scopeState() const;
 
 #ifdef MIYOOFIN_TEST_BUILD
     /// Queue a scope-bound lifecycle job using the currently requested epoch.
-    CatalogDbEnqueueResult enqueueScopedNoopForTest(
-        CatalogDbPriority priority);
+    CatalogDbEnqueueResult enqueueScopedNoopForTest(CatalogDbPriority priority);
     bool canPublishForTest(std::uint64_t scopeEpoch) const;
     CatalogDbConnectionState connectionStateForTest() const;
     CatalogDbTestResult runSqliteDiagnosticsForTest();
     CatalogDbTestResult runStatementReuseForTest();
     CatalogDbTestResult runSqlErrorForTest();
     CatalogDbTestResult runSchemaDiagnosticsForTest();
-    CatalogDbTestResult writeSchemaMarkerForTest(const std::string &value);
+    CatalogDbTestResult writeSchemaMarkerForTest(const std::string& value);
     CatalogDbTestResult readSchemaMarkerForTest();
     CatalogDbTestResult setSchemaMetadataForTest(std::int64_t applicationId,
                                                  std::int64_t userVersion);
@@ -343,98 +371,92 @@ public:
     CatalogDbTestResult runMediaItemCollectionsForTest();
     CatalogDbTestResult seedHierarchyQueryFixturesForTest();
     CatalogDbTestResult clearHierarchyQueryFixturesForTest();
-    CatalogDbTestResult runMediaPageQueryPlanForTest(
-        const std::string &type, int alphabetLetter = -1);
-    CatalogDbTestResult writeSentinelForTest(const std::string &value);
+    CatalogDbTestResult runMediaPageQueryPlanForTest(const std::string& type,
+                                                     int alphabetLetter = -1);
+    CatalogDbTestResult writeSentinelForTest(const std::string& value);
     CatalogDbTestResult readSentinelForTest();
 #endif // MIYOOFIN_TEST_BUILD
 
-    std::future<CatalogDbHierarchyResult> getSeasons(
-        const std::string &seriesId,
-        const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbHierarchyResult> getEpisodes(
-        const std::string &seasonId,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyResult> getSeasons(const std::string& seriesId,
+                                                     const CatalogDbJobMetadata& metadata = {});
+    std::future<CatalogDbHierarchyResult> getEpisodes(const std::string& seasonId,
+                                                      const CatalogDbJobMetadata& metadata = {});
     /// Read a bounded set of canonical media metadata by ID. The existing
     /// CatalogDb worker/connection performs the query; callers must batch
     /// requests to the supported maximum.
-    std::future<CatalogDbHierarchyResult> readMediaItemsByIds(
-        const std::vector<std::string> &itemIds,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyResult>
+    readMediaItemsByIds(const std::vector<std::string>& itemIds,
+                        const CatalogDbJobMetadata& metadata = {});
     /// Delete a bounded set of media rows atomically on the CatalogDb worker.
     /// Foreign-key cascades remove their current memberships and children.
-    std::future<CatalogDbHierarchyResult> deleteMediaItemsByIds(
-        const std::vector<std::string> &itemIds,
-        const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbHierarchyWriteResult> upsertSeriesHierarchy(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, std::int64_t refreshMs,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyResult>
+    deleteMediaItemsByIds(const std::vector<std::string>& itemIds,
+                          const CatalogDbJobMetadata& metadata = {});
+    std::future<CatalogDbHierarchyWriteResult>
+    upsertSeriesHierarchy(const MediaItem& series, const std::vector<MediaItem>& seasons,
+                          const std::map<std::string, std::vector<MediaItem>>& episodesBySeason,
+                          std::uint64_t generation, std::int64_t refreshMs,
+                          const CatalogDbJobMetadata& metadata = {});
     /// Stage a Jellyfin subtree without claiming that it is complete. Partial
     /// responses never trigger authoritative child deletion or completion.
-    std::future<CatalogDbHierarchyWriteResult> stageSeriesHierarchy(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, std::int64_t refreshMs,
-        bool complete, const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbHierarchyWriteResult>
+    stageSeriesHierarchy(const MediaItem& series, const std::vector<MediaItem>& seasons,
+                         const std::map<std::string, std::vector<MediaItem>>& episodesBySeason,
+                         std::uint64_t generation, std::int64_t refreshMs, bool complete,
+                         const CatalogDbJobMetadata& metadata = {});
     /// Reconcile exactly one season from an authoritative Jellyfin response.
     /// Only that season's episodes are replaced; the series remains incomplete.
-    std::future<CatalogDbHierarchyWriteResult> reconcileSeasonHierarchy(
-        const MediaItem &series, const MediaItem &season,
-        const std::vector<MediaItem> &episodes, std::uint64_t generation,
-        std::int64_t refreshMs, const CatalogDbJobMetadata &metadata = {});
-#ifdef MIYOOFIN_TEST_BUILD
     std::future<CatalogDbHierarchyWriteResult>
-    upsertSeriesHierarchyForTest(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, std::int64_t refreshMs,
-        int failAfterRows, int cancelAfterRows);
-#endif // MIYOOFIN_TEST_BUILD
-    std::future<CatalogDbReconcileResult> reconcileSeries(
-        const std::vector<MediaItem> &series, bool authoritative,
-        const CatalogDbJobMetadata &metadata = {});
+    reconcileSeasonHierarchy(const MediaItem& series, const MediaItem& season,
+                             const std::vector<MediaItem>& episodes, std::uint64_t generation,
+                             std::int64_t refreshMs, const CatalogDbJobMetadata& metadata = {});
 #ifdef MIYOOFIN_TEST_BUILD
-    std::future<CatalogDbReconcileResult> reconcileSeriesForTest(
-        const std::vector<MediaItem> &series, bool authoritative,
-        int failAfterRows);
+    std::future<CatalogDbHierarchyWriteResult> upsertSeriesHierarchyForTest(
+        const MediaItem& series, const std::vector<MediaItem>& seasons,
+        const std::map<std::string, std::vector<MediaItem>>& episodesBySeason,
+        std::uint64_t generation, std::int64_t refreshMs, int failAfterRows, int cancelAfterRows);
+#endif // MIYOOFIN_TEST_BUILD
+    std::future<CatalogDbReconcileResult>
+    reconcileSeries(const std::vector<MediaItem>& series, bool authoritative,
+                    const CatalogDbJobMetadata& metadata = {});
+#ifdef MIYOOFIN_TEST_BUILD
+    std::future<CatalogDbReconcileResult>
+    reconcileSeriesForTest(const std::vector<MediaItem>& series, bool authoritative,
+                           int failAfterRows);
 #endif // MIYOOFIN_TEST_BUILD
     /// Read the SQLite hierarchy checkpoint on the CatalogDb worker.  A
     /// non-empty legacy seed is imported only while the SQLite row is still
     /// at its initial zero value; the legacy file is never written.
-    std::future<CatalogDbSyncState> readSyncState(
-        bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
-        std::int64_t legacyLastReconcileMs,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbSyncState> readSyncState(bool legacyAvailable,
+                                                  std::int64_t legacyLastSuccessfulMs,
+                                                  std::int64_t legacyLastReconcileMs,
+                                                  const CatalogDbJobMetadata& metadata = {});
     /// Publish one complete-generation hierarchy checkpoint on the worker.
-    std::future<CatalogDbSyncState> writeSyncState(
-        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
-        std::uint64_t committedGeneration,
-        const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbMediaPageUpsertResult> upsertMediaPage(
-        const CatalogDbMediaPageWrite &page,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbSyncState> writeSyncState(std::int64_t lastSuccessfulMs,
+                                                   std::int64_t lastReconcileMs,
+                                                   std::uint64_t committedGeneration,
+                                                   const CatalogDbJobMetadata& metadata = {});
+    std::future<CatalogDbMediaPageUpsertResult>
+    upsertMediaPage(const CatalogDbMediaPageWrite& page, const CatalogDbJobMetadata& metadata = {});
 #ifdef MIYOOFIN_TEST_BUILD
-    std::future<CatalogDbMediaPageUpsertResult> upsertMediaPageForTest(
-        const CatalogDbMediaPageWrite &page, int failAfterRows,
-        const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbMediaPageUpsertResult>
+    upsertMediaPageForTest(const CatalogDbMediaPageWrite& page, int failAfterRows,
+                           const CatalogDbJobMetadata& metadata = {});
 #endif // MIYOOFIN_TEST_BUILD
-    std::future<CatalogDbTopLevelSyncResult> beginTopLevelSync(
-        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbTopLevelSyncResult> abortTopLevelSync(
-        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
-    std::future<CatalogDbTopLevelSyncResult> finalizeTopLevelSync(
-        std::uint64_t generation, const CatalogDbJobMetadata &metadata = {});
+    std::future<CatalogDbTopLevelSyncResult>
+    beginTopLevelSync(std::uint64_t generation, const CatalogDbJobMetadata& metadata = {});
+    std::future<CatalogDbTopLevelSyncResult>
+    abortTopLevelSync(std::uint64_t generation, const CatalogDbJobMetadata& metadata = {});
+    std::future<CatalogDbTopLevelSyncResult>
+    finalizeTopLevelSync(std::uint64_t generation, const CatalogDbJobMetadata& metadata = {});
     CatalogDbPopulationStatus populationStatus() const;
     /// Read one bounded, deterministically ordered movie/show page. All SQL
     /// work is performed by the CatalogDb worker; cursor fields are the full
     /// organizational ordering tuple.
-    std::future<CatalogDbMediaPageResult> readMediaPage(
-        const std::string &type, int alphabetLetter, std::size_t limit,
-        const CatalogDbPageCursor &after = {},
-        const CatalogDbJobMetadata &metadata = {},
-        CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported);
+    std::future<CatalogDbMediaPageResult>
+    readMediaPage(const std::string& type, int alphabetLetter, std::size_t limit,
+                  const CatalogDbPageCursor& after = {}, const CatalogDbJobMetadata& metadata = {},
+                  CatalogDbMediaPageFilter filter = CatalogDbMediaPageFilter::Supported);
 
 #ifdef MIYOOFIN_TEST_BUILD
     /// Set the generation accepted by the worker. Later scope work will use
@@ -448,21 +470,24 @@ public:
     std::vector<CatalogDbJobReport> jobReportsForTest() const;
 #endif // MIYOOFIN_TEST_BUILD
 
-private:
+  private:
     friend class CatalogCompatibility;
-    struct Job {
+    struct Job
+    {
         CatalogDbPriority priority;
         CatalogDbJobMetadata metadata;
         std::uint64_t enqueuedMonotonicUs = 0;
     };
 
-    enum class ScopeCommandKind : unsigned char {
+    enum class ScopeCommandKind : unsigned char
+    {
         Configure,
         Deconfigure,
         InvalidIdentity,
     };
 
-    struct ScopeCommand {
+    struct ScopeCommand
+    {
         ScopeCommandKind kind;
         std::uint64_t epoch;
         std::string scopeKey;
@@ -485,100 +510,93 @@ private:
     static std::size_t priorityIndex(CatalogDbPriority priority);
     void processScopeCommand(ScopeCommand command);
 #ifdef MIYOOFIN_TEST_BUILD
-    void processTestCommand(const std::shared_ptr<TestCommand> &command);
+    void processTestCommand(const std::shared_ptr<TestCommand>& command);
 #endif // MIYOOFIN_TEST_BUILD
-    void processHierarchyQuery(const std::shared_ptr<QueryCommand> &command);
-    void processHierarchyWrite(
-        const std::shared_ptr<HierarchyWriteCommand> &command);
-    void processReconcile(
-        const std::shared_ptr<ReconcileCommand> &command);
-    void processSyncState(
-        const std::shared_ptr<SyncStateCommand> &command);
-    void processLibrarySeed(
-        const std::shared_ptr<LibrarySeedCommand> &command);
-    void processLibraryRead(const std::shared_ptr<LibraryReadCommand> &command);
-    void processMediaPage(const std::shared_ptr<MediaPageCommand> &command);
-    void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand> &command);
-    void logMediaPageTransition(
-        const std::shared_ptr<MediaPageUpsertCommand> &command,
-        const char *event, const CatalogDbMediaPageUpsertResult *result = nullptr,
-        std::size_t attempt = 0);
+    void processHierarchyQuery(const std::shared_ptr<QueryCommand>& command);
+    void processHierarchyWrite(const std::shared_ptr<HierarchyWriteCommand>& command);
+    void processReconcile(const std::shared_ptr<ReconcileCommand>& command);
+    void processSyncState(const std::shared_ptr<SyncStateCommand>& command);
+    void processLibrarySeed(const std::shared_ptr<LibrarySeedCommand>& command);
+    void processLibraryRead(const std::shared_ptr<LibraryReadCommand>& command);
+    void processMediaPage(const std::shared_ptr<MediaPageCommand>& command);
+    void processMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand>& command);
+    void logMediaPageTransition(const std::shared_ptr<MediaPageUpsertCommand>& command,
+                                const char* event,
+                                const CatalogDbMediaPageUpsertResult* result = nullptr,
+                                std::size_t attempt = 0);
     // Media-page upsert write-path helpers (CatalogDbWrite.cpp). The per-item
     // SQL text and bind order must stay identical to the original inline body.
-    enum class MediaPageItemLoopOutcome : unsigned char {
+    enum class MediaPageItemLoopOutcome : unsigned char
+    {
         Completed,
         Fatal,
         Retryable,
     };
-    enum class MediaPageAttemptOutcome : unsigned char {
+    enum class MediaPageAttemptOutcome : unsigned char
+    {
         Complete,
         Retry,
     };
-    bool mediaPageUpsertStillValid(
-        const std::shared_ptr<MediaPageUpsertCommand> &command,
-        CatalogDbMediaPageUpsertResult &result);
-    void logMediaPageRollback(const std::shared_ptr<MediaPageUpsertCommand> &command,
-                              const char *stage, std::size_t itemOrdinal,
-                              const MediaItem *item, int sqliteRc);
-    void markMediaPagePopulationFailed(
-        const CatalogDbMediaPageUpsertResult &result);
-    bool prepareMediaPageItemStatements(sqlite3_stmt **upsert,
-                                       sqlite3_stmt **deleteGenres,
-                                       sqlite3_stmt **insertGenre,
-                                       sqlite3_stmt **deleteImageTags,
-                                       sqlite3_stmt **insertImageTag,
-                                       CatalogDbMediaPageUpsertResult &result);
-    bool prepareMediaPageViewRow(
-        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
-        sqlite3_stmt **view, sqlite3_stmt **membership);
-    MediaPageItemLoopOutcome writeMediaPageItemRows(
-        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
-        std::size_t attempt, bool viewReady, sqlite3_stmt *upsert,
-        const MediaItemCollectionStatements &collections,
-        sqlite3_stmt *membership, CatalogDbMediaPageUpsertResult &result);
-    MediaPageAttemptOutcome attemptMediaPageUpsert(
-        const std::shared_ptr<MediaPageUpsertCommand> &command, bool staged,
-        std::size_t attempt, CatalogDbMediaPageUpsertResult &result);
-    void processTopLevelSync(const std::shared_ptr<TopLevelSyncCommand> &command);
-    std::future<CatalogDbHierarchyWriteResult> enqueueHierarchyWrite(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, std::int64_t refreshMs,
-        bool complete, bool seasonScoped, const CatalogDbJobMetadata &metadata,
-        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
-    std::future<CatalogDbReconcileResult> enqueueReconcile(
-        const std::vector<MediaItem> &series, bool authoritative,
-        const CatalogDbJobMetadata &metadata,
-        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
-    std::future<CatalogDbSyncState> enqueueSyncStateRead(
-        bool legacyAvailable, std::int64_t legacyLastSuccessfulMs,
-        std::int64_t legacyLastReconcileMs,
-        const CatalogDbJobMetadata &metadata);
-    std::future<CatalogDbSyncState> enqueueSyncStateWrite(
-        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
-        std::uint64_t committedGeneration,
-        const CatalogDbJobMetadata &metadata);
-    std::future<CatalogCompatibilitySeedResult> enqueueLibrarySeed(
-        const CatalogCompatibilitySeedRequest &request,
-        const CatalogDbJobMetadata &metadata,
-        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
-    std::future<CatalogCompatibilityReadResult> enqueueLibraryRead(
-        const CatalogDbJobMetadata &metadata);
-    std::future<CatalogDbMediaPageResult> enqueueMediaPage(
-        const std::string &type, int alphabetLetter, std::size_t limit,
-        const CatalogDbPageCursor &after, const CatalogDbJobMetadata &metadata,
-        CatalogDbMediaPageFilter filter);
-    std::future<CatalogDbMediaPageUpsertResult> enqueueMediaPageUpsert(
-        const CatalogDbMediaPageWrite &page, const CatalogDbJobMetadata &metadata,
-        CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
+    bool mediaPageUpsertStillValid(const std::shared_ptr<MediaPageUpsertCommand>& command,
+                                   CatalogDbMediaPageUpsertResult& result);
+    void logMediaPageRollback(const std::shared_ptr<MediaPageUpsertCommand>& command,
+                              const char* stage, std::size_t itemOrdinal, const MediaItem* item,
+                              int sqliteRc);
+    void markMediaPagePopulationFailed(const CatalogDbMediaPageUpsertResult& result);
+    bool prepareMediaPageItemStatements(sqlite3_stmt** upsert, sqlite3_stmt** deleteGenres,
+                                        sqlite3_stmt** insertGenre, sqlite3_stmt** deleteImageTags,
+                                        sqlite3_stmt** insertImageTag,
+                                        CatalogDbMediaPageUpsertResult& result);
+    bool prepareMediaPageViewRow(const std::shared_ptr<MediaPageUpsertCommand>& command,
+                                 bool staged, sqlite3_stmt** view, sqlite3_stmt** membership);
+    MediaPageItemLoopOutcome
+    writeMediaPageItemRows(const std::shared_ptr<MediaPageUpsertCommand>& command, bool staged,
+                           std::size_t attempt, bool viewReady, sqlite3_stmt* upsert,
+                           const MediaItemCollectionStatements& collections,
+                           sqlite3_stmt* membership, CatalogDbMediaPageUpsertResult& result);
+    MediaPageAttemptOutcome
+    attemptMediaPageUpsert(const std::shared_ptr<MediaPageUpsertCommand>& command, bool staged,
+                           std::size_t attempt, CatalogDbMediaPageUpsertResult& result);
+    void processTopLevelSync(const std::shared_ptr<TopLevelSyncCommand>& command);
+    std::future<CatalogDbHierarchyWriteResult>
+    enqueueHierarchyWrite(const MediaItem& series, const std::vector<MediaItem>& seasons,
+                          const std::map<std::string, std::vector<MediaItem>>& episodesBySeason,
+                          std::uint64_t generation, std::int64_t refreshMs, bool complete,
+                          bool seasonScoped, const CatalogDbJobMetadata& metadata,
+                          CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
+    std::future<CatalogDbReconcileResult>
+    enqueueReconcile(const std::vector<MediaItem>& series, bool authoritative,
+                     const CatalogDbJobMetadata& metadata,
+                     CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
+    std::future<CatalogDbSyncState> enqueueSyncStateRead(bool legacyAvailable,
+                                                         std::int64_t legacyLastSuccessfulMs,
+                                                         std::int64_t legacyLastReconcileMs,
+                                                         const CatalogDbJobMetadata& metadata);
+    std::future<CatalogDbSyncState> enqueueSyncStateWrite(std::int64_t lastSuccessfulMs,
+                                                          std::int64_t lastReconcileMs,
+                                                          std::uint64_t committedGeneration,
+                                                          const CatalogDbJobMetadata& metadata);
+    std::future<CatalogCompatibilitySeedResult>
+    enqueueLibrarySeed(const CatalogCompatibilitySeedRequest& request,
+                       const CatalogDbJobMetadata& metadata,
+                       CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
+    std::future<CatalogCompatibilityReadResult>
+    enqueueLibraryRead(const CatalogDbJobMetadata& metadata);
+    std::future<CatalogDbMediaPageResult> enqueueMediaPage(const std::string& type,
+                                                           int alphabetLetter, std::size_t limit,
+                                                           const CatalogDbPageCursor& after,
+                                                           const CatalogDbJobMetadata& metadata,
+                                                           CatalogDbMediaPageFilter filter);
+    std::future<CatalogDbMediaPageUpsertResult>
+    enqueueMediaPageUpsert(const CatalogDbMediaPageWrite& page,
+                           const CatalogDbJobMetadata& metadata,
+                           CatalogDbFailureSpec injection = CatalogDbFailureSpec::disabled());
     void finalizeStatements();
     void closeConnection();
-    bool openConnection(const ScopeCommand &command);
-    bool bootstrapFreshDatabaseForWorker(const ScopeCommand &command,
-                                         std::string &error);
+    bool openConnection(const ScopeCommand& command);
+    bool bootstrapFreshDatabaseForWorker(const ScopeCommand& command, std::string& error);
 #ifdef MIYOOFIN_TEST_BUILD
-    CatalogDbTestResult runTestCommand(unsigned char operation,
-                                       const std::string &value = {});
+    CatalogDbTestResult runTestCommand(unsigned char operation, const std::string& value = {});
 #endif // MIYOOFIN_TEST_BUILD
 
     mutable std::mutex m_mutex;
@@ -618,8 +636,8 @@ private:
     CatalogDbMigrationState m_migrationState;
     bool m_stopping = false;
     std::thread m_worker;
-    sqlite3 *m_db = nullptr;
-    std::map<std::string, sqlite3_stmt *> m_statements;
+    sqlite3* m_db = nullptr;
+    std::map<std::string, sqlite3_stmt*> m_statements;
     bool m_connectionOpen = false;
     bool m_connectionWorkerOwned = false;
     std::size_t m_preparedStatementCount = 0;

@@ -32,7 +32,7 @@ LibraryQueryErrorCategory toLibraryError(CatalogDbErrorCategory error)
     return LibraryQueryErrorCategory::SqliteError;
 }
 
-CatalogDbPageCursor toCatalogCursor(const LibraryPageCursor &cursor)
+CatalogDbPageCursor toCatalogCursor(const LibraryPageCursor& cursor)
 {
     CatalogDbPageCursor out;
     out.sortKey = cursor.sortKey;
@@ -52,12 +52,12 @@ LibraryPageCursor toLibraryCursor(CatalogDbPageCursor cursor)
     return out;
 }
 
-std::vector<LibraryMembership> toLibraryMemberships(
-    std::vector<CatalogDbMediaPageMembership> memberships)
+std::vector<LibraryMembership>
+toLibraryMemberships(std::vector<CatalogDbMediaPageMembership> memberships)
 {
     std::vector<LibraryMembership> out;
     out.reserve(memberships.size());
-    for (auto &membership : memberships) {
+    for (auto& membership : memberships) {
         LibraryMembership converted;
         converted.viewId = std::move(membership.viewId);
         converted.viewName = std::move(membership.viewName);
@@ -67,9 +67,8 @@ std::vector<LibraryMembership> toLibraryMemberships(
     return out;
 }
 
-CatalogDbJobMetadata metadataFor(
-    std::uint64_t scopeEpoch,
-    const std::shared_ptr<std::atomic_bool> &cancellation)
+CatalogDbJobMetadata metadataFor(std::uint64_t scopeEpoch,
+                                 const std::shared_ptr<std::atomic_bool>& cancellation)
 {
     CatalogDbJobMetadata metadata;
     metadata.scopeEpoch = scopeEpoch;
@@ -87,7 +86,7 @@ MediaPage toLibraryPage(CatalogDbMediaPageResult result)
     out.message = std::move(result.message);
     out.hasMore = result.hasMore;
     out.items = std::move(result.items);
-    for (auto &entry : result.membershipsByItem)
+    for (auto& entry : result.membershipsByItem)
         out.membershipsByItem.emplace(std::move(entry.first),
                                       toLibraryMemberships(std::move(entry.second)));
     out.next = toLibraryCursor(std::move(result.next));
@@ -109,27 +108,28 @@ HierarchyPage toLibraryHierarchyPage(CatalogDbHierarchyResult result)
 } // namespace
 
 LibraryQuery::LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t epoch)
-    : m_db(std::move(db)), m_scopeEpoch(epoch) {}
+    : m_db(std::move(db)), m_scopeEpoch(epoch)
+{}
 
 std::future<MediaPage> LibraryQuery::movies(int letter, std::size_t limit,
-                                             const LibraryPageCursor &after,
-                                             const std::shared_ptr<std::atomic_bool> &cancellation) {
+                                            const LibraryPageCursor& after,
+                                            const std::shared_ptr<std::atomic_bool>& cancellation)
+{
     auto f = m_db->readMediaPage("movie", letter, limit, toCatalogCursor(after),
                                  metadataFor(m_scopeEpoch, cancellation));
-    return std::async(std::launch::async, [f = std::move(f)]() mutable {
-        return toLibraryPage(f.get());
-    });
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryPage(f.get()); });
 }
 
 std::future<MediaPage> LibraryQuery::shows(int letter, std::size_t limit,
-                                             const LibraryPageCursor &after,
-                                             const std::shared_ptr<std::atomic_bool> &cancellation) {
+                                           const LibraryPageCursor& after,
+                                           const std::shared_ptr<std::atomic_bool>& cancellation)
+{
     auto f = m_db->readMediaPage("show", letter, limit, toCatalogCursor(after),
                                  metadataFor(m_scopeEpoch, cancellation),
                                  CatalogDbMediaPageFilter::Supported);
-    return std::async(std::launch::async, [f = std::move(f)]() mutable {
-        return toLibraryPage(f.get());
-    });
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryPage(f.get()); });
 }
 
 bool LibraryQuery::scopeReady() const
@@ -141,31 +141,34 @@ bool LibraryQuery::scopeReady() const
 }
 
 std::future<MediaPage> LibraryQuery::anime(int letter, std::size_t limit,
-                                             const LibraryPageCursor &after) {
+                                           const LibraryPageCursor& after)
+{
     auto f = m_db->readMediaPage("show", letter, limit, toCatalogCursor(after),
-                                 metadataFor(m_scopeEpoch, {}),
-                                 CatalogDbMediaPageFilter::Anime);
-    return std::async(std::launch::async, [f = std::move(f)]() mutable {
-        return toLibraryPage(f.get());
-    });
+                                 metadataFor(m_scopeEpoch, {}), CatalogDbMediaPageFilter::Anime);
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryPage(f.get()); });
 }
 
-std::future<HierarchyPage> LibraryQuery::seasons(
-    const std::string &id,
-    const std::shared_ptr<std::atomic_bool> &cancellation) {
-    auto f=m_db->getSeasons(id, metadataFor(m_scopeEpoch, cancellation));
-    return std::async(std::launch::async,[f=std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
+std::future<HierarchyPage>
+LibraryQuery::seasons(const std::string& id, const std::shared_ptr<std::atomic_bool>& cancellation)
+{
+    auto f = m_db->getSeasons(id, metadataFor(m_scopeEpoch, cancellation));
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
 }
-std::future<HierarchyPage> LibraryQuery::episodes(
-    const std::string &id,
-    const std::shared_ptr<std::atomic_bool> &cancellation) {
-    auto f=m_db->getEpisodes(id, metadataFor(m_scopeEpoch, cancellation));
-    return std::async(std::launch::async,[f=std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
+std::future<HierarchyPage>
+LibraryQuery::episodes(const std::string& id, const std::shared_ptr<std::atomic_bool>& cancellation)
+{
+    auto f = m_db->getEpisodes(id, metadataFor(m_scopeEpoch, cancellation));
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
 }
-std::future<HierarchyPage> LibraryQuery::itemsByIds(
-    const std::vector<std::string> &itemIds,
-    const std::shared_ptr<std::atomic_bool> &cancellation) {
-    auto f=m_db->readMediaItemsByIds(itemIds, metadataFor(m_scopeEpoch, cancellation));
-    return std::async(std::launch::async,[f=std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
+std::future<HierarchyPage>
+LibraryQuery::itemsByIds(const std::vector<std::string>& itemIds,
+                         const std::shared_ptr<std::atomic_bool>& cancellation)
+{
+    auto f = m_db->readMediaItemsByIds(itemIds, metadataFor(m_scopeEpoch, cancellation));
+    return std::async(std::launch::async,
+                      [f = std::move(f)]() mutable { return toLibraryHierarchyPage(f.get()); });
 }
 }

@@ -9,7 +9,8 @@ namespace miyoofin {
 
 struct MediaItem;
 
-enum class MediaItemSqlError : unsigned char {
+enum class MediaItemSqlError : unsigned char
+{
     None,
     MissingId,
     InvalidKind,
@@ -19,29 +20,26 @@ enum class MediaItemSqlError : unsigned char {
     InvalidOrdinal,
 };
 
-struct MediaItemCollectionStatements {
-    sqlite3_stmt *deleteGenres = nullptr;
-    sqlite3_stmt *insertGenre = nullptr;
-    sqlite3_stmt *deleteImageTags = nullptr;
-    sqlite3_stmt *insertImageTag = nullptr;
-    sqlite3_stmt *selectGenres = nullptr;
-    sqlite3_stmt *selectImageTags = nullptr;
+struct MediaItemCollectionStatements
+{
+    sqlite3_stmt* deleteGenres = nullptr;
+    sqlite3_stmt* insertGenre = nullptr;
+    sqlite3_stmt* deleteImageTags = nullptr;
+    sqlite3_stmt* insertImageTag = nullptr;
+    sqlite3_stmt* selectGenres = nullptr;
+    sqlite3_stmt* selectImageTags = nullptr;
 };
 
-int mediaItemKindToSql(const std::string &type, MediaItemSqlError &error);
-std::string mediaItemKindFromSql(int kind, MediaItemSqlError &error);
+int mediaItemKindToSql(const std::string& type, MediaItemSqlError& error);
+std::string mediaItemKindFromSql(int kind, MediaItemSqlError& error);
 
-bool bindMediaItemScalars(sqlite3_stmt *statement, const MediaItem &item,
-                          MediaItemSqlError &error);
-bool readMediaItemScalars(sqlite3_stmt *statement, MediaItem &item,
-                          MediaItemSqlError &error);
-bool replaceMediaItemCollections(const MediaItemCollectionStatements &statements,
-                                 const MediaItem &item,
-                                 MediaItemSqlError &error);
-bool readMediaItemCollections(const MediaItemCollectionStatements &statements,
-                              MediaItem &item, MediaItemSqlError &error);
-bool mediaItemsEquivalentForCatalog(const MediaItem &expected,
-                                    const MediaItem &actual);
+bool bindMediaItemScalars(sqlite3_stmt* statement, const MediaItem& item, MediaItemSqlError& error);
+bool readMediaItemScalars(sqlite3_stmt* statement, MediaItem& item, MediaItemSqlError& error);
+bool replaceMediaItemCollections(const MediaItemCollectionStatements& statements,
+                                 const MediaItem& item, MediaItemSqlError& error);
+bool readMediaItemCollections(const MediaItemCollectionStatements& statements, MediaItem& item,
+                              MediaItemSqlError& error);
+bool mediaItemsEquivalentForCatalog(const MediaItem& expected, const MediaItem& actual);
 
 } // namespace miyoofin
 

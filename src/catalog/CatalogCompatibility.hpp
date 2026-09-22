@@ -7,11 +7,13 @@
 
 namespace miyoofin {
 
-struct CatalogCompatibilitySeedRequest {
+struct CatalogCompatibilitySeedRequest
+{
     LibrarySnapshot snapshot;
 };
 
-struct CatalogCompatibilitySeedResult {
+struct CatalogCompatibilitySeedResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -23,7 +25,8 @@ struct CatalogCompatibilitySeedResult {
     std::size_t homeItemsWritten = 0;
 };
 
-struct CatalogCompatibilityReadResult {
+struct CatalogCompatibilityReadResult
+{
     bool success = false;
     bool workerOwned = false;
     bool cancelled = false;
@@ -35,19 +38,19 @@ struct CatalogCompatibilityReadResult {
 
 // The only public owner of the legacy LibrarySnapshot seed/read boundary.
 // Implementations enqueue work on CatalogDb; this class never opens SQLite.
-class CatalogCompatibility {
-public:
-    static std::future<CatalogCompatibilitySeedResult> seedLibrarySnapshot(
-        CatalogDb &db, const LibrarySnapshot &snapshot,
-        const CatalogDbJobMetadata &metadata = {});
+class CatalogCompatibility
+{
+  public:
+    static std::future<CatalogCompatibilitySeedResult>
+    seedLibrarySnapshot(CatalogDb& db, const LibrarySnapshot& snapshot,
+                        const CatalogDbJobMetadata& metadata = {});
 #ifdef MIYOOFIN_TEST_BUILD
     static std::future<CatalogCompatibilitySeedResult>
-    seedLibrarySnapshotForTest(CatalogDb &db, const LibrarySnapshot &snapshot,
-                               int failAfterWrites,
-                               const CatalogDbJobMetadata &metadata = {});
+    seedLibrarySnapshotForTest(CatalogDb& db, const LibrarySnapshot& snapshot, int failAfterWrites,
+                               const CatalogDbJobMetadata& metadata = {});
 #endif // MIYOOFIN_TEST_BUILD
-    static std::future<CatalogCompatibilityReadResult> readLibrarySnapshot(
-        CatalogDb &db, const CatalogDbJobMetadata &metadata = {});
+    static std::future<CatalogCompatibilityReadResult>
+    readLibrarySnapshot(CatalogDb& db, const CatalogDbJobMetadata& metadata = {});
 };
 
 }

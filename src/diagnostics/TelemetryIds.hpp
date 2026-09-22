@@ -4,13 +4,15 @@
 
 namespace miyoofin {
 
-enum class PlatformId : uint32_t {
+enum class PlatformId : uint32_t
+{
     Unknown = 0,
     MiyooMiniPlusOnionOS = 1,
     Host = 2,
 };
 
-enum class Outcome : uint8_t {
+enum class Outcome : uint8_t
+{
     Unknown = 0,
     Success = 1,
     Failure = 2,
@@ -20,19 +22,22 @@ enum class Outcome : uint8_t {
     Unavailable = 6,
 };
 
-enum class RouteKind : uint8_t {
+enum class RouteKind : uint8_t
+{
     Unknown = 0,
     Lan = 1,
     Public = 2,
 };
 
-enum class HttpMethod : uint8_t {
+enum class HttpMethod : uint8_t
+{
     Unknown = 0,
     Get = 1,
     Post = 2,
 };
 
-enum class ScreenId : uint16_t {
+enum class ScreenId : uint16_t
+{
     None = 0,
     Startup = 1,
     ServerEntry = 2,
@@ -47,7 +52,8 @@ enum class ScreenId : uint16_t {
     Other = 11,
 };
 
-enum class TabId : uint16_t {
+enum class TabId : uint16_t
+{
     NotApplicable = 0,
     Home = 1,
     Movies = 2,
@@ -57,7 +63,8 @@ enum class TabId : uint16_t {
     Other = 6,
 };
 
-enum class ActionId : uint16_t {
+enum class ActionId : uint16_t
+{
     None = 0,
     Up = 1,
     Down = 2,
@@ -78,7 +85,8 @@ enum class ActionId : uint16_t {
     Other = 17,
 };
 
-enum class FramePhase : uint8_t {
+enum class FramePhase : uint8_t
+{
     FullFrame = 1,
     Input = 2,
     Update = 3,
@@ -88,14 +96,16 @@ enum class FramePhase : uint8_t {
     Present = 7,
 };
 
-enum class StateKind : uint8_t {
+enum class StateKind : uint8_t
+{
     Screen = 1,
     Tab = 2,
     Action = 3,
     PlaybackState = 4,
 };
 
-enum class PlaybackState : uint16_t {
+enum class PlaybackState : uint16_t
+{
     Unknown = 0,
     UiActive = 1,
     StartingOverlay = 2,
@@ -103,7 +113,8 @@ enum class PlaybackState : uint16_t {
     Resuming = 4,
 };
 
-enum class UiPhaseId : uint8_t {
+enum class UiPhaseId : uint8_t
+{
     Unknown = 0,
     IdleFrameBoundary = 1,
     EventInput = 2,
@@ -112,7 +123,8 @@ enum class UiPhaseId : uint8_t {
     Render = 5,
 };
 
-enum class UiScopeId : uint16_t {
+enum class UiScopeId : uint16_t
+{
     Unknown = 0,
     ScreenHandleAction = 1,
     ScreenUpdate = 2,
@@ -148,7 +160,8 @@ enum class UiScopeId : uint16_t {
     DownloadManagerPlanSnapshotMutexWait = 32,
 };
 
-enum class WorkerId : uint16_t {
+enum class WorkerId : uint16_t
+{
     HomeLibraryFetch = 1,
     HomeHierarchy = 2,
     HomePoster = 3,
@@ -168,8 +181,7 @@ enum class WorkerId : uint16_t {
 };
 
 // MFT v2-only identity. The v1 WorkerId values 1-14 remain frozen.
-constexpr uint16_t kMftV2CatalogDbWorkerId =
-    static_cast<uint16_t>(WorkerId::CatalogDb);
+constexpr uint16_t kMftV2CatalogDbWorkerId = static_cast<uint16_t>(WorkerId::CatalogDb);
 
 constexpr uint16_t kWorkerMaskHomeLibraryFetch = uint16_t{1} << 0;
 constexpr uint16_t kWorkerMaskHomeHierarchy = uint16_t{1} << 1;
@@ -187,7 +199,8 @@ constexpr uint16_t kWorkerMaskSavedSessionValidation = uint16_t{1} << 12;
 constexpr uint16_t kWorkerMaskPlaybackJournalSync = uint16_t{1} << 13;
 constexpr uint16_t kWorkerMaskAll = uint16_t{0x3fff};
 
-enum class RequestKind : uint16_t {
+enum class RequestKind : uint16_t
+{
     Unknown = 0,
     SystemInfo = 1,
     Authentication = 2,
@@ -210,7 +223,8 @@ enum class RequestKind : uint16_t {
     ItemsByIds = 19,
 };
 
-enum class ArtworkContext : uint8_t {
+enum class ArtworkContext : uint8_t
+{
     Unknown = 0,
     HomeSelected = 1,
     HomeGrid = 2,
@@ -222,7 +236,8 @@ enum class ArtworkContext : uint8_t {
     CacheGeneric = 8,
 };
 
-enum class PlaybackStage : uint8_t {
+enum class PlaybackStage : uint8_t
+{
     RequestToFinalPresent = 1,
     SuspendPlatform = 2,
     ChildWait = 3,
@@ -230,19 +245,22 @@ enum class PlaybackStage : uint8_t {
     ReturnToFirstNormalFrame = 5,
 };
 
-enum class PlaybackSourceKind : uint8_t {
+enum class PlaybackSourceKind : uint8_t
+{
     Unknown = 0,
     Jellyfin = 1,
     Local = 2,
 };
 
-enum class StallEdge : uint8_t {
+enum class StallEdge : uint8_t
+{
     Begin = 1,
     End = 2,
     SlowScope = 3,
 };
 
-enum class SessionEventKind : uint8_t {
+enum class SessionEventKind : uint8_t
+{
     TelemetryStarted = 1,
     TelemetryStopped = 2,
     SamplingSuspended = 3,
@@ -251,7 +269,8 @@ enum class SessionEventKind : uint8_t {
     WriterError = 6,
 };
 
-enum class WriterErrorKind : uint32_t {
+enum class WriterErrorKind : uint32_t
+{
     Unknown = 0,
     Open = 1,
     Write = 2,
@@ -260,12 +279,14 @@ enum class WriterErrorKind : uint32_t {
     Close = 5,
 };
 
-enum class SamplingReason : uint32_t {
+enum class SamplingReason : uint32_t
+{
     Unknown = 0,
     ExternalPlayback = 1,
 };
 
-enum class RecordType : uint16_t {
+enum class RecordType : uint16_t
+{
     SystemSample = 1,
     FrameTimingSummary = 2,
     StateTransition = 3,
@@ -282,7 +303,8 @@ enum class RecordType : uint16_t {
     SessionEvent = 14,
 };
 
-enum class MftV2RecordType : uint16_t {
+enum class MftV2RecordType : uint16_t
+{
     CatalogDbSummary = 15,
 };
 

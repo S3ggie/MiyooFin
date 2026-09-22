@@ -8,21 +8,13 @@
 
 namespace miyoofin {
 
-static const OnScreenKeyboard::Config kLoginKeyboardConfig = {
-    "SIGN IN", 134
-};
+static const OnScreenKeyboard::Config kLoginKeyboardConfig = {"SIGN IN", 134};
 
-LoginScreen::LoginScreen(const std::string &serverUrl,
-                         const std::string &serverName,
-                         const std::string &deviceId,
-                         const std::string &initialMessage)
-    : m_keyboard(kLoginKeyboardConfig)
-    , m_serverUrl(serverUrl)
-    , m_serverName(serverName)
-    , m_deviceId(deviceId)
-    , m_message(initialMessage)
-{
-}
+LoginScreen::LoginScreen(const std::string& serverUrl, const std::string& serverName,
+                         const std::string& deviceId, const std::string& initialMessage)
+    : m_keyboard(kLoginKeyboardConfig), m_serverUrl(serverUrl), m_serverName(serverName),
+      m_deviceId(deviceId), m_message(initialMessage)
+{}
 
 LoginScreen::~LoginScreen()
 {
@@ -31,7 +23,7 @@ LoginScreen::~LoginScreen()
     }
 }
 
-std::string &LoginScreen::activeText()
+std::string& LoginScreen::activeText()
 {
     return (m_activeField == 0) ? m_username : m_password;
 }
@@ -56,8 +48,10 @@ void LoginScreen::submitLogin()
     // on network I/O (unreachable via handleAction: it gates on
     // !m_connecting, and Back is swallowed while connecting).
     if (m_loginThread.joinable()) {
-        if (m_loginDone.load()) m_loginThread.join();
-        else return;
+        if (m_loginDone.load())
+            m_loginThread.join();
+        else
+            return;
     }
 
     m_connecting = true;
@@ -75,8 +69,7 @@ void LoginScreen::submitLogin()
         AuthResult result;
         AuthError err;
         std::string errMsg;
-        bool ok = JellyfinApi::authenticateByName(url, user, pass, devId,
-                                                  result, err, errMsg);
+        bool ok = JellyfinApi::authenticateByName(url, user, pass, devId, result, err, errMsg);
         if (ok) {
             m_loginResult = result;
             m_loginSuccess = true;
@@ -94,15 +87,15 @@ void LoginScreen::finishLogin()
     // join returns immediately and also establishes the happens-before edge
     // for m_loginError/m_loginResult. Reclaim here so the next submitLogin()
     // never assigns over a joinable thread.
-    if (m_loginThread.joinable()) m_loginThread.join();
+    if (m_loginThread.joinable())
+        m_loginThread.join();
     m_loginDone = false;
     m_connecting = false;
 
     if (m_loginSuccess) {
         m_success = true;
         m_result = m_loginResult;
-        printf("[LoginScreen] Sign-in successful for user '%s'\n",
-               m_result.userName.c_str());
+        printf("[LoginScreen] Sign-in successful for user '%s'\n", m_result.userName.c_str());
         return;
     }
 
@@ -126,14 +119,18 @@ void LoginScreen::leave()
 
 bool LoginScreen::handleAction(Action action)
 {
-    if (m_connecting) return true;
-    if (m_success) { m_finished = true; return false; }
+    if (m_connecting)
+        return true;
+    if (m_success) {
+        m_finished = true;
+        return false;
+    }
 
     // --- Field-select mode ---
     if (m_inFields) {
         switch (action) {
         case Action::PrevPage:
-            m_keyboard.handleAction(action);  // toggle caps
+            m_keyboard.handleAction(action); // toggle caps
             return true;
         case Action::Up:
         case Action::Down:
@@ -153,7 +150,8 @@ bool LoginScreen::handleAction(Action action)
             m_wantsServerEntry = true;
             return true;
         case Action::Settings:
-            if (!m_connecting && !m_success) submitLogin();
+            if (!m_connecting && !m_success)
+                submitLogin();
             return true;
         default:
             return false;
@@ -168,15 +166,18 @@ bool LoginScreen::handleAction(Action action)
     }
 
     int result = m_keyboard.handleAction(action);
-    if (result == -1) return false;
-    if (result == 0) return true;
+    if (result == -1)
+        return false;
+    if (result == 0)
+        return true;
 
     // Process character
     char c = static_cast<char>(result);
-    std::string &field = activeText();
+    std::string& field = activeText();
 
     if (c == OnScreenKeyboard::KEY_DEL) {
-        if (!field.empty()) field.pop_back();
+        if (!field.empty())
+            field.pop_back();
         m_message.clear();
         return true;
     }
@@ -186,7 +187,8 @@ bool LoginScreen::handleAction(Action action)
         return true;
     }
     if (c == OnScreenKeyboard::KEY_SUBMIT) {
-        if (!m_connecting && !m_success) submitLogin();
+        if (!m_connecting && !m_success)
+            submitLogin();
         return true;
     }
     if (c == OnScreenKeyboard::KEY_CANCEL) {
@@ -207,7 +209,7 @@ void LoginScreen::update(Uint32 dt)
     }
 }
 
-void LoginScreen::render(SDL_Surface *fb)
+void LoginScreen::render(SDL_Surface* fb)
 {
     drawTitle(fb);
     drawInputFields(fb);
@@ -220,28 +222,24 @@ void LoginScreen::render(SDL_Surface *fb)
 // Drawing helpers
 // -------------------------------------------------------------------
 
-void LoginScreen::drawTitle(SDL_Surface *fb)
+void LoginScreen::drawTitle(SDL_Surface* fb)
 {
     char title[128];
     std::snprintf(title, sizeof(title), "Sign in to %s", m_serverName.c_str());
-    BitmapFont::drawString(fb, 8, 8, title,
-        Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-        Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    BitmapFont::drawString(fb, 8, 8, title, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
+                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
 }
 
-void LoginScreen::drawField(SDL_Surface *fb, int y, const char *label,
-                             const std::string &display, bool selected,
-                             bool masked)
+void LoginScreen::drawField(SDL_Surface* fb, int y, const char* label, const std::string& display,
+                            bool selected, bool masked)
 {
     BitmapFont::fillRect(fb, 8, y, 624, 28, 40, 40, 50, 255);
-    BitmapFont::drawRect(fb, 8, y, 624, 28,
-        selected ? Theme::ACCENT_R : Theme::TEXT_R,
-        selected ? Theme::ACCENT_G : Theme::TEXT_G,
-        selected ? Theme::ACCENT_B : Theme::TEXT_B);
+    BitmapFont::drawRect(fb, 8, y, 624, 28, selected ? Theme::ACCENT_R : Theme::TEXT_R,
+                         selected ? Theme::ACCENT_G : Theme::TEXT_G,
+                         selected ? Theme::ACCENT_B : Theme::TEXT_B);
 
-    BitmapFont::drawString(fb, 12, y + 2, label,
-        Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-        40, 40, 50);
+    BitmapFont::drawString(fb, 12, y + 2, label, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
+                           40, 40, 50);
 
     int valX = 80;
     int maxChars = (624 - valX - 8) / BitmapFont::GLYPH_W;
@@ -254,8 +252,7 @@ void LoginScreen::drawField(SDL_Surface *fb, int y, const char *label,
     if ((int)displayStr.size() > maxChars) {
         displayStr = displayStr.substr((int)displayStr.size() - maxChars);
     }
-    BitmapFont::drawString(fb, valX, y + 6, displayStr.c_str(),
-        220, 220, 220, 40, 40, 50);
+    BitmapFont::drawString(fb, valX, y + 6, displayStr.c_str(), 220, 220, 220, 40, 40, 50);
 
     if (selected && m_inFields) {
         int cursorX = valX + (int)displayStr.size() * BitmapFont::GLYPH_W;
@@ -264,15 +261,16 @@ void LoginScreen::drawField(SDL_Surface *fb, int y, const char *label,
     }
 }
 
-void LoginScreen::drawInputFields(SDL_Surface *fb)
+void LoginScreen::drawInputFields(SDL_Surface* fb)
 {
     drawField(fb, 36, "Username:", m_username, m_activeField == 0, false);
     drawField(fb, 70, "Password:", m_password, m_activeField == 1, true);
 }
 
-void LoginScreen::drawStatus(SDL_Surface *fb)
+void LoginScreen::drawStatus(SDL_Surface* fb)
 {
-    if (m_message.empty() && !m_connecting) return;
+    if (m_message.empty() && !m_connecting)
+        return;
     int y = m_keyboard.keyboardBottom() + 16;
 
     if (m_connecting) {
@@ -280,32 +278,30 @@ void LoginScreen::drawStatus(SDL_Surface *fb)
         dotPhase = (dotPhase + 1) % 40;
         int dots = dotPhase / 8;
         char buf[32] = "Signing in";
-        for (int i = 0; i < dots; ++i) std::strcat(buf, ".");
-        BitmapFont::drawString(fb, 8, y, buf,
-            Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-            Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        for (int i = 0; i < dots; ++i)
+            std::strcat(buf, ".");
+        BitmapFont::drawString(fb, 8, y, buf, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
+                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
     } else {
-        BitmapFont::drawString(fb, 8, y, m_message.c_str(),
-            Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B,
-            Theme::BG_R, Theme::BG_G, Theme::BG_B, 75);
+        BitmapFont::drawString(fb, 8, y, m_message.c_str(), Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
+                               Theme::HIGHLIGHT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B, 75);
     }
 }
 
-void LoginScreen::drawHints(SDL_Surface *fb)
+void LoginScreen::drawHints(SDL_Surface* fb)
 {
     int y = 480 - 24;
-    BitmapFont::fillRect(fb, 0, y, 640, 24,
-        Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3, 255);
+    BitmapFont::fillRect(fb, 0, y, 640, 24, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
+                         Theme::BG_B * 2 / 3, 255);
 
-    const char *hints;
+    const char* hints;
     if (m_inFields) {
         hints = "LEFT/RIGHT=Switch Field  L2=Caps  DOWN=Keyboard  START=Sign In";
     } else {
         hints = "A=Type  B=Delete  X=Clear  L2=Caps  START=Sign In";
     }
-    BitmapFont::drawString(fb, 8, y + 4, hints,
-        Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-        Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
+    BitmapFont::drawString(fb, 8, y + 4, hints, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
+                           Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
 }
 
 } // namespace miyoofin

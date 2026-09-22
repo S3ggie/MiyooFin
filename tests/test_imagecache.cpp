@@ -25,9 +25,9 @@ static void testSelectCacheVictimsUnderCap()
 static void testSelectCacheVictimsOldestFirst()
 {
     std::vector<ImageCache::JanitorFileEntry> entries = {
-        {"new.jpg",  5000, 100},  // newest
-        {"old.jpg",  3000, 10},   // oldest
-        {"mid.jpg",  4000, 50},   // middle
+        {"new.jpg", 5000, 100}, // newest
+        {"old.jpg", 3000, 10},  // oldest
+        {"mid.jpg", 4000, 50},  // middle
     };
     // Total = 12000; target = 6000 → need to evict at least 6000 bytes.
     // Oldest first: old.jpg (3000) then mid.jpg (4000) → 7000 removed, remaining 5000.
@@ -67,9 +67,9 @@ static void testSelectCacheVictimsAllEvicted()
 static void testSelectCacheVictimsMtimeTie()
 {
     std::vector<ImageCache::JanitorFileEntry> entries = {
-        {"first.jpg", 1000, 50},   // same mtime as others
-        {"second.jpg", 2000, 50},  // same mtime as others
-        {"third.jpg", 3000, 50},   // same mtime as others
+        {"first.jpg", 1000, 50},  // same mtime as others
+        {"second.jpg", 2000, 50}, // same mtime as others
+        {"third.jpg", 3000, 50},  // same mtime as others
     };
     // All same mtime → stable_sort preserves input order.
     // Total = 6000; target = 2000 → need to evict 4000+ bytes.

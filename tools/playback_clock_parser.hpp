@@ -22,9 +22,9 @@
 // -------------------------------------------------------------------
 inline int64_t seconds_to_ticks(double seconds)
 {
-    if (!std::isfinite(seconds) || seconds < 0.0) return 0;
-    const double maxTicks =
-        static_cast<double>(std::numeric_limits<int64_t>::max());
+    if (!std::isfinite(seconds) || seconds < 0.0)
+        return 0;
+    const double maxTicks = static_cast<double>(std::numeric_limits<int64_t>::max());
     if (seconds * 10000000.0 >= maxTicks)
         return std::numeric_limits<int64_t>::max();
     return static_cast<int64_t>(seconds * 10000000.0 + 0.5);
@@ -33,13 +33,15 @@ inline int64_t seconds_to_ticks(double seconds)
 // Parse playback-request.txt's resume_ticks value.  Only a complete signed
 // decimal int64 is accepted; missing, malformed, negative, and overflowing
 // values normalize to zero.
-inline int64_t parse_resume_ticks(const std::string &value)
+inline int64_t parse_resume_ticks(const std::string& value)
 {
-    if (value.empty()) return 0;
+    if (value.empty())
+        return 0;
     size_t consumed = 0;
     try {
         long long parsed = std::stoll(value, &consumed, 10);
-        if (consumed != value.size() || parsed < 0) return 0;
+        if (consumed != value.size() || parsed < 0)
+            return 0;
         return static_cast<int64_t>(parsed);
     } catch (...) {
         return 0;
@@ -50,15 +52,17 @@ inline int64_t parse_resume_ticks(const std::string &value)
 // inputs normalize to zero and overflow saturates deterministically.
 inline int64_t add_resume_ticks(int64_t resumeTicks, int64_t localTicks)
 {
-    if (resumeTicks < 0) resumeTicks = 0;
-    if (localTicks < 0) localTicks = 0;
+    if (resumeTicks < 0)
+        resumeTicks = 0;
+    if (localTicks < 0)
+        localTicks = 0;
     const int64_t maxTicks = std::numeric_limits<int64_t>::max();
-    if (localTicks > maxTicks - resumeTicks) return maxTicks;
+    if (localTicks > maxTicks - resumeTicks)
+        return maxTicks;
     return resumeTicks + localTicks;
 }
 
-inline int64_t absolute_position_ticks(int64_t resumeTicks,
-                                       double localSeconds)
+inline int64_t absolute_position_ticks(int64_t resumeTicks, double localSeconds)
 {
     return add_resume_ticks(resumeTicks, seconds_to_ticks(localSeconds));
 }
@@ -81,21 +85,24 @@ inline int64_t absolute_position_ticks(int64_t resumeTicks,
 // Returns true on success and writes the PTS in seconds to `outSeconds`.
 // Returns false if the line does not contain a valid pts_time value.
 // -------------------------------------------------------------------
-inline bool parse_showinfo_pts(const std::string &record, double &outSeconds)
+inline bool parse_showinfo_pts(const std::string& record, double& outSeconds)
 {
-    if (record.empty()) return false;
+    if (record.empty())
+        return false;
 
     // Find "pts_time:" in the record
     const char needle[] = "pts_time:";
     const size_t needleLen = sizeof(needle) - 1; // 10
 
     size_t pos = record.find(needle);
-    if (pos == std::string::npos) return false;
+    if (pos == std::string::npos)
+        return false;
 
     pos += needleLen;
 
     // Must not be at end of string
-    if (pos >= record.size()) return false;
+    if (pos >= record.size())
+        return false;
 
     // The next character must be a digit, '.', or '-' (for negative)
     char first = record[pos];
@@ -103,17 +110,20 @@ inline bool parse_showinfo_pts(const std::string &record, double &outSeconds)
         return false;
 
     // Use strtod to parse the numeric value properly
-    const char *start = record.c_str() + pos;
-    char *endp = nullptr;
+    const char* start = record.c_str() + pos;
+    char* endp = nullptr;
     double val = std::strtod(start, &endp);
 
     // Must have consumed at least one digit
-    if (endp == start) return false;
+    if (endp == start)
+        return false;
     // Must have consumed at least one digit (not just a dot or sign)
-    if (endp - start == 1 && (first == '.' || first == '-')) return false;
+    if (endp - start == 1 && (first == '.' || first == '-'))
+        return false;
 
     // Reject NaN, Inf, negative
-    if (!std::isfinite(val) || val < 0.0) return false;
+    if (!std::isfinite(val) || val < 0.0)
+        return false;
 
     outSeconds = val;
     return true;
@@ -121,19 +131,19 @@ inline bool parse_showinfo_pts(const std::string &record, double &outSeconds)
 
 // These predicates only classify explicit FFplay/SDL stderr text. They do
 // not claim that a decoded frame reached the physical display.
-inline bool player_video_output_initialized(const std::string &record)
+inline bool player_video_output_initialized(const std::string& record)
 {
-    return record.find("SDL video driver") != std::string::npos
-        || record.find("SDL_CreateWindow") != std::string::npos
-        || record.find("Using video driver") != std::string::npos;
+    return record.find("SDL video driver") != std::string::npos ||
+           record.find("SDL_CreateWindow") != std::string::npos ||
+           record.find("Using video driver") != std::string::npos;
 }
 
-inline bool player_video_output_initialization_failed(const std::string &record)
+inline bool player_video_output_initialization_failed(const std::string& record)
 {
-    return record.find("Could not initialize SDL") != std::string::npos
-        || record.find("Failed to create window") != std::string::npos
-        || (record.find("SDL_CreateWindow") != std::string::npos
-            && record.find("failed") != std::string::npos);
+    return record.find("Could not initialize SDL") != std::string::npos ||
+           record.find("Failed to create window") != std::string::npos ||
+           (record.find("SDL_CreateWindow") != std::string::npos &&
+            record.find("failed") != std::string::npos);
 }
 
 // -------------------------------------------------------------------
@@ -147,7 +157,7 @@ inline bool player_video_output_initialization_failed(const std::string &record)
 // This ensures PlaybackStart is attempted exactly once, regardless
 // of whether the HTTP request succeeded.
 // -------------------------------------------------------------------
-inline bool pts_event(bool &startAttempted)
+inline bool pts_event(bool& startAttempted)
 {
     bool isProgress = startAttempted;
     startAttempted = true;
@@ -164,10 +174,10 @@ inline bool pts_event(bool &startAttempted)
 //
 // Advances `pos` past the consumed bytes.
 // -------------------------------------------------------------------
-inline bool extract_record(const std::string &buf, size_t &pos,
-                           std::string &record)
+inline bool extract_record(const std::string& buf, size_t& pos, std::string& record)
 {
-    if (pos >= buf.size()) return false;
+    if (pos >= buf.size())
+        return false;
 
     // Look for \n or \r
     size_t nl = buf.find('\n', pos);
@@ -181,7 +191,8 @@ inline bool extract_record(const std::string &buf, size_t &pos,
     else if (cr != std::string::npos)
         end = cr;
 
-    if (end == std::string::npos) return false;  // no delimiter yet
+    if (end == std::string::npos)
+        return false; // no delimiter yet
 
     record = buf.substr(pos, end - pos);
     pos = end + 1;
@@ -189,8 +200,7 @@ inline bool extract_record(const std::string &buf, size_t &pos,
     // Skip the other delimiter if it's a \r\n or \n\r pair
     if (pos < buf.size()) {
         char next = buf[pos];
-        if ((buf[end] == '\r' && next == '\n') ||
-            (buf[end] == '\n' && next == '\r'))
+        if ((buf[end] == '\r' && next == '\n') || (buf[end] == '\n' && next == '\r'))
             ++pos;
     }
 
@@ -224,23 +234,23 @@ inline bool extract_record(const std::string &buf, size_t &pos,
 // -------------------------------------------------------------------
 
 static const size_t POS_CFG_RECORD_SIZE = 264;
-static const size_t POS_CFG_KEY_SIZE    = 256;
-static const size_t POS_CFG_POS_OFFSET  = 256;
+static const size_t POS_CFG_KEY_SIZE = 256;
+static const size_t POS_CFG_POS_OFFSET = 256;
 
-inline bool parse_pos_cfg_position(const std::string &fileData,
-                                   const char *streamKey,
-                                   uint32_t &outSeconds)
+inline bool parse_pos_cfg_position(const std::string& fileData, const char* streamKey,
+                                   uint32_t& outSeconds)
 {
-    if (!streamKey || streamKey[0] == '\0') return false;
+    if (!streamKey || streamKey[0] == '\0')
+        return false;
 
     const size_t dataSize = fileData.size();
-    if (dataSize < POS_CFG_RECORD_SIZE) return false;
+    if (dataSize < POS_CFG_RECORD_SIZE)
+        return false;
 
     // Iterate only complete 264-byte records; trailing partial bytes
     // beyond the last full record are safely ignored.
     const size_t recordCount = dataSize / POS_CFG_RECORD_SIZE;
-    const unsigned char *data =
-        reinterpret_cast<const unsigned char *>(fileData.data());
+    const unsigned char* data = reinterpret_cast<const unsigned char*>(fileData.data());
 
     bool found = false;
     uint32_t bestSeconds = 0;
@@ -262,27 +272,30 @@ inline bool parse_pos_cfg_position(const std::string &fileData,
         }
 
         // Reject record if no NUL found in the key field
-        if (!hasNul) continue;
+        if (!hasNul)
+            continue;
 
         // Reject if NUL-terminated length doesn't match key length
-        if (nulPos != keyLen) continue;
+        if (nulPos != keyLen)
+            continue;
 
         // Compare the NUL-terminated value against the stream key
-        if (std::memcmp(data + base, streamKey, keyLen) != 0) continue;
+        if (std::memcmp(data + base, streamKey, keyLen) != 0)
+            continue;
 
         // Decode bytes +256..+259 as little-endian uint32
-        const uint32_t pos =
-            static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 0])
-          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 1]) << 8)
-          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 2]) << 16)
-          | (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 3]) << 24);
+        const uint32_t pos = static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 0]) |
+                             (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 1]) << 8) |
+                             (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 2]) << 16) |
+                             (static_cast<uint32_t>(data[base + POS_CFG_POS_OFFSET + 3]) << 24);
 
         // Prefer the last matching record in file order
         bestSeconds = pos;
         found = true;
     }
 
-    if (found) outSeconds = bestSeconds;
+    if (found)
+        outSeconds = bestSeconds;
     return found;
 }
 

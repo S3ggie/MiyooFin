@@ -1256,17 +1256,19 @@ static void testPageTransactionCleanupInvariants()
 
     // Enqueue rejection completes its promise synchronously, before the
     // command can ever reach the worker.
-    const auto enqueueStart = src.find(
-        "std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert(");
+    const std::string srcTokens = sourceTokenString(src);
+    const auto enqueueStart = srcTokens.find(sourceTokenString(
+        "std::future<CatalogDbMediaPageUpsertResult> CatalogDb::enqueueMediaPageUpsert("));
     const auto transitionStart = enqueueStart == std::string::npos
         ? std::string::npos
-        : src.find("void CatalogDb::logMediaPageTransition(", enqueueStart);
+        : srcTokens.find(sourceTokenString("void CatalogDb::logMediaPageTransition("),
+                         enqueueStart);
     CHECK(enqueueStart != std::string::npos);
     CHECK(transitionStart != std::string::npos);
     const std::string enqueueFn = enqueueStart == std::string::npos
         || transitionStart == std::string::npos
         ? std::string()
-        : src.substr(enqueueStart, transitionStart - enqueueStart);
+        : srcTokens.substr(enqueueStart, transitionStart - enqueueStart);
     const std::string enqueueRejection = sourceBetween(
         enqueueFn, "if (m_stopping || m_pendingJobs >= kMaxPendingJobs)",
         "m_mediaPageUpsertCommands.push_back");

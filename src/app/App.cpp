@@ -43,13 +43,12 @@ constexpr Uint32 PLAYBACK_STARTING_DURATION_MS =
 
 bool desktopNativeWindowRequested() noexcept
 {
-    const char *value = std::getenv("MIYOOFIN_DESKTOP_WINDOW");
+    const char* value = std::getenv("MIYOOFIN_DESKTOP_WINDOW");
     return value && value[0] != '\0' && value[0] != '0';
 }
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-PlaybackSourceKind telemetryPlaybackSource(
-    ScreenStack::ExternalPlaybackSource source) noexcept
+PlaybackSourceKind telemetryPlaybackSource(ScreenStack::ExternalPlaybackSource source) noexcept
 {
     switch (source) {
     case ScreenStack::ExternalPlaybackSource::Jellyfin:
@@ -61,13 +60,9 @@ PlaybackSourceKind telemetryPlaybackSource(
     }
 }
 
-void emitPlaybackEvent(PerformanceTelemetry &telemetry,
-                       uint32_t playbackSequence,
-                       PlaybackStage stage,
-                       PlaybackSourceKind source,
-                       uint8_t childExitKind,
-                       int32_t childExitCode,
-                       uint64_t durationUs) noexcept
+void emitPlaybackEvent(PerformanceTelemetry& telemetry, uint32_t playbackSequence,
+                       PlaybackStage stage, PlaybackSourceKind source, uint8_t childExitKind,
+                       int32_t childExitCode, uint64_t durationUs) noexcept
 {
     if (!telemetry.enabledFast() || playbackSequence == 0)
         return;
@@ -84,28 +79,22 @@ void emitPlaybackEvent(PerformanceTelemetry &telemetry,
 
 class FramePhaseTimer
 {
-public:
-    FramePhaseTimer(PerformanceTelemetry &telemetry,
-                    bool enabled,
-                    FramePhase phase) noexcept
-        : m_telemetry(telemetry)
-        , m_enabled(enabled)
-        , m_phase(phase)
-        , m_startUs(enabled ? TelemetryClock::monotonicUs() : 0)
-    {
-    }
+  public:
+    FramePhaseTimer(PerformanceTelemetry& telemetry, bool enabled, FramePhase phase) noexcept
+        : m_telemetry(telemetry), m_enabled(enabled), m_phase(phase),
+          m_startUs(enabled ? TelemetryClock::monotonicUs() : 0)
+    {}
 
     ~FramePhaseTimer()
     {
         if (!m_enabled)
             return;
         const uint64_t endUs = TelemetryClock::monotonicUs();
-        m_telemetry.recordFramePhase(
-            m_phase, endUs >= m_startUs ? endUs - m_startUs : 0);
+        m_telemetry.recordFramePhase(m_phase, endUs >= m_startUs ? endUs - m_startUs : 0);
     }
 
-private:
-    PerformanceTelemetry &m_telemetry;
+  private:
+    PerformanceTelemetry& m_telemetry;
     bool m_enabled;
     FramePhase m_phase;
     uint64_t m_startUs;
@@ -115,26 +104,25 @@ private:
 } // namespace
 
 App::App()
-    : m_window(nullptr)
-    , m_renderer(nullptr)
-    , m_fb(nullptr)
-    , m_fbTex(nullptr)
-    , m_catalogDb(std::make_shared<CatalogDb>())
-    , m_running(false)
-    , m_lastTick(0)
-    , m_playbackStarting(false)
-    , m_playbackStartingTick(0)
-{
-}
+    : m_window(nullptr), m_renderer(nullptr), m_fb(nullptr), m_fbTex(nullptr),
+      m_catalogDb(std::make_shared<CatalogDb>()), m_running(false), m_lastTick(0),
+      m_playbackStarting(false), m_playbackStartingTick(0)
+{}
 
 App::~App()
 {
     uiDiagnostics().setSuspended(true);
     uiDiagnostics().stop();
-    if (m_savedValidationThread.joinable()) m_savedValidationThread.join();
-    { std::lock_guard<std::mutex> lock(m_journalMutex); m_journalStop = true; m_journalWake = true; }
+    if (m_savedValidationThread.joinable())
+        m_savedValidationThread.join();
+    {
+        std::lock_guard<std::mutex> lock(m_journalMutex);
+        m_journalStop = true;
+        m_journalWake = true;
+    }
     m_journalCv.notify_one();
-    if (m_journalSyncThread.joinable()) m_journalSyncThread.join();
+    if (m_journalSyncThread.joinable())
+        m_journalSyncThread.join();
     if (m_libraryCoordinator) {
         m_libraryCoordinator->stop();
     }
@@ -151,10 +139,14 @@ App::~App()
         printf("[App] Download manager stopped\n");
     }
     m_catalogDb.reset();
-    if (m_fbTex)  SDL_DestroyTexture(m_fbTex);
-    if (m_fb)     SDL_FreeSurface(m_fb);
-    if (m_renderer) SDL_DestroyRenderer(m_renderer);
-    if (m_window) SDL_DestroyWindow(m_window);
+    if (m_fbTex)
+        SDL_DestroyTexture(m_fbTex);
+    if (m_fb)
+        SDL_FreeSurface(m_fb);
+    if (m_renderer)
+        SDL_DestroyRenderer(m_renderer);
+    if (m_window)
+        SDL_DestroyWindow(m_window);
     SDL_Quit();
     printf("[App] curl global cleanup\n");
     curl_global_cleanup();
@@ -165,10 +157,10 @@ bool App::init()
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    const char *desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
-    const char *diagnosticsPath = std::getenv("MIYOOFIN_UI_DIAGNOSTICS");
-    if (desktopInput && desktopInput[0] != '\0' && desktopInput[0] != '0'
-        && diagnosticsPath && diagnosticsPath[0] != '\0')
+    const char* desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
+    const char* diagnosticsPath = std::getenv("MIYOOFIN_UI_DIAGNOSTICS");
+    if (desktopInput && desktopInput[0] != '\0' && desktopInput[0] != '0' && diagnosticsPath &&
+        diagnosticsPath[0] != '\0')
         uiDiagnostics().start(diagnosticsPath);
     else
         uiDiagnostics().start();
@@ -182,10 +174,10 @@ bool App::init()
 
     SDL_DisplayMode dm;
     const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
-    const auto dimensions = desktopNativeWindowRequested()
-        ? DisplayDimensions{SCREEN_W, SCREEN_H}
-        : displayDimensionsFor(haveDesktopMode ? dm.w : 0,
-                               haveDesktopMode ? dm.h : 0);
+    const auto dimensions =
+        desktopNativeWindowRequested()
+            ? DisplayDimensions{SCREEN_W, SCREEN_H}
+            : displayDimensionsFor(haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
     const int displayW = dimensions.width;
     const int displayH = dimensions.height;
     if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
@@ -194,21 +186,15 @@ bool App::init()
         printf("[App] Using fallback dimensions: %dx%d\n", displayW, displayH);
     }
 
-    m_window = SDL_CreateWindow(
-        APP_NAME,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        displayW, displayH,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI
-    );
+    m_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, displayW,
+                                displayH, SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!m_window) {
         fprintf(stderr, "[App] SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
     }
 
-    m_renderer = SDL_CreateRenderer(
-        m_window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
-    );
+    m_renderer =
+        SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) {
         fprintf(stderr, "[App] SDL_CreateRenderer failed: %s\n", SDL_GetError());
         return false;
@@ -216,18 +202,14 @@ bool App::init()
 
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
 
-    m_fb = SDL_CreateRGBSurfaceWithFormat(
-        0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32
-    );
+    m_fb = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32);
     if (!m_fb) {
         fprintf(stderr, "[App] Failed to create framebuffer: %s\n", SDL_GetError());
         return false;
     }
 
-    m_fbTex = SDL_CreateTexture(
-        m_renderer, SDL_PIXELFORMAT_RGBA32,
-        SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H
-    );
+    m_fbTex = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
+                                SCREEN_W, SCREEN_H);
     if (!m_fbTex) {
         fprintf(stderr, "[App] Failed to create streaming texture: %s\n", SDL_GetError());
         return false;
@@ -239,9 +221,8 @@ bool App::init()
     loadSavedUrl();
     loadSavedSession();
     uiDiagnostics().log("[App] startup stage=session_loaded");
-    uiDiagnostics().log(m_session.valid()
-        ? "[App] startup stage=session_ready"
-        : "[App] startup stage=session_not_ready");
+    uiDiagnostics().log(m_session.valid() ? "[App] startup stage=session_ready"
+                                          : "[App] startup stage=session_not_ready");
     recoverPlaybackResult();
     m_downloadManager = std::make_shared<DownloadManager>(m_session);
     m_deviceId = DeviceIdentity::loadOrCreate();
@@ -273,18 +254,29 @@ bool App::init()
     return true;
 }
 
-
-
 bool App::suspendPlatform()
 {
     printf("[App] Suspending platform resources\n");
-    if (m_downloadManager) m_downloadManager->setPlaybackActive(true);
+    if (m_downloadManager)
+        m_downloadManager->setPlaybackActive(true);
 
     // Destroy SDL resources in reverse order of creation
-    if (m_fbTex)    { SDL_DestroyTexture(m_fbTex);      m_fbTex = nullptr; }
-    if (m_fb)       { SDL_FreeSurface(m_fb);             m_fb = nullptr; }
-    if (m_renderer) { SDL_DestroyRenderer(m_renderer);   m_renderer = nullptr; }
-    if (m_window)   { SDL_DestroyWindow(m_window);       m_window = nullptr; }
+    if (m_fbTex) {
+        SDL_DestroyTexture(m_fbTex);
+        m_fbTex = nullptr;
+    }
+    if (m_fb) {
+        SDL_FreeSurface(m_fb);
+        m_fb = nullptr;
+    }
+    if (m_renderer) {
+        SDL_DestroyRenderer(m_renderer);
+        m_renderer = nullptr;
+    }
+    if (m_window) {
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+    }
 
     // Suspend input (joystick will be closed by QuitSubSystem)
     m_input.suspend();
@@ -304,7 +296,8 @@ bool App::suspendPlatform()
 bool App::resumePlatform()
 {
     printf("[App] Resuming platform resources\n");
-    if (m_downloadManager) m_downloadManager->setPlaybackActive(false);
+    if (m_downloadManager)
+        m_downloadManager->setPlaybackActive(false);
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         fprintf(stderr, "[App] SDL_InitSubSystem failed: %s\n", SDL_GetError());
@@ -313,10 +306,10 @@ bool App::resumePlatform()
 
     SDL_DisplayMode dm;
     const bool haveDesktopMode = SDL_GetDesktopDisplayMode(0, &dm) == 0;
-    const auto dimensions = desktopNativeWindowRequested()
-        ? DisplayDimensions{SCREEN_W, SCREEN_H}
-        : displayDimensionsFor(haveDesktopMode ? dm.w : 0,
-                               haveDesktopMode ? dm.h : 0);
+    const auto dimensions =
+        desktopNativeWindowRequested()
+            ? DisplayDimensions{SCREEN_W, SCREEN_H}
+            : displayDimensionsFor(haveDesktopMode ? dm.w : 0, haveDesktopMode ? dm.h : 0);
     const int displayW = dimensions.width;
     const int displayH = dimensions.height;
     if (haveDesktopMode && dm.w > 0 && dm.h > 0) {
@@ -325,21 +318,15 @@ bool App::resumePlatform()
         printf("[App] Using fallback dimensions: %dx%d\n", displayW, displayH);
     }
 
-    m_window = SDL_CreateWindow(
-        APP_NAME,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        displayW, displayH,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI
-    );
+    m_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, displayW,
+                                displayH, SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!m_window) {
         fprintf(stderr, "[App] SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
     }
 
-    m_renderer = SDL_CreateRenderer(
-        m_window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
-    );
+    m_renderer =
+        SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) {
         fprintf(stderr, "[App] SDL_CreateRenderer failed: %s\n", SDL_GetError());
         return false;
@@ -347,18 +334,14 @@ bool App::resumePlatform()
 
     SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_NONE);
 
-    m_fb = SDL_CreateRGBSurfaceWithFormat(
-        0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32
-    );
+    m_fb = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32);
     if (!m_fb) {
         fprintf(stderr, "[App] Failed to create framebuffer: %s\n", SDL_GetError());
         return false;
     }
 
-    m_fbTex = SDL_CreateTexture(
-        m_renderer, SDL_PIXELFORMAT_RGBA32,
-        SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H
-    );
+    m_fbTex = SDL_CreateTexture(m_renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
+                                SCREEN_W, SCREEN_H);
     if (!m_fbTex) {
         fprintf(stderr, "[App] Failed to create streaming texture: %s\n", SDL_GetError());
         return false;
@@ -369,7 +352,8 @@ bool App::resumePlatform()
 
     // Clear any stale SDL events
     SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {}
+    while (SDL_PollEvent(&ev)) {
+    }
 
     printf("[App] Platform resumed\n");
     return true;
@@ -378,34 +362,34 @@ bool App::resumePlatform()
 void App::pollScreenshotRequest()
 {
     // A single stat() per frame — no allocation, no blocking when absent.
-    static const char *flagPath = "/tmp/miyoofin-screenshot-request";
+    static const char* flagPath = "/tmp/miyoofin-screenshot-request";
     struct stat st;
-    if (stat(flagPath, &st) != 0) return;
+    if (stat(flagPath, &st) != 0)
+        return;
     // Flag file present — consume it and capture the current framebuffer.
     std::remove(flagPath);
-    if (!m_fb) return;
+    if (!m_fb)
+        return;
     // Test-only hook for the headless host UI harness (docs/ui-script-harness.md):
     // when MIYOOFIN_SCREENSHOT_PATH is set, the framebuffer BMP is written
     // there instead of the device screenshot path. Opt-in via environment
     // only; unset (always, on device) preserves production behaviour exactly.
-    static const char *devicePath = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
-    const char *envPath = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
-    const char *outPath = (envPath && envPath[0] != '\0') ? envPath : devicePath;
+    static const char* devicePath = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+    const char* envPath = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
+    const char* outPath = (envPath && envPath[0] != '\0') ? envPath : devicePath;
     if (SDL_SaveBMP(m_fb, outPath) == 0)
         printf("[App] Screenshot saved: %s\n", outPath);
     else
         fprintf(stderr, "[App] Screenshot failed: %s\n", SDL_GetError());
 }
 
-
 int App::run()
 {
     while (m_running) {
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-        PerformanceTelemetry &telemetry = performanceTelemetry();
+        PerformanceTelemetry& telemetry = performanceTelemetry();
         const bool telemetryEnabled = telemetry.enabledFast();
-        const uint64_t frameStartUs = telemetryEnabled
-            ? TelemetryClock::monotonicUs() : 0;
+        const uint64_t frameStartUs = telemetryEnabled ? TelemetryClock::monotonicUs() : 0;
         if (!m_playbackReturnPending)
             telemetry.setPlaybackState(PlaybackState::UiActive);
 #endif
@@ -428,14 +412,12 @@ int App::run()
                 int windowH = 0;
                 if (m_window)
                     SDL_GetWindowSize(m_window, &windowW, &windowH);
-                for (const PointerClick &click : m_input.pointerClicks()) {
-                    Screen *active = m_stack.top();
+                for (const PointerClick& click : m_input.pointerClicks()) {
+                    Screen* active = m_stack.top();
                     if (!active)
                         continue;
-                    const int x = windowW > 0
-                        ? click.x * SCREEN_W / windowW : click.x;
-                    const int y = windowH > 0
-                        ? click.y * SCREEN_H / windowH : click.y;
+                    const int x = windowW > 0 ? click.x * SCREEN_W / windowW : click.x;
+                    const int y = windowH > 0 ? click.y * SCREEN_H / windowH : click.y;
                     active->handlePointerClick(x, y);
                 }
             }
@@ -448,12 +430,12 @@ int App::run()
                     telemetry.setAction(PerformanceTelemetry::actionIdFromAction(a));
 #endif
                     if (a == Action::Exit) {
-                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
+                        if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
                             home->cancelAsyncWork();
                         m_running = false;
                         break;
                     }
-                    Screen *active = m_stack.top();
+                    Screen* active = m_stack.top();
                     if (active) {
                         uiDiagnostics().setScreen(active->diagnosticName());
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
@@ -472,16 +454,16 @@ int App::run()
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
             FramePhaseTimer phaseTimer(telemetry, telemetryEnabled, FramePhase::Update);
 #endif
-            Screen *active = m_stack.top();
+            Screen* active = m_stack.top();
             uiDiagnostics().setPhase("update");
             if (active) {
                 uiDiagnostics().setScreen(active->diagnosticName());
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-                telemetry.setScreen(PerformanceTelemetry::screenIdFromDiagnosticName(
-                    active->diagnosticName()));
+                telemetry.setScreen(
+                    PerformanceTelemetry::screenIdFromDiagnosticName(active->diagnosticName()));
 #endif
-                if (auto *home = dynamic_cast<HomeScreen *>(active)) {
-                    const char *tabName = home->diagnosticTabName();
+                if (auto* home = dynamic_cast<HomeScreen*>(active)) {
+                    const char* tabName = home->diagnosticTabName();
                     uiDiagnostics().setTab(tabName);
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
                     telemetry.setTab(PerformanceTelemetry::tabIdFromDiagnosticName(tabName));
@@ -495,7 +477,10 @@ int App::run()
                 UiDiagnostics::Scope scope("Screen::update");
                 active->update(dt);
             }
-            { UiDiagnostics::Scope scope("App::finishSavedSessionValidation"); finishSavedSessionValidation(); }
+            {
+                UiDiagnostics::Scope scope("App::finishSavedSessionValidation");
+                finishSavedSessionValidation();
+            }
         }
 
         // --- Check if a screen requested external playback ---
@@ -522,159 +507,147 @@ int App::run()
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
             FramePhaseTimer transitionTimer(telemetry, telemetryEnabled, FramePhase::Transition);
 #endif
-            Screen *top = m_stack.top();
+            Screen* top = m_stack.top();
             uiDiagnostics().setPhase("screen transition");
             if (top) {
-            if (auto *conn = dynamic_cast<ConnectScreen *>(top)) {
-                if (conn->finished()) {
-                    if (conn->connected()) {
-                        m_serverUrl = conn->serverUrl();
-                        m_serverInfo = conn->serverInfo();
-                        m_stack.pop();  // remove ConnectScreen
+                if (auto* conn = dynamic_cast<ConnectScreen*>(top)) {
+                    if (conn->finished()) {
+                        if (conn->connected()) {
+                            m_serverUrl = conn->serverUrl();
+                            m_serverInfo = conn->serverInfo();
+                            m_stack.pop(); // remove ConnectScreen
 
-                        if (m_session.valid()) {
-                            printf("[App] ConnectScreen success -> AuthCheck\n");
-                            m_stack.push(
-                                std::make_unique<AuthCheckScreen>(m_session));
-                        } else {
-                            printf("[App] ConnectScreen success -> Login\n");
-                            m_stack.push(
-                                std::make_unique<LoginScreen>(
-                                    m_serverUrl, m_serverInfo.serverName,
-                                    m_deviceId));
+                            if (m_session.valid()) {
+                                printf("[App] ConnectScreen success -> AuthCheck\n");
+                                m_stack.push(std::make_unique<AuthCheckScreen>(m_session));
+                            } else {
+                                printf("[App] ConnectScreen success -> Login\n");
+                                m_stack.push(std::make_unique<LoginScreen>(
+                                    m_serverUrl, m_serverInfo.serverName, m_deviceId));
+                            }
+                        } else if (conn->failed()) {
+                            printf("[App] ConnectScreen fail -> ServerEntry\n");
+                            m_stack.pop();
+                            std::string msg =
+                                "Could not reach " + m_serverUrl + ": " + conn->errorMessage();
+                            m_stack.push(std::make_unique<ServerEntryScreen>(m_serverUrl, msg));
                         }
-                    } else if (conn->failed()) {
-                        printf("[App] ConnectScreen fail -> ServerEntry\n");
-                        m_stack.pop();
-                        std::string msg = "Could not reach " + m_serverUrl
-                                        + ": " + conn->errorMessage();
-                        m_stack.push(
-                            std::make_unique<ServerEntryScreen>(m_serverUrl, msg));
                     }
-                }
-            }
-            else if (auto *entry = dynamic_cast<ServerEntryScreen *>(top)) {
-                if (entry->connected() && entry->finished()) {
-                    if (entry->localAddressEntry()) {
-                        m_session.localServerUrl = entry->serverUrl();
-                        m_session.save();
+                } else if (auto* entry = dynamic_cast<ServerEntryScreen*>(top)) {
+                    if (entry->connected() && entry->finished()) {
+                        if (entry->localAddressEntry()) {
+                            m_session.localServerUrl = entry->serverUrl();
+                            m_session.save();
+                            m_stack.pop();
+                            if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
+                                home->setLocalServerUrl(m_session.localServerUrl);
+                            continue;
+                        }
+                        if (entry->publicAddressEntry()) {
+                            m_session.publicServerUrl = entry->serverUrl();
+                            m_session.save();
+                            m_stack.pop();
+                            if (m_downloadManager)
+                                m_downloadManager->configure(m_session);
+                            if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
+                                home->setPublicServerUrl(m_session.publicServerUrl);
+                            continue;
+                        }
+                        m_serverUrl = entry->serverUrl();
+                        m_serverInfo = entry->serverInfo();
+                        printf("[App] ServerEntryScreen success -> Login\n");
                         m_stack.pop();
-                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
-                            home->setLocalServerUrl(m_session.localServerUrl);
-                        continue;
-                    }
-                    if (entry->publicAddressEntry()) {
-                        m_session.publicServerUrl = entry->serverUrl();
-                        m_session.save();
-                        m_stack.pop();
-                        if (m_downloadManager) m_downloadManager->configure(m_session);
-                        if (auto *home = dynamic_cast<HomeScreen *>(m_stack.top()))
-                            home->setPublicServerUrl(m_session.publicServerUrl);
-                        continue;
-                    }
-                    m_serverUrl = entry->serverUrl();
-                    m_serverInfo = entry->serverInfo();
-                    printf("[App] ServerEntryScreen success -> Login\n");
-                    m_stack.pop();
-                    m_stack.push(
-                        std::make_unique<LoginScreen>(
+                        m_stack.push(std::make_unique<LoginScreen>(
                             m_serverUrl, m_serverInfo.serverName, m_deviceId));
-                }
-            }
-            else if (auto *authCheck = dynamic_cast<AuthCheckScreen *>(top)) {
-                if (authCheck->finished()) {
-                    if (authCheck->ok()) {
-                        printf("[App] AuthCheckScreen valid -> Home\n");
-                        m_stack.pop();
-                        goToHome();
-                    } else {
-                        printf("[App] AuthCheckScreen invalid -> Login\n");
-                        logout();
-                        m_stack.pop();
-                        m_stack.push(
-                            std::make_unique<LoginScreen>(
-                                m_serverUrl, m_serverInfo.serverName,
-                                m_deviceId, authCheck->errorMessage()));
                     }
-                }
-            }
-            else if (auto *login = dynamic_cast<LoginScreen *>(top)) {
-                if (login->wantsServerEntry()) {
-                    // Back from the field row: return to the server-URL
-                    // screen with the URL carried back for editing. pop()
-                    // calls leave(), which joins the login thread (already
-                    // finished or never started: Back is gated on
-                    // !m_connecting), so no worker outlives the screen.
-                    printf("[App] LoginScreen back -> ServerEntry\n");
-                    m_stack.pop();
-                    m_stack.push(
-                        std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
-                } else if (login->finished()) {
-                    if (login->success()) {
-                        // Save the session
-                        printf("[App] LoginScreen success -> Home\n");
-                        m_session.serverUrl   = m_serverUrl;
-                        m_session.serverId    = login->result().serverId;
-                        m_session.accessToken = login->result().accessToken;
-                        m_session.userId      = login->result().userId;
-                        m_session.userName    = login->result().userName;
-                        m_session.deviceId    = m_deviceId;
-                        m_session.save();
-                        configureCatalogScopeForSession();
-                        if (m_downloadManager) m_downloadManager->configure(m_session);
-
-                        // Also save server URL for standalone use
-                        FILE *sf = fopen("server.txt", "w");
-                        if (sf) {
-                            fprintf(sf, "%s\n", m_serverUrl.c_str());
-                            fclose(sf);
+                } else if (auto* authCheck = dynamic_cast<AuthCheckScreen*>(top)) {
+                    if (authCheck->finished()) {
+                        if (authCheck->ok()) {
+                            printf("[App] AuthCheckScreen valid -> Home\n");
+                            m_stack.pop();
+                            goToHome();
+                        } else {
+                            printf("[App] AuthCheckScreen invalid -> Login\n");
+                            logout();
+                            m_stack.pop();
+                            m_stack.push(std::make_unique<LoginScreen>(
+                                m_serverUrl, m_serverInfo.serverName, m_deviceId,
+                                authCheck->errorMessage()));
                         }
-
-                        m_stack.pop();
-                        goToHome();
                     }
-                    // Login failed — screen stays with error message
+                } else if (auto* login = dynamic_cast<LoginScreen*>(top)) {
+                    if (login->wantsServerEntry()) {
+                        // Back from the field row: return to the server-URL
+                        // screen with the URL carried back for editing. pop()
+                        // calls leave(), which joins the login thread (already
+                        // finished or never started: Back is gated on
+                        // !m_connecting), so no worker outlives the screen.
+                        printf("[App] LoginScreen back -> ServerEntry\n");
+                        m_stack.pop();
+                        m_stack.push(std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
+                    } else if (login->finished()) {
+                        if (login->success()) {
+                            // Save the session
+                            printf("[App] LoginScreen success -> Home\n");
+                            m_session.serverUrl = m_serverUrl;
+                            m_session.serverId = login->result().serverId;
+                            m_session.accessToken = login->result().accessToken;
+                            m_session.userId = login->result().userId;
+                            m_session.userName = login->result().userName;
+                            m_session.deviceId = m_deviceId;
+                            m_session.save();
+                            configureCatalogScopeForSession();
+                            if (m_downloadManager)
+                                m_downloadManager->configure(m_session);
+
+                            // Also save server URL for standalone use
+                            FILE* sf = fopen("server.txt", "w");
+                            if (sf) {
+                                fprintf(sf, "%s\n", m_serverUrl.c_str());
+                                fclose(sf);
+                            }
+
+                            m_stack.pop();
+                            goToHome();
+                        }
+                        // Login failed — screen stays with error message
+                    }
+                } else if (auto* home = dynamic_cast<HomeScreen*>(top)) {
+                    if (home->updateExitRequested()) {
+                        home->cancelAsyncWork();
+                        m_running = false;
+                    } else if (home->takeLocalAddressRequest()) {
+                        m_stack.push(std::make_unique<ServerEntryScreen>(
+                            m_session.localServerUrl, "", m_session.serverId, true));
+                    } else if (home->takePublicAddressRequest()) {
+                        m_stack.push(std::make_unique<ServerEntryScreen>(
+                            m_session.publicServerUrl, "", m_session.serverId, false, true));
+                    } else if (home->changeServerRequested()) {
+                        logout();
+                        m_stack.popToRoot();
+                        m_stack.push(std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
+                    } else if (home->logoutRequested()) {
+                        logout();
+                        m_stack.popToRoot();
+                        m_stack.push(
+                            std::make_unique<LoginScreen>(m_serverUrl, m_serverInfo.serverName,
+                                                          m_deviceId, "Logged out successfully."));
+                    }
                 }
-            }
-            else if (auto *home = dynamic_cast<HomeScreen *>(top)) {
-                if (home->updateExitRequested()) {
-                    home->cancelAsyncWork();
-                    m_running = false;
-                } else if (home->takeLocalAddressRequest()) {
-                    m_stack.push(std::make_unique<ServerEntryScreen>(
-                        m_session.localServerUrl, "", m_session.serverId, true));
-                } else if (home->takePublicAddressRequest()) {
-                    m_stack.push(std::make_unique<ServerEntryScreen>(
-                        m_session.publicServerUrl, "", m_session.serverId, false, true));
-                } else if (home->changeServerRequested()) {
-                    logout();
-                    m_stack.popToRoot();
-                    m_stack.push(std::make_unique<ServerEntryScreen>(m_serverUrl, ""));
-                } else if (home->logoutRequested()) {
-                    logout();
-                    m_stack.popToRoot();
-                    m_stack.push(
-                        std::make_unique<LoginScreen>(
-                            m_serverUrl, m_serverInfo.serverName, m_deviceId,
-                            "Logged out successfully."));
-                }
-            }
             }
         }
 
         // --- Render ---
         uiDiagnostics().setPhase("render");
         SDL_FillRect(m_fb, nullptr,
-                     SDL_MapRGBA(m_fb->format,
-                                 Theme::BG_R, Theme::BG_G,
-                                 Theme::BG_B, Theme::BG_A));
+                     SDL_MapRGBA(m_fb->format, Theme::BG_R, Theme::BG_G, Theme::BG_B, Theme::BG_A));
 
-        Screen *renderTop = m_stack.top();
+        Screen* renderTop = m_stack.top();
         if (renderTop) {
             uiDiagnostics().setScreen(renderTop->diagnosticName());
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-            telemetry.setScreen(PerformanceTelemetry::screenIdFromDiagnosticName(
-                renderTop->diagnosticName()));
+            telemetry.setScreen(
+                PerformanceTelemetry::screenIdFromDiagnosticName(renderTop->diagnosticName()));
 #endif
             UiDiagnostics::Scope scope("Screen::render");
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
@@ -683,10 +656,9 @@ int App::run()
             renderTop->render(m_fb);
         }
 
-        const Uint32 playbackStartingElapsed =
-            now - m_playbackStartingTick;
-        const bool handoffAfterPresent = m_playbackStarting &&
-            playbackStartingElapsed >= PLAYBACK_STARTING_DURATION_MS;
+        const Uint32 playbackStartingElapsed = now - m_playbackStartingTick;
+        const bool handoffAfterPresent =
+            m_playbackStarting && playbackStartingElapsed >= PLAYBACK_STARTING_DURATION_MS;
         if (m_playbackStarting) {
             drawPlaybackStartingOverlay(playbackStartingElapsed);
         }
@@ -714,11 +686,10 @@ int App::run()
         if (m_playbackReturnPending) {
             if (telemetryEnabled && telemetry.enabledFast()) {
                 const uint64_t presentUs = TelemetryClock::monotonicUs();
-                emitPlaybackEvent(telemetry, m_playbackSequence,
-                                  PlaybackStage::ReturnToFirstNormalFrame,
-                                  telemetryPlaybackSource(m_playbackSource), 0, 0,
-                                  presentUs >= m_playbackResumeUs
-                                      ? presentUs - m_playbackResumeUs : 0);
+                emitPlaybackEvent(
+                    telemetry, m_playbackSequence, PlaybackStage::ReturnToFirstNormalFrame,
+                    telemetryPlaybackSource(m_playbackSource), 0, 0,
+                    presentUs >= m_playbackResumeUs ? presentUs - m_playbackResumeUs : 0);
                 telemetry.setPlaybackState(PlaybackState::UiActive);
             }
             m_playbackReturnPending = false;
@@ -728,20 +699,18 @@ int App::run()
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
         if (handoffAfterPresent && telemetryEnabled && m_playbackSequence != 0) {
             const uint64_t presentUs = TelemetryClock::monotonicUs();
-            emitPlaybackEvent(telemetry, m_playbackSequence,
-                              PlaybackStage::RequestToFinalPresent,
+            emitPlaybackEvent(telemetry, m_playbackSequence, PlaybackStage::RequestToFinalPresent,
                               telemetryPlaybackSource(m_playbackSource), 0, 0,
-                              presentUs >= m_playbackRequestUs
-                                  ? presentUs - m_playbackRequestUs : 0);
+                              presentUs >= m_playbackRequestUs ? presentUs - m_playbackRequestUs
+                                                               : 0);
         }
 #endif
 
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
         if (telemetryEnabled) {
             const uint64_t frameEndUs = TelemetryClock::monotonicUs();
-            telemetry.recordFramePhase(
-                FramePhase::FullFrame,
-                frameEndUs >= frameStartUs ? frameEndUs - frameStartUs : 0);
+            telemetry.recordFramePhase(FramePhase::FullFrame,
+                                       frameEndUs >= frameStartUs ? frameEndUs - frameStartUs : 0);
         }
 #endif
 

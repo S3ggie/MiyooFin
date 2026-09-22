@@ -45,9 +45,9 @@ using namespace miyoofin;
 // Constants
 // ===================================================================
 
-static const int POLL_INTERVAL_US    = 80000; // 80 ms
-static const int HTTP_TIMEOUT_SEC    = 5;
-static const size_t MAX_PARTIAL_BUF  = 4096;
+static const int POLL_INTERVAL_US = 80000; // 80 ms
+static const int HTTP_TIMEOUT_SEC = 5;
+static const size_t MAX_PARTIAL_BUF = 4096;
 
 // ===================================================================
 // Signal handling
@@ -55,24 +55,27 @@ static const size_t MAX_PARTIAL_BUF  = 4096;
 
 static volatile sig_atomic_t g_running = 1;
 
-static void signal_handler(int) { g_running = 0; }
+static void signal_handler(int)
+{
+    g_running = 0;
+}
 
 // ===================================================================
 // Diagnostics logging
 // ===================================================================
 
-static FILE *g_logFile = nullptr;
+static FILE* g_logFile = nullptr;
 
-static void reporter_log(const char *fmt, ...)
+static void reporter_log(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
     if (g_logFile) {
         time_t now = time(nullptr);
         struct tm tm_buf;
-        struct tm *tm = localtime_r(&now, &tm_buf);
-        fprintf(g_logFile, "[%02d:%02d:%02d] [PlaybackReporter] ",
-                tm->tm_hour, tm->tm_min, tm->tm_sec);
+        struct tm* tm = localtime_r(&now, &tm_buf);
+        fprintf(g_logFile, "[%02d:%02d:%02d] [PlaybackReporter] ", tm->tm_hour, tm->tm_min,
+                tm->tm_sec);
         vfprintf(g_logFile, fmt, ap);
         fprintf(g_logFile, "\n");
         fflush(g_logFile);
@@ -84,10 +87,11 @@ static void reporter_log(const char *fmt, ...)
 // File helpers
 // ===================================================================
 
-static std::string read_file(const std::string &path)
+static std::string read_file(const std::string& path)
 {
-    FILE *f = std::fopen(path.c_str(), "r");
-    if (!f) return {};
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f)
+        return {};
     std::string result;
     char buf[256];
     size_t n;
@@ -98,10 +102,11 @@ static std::string read_file(const std::string &path)
 }
 
 // Read a file as raw bytes (binary-safe for pos.cfg and similar)
-static std::string read_file_binary(const std::string &path)
+static std::string read_file_binary(const std::string& path)
 {
-    FILE *f = std::fopen(path.c_str(), "rb");
-    if (!f) return {};
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return {};
     std::string result;
     char buf[256];
     size_t n;
@@ -111,40 +116,48 @@ static std::string read_file_binary(const std::string &path)
     return result;
 }
 
-static bool file_exists(const std::string &path)
+static bool file_exists(const std::string& path)
 {
     struct stat st;
     return stat(path.c_str(), &st) == 0;
 }
 
-static bool nonempty_file(const std::string &path)
+static bool nonempty_file(const std::string& path)
 {
     struct stat st;
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
-static bool write_playback_result(const std::string &path,
-                                  const std::string &itemId,
-                                  const std::string &itemType, int64_t positionTicks, int64_t baseTicks,
-                                  const std::string &sourceMode, bool serverReported)
+static bool write_playback_result(const std::string& path, const std::string& itemId,
+                                  const std::string& itemType, int64_t positionTicks,
+                                  int64_t baseTicks, const std::string& sourceMode,
+                                  bool serverReported)
 {
-    FILE *f = std::fopen(path.c_str(), "w");
-    if (!f) return false;
-    const bool wrote = std::fprintf(f, "item_id=%s\nitem_type=%s\nposition_ticks=%lld\nbase_resume_ticks=%lld\nsource_mode=%s\nserver_reported=%d\n", itemId.c_str(), itemType.c_str(), (long long)positionTicks, (long long)baseTicks, sourceMode.c_str(), serverReported?1:0) >= 0;
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f)
+        return false;
+    const bool wrote =
+        std::fprintf(f,
+                     "item_id=%s\nitem_type=%s\nposition_ticks=%lld\nbase_resume_ticks=%"
+                     "lld\nsource_mode=%s\nserver_reported=%d\n",
+                     itemId.c_str(), itemType.c_str(), (long long)positionTicks,
+                     (long long)baseTicks, sourceMode.c_str(), serverReported ? 1 : 0) >= 0;
     const bool closed = std::fclose(f) == 0;
     return wrote && closed;
 }
 
-static std::string read_kv_from_content(const std::string &content,
-                                        const char *key)
+static std::string read_kv_from_content(const std::string& content, const char* key)
 {
     std::string needle = std::string(key) + "=";
     size_t pos = content.find(needle);
-    if (pos == std::string::npos) return {};
+    if (pos == std::string::npos)
+        return {};
     pos += needle.size();
     size_t end = content.find('\n', pos);
-    if (end == std::string::npos) end = content.size();
-    while (end > pos && content[end - 1] == '\r') --end;
+    if (end == std::string::npos)
+        end = content.size();
+    while (end > pos && content[end - 1] == '\r')
+        --end;
     return content.substr(pos, end - pos);
 }
 
@@ -152,7 +165,7 @@ static std::string read_kv_from_content(const std::string &content,
 // libcurl write callback (discard response body)
 // ===================================================================
 
-static size_t discard_write(void *, size_t size, size_t nmemb, void *)
+static size_t discard_write(void*, size_t size, size_t nmemb, void*)
 {
     return size * nmemb;
 }
@@ -161,14 +174,16 @@ static size_t discard_write(void *, size_t size, size_t nmemb, void *)
 // HTTP POST helper
 // ===================================================================
 
-struct PostResult { long httpStatus=0; bool transportFailure=false; };
-
-static PostResult post_json(const std::string &url,
-                      const std::vector<std::string> &headers,
-                      const std::string &body,
-                      const std::string &cacertPath)
+struct PostResult
 {
-    CURL *curl = curl_easy_init();
+    long httpStatus = 0;
+    bool transportFailure = false;
+};
+
+static PostResult post_json(const std::string& url, const std::vector<std::string>& headers,
+                            const std::string& body, const std::string& cacertPath)
+{
+    CURL* curl = curl_easy_init();
     if (!curl) {
         reporter_log("curl_easy_init failed");
         return {0, true};
@@ -186,9 +201,9 @@ static PostResult post_json(const std::string &url,
     if (!cacertPath.empty())
         curl_easy_setopt(curl, CURLOPT_CAINFO, cacertPath.c_str());
 
-    struct curl_slist *hdrList = nullptr;
+    struct curl_slist* hdrList = nullptr;
     hdrList = curl_slist_append(hdrList, "Content-Type: application/json");
-    for (const auto &h : headers)
+    for (const auto& h : headers)
         hdrList = curl_slist_append(hdrList, h.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrList);
 
@@ -212,14 +227,13 @@ static PostResult post_json(const std::string &url,
 // Jellyfin auth header builder — matches existing MiyooFin identity
 // ===================================================================
 
-static void build_identity_headers(const std::string &deviceId,
-                                   std::vector<std::string> &headers)
+static void build_identity_headers(const std::string& deviceId, std::vector<std::string>& headers)
 {
     char hdr[512];
     std::snprintf(hdr, sizeof(hdr),
-        "X-Emby-Authorization: MediaBrowser "
-        "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
-        APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
+                  "X-Emby-Authorization: MediaBrowser "
+                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
+                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
     headers.push_back(hdr);
 }
 
@@ -227,8 +241,7 @@ static void build_identity_headers(const std::string &deviceId,
 // JSON payload builders (manual — no JSON dependency)
 // ===================================================================
 
-static std::string build_playing_payload(const std::string &itemId,
-                                         int64_t positionTicks,
+static std::string build_playing_payload(const std::string& itemId, int64_t positionTicks,
                                          bool canSeek)
 {
     std::string b = "{";
@@ -243,8 +256,7 @@ static std::string build_playing_payload(const std::string &itemId,
     return b;
 }
 
-static std::string build_stopped_payload(const std::string &itemId,
-                                         int64_t positionTicks,
+static std::string build_stopped_payload(const std::string& itemId, int64_t positionTicks,
                                          bool failed)
 {
     std::string b = "{";
@@ -259,24 +271,21 @@ static std::string build_stopped_payload(const std::string &itemId,
 // Report helpers
 // ===================================================================
 
-static bool report_event(const char *name, const std::string &path,
-                         const PlaybackRoute &route,
-                         const std::string &itemId,
-                         int64_t positionTicks,
-                         bool stopped, bool failed,
-                         const std::string &token,
-                         const std::string &deviceId,
-                         const std::string &cacertPath)
+static bool report_event(const char* name, const std::string& path, const PlaybackRoute& route,
+                         const std::string& itemId, int64_t positionTicks, bool stopped,
+                         bool failed, const std::string& token, const std::string& deviceId,
+                         const std::string& cacertPath)
 {
     std::vector<std::string> headers;
     headers.push_back("X-Emby-Token: " + token);
     build_identity_headers(deviceId, headers);
     const std::string body = stopped ? build_stopped_payload(itemId, positionTicks, failed)
                                      : build_playing_payload(itemId, positionTicks, true);
-    PostResult result=post_json(route.primary + path, headers, body, cacertPath);
-    if (!route.fallback.empty() && playback_should_fallback(result.transportFailure, result.httpStatus)) {
+    PostResult result = post_json(route.primary + path, headers, body, cacertPath);
+    if (!route.fallback.empty() &&
+        playback_should_fallback(result.transportFailure, result.httpStatus)) {
         reporter_log("[ReporterRoute] LAN failed; PUBLIC");
-        result=post_json(route.fallback + path, headers, body, cacertPath);
+        result = post_json(route.fallback + path, headers, body, cacertPath);
     }
     reporter_log("%s %lld ticks HTTP %ld", name, (long long)positionTicks, result.httpStatus);
     return result.httpStatus >= 200 && result.httpStatus < 300;
@@ -286,13 +295,13 @@ static bool report_event(const char *name, const std::string &path,
 // Main
 // ===================================================================
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     if (argc != 2) {
         std::fprintf(stderr,
-            "Usage: %s <app-dir>\n"
-            "Jellyfin playback reporter for MiyooFin.\n",
-            argv[0]);
+                     "Usage: %s <app-dir>\n"
+                     "Jellyfin playback reporter for MiyooFin.\n",
+                     argv[0]);
         return 1;
     }
 
@@ -316,50 +325,55 @@ int main(int argc, char *argv[])
     std::string sessionContent = read_file(appDir + "/session.txt");
     if (sessionContent.empty()) {
         reporter_log("ERROR: cannot read session.txt");
-        std::fclose(g_logFile); return 1;
+        std::fclose(g_logFile);
+        return 1;
     }
-    std::string serverUrl   = read_kv_from_content(sessionContent, "server_url");
+    std::string serverUrl = read_kv_from_content(sessionContent, "server_url");
     std::string localServerUrl = read_kv_from_content(sessionContent, "local_server_url");
     std::string publicServerUrl = read_kv_from_content(sessionContent, "public_server_url");
     std::string accessToken = read_kv_from_content(sessionContent, "access_token");
-    std::string userId      = read_kv_from_content(sessionContent, "user_id");
-    std::string deviceId    = read_kv_from_content(sessionContent, "device_id");
+    std::string userId = read_kv_from_content(sessionContent, "user_id");
+    std::string deviceId = read_kv_from_content(sessionContent, "device_id");
     if (serverUrl.empty() || accessToken.empty()) {
         reporter_log("ERROR: missing server_url or access_token");
-        std::fclose(g_logFile); return 1;
+        std::fclose(g_logFile);
+        return 1;
     }
 
     // Read playback-request.txt
     std::string reqContent = read_file(appDir + "/playback-request.txt");
     if (reqContent.empty()) {
         reporter_log("ERROR: cannot read playback-request.txt");
-        std::fclose(g_logFile); return 1;
+        std::fclose(g_logFile);
+        return 1;
     }
     std::string itemId = read_kv_from_content(reqContent, "item_id");
     std::string itemType = read_kv_from_content(reqContent, "item_type");
     std::string sourceMode = read_kv_from_content(reqContent, "source_mode");
     if (itemId.empty()) {
         reporter_log("ERROR: missing item_id");
-        std::fclose(g_logFile); return 1;
+        std::fclose(g_logFile);
+        return 1;
     }
-    int64_t resumeTicks = parse_resume_ticks(
-        read_kv_from_content(reqContent, "resume_ticks"));
+    int64_t resumeTicks = parse_resume_ticks(read_kv_from_content(reqContent, "resume_ticks"));
     // Downloaded/local playback retains its established public-only reporter
     // behavior. LAN route selection belongs only to remote Jellyfin playback.
-    const std::string publicRoute=publicServerUrl.empty() ? serverUrl : publicServerUrl;
-    const std::string lanRoute=localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
-    PlaybackRoute route=playback_route(publicRoute, sourceMode == "local" ? "" : lanRoute);
+    const std::string publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
+    const std::string lanRoute =
+        localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    PlaybackRoute route = playback_route(publicRoute, sourceMode == "local" ? "" : lanRoute);
     reporter_log("item=%s server=%s", itemId.c_str(), serverUrl.c_str());
     reporter_log("[ReporterRoute] %s", route.usingLan ? "LAN" : "PUBLIC");
     reporter_log("resume ticks=%lld", (long long)resumeTicks);
 
     std::string cacertPath = appDir + "/cacert.pem";
-    const bool reportsHttps=route.primary.compare(0,8,"https://")==0 ||
-                            route.fallback.compare(0,8,"https://")==0;
+    const bool reportsHttps = route.primary.compare(0, 8, "https://") == 0 ||
+                              route.fallback.compare(0, 8, "https://") == 0;
     if (!nonempty_file(cacertPath)) {
         if (reportsHttps) {
             reporter_log("ERROR: cacert.pem not found for HTTPS reporting");
-            std::fclose(g_logFile); return 1;
+            std::fclose(g_logFile);
+            return 1;
         }
         // HTTP-only LAN reporting does not use CA verification.
         cacertPath.clear();
@@ -372,7 +386,7 @@ int main(int argc, char *argv[])
 
     // State
     std::string ffplayLog = appDir + "/playback-ffplay.log";
-    FILE *logFp = nullptr;
+    FILE* logFp = nullptr;
     size_t fileOffset = 0;
     std::string partialBuf;
     double lastPts = -1.0;
@@ -383,13 +397,11 @@ int main(int argc, char *argv[])
     bool outputInitObserved = false;
     bool outputInitFailed = false;
 
-    auto inspectPlayerOutput = [&](const std::string &record) {
-        if (!outputInitFailed
-            && player_video_output_initialization_failed(record)) {
+    auto inspectPlayerOutput = [&](const std::string& record) {
+        if (!outputInitFailed && player_video_output_initialization_failed(record)) {
             outputInitFailed = true;
             reporter_log("player_video_output_initialization_failed evidence=ffplay_stderr");
-        } else if (!outputInitObserved
-                   && player_video_output_initialized(record)) {
+        } else if (!outputInitObserved && player_video_output_initialized(record)) {
             outputInitObserved = true;
             reporter_log("player_video_output_initialized evidence=ffplay_stderr");
         }
@@ -402,11 +414,13 @@ int main(int argc, char *argv[])
         if (file_exists(exitFilePath)) {
             ffplayExited = true;
             std::string exitContent = read_file(exitFilePath);
-            if (!exitContent.empty()) exitCode = std::atoi(exitContent.c_str());
+            if (!exitContent.empty())
+                exitCode = std::atoi(exitContent.c_str());
             reporter_log("FFplay exit code=%d", exitCode);
         }
 
-        if (!logFp) logFp = std::fopen(ffplayLog.c_str(), "r");
+        if (!logFp)
+            logFp = std::fopen(ffplayLog.c_str(), "r");
 
         if (logFp) {
             long curSize = 0;
@@ -431,7 +445,8 @@ int main(int argc, char *argv[])
                         hasPts = true;
                         if (!pts_event(startAttempted)) {
                             // First valid PTS → send PlaybackStart (once)
-                            reporter_log("first_video_frame_decoded pts=%.4f evidence=showinfo", pts);
+                            reporter_log("first_video_frame_decoded pts=%.4f evidence=showinfo",
+                                         pts);
                             reporter_log("first pts %.4f sec", pts);
                             report_event("ReportPlaybackStart", "/Sessions/Playing", route, itemId,
                                          absolute_position_ticks(resumeTicks, pts), false, false,
@@ -447,18 +462,22 @@ int main(int argc, char *argv[])
                 if (parsePos > 0) {
                     partialBuf = partialBuf.substr(parsePos);
                     if (partialBuf.size() > MAX_PARTIAL_BUF)
-                        partialBuf = partialBuf.substr(
-                            partialBuf.size() - MAX_PARTIAL_BUF);
+                        partialBuf = partialBuf.substr(partialBuf.size() - MAX_PARTIAL_BUF);
                 }
             }
         }
 
-        if (ffplayExited && logFp) { std::fclose(logFp); logFp = nullptr; }
-        if (!ffplayExited) usleep(POLL_INTERVAL_US);
+        if (ffplayExited && logFp) {
+            std::fclose(logFp);
+            logFp = nullptr;
+        }
+        if (!ffplayExited)
+            usleep(POLL_INTERVAL_US);
     }
 
     // Drain remaining log bytes after FFplay exits
-    if (!logFp) logFp = std::fopen(ffplayLog.c_str(), "r");
+    if (!logFp)
+        logFp = std::fopen(ffplayLog.c_str(), "r");
     if (logFp) {
         if (std::fseek(logFp, 0, SEEK_END) == 0) {
             long curSize = std::ftell(logFp);
@@ -475,19 +494,22 @@ int main(int argc, char *argv[])
                     inspectPlayerOutput(record);
                     double pts = 0.0;
                     if (parse_showinfo_pts(record, pts)) {
-                        lastPts = pts; hasPts = true;
+                        lastPts = pts;
+                        hasPts = true;
                     }
                 }
             }
         }
-        std::fclose(logFp); logFp = nullptr;
+        std::fclose(logFp);
+        logFp = nullptr;
     }
 
     // Parse any remaining partial buffer (trailing data without delimiter)
     if (!partialBuf.empty()) {
         double pts = 0.0;
         if (parse_showinfo_pts(partialBuf, pts)) {
-            lastPts = pts; hasPts = true;
+            lastPts = pts;
+            hasPts = true;
         }
     }
 
@@ -500,11 +522,9 @@ int main(int argc, char *argv[])
     // after draining all showinfo output.  On any failure we silently
     // fall back to the latest sampled showinfo PTS — the existing
     // behaviour.
-    static const char *POS_CFG_PATH =
-        "/mnt/SDCARD/.tmp_update/pos.cfg";
-    const char *streamKey = sourceMode == "local"
-        ? "http://127.0.0.1:18080/local.m3u8"
-        : "http://127.0.0.1:18080/stream";
+    static const char* POS_CFG_PATH = "/mnt/SDCARD/.tmp_update/pos.cfg";
+    const char* streamKey = sourceMode == "local" ? "http://127.0.0.1:18080/local.m3u8"
+                                                  : "http://127.0.0.1:18080/stream";
 
     bool usedPosCfg = false;
     if (hasPts) {
@@ -521,11 +541,12 @@ int main(int argc, char *argv[])
         } else {
             reporter_log("pos.cfg not readable; using last PTS");
         }
-        (void)usedPosCfg;  // suppress unused-variable warning in non-debug builds
+        (void)usedPosCfg; // suppress unused-variable warning in non-debug builds
     }
 
     if (outputInitFailed) {
-        reporter_log("playback_attempt_classification=failed reason=player_video_output_initialization");
+        reporter_log(
+            "playback_attempt_classification=failed reason=player_video_output_initialization");
     } else if (!outputInitObserved) {
         reporter_log("player_video_output_initialization=not_observed");
     }
@@ -534,13 +555,14 @@ int main(int argc, char *argv[])
     // attempt even when FFplay itself returned zero; no retry is performed.
     bool failed = (exitCode != 0) || outputInitFailed;
     if (hasPts) {
-        const int64_t finalTicks =
-            absolute_position_ticks(resumeTicks, lastPts);
+        const int64_t finalTicks = absolute_position_ticks(resumeTicks, lastPts);
         const std::string resultPath = appDir + "/playback-result.txt";
-        const bool serverReported=report_event("stopped", "/Sessions/Playing/Stopped", route, itemId, finalTicks, true, failed, accessToken, deviceId, cacertPath);
-        if (write_playback_result(resultPath, itemId, itemType, finalTicks, resumeTicks, sourceMode, serverReported))
-            reporter_log("playback result position=%lld",
-                         (long long)finalTicks);
+        const bool serverReported =
+            report_event("stopped", "/Sessions/Playing/Stopped", route, itemId, finalTicks, true,
+                         failed, accessToken, deviceId, cacertPath);
+        if (write_playback_result(resultPath, itemId, itemType, finalTicks, resumeTicks, sourceMode,
+                                  serverReported))
+            reporter_log("playback result position=%lld", (long long)finalTicks);
         else
             reporter_log("ERROR: failed to write playback result");
     } else {
@@ -549,6 +571,9 @@ int main(int argc, char *argv[])
 
     curl_global_cleanup();
     reporter_log("Reporter exiting");
-    if (g_logFile) { std::fclose(g_logFile); g_logFile = nullptr; }
+    if (g_logFile) {
+        std::fclose(g_logFile);
+        g_logFile = nullptr;
+    }
     return 0;
 }

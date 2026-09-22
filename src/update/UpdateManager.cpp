@@ -22,7 +22,7 @@ namespace miyoofin {
 // updateStatusText
 // -------------------------------------------------------------------
 
-std::string updateStatusText(const UpdateSnapshot &snap)
+std::string updateStatusText(const UpdateSnapshot& snap)
 {
     switch (snap.stage) {
     case UpdateStage::Idle:
@@ -51,8 +51,7 @@ std::string updateStatusText(const UpdateSnapshot &snap)
 // updateCheckErrorMessage
 // -------------------------------------------------------------------
 
-std::string updateCheckErrorMessage(long httpCode,
-                                    const std::string &transportError)
+std::string updateCheckErrorMessage(long httpCode, const std::string& transportError)
 {
     if (httpCode == 404)
         return "no published release yet";
@@ -67,9 +66,9 @@ std::string updateCheckErrorMessage(long httpCode,
 // Dev-override helpers (pure, testable without I/O)
 // -------------------------------------------------------------------
 
-ManifestSource resolveManifestSource(const std::string &envValue,
-                                     const std::string &devFileContents,
-                                     const std::string &defaultUrl)
+ManifestSource resolveManifestSource(const std::string& envValue,
+                                     const std::string& devFileContents,
+                                     const std::string& defaultUrl)
 {
     // Priority 1: MIYOOFIN_UPDATE_URL env var (non-empty)
     if (!envValue.empty())
@@ -82,10 +81,12 @@ ManifestSource resolveManifestSource(const std::string &envValue,
         while (std::getline(ss, line)) {
             // Trim leading/trailing whitespace
             auto start = line.find_first_not_of(" \t\r\n");
-            if (start == std::string::npos) continue;
+            if (start == std::string::npos)
+                continue;
             auto end = line.find_last_not_of(" \t\r\n");
             std::string trimmed = line.substr(start, end - start + 1);
-            if (trimmed.empty() || trimmed[0] == '#') continue;
+            if (trimmed.empty() || trimmed[0] == '#')
+                continue;
             return {trimmed, true};
         }
     }
@@ -94,15 +95,17 @@ ManifestSource resolveManifestSource(const std::string &envValue,
     return {defaultUrl, false};
 }
 
-bool isLocalAsset(const std::string &url)
+bool isLocalAsset(const std::string& url)
 {
-    if (url.empty()) return false;
-    if (url.compare(0, 7, "file://") == 0) return true;
+    if (url.empty())
+        return false;
+    if (url.compare(0, 7, "file://") == 0)
+        return true;
     // Plain absolute path
     return url[0] == '/';
 }
 
-std::string localAssetPath(const std::string &url)
+std::string localAssetPath(const std::string& url)
 {
     if (url.compare(0, 7, "file://") == 0)
         return url.substr(7);
@@ -113,14 +116,12 @@ std::string localAssetPath(const std::string &url)
 // UpdateManager
 // -------------------------------------------------------------------
 
-static const char *MANIFEST_URL =
+static const char* MANIFEST_URL =
     "https://github.com/S3ggie/MiyooFin/releases/latest/download/manifest.json";
 
 UpdateManager::UpdateManager(std::string appDir)
-    : m_appDir(std::move(appDir))
-    , m_enabled(!m_appDir.empty())
-{
-}
+    : m_appDir(std::move(appDir)), m_enabled(!m_appDir.empty())
+{}
 
 UpdateManager::~UpdateManager()
 {
@@ -150,7 +151,7 @@ void UpdateManager::setStage(UpdateStage stage)
         m_snapshot.percent = 0;
 }
 
-void UpdateManager::setError(const std::string &msg)
+void UpdateManager::setError(const std::string& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_snapshot.stage = UpdateStage::Error;
@@ -227,10 +228,12 @@ bool UpdateManager::pollDone()
 void UpdateManager::workerRun()
 {
     // RAII guard: always clear running + set done on exit.
-    struct RunningGuard {
-        std::atomic<bool> &running;
-        std::atomic<bool> &done;
-        ~RunningGuard() {
+    struct RunningGuard
+    {
+        std::atomic<bool>& running;
+        std::atomic<bool>& done;
+        ~RunningGuard()
+        {
             running.store(false, std::memory_order_release);
             done.store(true, std::memory_order_release);
         }
@@ -241,8 +244,9 @@ void UpdateManager::workerRun()
     // ---------------------------------------------------------------
     std::string envUrl;
     {
-        const char *v = std::getenv("MIYOOFIN_UPDATE_URL");
-        if (v) envUrl = v;
+        const char* v = std::getenv("MIYOOFIN_UPDATE_URL");
+        if (v)
+            envUrl = v;
     }
 
     std::string devFileContents;
@@ -250,14 +254,12 @@ void UpdateManager::workerRun()
         std::string devPath = m_appDir + "/update-dev-url.txt";
         std::ifstream ifs(devPath);
         if (ifs.is_open()) {
-            devFileContents.assign(
-                (std::istreambuf_iterator<char>(ifs)),
-                std::istreambuf_iterator<char>());
+            devFileContents.assign((std::istreambuf_iterator<char>(ifs)),
+                                   std::istreambuf_iterator<char>());
         }
     }
 
-    ManifestSource src = resolveManifestSource(
-        envUrl, devFileContents, MANIFEST_URL);
+    ManifestSource src = resolveManifestSource(envUrl, devFileContents, MANIFEST_URL);
     m_devOverride = src.devOverride;
 
     // ---------------------------------------------------------------
@@ -265,7 +267,10 @@ void UpdateManager::workerRun()
     // ---------------------------------------------------------------
     setStage(UpdateStage::Checking);
 
-    if (isCancelled()) { setError("cancelled"); return; }
+    if (isCancelled()) {
+        setError("cancelled");
+        return;
+    }
 
     std::string body;
 
@@ -277,8 +282,7 @@ void UpdateManager::workerRun()
             setError("manifest not found");
             return;
         }
-        body.assign((std::istreambuf_iterator<char>(ifs)),
-                     std::istreambuf_iterator<char>());
+        body.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     } else {
         HttpClient client;
         client.setTimeoutSec(10);
@@ -298,7 +302,10 @@ void UpdateManager::workerRun()
         return;
     }
 
-    if (isCancelled()) { setError("cancelled"); return; }
+    if (isCancelled()) {
+        setError("cancelled");
+        return;
+    }
 
     // ---------------------------------------------------------------
     // Step 2: Compare versions
@@ -313,8 +320,7 @@ void UpdateManager::workerRun()
     }
 
     // Check minVersion: if current < minVersion, the user must update stepwise.
-    if (!manifest.minVersion.empty() &&
-        isNewerThan(manifest.minVersion, VERSION_STR)) {
+    if (!manifest.minVersion.empty() && isNewerThan(manifest.minVersion, VERSION_STR)) {
         setError("please update stepwise");
         return;
     }
@@ -328,11 +334,13 @@ void UpdateManager::workerRun()
         m_snapshot.availableVersion = manifest.version;
     }
 
-    while (!m_confirmInstall.load(std::memory_order_acquire) &&
-           !isCancelled()) {
+    while (!m_confirmInstall.load(std::memory_order_acquire) && !isCancelled()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (isCancelled()) { setError("cancelled"); return; }
+    if (isCancelled()) {
+        setError("cancelled");
+        return;
+    }
     m_confirmInstall.store(false, std::memory_order_release);
 
     // ---------------------------------------------------------------
@@ -345,15 +353,13 @@ void UpdateManager::workerRun()
 
     // Key .part file by target version so a different release's partial
     // is never resumed (minor).
-    std::string partPath = downloadDir + "/MiyooFin-" +
-                           manifest.version + ".tar.gz.part";
+    std::string partPath = downloadDir + "/MiyooFin-" + manifest.version + ".tar.gz.part";
 
     // Free-space pre-check: require the download size plus ~8 MiB slack.
     {
         struct statvfs vfs;
         if (statvfs(m_appDir.c_str(), &vfs) == 0) {
-            std::uint64_t freeBytes =
-                static_cast<std::uint64_t>(vfs.f_bsize) * vfs.f_bavail;
+            std::uint64_t freeBytes = static_cast<std::uint64_t>(vfs.f_bsize) * vfs.f_bavail;
             if (freeBytes < manifest.tarGz.size + 8ULL * 1024 * 1024) {
                 setError("disk full");
                 return;
@@ -403,7 +409,10 @@ void UpdateManager::workerRun()
     if (!downloaded) {
         // Up to 3 attempts with cancellable 1s/2s/4s backoff.
         for (int attempt = 0; attempt < 3; ++attempt) {
-            if (isCancelled()) { setError("cancelled"); return; }
+            if (isCancelled()) {
+                setError("cancelled");
+                return;
+            }
 
             std::string dlError;
             HttpClient dlClient;
@@ -414,10 +423,8 @@ void UpdateManager::workerRun()
             std::uint64_t bytesReceived = 0;
 
             bool ok = dlClient.downloadToFile(
-                manifest.tarGz.url, {}, partPath, dlError,
-                &bytesReceived,
-            [this, resumeFrom, totalSize](
-                std::uint64_t received, std::uint64_t /*total*/) {
+                manifest.tarGz.url, {}, partPath, dlError, &bytesReceived,
+                [this, resumeFrom, totalSize](std::uint64_t received, std::uint64_t /*total*/) {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     m_snapshot.bytesReceived = resumeFrom + received;
                     // Use the known total size from the manifest for
@@ -425,18 +432,22 @@ void UpdateManager::workerRun()
                     // which is the remaining portion on resume (minor).
                     m_snapshot.bytesTotal = totalSize;
                     if (m_snapshot.bytesTotal > 0) {
-                        m_snapshot.percent = static_cast<int>(
-                            m_snapshot.bytesReceived * 100 /
-                            m_snapshot.bytesTotal);
+                        m_snapshot.percent = static_cast<int>(m_snapshot.bytesReceived * 100 /
+                                                              m_snapshot.bytesTotal);
                         if (m_snapshot.percent > 100)
                             m_snapshot.percent = 100;
                     }
                 },
-                &m_cancelled,
-                300, 15, resumeFrom);
+                &m_cancelled, 300, 15, resumeFrom);
 
-            if (ok) { downloaded = true; break; }
-            if (isCancelled()) { setError("cancelled"); return; }
+            if (ok) {
+                downloaded = true;
+                break;
+            }
+            if (isCancelled()) {
+                setError("cancelled");
+                return;
+            }
 
             // M4: Treat HTTP 416 (Range Not Satisfiable) as "already
             // complete" — the .part file was fully downloaded.
@@ -477,7 +488,10 @@ void UpdateManager::workerRun()
         std::string shaHex;
         std::string shaError;
         if (!sha256File(partPath, shaHex, shaError, &m_cancelled)) {
-            if (isCancelled()) { setError("cancelled"); return; }
+            if (isCancelled()) {
+                setError("cancelled");
+                return;
+            }
             setError("verification failed");
             return;
         }
@@ -500,7 +514,10 @@ void UpdateManager::workerRun()
         }
     }
 
-    if (isCancelled()) { setError("cancelled"); return; }
+    if (isCancelled()) {
+        setError("cancelled");
+        return;
+    }
 
     // ---------------------------------------------------------------
     // Step 6: Install
@@ -509,13 +526,11 @@ void UpdateManager::workerRun()
 
     {
         std::string installError;
-        bool ok = installUpdate(
-            m_appDir, partPath, manifest.version, installError,
-            &m_cancelled,
-            [this](int pct) {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_snapshot.percent = pct;
-            });
+        bool ok = installUpdate(m_appDir, partPath, manifest.version, installError, &m_cancelled,
+                                [this](int pct) {
+                                    std::lock_guard<std::mutex> lock(m_mutex);
+                                    m_snapshot.percent = pct;
+                                });
         if (!ok) {
             // M5: If installUpdate failed, the error is a real failure
             // (it already rolled back).  Propagate the detail (minor).

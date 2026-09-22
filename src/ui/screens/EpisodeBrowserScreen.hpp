@@ -23,60 +23,88 @@ namespace miyoofin {
 /// Screen displaying episodes for a selected season, fetched from Jellyfin.
 /// Two-panel layout: left = scrollable text list, right = placeholder
 /// thumbnail + metadata + overview + Play/Download buttons.
-class EpisodeBrowserScreen : public Screen {
-public:
-    EpisodeBrowserScreen(const Session &session,
-                         const MediaItem &series,
-                         const MediaItem &season,
-                         const std::string &initialEpisodeId = "", std::shared_ptr<DownloadManager> downloads={}, bool networkOffline=false,
-                          bool downloadedOnly=false,
-                         std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={},
-                         std::shared_ptr<library::LibraryQuery> libraryQuery={});
+class EpisodeBrowserScreen : public Screen
+{
+  public:
+    EpisodeBrowserScreen(const Session& session, const MediaItem& series, const MediaItem& season,
+                         const std::string& initialEpisodeId = "",
+                         std::shared_ptr<DownloadManager> downloads = {},
+                         bool networkOffline = false, bool downloadedOnly = false,
+                         std::shared_ptr<library::LibraryCoordinator> libraryCoordinator = {},
+                         std::shared_ptr<library::LibraryQuery> libraryQuery = {});
     ~EpisodeBrowserScreen() override;
 
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
-    void render(SDL_Surface *fb) override;
-    const char *diagnosticName() const override { return "EpisodeBrowserScreen"; }
-    bool deferDestruction() const override { return true; }
+    void render(SDL_Surface* fb) override;
+    const char* diagnosticName() const override
+    {
+        return "EpisodeBrowserScreen";
+    }
+    bool deferDestruction() const override
+    {
+        return true;
+    }
 
     /// Find the index of an episode by its ID in a list.
     /// Returns -1 if not found.  (Public for testing.)
-    static int findEpisodeIndex(const std::vector<MediaItem> &episodes,
-                                const std::string &episodeId);
+    static int findEpisodeIndex(const std::vector<MediaItem>& episodes,
+                                const std::string& episodeId);
 
     static constexpr int LIST_VISIBLE = 22;
 
     /// Return the selected index first, then the visible viewport nearest to
     /// it, excluding unavailable indices.
     static int nextPrefetchIndex(int selected, int listScroll, int total,
-                                 const std::set<int> &unavailable);
+                                 const std::set<int>& unavailable);
 
     /// A request invalidated by a newer selection must not be treated as a
     /// failed artwork key.  Public for focused worker-policy tests.
-    static bool artworkRequestCancelled(bool cancellationRequested,
-                                        std::uint64_t requestGeneration,
+    static bool artworkRequestCancelled(bool cancellationRequested, std::uint64_t requestGeneration,
                                         std::uint64_t currentGeneration);
     static bool shouldMarkArtworkFailed(bool success, bool cancelled);
 
     /// Advance the deterministic post-playback resume countdown.
     /// Returns true exactly when the caller should resume prefetching.
-    static bool advancePrefetchResume(bool &pending, int &delayUpdates);
-    static constexpr bool hasSeparateDownloadActions() { return true; }
-    bool diagnosticEpisodesReady() const { return !m_episodes.empty(); }
-    const std::vector<MediaItem> &diagnosticEpisodes() const { return m_episodes; }
+    static bool advancePrefetchResume(bool& pending, int& delayUpdates);
+    static constexpr bool hasSeparateDownloadActions()
+    {
+        return true;
+    }
+    bool diagnosticEpisodesReady() const
+    {
+        return !m_episodes.empty();
+    }
+    const std::vector<MediaItem>& diagnosticEpisodes() const
+    {
+        return m_episodes;
+    }
 
-private:
-    enum class LoadState { Loading, Ready, Error };
+  private:
+    enum class LoadState
+    {
+        Loading,
+        Ready,
+        Error
+    };
 
     /// Which UI area currently holds input focus.
-    enum class FocusArea { EpisodeList, ActionButtons };
+    enum class FocusArea
+    {
+        EpisodeList,
+        ActionButtons
+    };
 
     /// Which action button is focused (only meaningful when
     /// focus == ActionButtons).
-    enum class ActionButton { Play, DownloadEpisode, DownloadSeason };
+    enum class ActionButton
+    {
+        Play,
+        DownloadEpisode,
+        DownloadSeason
+    };
 
     /// Fetch episodes from the server.  Called on first enter() and
     /// on retry from Error state.
@@ -102,19 +130,21 @@ private:
     // ----- Artwork worker types -----
 
     /// Immutable job description copied to the background worker.
-    struct ArtworkJob {
+    struct ArtworkJob
+    {
         std::string itemId;
         std::string imageTag;
-        std::string artworkKey;   ///< Stable identity key for completion matching
-        int         width  = 288;
-        int         height = 162;
+        std::string artworkKey; ///< Stable identity key for completion matching
+        int width = 288;
+        int height = 162;
     };
 
     /// Completion signal published by the artwork worker.
-    struct ArtworkCompletion {
+    struct ArtworkCompletion
+    {
         std::string artworkKey;
         DecodedImage image;
-        bool        success = false;
+        bool success = false;
     };
 
     /// Background artwork download worker loop (runs on worker thread).
@@ -123,78 +153,87 @@ private:
     /// Publish current selection to the worker and wake it to recompute.
     void wakeArtworkWorker();
 
-    struct PreparedArtwork {
-        SDL_Surface *surface = nullptr;
+    struct PreparedArtwork
+    {
+        SDL_Surface* surface = nullptr;
         int x = 0;
         int y = 0;
     };
-    static PreparedArtwork prepareArtworkSurface(const DecodedImage &image);
-    static void freePreparedArtwork(PreparedArtwork &artwork);
+    static PreparedArtwork prepareArtworkSurface(const DecodedImage& image);
+    static void freePreparedArtwork(PreparedArtwork& artwork);
 
     // ----- Data -----
-    Session       m_session;
-    MediaItem     m_series;
-    MediaItem     m_season;
-    std::string   m_initialEpisodeId;
+    Session m_session;
+    MediaItem m_series;
+    MediaItem m_season;
+    std::string m_initialEpisodeId;
     std::vector<MediaItem> m_episodes;
     std::shared_ptr<DownloadManager> m_downloads;
     std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
-    bool m_networkOffline=false, m_downloadedOnly=false; std::uint64_t m_planId=0; bool m_confirmDownload=false, m_planIsSeason=false;
-    LoadState     m_loadState = LoadState::Loading;
-    std::string   m_error;
-    std::thread m_fetchThread; std::mutex m_fetchMutex; bool m_fetchDone=false, m_fetchOk=false, m_cachedEpisodesDone=false; std::vector<MediaItem> m_fetchEpisodes, m_cachedEpisodes; std::string m_fetchError; std::atomic<bool> m_fetchCancelled{false};
-    std::shared_ptr<std::atomic_bool> m_catalogCancellation = std::make_shared<std::atomic_bool>(false);
+    bool m_networkOffline = false, m_downloadedOnly = false;
+    std::uint64_t m_planId = 0;
+    bool m_confirmDownload = false, m_planIsSeason = false;
+    LoadState m_loadState = LoadState::Loading;
+    std::string m_error;
+    std::thread m_fetchThread;
+    std::mutex m_fetchMutex;
+    bool m_fetchDone = false, m_fetchOk = false, m_cachedEpisodesDone = false;
+    std::vector<MediaItem> m_fetchEpisodes, m_cachedEpisodes;
+    std::string m_fetchError;
+    std::atomic<bool> m_fetchCancelled{false};
+    std::shared_ptr<std::atomic_bool> m_catalogCancellation =
+        std::make_shared<std::atomic_bool>(false);
 
     // ----- Navigation state -----
-    int           m_selectedEpisode = 0;
-    int           m_listScroll = 0;       // index of first visible row
-    int           m_overviewScroll = 0;   // first visible wrapped line
+    int m_selectedEpisode = 0;
+    int m_listScroll = 0;     // index of first visible row
+    int m_overviewScroll = 0; // first visible wrapped line
 
     // ----- Focus state -----
-    FocusArea     m_focus = FocusArea::EpisodeList;
-    ActionButton  m_actionBtn = ActionButton::Play;
+    FocusArea m_focus = FocusArea::EpisodeList;
+    ActionButton m_actionBtn = ActionButton::Play;
 
     // ----- Selected-episode artwork (B5g1a: non-blocking) -----
-    DecodedImage  m_episodeArtwork;
+    DecodedImage m_episodeArtwork;
     PreparedArtwork m_episodeArtworkSurface;
-    std::string   m_episodeArtworkKey;
+    std::string m_episodeArtworkKey;
 
     // ----- Artwork worker state (B5g1b) -----
-    std::thread              m_workerThread;
-    std::mutex               m_workerMutex;
-    std::condition_variable  m_workerCv;
-    bool                     m_workerStop = false;
-    std::atomic<bool>        m_workerCancelled{false};
-    std::atomic<bool>        m_shutdownSignalled{false};
+    std::thread m_workerThread;
+    std::mutex m_workerMutex;
+    std::condition_variable m_workerCv;
+    bool m_workerStop = false;
+    std::atomic<bool> m_workerCancelled{false};
+    std::atomic<bool> m_shutdownSignalled{false};
 
     /// Immutable per-episode job data, rebuilt after fetchEpisodes().
-    std::vector<ArtworkJob>  m_artworkJobs;
-    int                      m_workerSelected = 0;
-    int                      m_workerListScroll = 0;
-    std::uint64_t            m_workerGeneration = 0;
-    bool                     m_workerPaused = false;
+    std::vector<ArtworkJob> m_artworkJobs;
+    int m_workerSelected = 0;
+    int m_workerListScroll = 0;
+    std::uint64_t m_workerGeneration = 0;
+    bool m_workerPaused = false;
 
     // Main-thread-only playback return bookkeeping.  App performs exactly
     // one update between requesting playback and entering external playback.
-    bool                     m_prefetchResumePending = false;
-    int                      m_prefetchResumeDelayUpdates = 0;
-    std::string              m_playbackEpisodeId;
+    bool m_prefetchResumePending = false;
+    int m_prefetchResumeDelayUpdates = 0;
+    std::string m_playbackEpisodeId;
 
     /// Key of the job currently being executed by the worker.
     /// Prevents duplicate submissions for the same artwork key.
-    std::string              m_workerInProgressKey;
+    std::string m_workerInProgressKey;
 
     /// Latest completion signal (consumed once by main thread).
-    ArtworkCompletion        m_workerCompletion;
-    bool                     m_workerHasCompletion = false;
-    std::string              m_workerDecodedKey;
+    ArtworkCompletion m_workerCompletion;
+    bool m_workerHasCompletion = false;
+    std::string m_workerDecodedKey;
 
     /// Artwork keys that failed download; guarded by m_workerMutex.
-    std::set<std::string>    m_failedKeys;
+    std::set<std::string> m_failedKeys;
 
     // ----- Initial episode focus (B5e3b) -----
-    bool          m_initialSelectionApplied = false;
+    bool m_initialSelectionApplied = false;
 };
 
 } // namespace miyoofin

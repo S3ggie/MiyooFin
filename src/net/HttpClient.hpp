@@ -16,37 +16,43 @@ using DownloadProgress = std::function<void(std::uint64_t received, std::uint64_
 /// Result of a single HTTP request. The HTTP status code is always
 /// reported even for error responses so callers can distinguish
 /// transport failures from HTTP-level failures (401, 403, 500, ...).
-struct HttpResponse {
-    long         status = 0;   ///< HTTP status code (0 if transport error)
-    int          transportCode = 0; ///< CURLcode when status is unavailable
-    std::string  body;         ///< Response body (may be empty)
-    bool         ok() const { return status >= 200 && status < 300; }
+struct HttpResponse
+{
+    long status = 0;       ///< HTTP status code (0 if transport error)
+    int transportCode = 0; ///< CURLcode when status is unavailable
+    std::string body;      ///< Response body (may be empty)
+    bool ok() const
+    {
+        return status >= 200 && status < 300;
+    }
 };
 
 /// Result of a binary HTTP request (e.g. image download).
-struct BinaryHttpResponse {
-    long                    status = 0;   ///< HTTP status code (0 if transport error)
-    int                     transportCode = 0; ///< CURLcode when status is unavailable
-    std::vector<unsigned char> data;      ///< Raw response bytes
-    bool                    truncated = false;  ///< true if response exceeded max size
-    bool ok() const { return status >= 200 && status < 300 && !truncated; }
+struct BinaryHttpResponse
+{
+    long status = 0;                 ///< HTTP status code (0 if transport error)
+    int transportCode = 0;           ///< CURLcode when status is unavailable
+    std::vector<unsigned char> data; ///< Raw response bytes
+    bool truncated = false;          ///< true if response exceeded max size
+    bool ok() const
+    {
+        return status >= 200 && status < 300 && !truncated;
+    }
 };
 
 /// Minimal synchronous HTTP client wrapping libcurl.
 /// Supports GET and POST with optional custom headers and a JSON body.
-class HttpClient {
-public:
+class HttpClient
+{
+  public:
     HttpClient();
     ~HttpClient();
-    HttpClient(const HttpClient &) = delete;
-    HttpClient &operator=(const HttpClient &) = delete;
+    HttpClient(const HttpClient&) = delete;
+    HttpClient& operator=(const HttpClient&) = delete;
 
     /// Perform a GET request.
     /// @return true if the HTTP status code is 200 and the body is non-empty.
-    bool get(const std::string &url,
-             std::string &responseBody,
-             long &httpCode,
-             std::string &error);
+    bool get(const std::string& url, std::string& responseBody, long& httpCode, std::string& error);
 
     /// Perform a POST request with the given headers and body.
     /// @param url          Full URL to fetch.
@@ -55,11 +61,8 @@ public:
     /// @param response     Output: status + body (populated on any HTTP response).
     /// @param error        Output: human-readable error on transport failure.
     /// @return true if the request completed at the HTTP level (any status).
-    bool post(const std::string &url,
-              const std::vector<std::string> &headers,
-              const std::string &postBody,
-              HttpResponse &response,
-              std::string &error);
+    bool post(const std::string& url, const std::vector<std::string>& headers,
+              const std::string& postBody, HttpResponse& response, std::string& error);
 
     /// Perform a binary GET request.  The response body is stored as
     /// raw bytes.  If the response exceeds maxSize bytes the transfer
@@ -70,24 +73,18 @@ public:
     /// @param error        Output: human-readable error on transport failure.
     /// @param maxSize      Maximum allowed response size in bytes (default 2 MB).
     /// @return true if the request completed at the HTTP level.
-    bool getBinary(const std::string &url,
-                   const std::vector<std::string> &headers,
-                   BinaryHttpResponse &response,
-                   std::string &error,
-                   size_t maxSize = 2 * 1024 * 1024,
-                   const std::atomic<bool> *cancelled = nullptr);
+    bool getBinary(const std::string& url, const std::vector<std::string>& headers,
+                   BinaryHttpResponse& response, std::string& error,
+                   size_t maxSize = 2 * 1024 * 1024, const std::atomic<bool>* cancelled = nullptr);
 
     /// Low-level request. Performs the given HTTP method with optional
     /// headers and body. On success (HTTP request completed) returns true
     /// and fills `response.status`/`response.body` regardless of status.
     /// On transport failure returns false and sets `error`.
-    bool perform(const std::string &method,
-                 const std::string &url,
-                 const std::vector<std::string> &headers,
-                 const std::string &postBody,
-                 HttpResponse &response,
-                 std::string &error,
-                 const std::atomic<bool> *cancelled = nullptr);
+    bool perform(const std::string& method, const std::string& url,
+                 const std::vector<std::string>& headers, const std::string& postBody,
+                 HttpResponse& response, std::string& error,
+                 const std::atomic<bool>* cancelled = nullptr);
 
     /// Download a URL directly to a file, streaming through disk.
     ///
@@ -101,25 +98,26 @@ public:
     ///
     /// Never retries internally; the caller is responsible for retry loops.
     /// Must NOT be called from the SDL thread.
-    bool downloadToFile(const std::string &url,
-                        const std::vector<std::string> &headers,
-                        const std::string &destTmpPath,
-                        std::string &error,
-                        std::uint64_t *outBytes = nullptr,
-                        DownloadProgress progress = {},
-                        const std::atomic<bool> *cancelled = nullptr,
-                        long timeoutSec = 300,
-                        long connectTimeoutSec = 15,
-                        std::uint64_t resumeFrom = 0);
+    bool downloadToFile(const std::string& url, const std::vector<std::string>& headers,
+                        const std::string& destTmpPath, std::string& error,
+                        std::uint64_t* outBytes = nullptr, DownloadProgress progress = {},
+                        const std::atomic<bool>* cancelled = nullptr, long timeoutSec = 300,
+                        long connectTimeoutSec = 15, std::uint64_t resumeFrom = 0);
 
     /// Set request timeout in seconds (default 5).
-    void setTimeoutSec(long sec) { m_timeoutSec = sec; }
-    void setConnectTimeoutSec(long sec) { m_connectTimeoutSec = sec; }
+    void setTimeoutSec(long sec)
+    {
+        m_timeoutSec = sec;
+    }
+    void setConnectTimeoutSec(long sec)
+    {
+        m_connectTimeoutSec = sec;
+    }
 
-private:
+  private:
     long m_timeoutSec = 5;
     long m_connectTimeoutSec = 5;
-    CURL *m_curl = nullptr;
+    CURL* m_curl = nullptr;
 };
 
 } // namespace miyoofin

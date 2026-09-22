@@ -6,7 +6,8 @@
 namespace miyoofin {
 
 /// Semantic version triple with optional prerelease identifier.
-struct SemVer {
+struct SemVer
+{
     int major = 0;
     int minor = 0;
     int patch = 0;
@@ -17,7 +18,7 @@ struct SemVer {
 /// Strips a leading `v` or `=`, requires X.Y.Z numeric core, optional
 /// `-prerelease` and ignored `+build` metadata.  Returns false on malformed
 /// input.
-bool parseSemVer(const std::string &in, SemVer &out);
+bool parseSemVer(const std::string& in, SemVer& out);
 
 /// Compare two parsed SemVer values.
 ///   - Numeric triple compared first.
@@ -26,11 +27,11 @@ bool parseSemVer(const std::string &in, SemVer &out);
 ///     identifiers compared numerically (and numerics sort less than
 ///     alphanumerics), otherwise lexicographic.
 /// Returns -1, 0, or +1.
-int compareSemVer(const SemVer &a, const SemVer &b);
+int compareSemVer(const SemVer& a, const SemVer& b);
 
 /// Convenience: returns true only when both versions parse and candidate > current.
 /// Malformed input -> false.
-bool isNewerThan(const std::string &candidate, const std::string &current);
+bool isNewerThan(const std::string& candidate, const std::string& current);
 
 } // namespace miyoofin
 

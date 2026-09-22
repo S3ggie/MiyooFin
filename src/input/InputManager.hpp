@@ -10,31 +10,35 @@
 namespace miyoofin {
 
 /// Stores a single input event for the diagnostics log.
-struct RawEvent {
-    Uint32      timestamp;   // SDL_GetTicks() when captured
-    Uint32      eventType;   // SDL event type
-    bool        isDown;      // true = key down / button down, false = up
-    SDL_Keycode keycode;     // SDL virtual key code (0 for joystick)
-    SDL_Scancode scancode;   // SDL physical scancode (0 for joystick)
-    Uint8       button;      // controller / joystick button index (0 for keyboard)
-    Sint32      axis;        // axis index (for joystick axis events)
-    Sint16      axisValue;   // axis value
-    Action      action;      // the tentative mapped action
+struct RawEvent
+{
+    Uint32 timestamp;      // SDL_GetTicks() when captured
+    Uint32 eventType;      // SDL event type
+    bool isDown;           // true = key down / button down, false = up
+    SDL_Keycode keycode;   // SDL virtual key code (0 for joystick)
+    SDL_Scancode scancode; // SDL physical scancode (0 for joystick)
+    Uint8 button;          // controller / joystick button index (0 for keyboard)
+    Sint32 axis;           // axis index (for joystick axis events)
+    Sint16 axisValue;      // axis value
+    Action action;         // the tentative mapped action
 };
 
-struct PointerClick {
+struct PointerClick
+{
     int x;
     int y;
 };
 
 /// InputManager reads SDL events and converts them to logical actions.
 /// It also keeps a log of raw events for the diagnostics screen.
-class InputManager {
-public:
+class InputManager
+{
+  public:
     static constexpr Uint32 DPAD_REPEAT_INITIAL_DELAY_MS = 300;
     static constexpr Uint32 DPAD_REPEAT_INTERVAL_MS = 90;
 
-    struct DpadRepeatState {
+    struct DpadRepeatState
+    {
         bool held = false;
         Action action = Action::None;
         Uint32 nextRepeatAt = 0;
@@ -53,10 +57,14 @@ public:
     void resume();
 
     /// Access the raw event log (most recent events).
-    const std::vector<RawEvent>& rawLog() const { return m_rawLog; }
+    const std::vector<RawEvent>& rawLog() const
+    {
+        return m_rawLog;
+    }
 
     /// Left-clicks captured during the most recent poll, in window pixels.
-    const std::vector<PointerClick>& pointerClicks() const {
+    const std::vector<PointerClick>& pointerClicks() const
+    {
         return m_pointerClicks;
     }
 
@@ -64,50 +72,51 @@ public:
     static constexpr int MAX_LOG_ENTRIES = 50;
 
     // Pure repeat-state helpers exposed for deterministic host tests.
-    static bool isDpadRepeatAction(Action action) {
-        return action == Action::Up || action == Action::Down ||
-               action == Action::Left || action == Action::Right;
+    static bool isDpadRepeatAction(Action action)
+    {
+        return action == Action::Up || action == Action::Down || action == Action::Left ||
+               action == Action::Right;
     }
-    static bool beginDpadPress(DpadRepeatState &state, Action action,
-                               Uint32 now) {
-        if (!isDpadRepeatAction(action) || state.held) return false;
+    static bool beginDpadPress(DpadRepeatState& state, Action action, Uint32 now)
+    {
+        if (!isDpadRepeatAction(action) || state.held)
+            return false;
         state.held = true;
         state.action = action;
         state.nextRepeatAt = now + DPAD_REPEAT_INITIAL_DELAY_MS;
         return true;
     }
-    static void endDpadPress(DpadRepeatState &state) {
+    static void endDpadPress(DpadRepeatState& state)
+    {
         state.held = false;
         state.nextRepeatAt = 0;
     }
-    static bool takeDpadRepeat(DpadRepeatState &state, Uint32 now) {
-        if (!state.held ||
-            static_cast<Sint32>(now - state.nextRepeatAt) < 0)
+    static bool takeDpadRepeat(DpadRepeatState& state, Uint32 now)
+    {
+        if (!state.held || static_cast<Sint32>(now - state.nextRepeatAt) < 0)
             return false;
         const Uint32 elapsed = now - state.nextRepeatAt;
-        state.nextRepeatAt +=
-            (elapsed / DPAD_REPEAT_INTERVAL_MS + 1) *
-            DPAD_REPEAT_INTERVAL_MS;
+        state.nextRepeatAt += (elapsed / DPAD_REPEAT_INTERVAL_MS + 1) * DPAD_REPEAT_INTERVAL_MS;
         return true;
     }
-    static void resetDpadRepeatStates(
-        std::array<DpadRepeatState, 4> &states) {
-        for (auto &state : states) state = {};
+    static void resetDpadRepeatStates(std::array<DpadRepeatState, 4>& states)
+    {
+        for (auto& state : states)
+            state = {};
     }
 
-private:
+  private:
     std::vector<RawEvent> m_rawLog;
     std::vector<PointerClick> m_pointerClicks;
-    int m_joystickIndex;          // -1 if none opened
+    int m_joystickIndex; // -1 if none opened
     bool m_desktopInput = false;
     std::array<DpadRepeatState, 4> m_dpadRepeatStates;
 
     static int dpadStateIndex(SDL_Scancode scancode, bool desktopInput);
     static Action dpadAction(SDL_Scancode scancode, bool desktopInput);
 
-    void addRawEvent(Uint32 type, bool isDown,
-                     SDL_Keycode kc, SDL_Scancode sc,
-                     Uint8 btn, Action action);
+    void addRawEvent(Uint32 type, bool isDown, SDL_Keycode kc, SDL_Scancode sc, Uint8 btn,
+                     Action action);
 };
 
 } // namespace miyoofin

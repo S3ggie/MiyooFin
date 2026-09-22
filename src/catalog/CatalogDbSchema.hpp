@@ -10,7 +10,7 @@ namespace miyoofin {
 // cannot silently drift from the production database contract.
 inline constexpr std::int64_t kCatalogApplicationId = 0x4D59464E;
 
-inline constexpr std::array<const char *, 18> kCatalogSchemaStatements = {{
+inline constexpr std::array<const char*, 18> kCatalogSchemaStatements = {{
     "CREATE TABLE media_items ("
     "id TEXT PRIMARY KEY NOT NULL,"
     "kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 4),"

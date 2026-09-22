@@ -18,20 +18,21 @@
 #include <string.h>
 
 /* Linux input_event with fixed-size fields — 16 bytes on all Linux arches. */
-struct evdev_event {
-    uint64_t time;   /* struct timeval (8 bytes on 32-bit LE) */
+struct evdev_event
+{
+    uint64_t time; /* struct timeval (8 bytes on 32-bit LE) */
     uint16_t type;
     uint16_t code;
-    int32_t  value;
+    int32_t value;
 };
 
-#define EV_KEY      0x01
-#define KEY_UP      0    /* evdev: value 0 = key release */
-#define KEY_ESC     1    /* Linux keycode for SDL_SCANCODE_ESCAPE (41) */
-#define KEY_MENU    139  /* Linux keycode for KEY_MENU (fallback) */
-#define DEVICE      "/dev/input/event0"
-#define TIMEOUT_MS  1500 /* 1.5 seconds — generous bound for button release */
-#define POLL_STEP   50   /* poll in 50 ms increments */
+#define EV_KEY 0x01
+#define KEY_UP 0     /* evdev: value 0 = key release */
+#define KEY_ESC 1    /* Linux keycode for SDL_SCANCODE_ESCAPE (41) */
+#define KEY_MENU 139 /* Linux keycode for KEY_MENU (fallback) */
+#define DEVICE "/dev/input/event0"
+#define TIMEOUT_MS 1500 /* 1.5 seconds — generous bound for button release */
+#define POLL_STEP 50    /* poll in 50 ms increments */
 
 int main(void)
 {

@@ -6,4 +6,14 @@
 #include <type_traits>
 #include "cases/test_catalog_parity_sync.inc"
 #include "cases/test_catalog_parity_query.inc"
-int main(){testCatalogDbProjectionParity();testCatalogDbDownloadFallbackParity();testCatalogDbBoundedMediaPaging();testLegacyWholeFilePersistenceRetired();testCatalogDbMediaPageUpsertAndPopulation();testHomeUsesCatalogBeforeNetworkRefresh();testLibraryQueryDomainBoundary();return miyoofin_test::finish("catalog_parity_query");}
+int main()
+{
+    testCatalogDbProjectionParity();
+    testCatalogDbDownloadFallbackParity();
+    testCatalogDbBoundedMediaPaging();
+    testLegacyWholeFilePersistenceRetired();
+    testCatalogDbMediaPageUpsertAndPopulation();
+    testHomeUsesCatalogBeforeNetworkRefresh();
+    testLibraryQueryDomainBoundary();
+    return miyoofin_test::finish("catalog_parity_query");
+}

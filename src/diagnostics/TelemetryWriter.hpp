@@ -14,16 +14,16 @@ namespace miyoofin {
 
 class TelemetryWriter
 {
-public:
+  public:
     TelemetryWriter() = default;
     ~TelemetryWriter() noexcept;
 
-    TelemetryWriter(const TelemetryWriter &) = delete;
-    TelemetryWriter &operator=(const TelemetryWriter &) = delete;
+    TelemetryWriter(const TelemetryWriter&) = delete;
+    TelemetryWriter& operator=(const TelemetryWriter&) = delete;
 
-    bool open(const TelemetryConfig &config, const MftFileHeader &header);
-    bool append(const TelemetryRecord &record);
-    bool appendCatalogDbSummary(const CatalogDbSummaryRecord &record);
+    bool open(const TelemetryConfig& config, const MftFileHeader& header);
+    bool append(const TelemetryRecord& record);
+    bool appendCatalogDbSummary(const CatalogDbSummaryRecord& record);
     bool flushIfDue(uint64_t monotonicUs) noexcept;
     bool flush() noexcept;
     bool close() noexcept;
@@ -35,10 +35,10 @@ public:
     WriterErrorKind lastErrorKind() const noexcept;
     int lastErrorNumber() const noexcept;
 
-private:
+  private:
     void setError(WriterErrorKind kind, int errorNumber) noexcept;
 
-    FILE *file_ = nullptr;
+    FILE* file_ = nullptr;
     std::vector<uint8_t> buffer_;
     std::size_t buffered_ = 0;
     std::string path_;

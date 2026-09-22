@@ -11,7 +11,8 @@ constexpr std::size_t kMftFileHeaderSize = 80;
 constexpr std::size_t kMftRecordHeaderSize = 16;
 constexpr std::size_t kMftMaxRecordSize = 256;
 
-struct MftFileHeader {
+struct MftFileHeader
+{
     uint16_t schema_version = 1;
     uint32_t flags;
     uint32_t pid;
@@ -27,22 +28,17 @@ struct MftFileHeader {
     uint32_t platform_id;
 };
 
-bool encodeFileHeader(const MftFileHeader &header,
-                      uint8_t *destination,
+bool encodeFileHeader(const MftFileHeader& header, uint8_t* destination,
                       std::size_t capacity) noexcept;
 
 uint16_t encodedRecordSize(RecordType type) noexcept;
 
-bool encodeRecord(const TelemetryRecord &record,
-                  uint8_t *destination,
-                  std::size_t capacity,
-                  uint16_t &written) noexcept;
+bool encodeRecord(const TelemetryRecord& record, uint8_t* destination, std::size_t capacity,
+                  uint16_t& written) noexcept;
 
 constexpr uint16_t kMftV2CatalogDbSummarySize = 128;
 
-bool encodeCatalogDbSummaryRecord(const CatalogDbSummaryRecord &record,
-                                  uint8_t *destination,
-                                  std::size_t capacity,
-                                  uint16_t &written) noexcept;
+bool encodeCatalogDbSummaryRecord(const CatalogDbSummaryRecord& record, uint8_t* destination,
+                                  std::size_t capacity, uint16_t& written) noexcept;
 
 } // namespace miyoofin

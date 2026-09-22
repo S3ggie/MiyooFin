@@ -8,8 +8,7 @@ namespace library {
 void library::LibrarySync::startLiveEvents()
 {
     std::lock_guard<std::mutex> lock(m_liveEventMutex);
-    if (m_liveEventThread.joinable() || !m_session.valid()
-        || m_session.manualOfflineMode)
+    if (m_liveEventThread.joinable() || !m_session.valid() || m_session.manualOfflineMode)
         return;
     m_liveEventQueue = std::make_shared<JellyfinLibraryEventQueue>();
     m_liveEventCancellation = std::make_shared<std::atomic_bool>(false);
@@ -22,7 +21,7 @@ void library::LibrarySync::startLiveEvents()
     });
 }
 
-bool library::LibrarySync::takeLiveChange(JellyfinLibraryChangeBatch &batch)
+bool library::LibrarySync::takeLiveChange(JellyfinLibraryChangeBatch& batch)
 {
     std::shared_ptr<JellyfinLibraryEventQueue> queue;
     {
@@ -32,7 +31,8 @@ bool library::LibrarySync::takeLiveChange(JellyfinLibraryChangeBatch &batch)
     return queue && queue->pop(batch);
 }
 
-library::LibrarySync::Status library::LibrarySync::status() const {
+library::LibrarySync::Status library::LibrarySync::status() const
+{
     return {m_inFlight.load(), m_transactionGeneration.load(), m_success.load()};
 }
 }

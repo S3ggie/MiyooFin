@@ -14,7 +14,8 @@ void handleRemoteExitSignal(int signalNumber) noexcept
 
 void installRemoteExitSignalHandler() noexcept
 {
-    struct sigaction action {};
+    struct sigaction action
+    {};
     action.sa_handler = handleRemoteExitSignal;
     sigemptyset(&action.sa_mask);
     action.sa_flags = 0;

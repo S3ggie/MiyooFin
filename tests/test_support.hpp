@@ -71,11 +71,10 @@ namespace miyoofin_test {
 
 inline int failures = 0;
 
-inline std::string readTestBytes(const std::string &path)
+inline std::string readTestBytes(const std::string& path)
 {
     std::ifstream input(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>()};
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 // Whitespace-insensitive production-source matcher for structural tests.
@@ -87,7 +86,7 @@ inline std::string readTestBytes(const std::string &path)
 // use them only for ordering comparisons, never as offsets into the raw
 // string. Region slicing must anchor on whitespace-free tokens (function
 // signatures, comments, identifiers), which reformatting cannot alter.
-inline std::string sourceTokenString(const std::string &text)
+inline std::string sourceTokenString(const std::string& text)
 {
     std::string out;
     out.reserve(text.size());
@@ -102,10 +101,17 @@ inline std::string sourceTokenString(const std::string &text)
 // while leaving string/char literals intact (a URL such as "http://..."
 // must not start a line comment). Structural checks must run on the result:
 // comment prose mentioning an identifier can never satisfy them.
-inline std::string stripSourceComments(const std::string &text)
+inline std::string stripSourceComments(const std::string& text)
 {
     std::string out = text;
-    enum State { Code, Line, Block, Str, Chr };
+    enum State
+    {
+        Code,
+        Line,
+        Block,
+        Str,
+        Chr
+    };
     State state = Code;
     for (std::size_t i = 0; i < out.size(); ++i) {
         const char c = out[i];
@@ -127,8 +133,10 @@ inline std::string stripSourceComments(const std::string &text)
             }
             break;
         case Line:
-            if (c == '\n') state = Code;
-            else out[i] = ' ';
+            if (c == '\n')
+                state = Code;
+            else
+                out[i] = ' ';
             break;
         case Block:
             if (c == '*' && next == '/') {
@@ -140,20 +148,23 @@ inline std::string stripSourceComments(const std::string &text)
             }
             break;
         case Str:
-            if (c == '\\' && i + 1 < out.size()) ++i;
-            else if (c == '"') state = Code;
+            if (c == '\\' && i + 1 < out.size())
+                ++i;
+            else if (c == '"')
+                state = Code;
             break;
         case Chr:
-            if (c == '\\' && i + 1 < out.size()) ++i;
-            else if (c == '\'') state = Code;
+            if (c == '\\' && i + 1 < out.size())
+                ++i;
+            else if (c == '\'')
+                state = Code;
             break;
         }
     }
     return out;
 }
 
-inline bool sourceContains(const std::string &haystack,
-                           const std::string &needle)
+inline bool sourceContains(const std::string& haystack, const std::string& needle)
 {
     if (haystack.empty() || needle.empty())
         return false;
@@ -163,7 +174,7 @@ inline bool sourceContains(const std::string &haystack,
     return sourceTokenString(haystack).find(token) != std::string::npos;
 }
 
-inline bool sourceLacks(const std::string &haystack, const std::string &needle)
+inline bool sourceLacks(const std::string& haystack, const std::string& needle)
 {
     // Fail-safe: an empty/unreadable source must never satisfy an absence
     // check (otherwise the check passes vacuously when the file is missing).
@@ -174,8 +185,7 @@ inline bool sourceLacks(const std::string &haystack, const std::string &needle)
     return !sourceContains(haystack, needle);
 }
 
-inline std::size_t sourceCount(const std::string &haystack,
-                               const std::string &needle)
+inline std::size_t sourceCount(const std::string& haystack, const std::string& needle)
 {
     if (haystack.empty() || needle.empty())
         return 0;
@@ -191,8 +201,7 @@ inline std::size_t sourceCount(const std::string &haystack,
     return count;
 }
 
-inline std::size_t sourcePos(const std::string &haystack,
-                             const std::string &needle)
+inline std::size_t sourcePos(const std::string& haystack, const std::string& needle)
 {
     if (haystack.empty() || needle.empty())
         return std::string::npos;
@@ -202,8 +211,7 @@ inline std::size_t sourcePos(const std::string &haystack,
     return sourceTokenString(haystack).find(token);
 }
 
-inline std::size_t sourceRPos(const std::string &haystack,
-                              const std::string &needle)
+inline std::size_t sourceRPos(const std::string& haystack, const std::string& needle)
 {
     if (haystack.empty() || needle.empty())
         return std::string::npos;
@@ -217,19 +225,18 @@ inline std::size_t sourceRPos(const std::string &haystack,
 // anchor such as "void HomeScreen::finishFetch("), ending at the next
 // top-level function/namespace boundary. Lets a structural check pin one
 // function instead of searching the whole translation unit.
-inline std::string sourceFunction(const std::string &haystack,
-                                  const std::string &signature)
+inline std::string sourceFunction(const std::string& haystack, const std::string& signature)
 {
     const std::size_t begin = haystack.find(signature);
     if (begin == std::string::npos)
         return {};
-    static const char *const kEndMarkers[] = {
-        "\nvoid ", "\nbool ", "\nint ", "\nstatic ",
-        "\nHomeScreen::", "\nDownloadManager::", "\nCatalogDb::",
-        "\n} // namespace",
+    static const char* const kEndMarkers[] = {
+        "\nvoid ",       "\nbool ",          "\nint ",
+        "\nstatic ",     "\nHomeScreen::",   "\nDownloadManager::",
+        "\nCatalogDb::", "\n} // namespace",
     };
     std::size_t end = std::string::npos;
-    for (const char *marker : kEndMarkers) {
+    for (const char* marker : kEndMarkers) {
         const std::size_t pos = haystack.find(marker, begin + 1);
         if (pos != std::string::npos && (end == std::string::npos || pos < end))
             end = pos;
@@ -243,9 +250,8 @@ inline std::string sourceFunction(const std::string &haystack,
 // `endNeedle` after it (empty when either anchor is missing). For pinning
 // ordered regions (handler bodies, publish windows) without fixed char
 // windows that reformatting would shift.
-inline std::string sourceBetween(const std::string &haystack,
-                                 const std::string &startNeedle,
-                                 const std::string &endNeedle)
+inline std::string sourceBetween(const std::string& haystack, const std::string& startNeedle,
+                                 const std::string& endNeedle)
 {
     const std::string hay = sourceTokenString(haystack);
     const std::string start = sourceTokenString(startNeedle);
@@ -261,7 +267,7 @@ inline std::string sourceBetween(const std::string &haystack,
     return hay.substr(begin + start.size(), stop - begin - start.size());
 }
 
-inline int finish(const char *group)
+inline int finish(const char* group)
 {
     if (failures == 0) {
         std::printf("[%s] passed\n", group);
@@ -274,32 +280,31 @@ inline int finish(const char *group)
 } // namespace miyoofin_test
 
 using miyoofin_test::readTestBytes;
-using miyoofin_test::sourceTokenString;
-using miyoofin_test::stripSourceComments;
+using miyoofin_test::sourceBetween;
 using miyoofin_test::sourceContains;
-using miyoofin_test::sourceLacks;
 using miyoofin_test::sourceCount;
+using miyoofin_test::sourceFunction;
+using miyoofin_test::sourceLacks;
 using miyoofin_test::sourcePos;
 using miyoofin_test::sourceRPos;
-using miyoofin_test::sourceFunction;
-using miyoofin_test::sourceBetween;
+using miyoofin_test::sourceTokenString;
+using miyoofin_test::stripSourceComments;
 
-#define CHECK(cond) \
-    do { \
-        if (!(cond)) { \
-            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            ++miyoofin_test::failures; \
-        } \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                          \
+            ++miyoofin_test::failures;                                                             \
+        }                                                                                          \
     } while (0)
 
-#define CHECK_EQ(a, b) \
-    do { \
-        if ((a) != (b)) { \
-            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", \
-                        __FILE__, __LINE__, std::string(b).c_str(), \
-                        std::string(a).c_str()); \
-            ++miyoofin_test::failures; \
-        } \
+#define CHECK_EQ(a, b)                                                                             \
+    do {                                                                                           \
+        if ((a) != (b)) {                                                                          \
+            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", __FILE__, __LINE__,         \
+                        std::string(b).c_str(), std::string(a).c_str());                           \
+            ++miyoofin_test::failures;                                                             \
+        }                                                                                          \
     } while (0)
 
 #endif // MIYOOFIN_TEST_SUPPORT_HPP

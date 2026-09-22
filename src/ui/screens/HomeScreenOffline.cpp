@@ -9,16 +9,15 @@ void HomeScreen::prepareOfflineProjection()
     // The legacy catalog is not a runtime authority in offline mode; an empty
     // catalog lets the projection synthesize only the downloaded branches.
     OfflineCatalogSnapshot catalog;
-    OfflineLibraryProjection projection(
-        m_cachedSnapshot, catalog,
-        m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
+    OfflineLibraryProjection projection(m_cachedSnapshot, catalog,
+                                        m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
 
     m_fetchOfflineTabs = offlineTabsFromSnapshot(m_cachedSnapshot);
     m_fetchOfflineMovies.clear();
     m_fetchOfflineSnapshot = m_cachedSnapshot;
 
     // Keep the tab skeleton but defer population until media pages are fetched.
-    for (auto &tab : m_fetchOfflineTabs) {
+    for (auto& tab : m_fetchOfflineTabs) {
         if (tab.name == "Movies")
             tab.rows = {{"Movies", {}}};
         if (tab.name == "Shows")
@@ -26,11 +25,10 @@ void HomeScreen::prepareOfflineProjection()
     }
 
     // Filter each show view to items that are playable or have offline seasons.
-    for (auto &view : m_fetchOfflineSnapshot.shows) {
+    for (auto& view : m_fetchOfflineSnapshot.shows) {
         std::vector<MediaItem> filtered;
-        for (const auto &item : view.items) {
-            if (projection.playable(item.id)
-                || !projection.seasons(item.id).empty()) {
+        for (const auto& item : view.items) {
+            if (projection.playable(item.id) || !projection.seasons(item.id).empty()) {
                 filtered.push_back(item);
             }
         }
@@ -55,14 +53,15 @@ void HomeScreen::applyOfflineProjection()
     clampNavigation();
 }
 
-HomeScreen::OfflineSnapshotSignature HomeScreen::computeOfflineSignature(
-    const DownloadSnapshot &downloads, std::uint64_t catalogGeneration)
+HomeScreen::OfflineSnapshotSignature
+HomeScreen::computeOfflineSignature(const DownloadSnapshot& downloads,
+                                    std::uint64_t catalogGeneration)
 {
     OfflineSnapshotSignature sig;
     sig.localBytes = downloads.localBytes;
     sig.reservedBytes = downloads.reservedBytes;
     sig.catalogGeneration = catalogGeneration;
-    for (const auto &item : downloads.items) {
+    for (const auto& item : downloads.items) {
         if (OfflineLibraryQuery::isAvailable(item.state)) {
             sig.availableItemIds.insert(item.itemId);
             sig.totalDownloadedBytes += item.downloadedBytes;
@@ -74,16 +73,15 @@ HomeScreen::OfflineSnapshotSignature HomeScreen::computeOfflineSignature(
 
 bool HomeScreen::tryApplyCachedOfflineSnapshot()
 {
-    if (!m_haveCachedSnapshot || !m_haveOfflineSignature
-        || !m_haveOfflineSnapshotCache || !m_downloads)
+    if (!m_haveCachedSnapshot || !m_haveOfflineSignature || !m_haveOfflineSnapshotCache ||
+        !m_downloads)
         return false;
     const DownloadSnapshot downloads = m_downloads->snapshot();
     // Cheap atomic load — no database query on the UI thread.  A catalog
     // sync that changed only metadata (titles, artwork tags, playback
     // state) advances the generation, so the stale cache misses here and
     // the snapshot is rebuilt instead of showing stale metadata forever.
-    const auto sig = computeOfflineSignature(
-        downloads, committedCatalogGeneration());
+    const auto sig = computeOfflineSignature(downloads, committedCatalogGeneration());
     if (sig != m_offlineSignature)
         return false;
     // Cache hit — apply the snapshot directly on the UI thread.

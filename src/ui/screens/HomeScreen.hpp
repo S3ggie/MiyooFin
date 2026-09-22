@@ -40,17 +40,22 @@ namespace miyoofin {
 /// The main Jellyfin-style home screen with top tabs, horizontal
 /// media rows, card grid, and info panel for the selected item.
 /// Fetches real library data from the server on a background thread.
-class HomeScreen : public Screen {
-public:
-    enum class ShowsFocusState { ShowsGrid, AnimeGrid, AlphabetRail };
+class HomeScreen : public Screen
+{
+  public:
+    enum class ShowsFocusState
+    {
+        ShowsGrid,
+        AnimeGrid,
+        AlphabetRail
+    };
 
     using SettingsRowAction = HomeSettingsRowAction;
     using SettingsAddressRow = HomeSettingsAddressRow;
     using PosterJob = HomePosterJob;
-    explicit HomeScreen(const Session &session,
-                        std::shared_ptr<DownloadManager> downloads={},
-                         std::shared_ptr<library::LibraryQuery> libraryQuery={},
-                         std::shared_ptr<library::LibraryCoordinator> libraryCoordinator={});
+    explicit HomeScreen(const Session& session, std::shared_ptr<DownloadManager> downloads = {},
+                        std::shared_ptr<library::LibraryQuery> libraryQuery = {},
+                        std::shared_ptr<library::LibraryCoordinator> libraryCoordinator = {});
     ~HomeScreen() override;
 
     void enter() override;
@@ -58,11 +63,20 @@ public:
     bool handleAction(Action action) override;
     bool handlePointerClick(int x, int y) override;
     void update(Uint32 dt) override;
-    void render(SDL_Surface *fb) override;
-    const char *diagnosticName() const override { return "HomeScreen"; }
-    bool deferDestruction() const override { return true; }
-    int diagnosticActiveTab() const { return m_activeTab; }
-    const char *diagnosticTabName() const;
+    void render(SDL_Surface* fb) override;
+    const char* diagnosticName() const override
+    {
+        return "HomeScreen";
+    }
+    bool deferDestruction() const override
+    {
+        return true;
+    }
+    int diagnosticActiveTab() const
+    {
+        return m_activeTab;
+    }
+    const char* diagnosticTabName() const;
 
     static constexpr int kPosterThreads = 3;
     /// Maximum decode attempts for a cached JPEG before it receives a
@@ -70,63 +84,92 @@ public:
     /// is reset on success and is naturally fresh when the key changes
     /// (new imageTag).  Defined here so tests can reference the bound.
     static constexpr int kMaxDecodeAttempts = 3;
-    static constexpr int settingsRowCount() { return homeSettingsBaseRowCount(); }
+    static constexpr int settingsRowCount()
+    {
+        return homeSettingsBaseRowCount();
+    }
     static SettingsRowAction settingsRowAction(int row);
-    static std::vector<SettingsAddressRow> settingsAddressRows(const Session &session);
-    static int settingsRowCount(const Session &session);
-    static SettingsRowAction settingsRowAction(int row, const Session &session);
-    static const char *lastApiRouteValue();
+    static std::vector<SettingsAddressRow> settingsAddressRows(const Session& session);
+    static int settingsRowCount(const Session& session);
+    static SettingsRowAction settingsRowAction(int row, const Session& session);
+    static const char* lastApiRouteValue();
 
     /// True when the user has confirmed logout (App handles the transition).
-    bool logoutRequested() const { return m_logoutRequested; }
+    bool logoutRequested() const
+    {
+        return m_logoutRequested;
+    }
     /// True when the user has confirmed changing servers (App handles the transition).
-    bool changeServerRequested() const { return m_changeServerRequested; }
-    bool takeLocalAddressRequest() { const bool requested = m_localAddressRequested; m_localAddressRequested = false; return requested; }
-    bool takePublicAddressRequest() { const bool requested = m_publicAddressRequested; m_publicAddressRequested = false; return requested; }
-    bool updateExitRequested() const { return m_updateExitRequested; }
-    void setLocalServerUrl(const std::string &url) { m_session.localServerUrl = url; }
+    bool changeServerRequested() const
+    {
+        return m_changeServerRequested;
+    }
+    bool takeLocalAddressRequest()
+    {
+        const bool requested = m_localAddressRequested;
+        m_localAddressRequested = false;
+        return requested;
+    }
+    bool takePublicAddressRequest()
+    {
+        const bool requested = m_publicAddressRequested;
+        m_publicAddressRequested = false;
+        return requested;
+    }
+    bool updateExitRequested() const
+    {
+        return m_updateExitRequested;
+    }
+    void setLocalServerUrl(const std::string& url)
+    {
+        m_session.localServerUrl = url;
+    }
     void cancelAsyncWork() noexcept;
     void requestStopAllWorkers() noexcept;
     void joinAllWorkers();
-    void setPublicServerUrl(const std::string &url) { m_session.publicServerUrl = url; }
-    bool presentationOffline() const { return m_libraryOffline || m_session.manualOfflineMode; }
+    void setPublicServerUrl(const std::string& url)
+    {
+        m_session.publicServerUrl = url;
+    }
+    bool presentationOffline() const
+    {
+        return m_libraryOffline || m_session.manualOfflineMode;
+    }
 
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
-    static void updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items);
+    static void updateContinueWatchingRow(std::vector<TabData>& tabs,
+                                          const std::vector<MediaItem>& items);
 
     // --- Row artwork helpers (public for testing) -------------------------
 
     /// Build the row-artwork identity key for a media item.
     /// Format: "itemId:Primary:imageTag:WxH"
-    static std::string rowArtworkKey(const MediaItem &item);
-    static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot &snapshot);
+    static std::string rowArtworkKey(const MediaItem& item);
+    static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot& snapshot);
     /// Pure online Home projection; exposed to keep its cached row semantics testable.
-    static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot &snapshot);
-    static std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot &snapshot);
-    static library::MediaPage offlineMediaPage(const LibrarySnapshot &snapshot,
-                                                const std::string &type,
-                                                int alphabetLetter,
-                                                std::size_t limit,
-                                                const library::LibraryPageCursor &after = {});
+    static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot& snapshot);
+    static std::vector<TabData> offlineTabsFromSnapshot(const LibrarySnapshot& snapshot);
+    static library::MediaPage offlineMediaPage(const LibrarySnapshot& snapshot,
+                                               const std::string& type, int alphabetLetter,
+                                               std::size_t limit,
+                                               const library::LibraryPageCursor& after = {});
     /// Offline contains only locally playable libraries; Home is intentionally absent.
-    static std::vector<std::string> tabNames(const std::vector<TabData> &tabs);
+    static std::vector<std::string> tabNames(const std::vector<TabData>& tabs);
     /// Keep a named tab across a layout change, falling back to Movies.
-    static int transitionTabIndex(const std::vector<TabData> &from, int selected,
-                                  const std::vector<TabData> &to);
-    static int tabIndexAtPoint(const std::vector<TabData> &tabs, int x, int y);
-    static ShowsFocusState showsFocusAfterRefresh(ShowsFocusState previous,
-                                                   bool hasShows,
-                                                   bool hasAnime);
-    static int restoreSelectionIndex(const std::vector<MediaItem> &items,
-                                     const std::string &selectedId,
-                                     int fallback);
-    static int preserveGridScroll(int selected, int count, int currentScroll,
-                                  int columns, int rows);
+    static int transitionTabIndex(const std::vector<TabData>& from, int selected,
+                                  const std::vector<TabData>& to);
+    static int tabIndexAtPoint(const std::vector<TabData>& tabs, int x, int y);
+    static ShowsFocusState showsFocusAfterRefresh(ShowsFocusState previous, bool hasShows,
+                                                  bool hasAnime);
+    static int restoreSelectionIndex(const std::vector<MediaItem>& items,
+                                     const std::string& selectedId, int fallback);
+    static int preserveGridScroll(int selected, int count, int currentScroll, int columns,
+                                  int rows);
     /// Season posters use the exact dimensions of SeriesScreen's grid.
-    static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem> &seasons);
+    static std::vector<PosterJob> collectSeasonPosterJobs(const std::vector<MediaItem>& seasons);
     /// Canonical artwork key for deduplication: "itemId:imageType:imageTag:WxH".
-    static std::string posterJobKey(const PosterJob &job);
+    static std::string posterJobKey(const PosterJob& job);
     /// Scheduling decision: should the poster worker process this job now?
     /// High-priority jobs always run; low-priority jobs are deferred while the
     /// initial population walk is still in progress.
@@ -142,7 +185,8 @@ public:
     std::map<std::string, SDL_Surface*> m_cardSurfaceCache;
 
     // --- Offline snapshot cache (public for testing) -----------------------
-    struct OfflineSnapshotSignature {
+    struct OfflineSnapshotSignature
+    {
         std::size_t availableItemCount = 0;
         std::uint64_t totalDownloadedBytes = 0;
         std::uint64_t localBytes = 0;
@@ -151,27 +195,31 @@ public:
         // metadata (titles, artwork tags, playback state) backing the
         // snapshot.  Bumped at each top-level sync commit, so a
         // metadata-only sync cannot compare equal against an older cache.
-         // (Hierarchy-only season/episode commits are not covered.)
+        // (Hierarchy-only season/episode commits are not covered.)
         std::uint64_t catalogGeneration = 0;
         std::set<std::string> availableItemIds;
-        bool operator==(const OfflineSnapshotSignature &o) const {
-            return availableItemCount == o.availableItemCount
-                && totalDownloadedBytes == o.totalDownloadedBytes
-                && localBytes == o.localBytes
-                && reservedBytes == o.reservedBytes
-                && catalogGeneration == o.catalogGeneration
-                && availableItemIds == o.availableItemIds;
+        bool operator==(const OfflineSnapshotSignature& o) const
+        {
+            return availableItemCount == o.availableItemCount &&
+                   totalDownloadedBytes == o.totalDownloadedBytes && localBytes == o.localBytes &&
+                   reservedBytes == o.reservedBytes && catalogGeneration == o.catalogGeneration &&
+                   availableItemIds == o.availableItemIds;
         }
-        bool operator!=(const OfflineSnapshotSignature &o) const {
+        bool operator!=(const OfflineSnapshotSignature& o) const
+        {
             return !(*this == o);
         }
     };
-    static OfflineSnapshotSignature computeOfflineSignature(
-        const DownloadSnapshot &downloads,
-        std::uint64_t catalogGeneration = 0);
+    static OfflineSnapshotSignature computeOfflineSignature(const DownloadSnapshot& downloads,
+                                                            std::uint64_t catalogGeneration = 0);
 
-private:
-    enum class LoadState { Loading, Ready, Error };
+  private:
+    enum class LoadState
+    {
+        Loading,
+        Ready,
+        Error
+    };
 
     LoadState m_loadState = LoadState::Loading;
 
@@ -192,13 +240,18 @@ private:
     int m_movieActiveLetter = -1;
     int m_movieAlphabetFocus = 0;
     bool m_movieRailFocused = false;
-    enum class ShowsFocus { ShowsGrid, AnimeGrid, AlphabetRail };
+    enum class ShowsFocus
+    {
+        ShowsGrid,
+        AnimeGrid,
+        AlphabetRail
+    };
     std::vector<MediaItem> m_showWindow, m_animeWindow;
     std::set<std::string> m_animeItemIds;
     std::vector<MediaItem> m_filteredShows, m_filteredAnime;
     ShowsFocus m_showsFocus = ShowsFocus::AlphabetRail;
-    int m_showSelected=0, m_animeSelected=0, m_showScroll=0, m_animeScroll=0;
-    int m_showsAlphabetFocus=0, m_showsActiveLetter=-1;
+    int m_showSelected = 0, m_animeSelected = 0, m_showScroll = 0, m_animeScroll = 0;
+    int m_showsAlphabetFocus = 0, m_showsActiveLetter = -1;
     std::string m_moviePreviewId;
     std::string m_showsPreviewId;
 
@@ -216,7 +269,8 @@ private:
     // commits (seasons/episodes) do NOT advance this epoch.
     std::string m_userName;
 
-    struct MediaPageState {
+    struct MediaPageState
+    {
         std::string type;
         int letter = -1;
         std::vector<MediaItem> items;
@@ -235,7 +289,13 @@ private:
     bool m_logoutArmed = false;
     Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
-    enum class SettingsConfirmation { None, ChangeServer, Logout, CheckForUpdates };
+    enum class SettingsConfirmation
+    {
+        None,
+        ChangeServer,
+        Logout,
+        CheckForUpdates
+    };
     SettingsConfirmation m_settingsConfirmation = SettingsConfirmation::None;
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
@@ -267,7 +327,8 @@ private:
     bool m_fetchPostFinalizeApplied = false;
     bool m_fetchFailureRestored = false;
     std::mutex m_fetchMutex;
-    struct PendingPresentation {
+    struct PendingPresentation
+    {
         std::vector<TabData> tabs;
         LibrarySnapshot cachedSnapshot;
         LibrarySnapshot remoteSnapshot;
@@ -367,8 +428,20 @@ private:
     std::thread m_decodeThread;
     std::mutex m_decodeMutex;
     std::condition_variable m_decodeWake;
-    struct DecodeJob { std::string key; PosterJob artwork; bool shows = false; ArtworkContext context = ArtworkContext::Unknown; };
-    struct DecodeResult { std::string key; DecodedImage image; bool shows = false; bool cachePresent = false; };
+    struct DecodeJob
+    {
+        std::string key;
+        PosterJob artwork;
+        bool shows = false;
+        ArtworkContext context = ArtworkContext::Unknown;
+    };
+    struct DecodeResult
+    {
+        std::string key;
+        DecodedImage image;
+        bool shows = false;
+        bool cachePresent = false;
+    };
     std::deque<DecodeJob> m_decodeJobs;
     std::deque<DecodeResult> m_decodeResults;
     std::set<std::string> m_decodeOutstanding;
@@ -383,22 +456,21 @@ private:
     void requestFetch(Uint32 now);
     void finishFetch();
     void publishPendingPresentation(PendingPresentation presentation);
-    bool takePendingPresentation(PendingPresentation &presentation);
-    void applyPendingPresentation(const PendingPresentation &presentation);
+    bool takePendingPresentation(PendingPresentation& presentation);
+    void applyPendingPresentation(const PendingPresentation& presentation);
     void applyPresentationProjection();
     void restoreOnlinePresentation();
     void applyOfflineProjection();
     void prepareOfflineProjection();
-    void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority=false);
+    void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority = false);
     void posterWorker();
-    bool requestHierarchy(const std::vector<MediaItem> &shows,
-                          std::uint64_t generation, bool forceReconcile);
+    bool requestHierarchy(const std::vector<MediaItem>& shows, std::uint64_t generation,
+                          bool forceReconcile);
     void consumeHierarchyResults();
     std::string syncStatusText() const;
     void decodeWorker();
     void drainDecodedArtwork();
-    void submitDecode(const MediaItem &item, bool highPriority=false,
-                      bool shows=false);
+    void submitDecode(const MediaItem& item, bool highPriority = false, bool shows = false);
 
     // DownloadManager may hold its mutex while reconciling/persisting on slow
     // SD storage.  Snapshot and playback-journal reads are therefore published
@@ -432,9 +504,8 @@ private:
     std::atomic<bool> m_homeRailsReady{false};
     bool m_homeRailsApplied = false;
     void updateLiveLibraryChanges();
-    bool liveChangeAffectsHome(
-        const library::LiveLibraryChangeResult &result) const;
-    void publishLiveCatalogItems(const library::LiveLibraryChangeResult &result);
+    bool liveChangeAffectsHome(const library::LiveLibraryChangeResult& result) const;
+    void publishLiveCatalogItems(const library::LiveLibraryChangeResult& result);
     void startHomeRailRefresh();
     void finishHomeRailRefresh();
     void finishSafetyReconcile();
@@ -444,36 +515,36 @@ private:
     bool catalogScopeReady() const;
 
     // Helpers
-    const TabData &currentTab() const;
-    bool activeTabNamed(const char *name) const;
-    int tabIndex(const char *name) const;
-    const MediaRow *currentRow() const;
-    const MediaItem *currentItem() const;
+    const TabData& currentTab() const;
+    bool activeTabNamed(const char* name) const;
+    int tabIndex(const char* name) const;
+    const MediaRow* currentRow() const;
+    const MediaItem* currentItem() const;
 
     void clampNavigation();
     /// Return the label of the currently focused Home row, or "" if none.
     std::string focusedHomeRowLabel() const;
     /// Reconcile m_activeRow by row label after a Home-row mutation.
-    void restoreHomeRowFocus(const std::string &label);
+    void restoreHomeRowFocus(const std::string& label);
     void activateTab(int index);
-    void drawTabBar(SDL_Surface *fb);
-    void drawInfoPanel(SDL_Surface *fb);
-    void drawRowList(SDL_Surface *fb);
-    void drawCard(SDL_Surface *fb, int x, int y, int w, int h,
-                  const MediaItem &item, bool selected);
-    void drawPlaceholderTab(SDL_Surface *fb, const char *message);
-    void drawBottomHints(SDL_Surface *fb);
-    void drawLoadingState(SDL_Surface *fb);
-    void drawErrorState(SDL_Surface *fb);
+    void drawTabBar(SDL_Surface* fb);
+    void drawInfoPanel(SDL_Surface* fb);
+    void drawRowList(SDL_Surface* fb);
+    void drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item,
+                  bool selected);
+    void drawPlaceholderTab(SDL_Surface* fb, const char* message);
+    void drawBottomHints(SDL_Surface* fb);
+    void drawLoadingState(SDL_Surface* fb);
+    void drawErrorState(SDL_Surface* fb);
     void refreshDownloads();
     bool handleDownloadsAction(Action action);
-    void drawDownloadsTab(SDL_Surface *fb);
-    void drawSettingsTab(SDL_Surface *fb);
+    void drawDownloadsTab(SDL_Surface* fb);
+    void drawSettingsTab(SDL_Surface* fb);
 
     // Selected artwork state (B5b)
     DecodedImage m_selectedArtwork;
-    std::string  m_selectedArtworkId;      // "itemId:imageTag" identity key
-    bool         m_selectedArtworkAttempted = false;
+    std::string m_selectedArtworkId; // "itemId:imageTag" identity key
+    bool m_selectedArtworkAttempted = false;
 
     void tryLoadSelectedArtwork();
 
@@ -481,30 +552,31 @@ private:
     void tryLoadOneRowArtwork();
     void evictRowArtworkIfNeeded();
     std::set<std::string> protectedRowArtworkKeys() const;
-    void touchRowArtwork(const std::string &key);
-    void storeDecodedRowArtwork(const std::string &key, DecodedImage image);
-    void prepareCardSurface(const std::string &cacheKey, const DecodedImage &img, int boxW, int boxH);
+    void touchRowArtwork(const std::string& key);
+    void storeDecodedRowArtwork(const std::string& key, DecodedImage image);
+    void prepareCardSurface(const std::string& cacheKey, const DecodedImage& img, int boxW,
+                            int boxH);
     void freeAllCardSurfaces();
     void updateShowsDecodeWorkingSet();
-    void drawMovieGrid(SDL_Surface *fb);
-    void drawMoviePreview(SDL_Surface *fb);
-    void drawMovieAlphabetRail(SDL_Surface *fb);
+    void drawMovieGrid(SDL_Surface* fb);
+    void drawMoviePreview(SDL_Surface* fb);
+    void drawMovieAlphabetRail(SDL_Surface* fb);
     void refreshMovieFilter();
     void rebuildShowsPresentation();
     void refreshShowsFilter();
     void resetMediaPaging();
-    void requestMediaPage(MediaPageState &state);
-    void requestEarlierMediaPage(MediaPageState &state);
-    void finishMediaPage(MediaPageState &state);
-    void applyPendingDown(MediaPageState &state);
+    void requestMediaPage(MediaPageState& state);
+    void requestEarlierMediaPage(MediaPageState& state);
+    void finishMediaPage(MediaPageState& state);
+    void applyPendingDown(MediaPageState& state);
     void updateMediaPaging();
-    const MediaItem *showsSelectedItem() const;
+    const MediaItem* showsSelectedItem() const;
     void clampShowsNavigation();
-    void drawShowsGrid(SDL_Surface *fb);
-    void drawShowsPreview(SDL_Surface *fb);
-    void drawShowsAlphabetRail(SDL_Surface *fb);
+    void drawShowsGrid(SDL_Surface* fb);
+    void drawShowsPreview(SDL_Surface* fb);
+    void drawShowsAlphabetRail(SDL_Surface* fb);
     int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
-    static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView> &views);
+    static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView>& views);
 };
 
 } // namespace miyoofin

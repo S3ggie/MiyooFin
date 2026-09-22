@@ -8,8 +8,7 @@ bool PerformanceTelemetry::enabledFast() const noexcept
 {
     return m_enabled.load(std::memory_order_relaxed);
 }
-void PerformanceTelemetry::emitStateTransition(StateKind kind,
-                                               uint16_t previous,
+void PerformanceTelemetry::emitStateTransition(StateKind kind, uint16_t previous,
                                                uint16_t current) noexcept
 {
     TelemetryRecord record{};
@@ -58,7 +57,7 @@ void PerformanceTelemetry::setPlaybackState(PlaybackState state) noexcept
     if (previous != current)
         emitStateTransition(StateKind::PlaybackState, previous, current);
 }
-PerformanceTelemetry::WorkerSlot *PerformanceTelemetry::workerSlot(WorkerId worker) noexcept
+PerformanceTelemetry::WorkerSlot* PerformanceTelemetry::workerSlot(WorkerId worker) noexcept
 {
     const uint16_t value = static_cast<uint16_t>(worker);
     if (value == 0 || value > m_workerSlots.size())
@@ -69,29 +68,27 @@ void PerformanceTelemetry::setWorkerActive(WorkerId worker, bool active) noexcep
 {
     if (!enabledFast())
         return;
-    if (WorkerSlot *slot = workerSlot(worker))
+    if (WorkerSlot* slot = workerSlot(worker))
         slot->active.store(active ? 1u : 0u, std::memory_order_relaxed);
 }
 void PerformanceTelemetry::updateQueueHighwater(uint32_t depth) noexcept
 {
     uint32_t observed = m_queueHighwater.load(std::memory_order_relaxed);
-    while (depth > observed
-        && !m_queueHighwater.compare_exchange_weak(observed, depth,
-                                                    std::memory_order_relaxed,
-                                                    std::memory_order_relaxed)) {
+    while (depth > observed &&
+           !m_queueHighwater.compare_exchange_weak(observed, depth, std::memory_order_relaxed,
+                                                   std::memory_order_relaxed)) {
     }
 }
 void PerformanceTelemetry::setWorkerQueueDepth(WorkerId worker, uint32_t depth) noexcept
 {
     if (!enabledFast())
         return;
-    if (WorkerSlot *slot = workerSlot(worker)) {
+    if (WorkerSlot* slot = workerSlot(worker)) {
         slot->queueDepth.store(depth, std::memory_order_relaxed);
         uint32_t observed = slot->queueHighwater.load(std::memory_order_relaxed);
-        while (depth > observed
-            && !slot->queueHighwater.compare_exchange_weak(observed, depth,
-                                                            std::memory_order_relaxed,
-                                                            std::memory_order_relaxed)) {
+        while (depth > observed &&
+               !slot->queueHighwater.compare_exchange_weak(
+                   observed, depth, std::memory_order_relaxed, std::memory_order_relaxed)) {
         }
     }
 }
@@ -99,21 +96,21 @@ void PerformanceTelemetry::addWorkerCompleted(WorkerId worker, uint32_t count) n
 {
     if (!enabledFast())
         return;
-    if (WorkerSlot *slot = workerSlot(worker))
+    if (WorkerSlot* slot = workerSlot(worker))
         slot->completed.fetch_add(count, std::memory_order_relaxed);
 }
 void PerformanceTelemetry::addWorkerFailed(WorkerId worker, uint32_t count) noexcept
 {
     if (!enabledFast())
         return;
-    if (WorkerSlot *slot = workerSlot(worker))
+    if (WorkerSlot* slot = workerSlot(worker))
         slot->failed.fetch_add(count, std::memory_order_relaxed);
 }
 void PerformanceTelemetry::addWorkerCancelled(WorkerId worker, uint32_t count) noexcept
 {
     if (!enabledFast())
         return;
-    if (WorkerSlot *slot = workerSlot(worker))
+    if (WorkerSlot* slot = workerSlot(worker))
         slot->cancelled.fetch_add(count, std::memory_order_relaxed);
 }
 void PerformanceTelemetry::recordArtworkCacheProbe(bool hit) noexcept
@@ -155,10 +152,9 @@ void PerformanceTelemetry::recordArtworkDecode(bool success, uint64_t durationUs
     m_artworkDecodeTotalUs.fetch_add(durationUs, std::memory_order_relaxed);
     uint32_t observed = m_artworkDecodeMaxUs.load(std::memory_order_relaxed);
     const uint32_t duration = clampToUint32(durationUs);
-    while (duration > observed
-        && !m_artworkDecodeMaxUs.compare_exchange_weak(observed, duration,
-                                                        std::memory_order_relaxed,
-                                                        std::memory_order_relaxed)) {
+    while (duration > observed &&
+           !m_artworkDecodeMaxUs.compare_exchange_weak(
+               observed, duration, std::memory_order_relaxed, std::memory_order_relaxed)) {
     }
 }
 void PerformanceTelemetry::recordFramePhase(FramePhase phase, uint64_t durationUs) noexcept
@@ -166,20 +162,19 @@ void PerformanceTelemetry::recordFramePhase(FramePhase phase, uint64_t durationU
     if (!enabledFast())
         return;
     const uint8_t phaseValue = static_cast<uint8_t>(phase);
-    if (phaseValue < static_cast<uint8_t>(FramePhase::FullFrame)
-        || phaseValue > static_cast<uint8_t>(FramePhase::Present))
+    if (phaseValue < static_cast<uint8_t>(FramePhase::FullFrame) ||
+        phaseValue > static_cast<uint8_t>(FramePhase::Present))
         return;
 
-    FramePhaseAccumulator &accumulator = m_framePhases[phaseValue - 1];
+    FramePhaseAccumulator& accumulator = m_framePhases[phaseValue - 1];
     accumulator.count.fetch_add(1, std::memory_order_relaxed);
     accumulator.totalUs.fetch_add(durationUs, std::memory_order_relaxed);
     accumulator.over50Ms.fetch_add(durationUs > 50000 ? 1u : 0u, std::memory_order_relaxed);
     accumulator.over100Ms.fetch_add(durationUs > 100000 ? 1u : 0u, std::memory_order_relaxed);
     const uint32_t duration = clampToUint32(durationUs);
     uint32_t observed = accumulator.maxUs.load(std::memory_order_relaxed);
-    while (duration > observed
-        && !accumulator.maxUs.compare_exchange_weak(observed, duration,
-                                                    std::memory_order_relaxed,
+    while (duration > observed &&
+           !accumulator.maxUs.compare_exchange_weak(observed, duration, std::memory_order_relaxed,
                                                     std::memory_order_relaxed)) {
     }
 
@@ -202,8 +197,7 @@ void PerformanceTelemetry::recordFramePhase(FramePhase phase, uint64_t durationU
         histogramBin = 7;
     accumulator.histogram[histogramBin].fetch_add(1, std::memory_order_relaxed);
 }
-void PerformanceTelemetry::setDownloadGauges(uint32_t activeDownloads,
-                                             uint32_t queuedDownloads,
+void PerformanceTelemetry::setDownloadGauges(uint32_t activeDownloads, uint32_t queuedDownloads,
                                              uint32_t plannerQueueDepth) noexcept
 {
     if (!enabledFast())
@@ -235,10 +229,9 @@ void PerformanceTelemetry::setCatalogDbActive(bool active) noexcept
 void PerformanceTelemetry::updateCatalogDbQueueHighwater(uint32_t depth) noexcept
 {
     uint32_t observed = m_catalogDbQueueHighwater.load(std::memory_order_relaxed);
-    while (depth > observed
-        && !m_catalogDbQueueHighwater.compare_exchange_weak(
-               observed, depth, std::memory_order_relaxed,
-               std::memory_order_relaxed)) {
+    while (depth > observed &&
+           !m_catalogDbQueueHighwater.compare_exchange_weak(
+               observed, depth, std::memory_order_relaxed, std::memory_order_relaxed)) {
     }
 }
 void PerformanceTelemetry::setCatalogDbQueueDepth(uint32_t depth) noexcept
@@ -333,7 +326,7 @@ uint64_t PerformanceTelemetry::nextEphemeralId() noexcept
         return 0;
     return m_nextEphemeralId.fetch_add(1, std::memory_order_relaxed);
 }
-bool PerformanceTelemetry::emitRecord(const TelemetryRecord &record) noexcept
+bool PerformanceTelemetry::emitRecord(const TelemetryRecord& record) noexcept
 {
     if (!enabledFast())
         return false;
@@ -342,10 +335,8 @@ bool PerformanceTelemetry::emitRecord(const TelemetryRecord &record) noexcept
         copy.header.monotonic_us = monotonicUs();
     return enqueue(copy);
 }
-bool PerformanceTelemetry::emitSessionEvent(SessionEventKind kind,
-                                             Outcome outcome,
-                                             uint32_t value0,
-                                             uint64_t value1) noexcept
+bool PerformanceTelemetry::emitSessionEvent(SessionEventKind kind, Outcome outcome, uint32_t value0,
+                                            uint64_t value1) noexcept
 {
     if (!enabledFast())
         return false;

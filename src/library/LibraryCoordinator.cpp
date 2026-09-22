@@ -19,23 +19,19 @@ std::int64_t coordinatorWallClockMs()
     return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
 }
 
-bool coordinatorSupportedLibraryView(const miyoofin::LibraryView &view)
+bool coordinatorSupportedLibraryView(const miyoofin::LibraryView& view)
 {
-    return view.collectionType == "movies"
-        || view.collectionType == "tvshows";
+    return view.collectionType == "movies" || view.collectionType == "tvshows";
 }
 
-bool coordinatorLiveChangeIsEmpty(
-    const miyoofin::JellyfinLibraryChangeBatch &batch)
+bool coordinatorLiveChangeIsEmpty(const miyoofin::JellyfinLibraryChangeBatch& batch)
 {
-    return !batch.catchUpRequired && !batch.userDataChanged
-        && batch.itemsAdded.empty() && batch.itemsUpdated.empty()
-        && batch.itemsRemoved.empty();
+    return !batch.catchUpRequired && !batch.userDataChanged && batch.itemsAdded.empty() &&
+           batch.itemsUpdated.empty() && batch.itemsRemoved.empty();
 }
 
-bool coordinatorHierarchyIdentityMatches(
-    const miyoofin::library::HierarchyRequest &left,
-    const miyoofin::library::HierarchyRequest &right)
+bool coordinatorHierarchyIdentityMatches(const miyoofin::library::HierarchyRequest& left,
+                                         const miyoofin::library::HierarchyRequest& right)
 {
     if (left.kind != right.kind || left.generation != right.generation)
         return false;
@@ -43,8 +39,8 @@ bool coordinatorHierarchyIdentityMatches(
         return false;
     if (left.series.id != right.series.id)
         return false;
-    return left.kind != miyoofin::library::HierarchyTaskKind::SeasonEpisodes
-        || left.season.id == right.season.id;
+    return left.kind != miyoofin::library::HierarchyTaskKind::SeasonEpisodes ||
+           left.season.id == right.season.id;
 }
 
 } // namespace
@@ -52,15 +48,11 @@ bool coordinatorHierarchyIdentityMatches(
 namespace miyoofin {
 namespace library {
 
-LibraryCoordinator::LibraryCoordinator(Session session,
-                                       std::shared_ptr<CatalogDb> db,
+LibraryCoordinator::LibraryCoordinator(Session session, std::shared_ptr<CatalogDb> db,
                                        std::uint64_t scopeEpoch)
-    : m_session(session)
-    , m_sync(std::make_shared<LibrarySync>(std::move(session), db,
-                                              scopeEpoch))
-    , m_query(std::shared_ptr<LibraryQuery>(new LibraryQuery(db, scopeEpoch)))
-    , m_db(std::move(db))
-    , m_scopeEpoch(scopeEpoch)
+    : m_session(session), m_sync(std::make_shared<LibrarySync>(std::move(session), db, scopeEpoch)),
+      m_query(std::shared_ptr<LibraryQuery>(new LibraryQuery(db, scopeEpoch))), m_db(std::move(db)),
+      m_scopeEpoch(scopeEpoch)
 {
     m_manualOfflineMode = m_session.manualOfflineMode;
 }
@@ -99,11 +91,9 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || m_startupInFlight
-            || m_fullSyncInFlight || !m_fullPopulationUpdates.empty()
-            || m_safetyReconcileInFlight
-            || m_safetyReconcileResultReady || m_liveChangeActive
-            || m_hierarchyMutationInFlight)
+        if (m_stopped || !m_running || !m_sync || m_startupInFlight || m_fullSyncInFlight ||
+            !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight ||
+            m_safetyReconcileResultReady || m_liveChangeActive || m_hierarchyMutationInFlight)
             return false;
         if (m_startupThread.joinable())
             priorThread = std::move(m_startupThread);
@@ -129,12 +119,9 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
         const auto scopeEpoch = m_scopeEpoch;
         m_startupResult = {};
         m_startupResultReady = false;
-        m_startupThread = std::thread(
-            [this, catalogHasRows, cancellation, sync, db, scopeEpoch] {
+        m_startupThread = std::thread([this, catalogHasRows, cancellation, sync, db, scopeEpoch] {
             StartupSyncResult result;
-            const auto cancelled = [&] {
-                return cancellation && cancellation->load();
-            };
+            const auto cancelled = [&] { return cancellation && cancellation->load(); };
 
             if (!db || scopeEpoch == 0) {
                 result.error = CatalogDbErrorCategory::ScopeNotReady;
@@ -147,8 +134,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                 CatalogDbJobMetadata metadata;
                 metadata.scopeEpoch = scopeEpoch;
                 metadata.cancellation = cancellation;
-                const auto state = db->readSyncState(
-                    false, 0, 0, metadata).get();
+                const auto state = db->readSyncState(false, 0, 0, metadata).get();
                 const std::int64_t nowMs = coordinatorWallClockMs();
                 if (!state.success) {
                     result.mode = StartupSyncMode::FullReconcile;
@@ -167,19 +153,16 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                         m_lastReconcileMs = result.lastReconcileMs;
                     }
 
-                    const bool validCheckpoint = catalogHasRows
-                        && state.lastSuccessfulMs > 0
-                        && result.generation > 0
-                        && state.lastReconcileMs <= state.lastSuccessfulMs
-                        && nowMs >= state.lastSuccessfulMs;
-                    if (!validCheckpoint
-                        || nowMs - state.lastReconcileMs >= 24LL * 60 * 60 * 1000) {
+                    const bool validCheckpoint = catalogHasRows && state.lastSuccessfulMs > 0 &&
+                                                 result.generation > 0 &&
+                                                 state.lastReconcileMs <= state.lastSuccessfulMs &&
+                                                 nowMs >= state.lastSuccessfulMs;
+                    if (!validCheckpoint ||
+                        nowMs - state.lastReconcileMs >= 24LL * 60 * 60 * 1000) {
                         result.mode = StartupSyncMode::FullReconcile;
-                    } else if (nowMs - state.lastSuccessfulMs
-                               < 15LL * 60 * 1000) {
+                    } else if (nowMs - state.lastSuccessfulMs < 15LL * 60 * 1000) {
                         result.mode = StartupSyncMode::SkipFresh;
-                    } else if (nowMs - state.lastSuccessfulMs
-                               < 24LL * 60 * 60 * 1000) {
+                    } else if (nowMs - state.lastSuccessfulMs < 24LL * 60 * 60 * 1000) {
                         result.mode = StartupSyncMode::DeltaCatchUp;
                     } else {
                         result.mode = StartupSyncMode::FullReconcile;
@@ -196,9 +179,10 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                         std::lock_guard<std::mutex> lock(m_startupMutex);
                         committedGeneration = m_catalogGeneration + 1;
                     }
-                    const auto catchUp = sync->catchUpChangedCatalog(
-                        state.lastSuccessfulMs, cancellation,
-                        committedGeneration).get();
+                    const auto catchUp =
+                        sync->catchUpChangedCatalog(state.lastSuccessfulMs, cancellation,
+                                                    committedGeneration)
+                            .get();
                     result.success = catchUp.success;
                     result.cancelled = catchUp.cancelled;
                     result.superseded = catchUp.superseded;
@@ -210,8 +194,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                         result.generation = committedGeneration;
                         result.lastSuccessfulMs = catchUp.checkpointMs;
                         std::lock_guard<std::mutex> lock(m_startupMutex);
-                        m_catalogGeneration = std::max(
-                            m_catalogGeneration, committedGeneration);
+                        m_catalogGeneration = std::max(m_catalogGeneration, committedGeneration);
                         m_lastSuccessfulMs = result.lastSuccessfulMs;
                     }
                 } else {
@@ -229,12 +212,12 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                 m_startupInFlight = false;
             }
             m_startupWake.notify_all();
-            });
+        });
     }
     return true;
 }
 
-bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult &result)
+bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult& result)
 {
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
@@ -249,23 +232,20 @@ bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult &result)
     return true;
 }
 
-bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
+bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
 {
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || !m_db
-            || m_scopeEpoch == 0 || m_startupInFlight
-            || m_startupResultReady || m_fullSyncInFlight
-            || !m_fullPopulationUpdates.empty()
-            || m_safetyReconcileInFlight || m_safetyReconcileResultReady
-            || m_liveChangeActive || m_hierarchyMutationInFlight)
+        if (m_stopped || !m_running || !m_sync || !m_db || m_scopeEpoch == 0 || m_startupInFlight ||
+            m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
+            m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive ||
+            m_hierarchyMutationInFlight)
             return false;
         if (m_fullPopulationThread.joinable())
             priorThread = std::move(m_fullPopulationThread);
         m_fullSyncInFlight = true;
-        m_fullPopulationCancellation =
-            std::make_shared<std::atomic_bool>(false);
+        m_fullPopulationCancellation = std::make_shared<std::atomic_bool>(false);
         m_fullPopulationUpdates.clear();
         request = ++m_fullPopulationRequest;
         m_fullPopulationGeneration = 0;
@@ -286,8 +266,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
     const std::uint64_t requestId = request;
     const std::uint64_t scopeEpoch = m_scopeEpoch;
     try {
-        m_fullPopulationThread = std::thread(
-            [this, sync, db, session, cancellation, requestId, scopeEpoch] {
+        m_fullPopulationThread = std::thread([this, sync, db, session, cancellation, requestId,
+                                              scopeEpoch] {
             FullPopulationUpdate terminal;
             terminal.request = requestId;
             terminal.terminal = true;
@@ -296,10 +276,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             bool transactionStarted = false;
             bool transactionCommitted = false;
             std::vector<LibraryView> views;
-            std::vector<std::pair<std::string, std::vector<MediaItem>>>
-                moviesByView;
-            std::vector<std::pair<std::string, std::vector<MediaItem>>>
-                showsByView;
+            std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+            std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
             std::size_t metadataTotal = 0;
             std::size_t metadataCompleted = 0;
             std::size_t mediaCount = 0;
@@ -307,9 +285,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
             std::size_t completedPageCount = 0;
             bool firstPage = true;
 
-            const auto cancelled = [&] {
-                return cancellation && cancellation->load();
-            };
+            const auto cancelled = [&] { return cancellation && cancellation->load(); };
             const auto publish = [this, requestId](FullPopulationUpdate value) {
                 std::lock_guard<std::mutex> guard(m_startupMutex);
                 // A request cannot normally be superseded while this worker is
@@ -321,28 +297,26 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 if (value.terminal)
                     m_fullSyncInFlight = false;
                 m_fullPopulationUpdates.push_back(std::move(value));
-                const auto &published = m_fullPopulationUpdates.back();
-                std::string kind = published.terminal
-                    ? (published.success ? "terminal_success"
-                        : (published.cancelled || published.superseded
-                            ? "terminal_cancel" : "terminal_failure"))
-                    : (published.firstPage ? "first_page" : "page");
+                const auto& published = m_fullPopulationUpdates.back();
+                std::string kind =
+                    published.terminal
+                        ? (published.success
+                               ? "terminal_success"
+                               : (published.cancelled || published.superseded ? "terminal_cancel"
+                                                                              : "terminal_failure"))
+                        : (published.firstPage ? "first_page" : "page");
                 uiDiagnostics().log(
-                    "[LibraryCoordinator] full_population_publish request="
-                    + std::to_string(published.request)
-                    + " generation=" + std::to_string(published.generation)
-                    + " kind=" + kind
-                    + " queue_depth="
-                    + std::to_string(m_fullPopulationUpdates.size())
-                    + " monotonic_us="
-                    + std::to_string(TelemetryClock::monotonicUs()));
+                    "[LibraryCoordinator] full_population_publish request=" +
+                    std::to_string(published.request) +
+                    " generation=" + std::to_string(published.generation) + " kind=" + kind +
+                    " queue_depth=" + std::to_string(m_fullPopulationUpdates.size()) +
+                    " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
             };
             const auto publishTerminal = [&](FullPopulationUpdate value) {
                 value.request = requestId;
-                value.generation = transactionCommitted
-                    ? committedGeneration : m_catalogGeneration;
-                value.committedGeneration = transactionCommitted
-                    ? committedGeneration : m_catalogGeneration;
+                value.generation = transactionCommitted ? committedGeneration : m_catalogGeneration;
+                value.committedGeneration =
+                    transactionCommitted ? committedGeneration : m_catalogGeneration;
                 value.terminal = true;
                 value.committed = transactionCommitted;
                 value.views = views;
@@ -395,29 +369,28 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 std::string viewsError;
                 HttpClient client;
                 if (!RouteRequest(session).run(
-                        [&](const std::string &base) {
-                            return JellyfinApi::getViews(
-                                base, session.accessToken, session.userId,
-                                session.deviceId, views, viewsError, client,
-                                cancellation.get());
-                        }, viewsError)) {
-                    terminal.message = viewsError.empty()
-                        ? "Failed to fetch libraries" : viewsError;
+                        [&](const std::string& base) {
+                            return JellyfinApi::getViews(base, session.accessToken, session.userId,
+                                                         session.deviceId, views, viewsError,
+                                                         client, cancellation.get());
+                        },
+                        viewsError)) {
+                    terminal.message =
+                        viewsError.empty() ? "Failed to fetch libraries" : viewsError;
                     sync->abort(transactionGeneration).get();
                     transactionStarted = false;
                     publishTerminal(std::move(terminal));
                     return;
                 }
                 views.erase(std::remove_if(views.begin(), views.end(),
-                    [](const LibraryView &view) {
-                        return !coordinatorSupportedLibraryView(view);
-                    }), views.end());
+                                           [](const LibraryView& view) {
+                                               return !coordinatorSupportedLibraryView(view);
+                                           }),
+                            views.end());
 
-                for (std::size_t viewOrdinal = 0; viewOrdinal < views.size();
-                     ++viewOrdinal) {
-                    const auto &view = views[viewOrdinal];
-                    const std::string types = view.collectionType == "tvshows"
-                        ? "Series" : "Movie";
+                for (std::size_t viewOrdinal = 0; viewOrdinal < views.size(); ++viewOrdinal) {
+                    const auto& view = views[viewOrdinal];
+                    const std::string types = view.collectionType == "tvshows" ? "Series" : "Movie";
                     int start = 0;
                     bool firstPageForView = true;
                     for (;;) {
@@ -431,21 +404,20 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         std::string pageError;
                         ++requestCount;
                         if (!RouteRequest(session).run(
-                                [&](const std::string &base) {
+                                [&](const std::string& base) {
                                     return JellyfinApi::getLibraryItemsPage(
-                                        base, session.accessToken, session.userId,
-                                        session.deviceId, view.id, types, start,
-                                        48, page, pageError, client,
+                                        base, session.accessToken, session.userId, session.deviceId,
+                                        view.id, types, start, 48, page, pageError, client,
                                         cancellation.get());
-                                }, pageError)) {
+                                },
+                                pageError)) {
                             terminal.cancelled = cancelled();
-                            terminal.superseded = !terminal.cancelled
-                                && cancellation && cancellation->load();
-                            terminal.error = terminal.cancelled
-                                ? CatalogDbErrorCategory::Superseded
-                                : CatalogDbErrorCategory::None;
-                            terminal.message = pageError.empty()
-                                ? "Failed to fetch library page" : pageError;
+                            terminal.superseded =
+                                !terminal.cancelled && cancellation && cancellation->load();
+                            terminal.error = terminal.cancelled ? CatalogDbErrorCategory::Superseded
+                                                                : CatalogDbErrorCategory::None;
+                            terminal.message =
+                                pageError.empty() ? "Failed to fetch library page" : pageError;
                             sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             publishTerminal(std::move(terminal));
@@ -454,8 +426,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
 
                         if (firstPageForView) {
                             metadataTotal += page.totalRecordCount > 0
-                                ? static_cast<std::size_t>(page.totalRecordCount)
-                                : page.items.size();
+                                                 ? static_cast<std::size_t>(page.totalRecordCount)
+                                                 : page.items.size();
                             firstPageForView = false;
                         }
                         metadataCompleted += page.items.size();
@@ -478,49 +450,42 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                                 ++completedPageCount;
                             uiDiagnostics().log(
                                 "[LibraryCoordinator] full_population_stage_complete"
-                                " request=" + std::to_string(requestId)
-                                + " generation=" + std::to_string(transactionGeneration)
-                                + " page_kind="
-                                + (writePage.collectionType == "movies"
-                                    ? "movies"
-                                    : writePage.collectionType == "tvshows"
-                                        ? "tvshows" : "unknown")
-                                + " page_index="
-                                + std::to_string(writePage.ordinalStart)
-                                + " status="
-                                + (written.success ? "success"
-                                    : (written.cancelled || written.superseded
-                                        ? "cancelled" : "failure"))
-                                + " error="
-                                + std::to_string(static_cast<unsigned>(written.error))
-                                + " completed_pages="
-                                + std::to_string(completedPageCount)
-                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
-                                + " monotonic_us="
-                                + std::to_string(TelemetryClock::monotonicUs()));
-                        } catch (const std::exception &) {
+                                " request=" +
+                                std::to_string(requestId) + " generation=" +
+                                std::to_string(transactionGeneration) + " page_kind=" +
+                                (writePage.collectionType == "movies"    ? "movies"
+                                 : writePage.collectionType == "tvshows" ? "tvshows"
+                                                                         : "unknown") +
+                                " page_index=" + std::to_string(writePage.ordinalStart) +
+                                " status=" +
+                                (written.success
+                                     ? "success"
+                                     : (written.cancelled || written.superseded ? "cancelled"
+                                                                                : "failure")) +
+                                " error=" + std::to_string(static_cast<unsigned>(written.error)) +
+                                " completed_pages=" + std::to_string(completedPageCount) +
+                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
+                        } catch (const std::exception&) {
                             uiDiagnostics().log(
                                 "[LibraryCoordinator] full_population_stage_exception"
-                                " request=" + std::to_string(requestId)
-                                + " generation=" + std::to_string(transactionGeneration)
-                                + " exception_class=std_exception"
-                                + " completed_pages="
-                                + std::to_string(completedPageCount)
-                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
-                                + " monotonic_us="
-                                + std::to_string(TelemetryClock::monotonicUs()));
+                                " request=" +
+                                std::to_string(requestId) +
+                                " generation=" + std::to_string(transactionGeneration) +
+                                " exception_class=std_exception" +
+                                " completed_pages=" + std::to_string(completedPageCount) +
+                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
                             throw;
                         } catch (...) {
                             uiDiagnostics().log(
                                 "[LibraryCoordinator] full_population_stage_exception"
-                                " request=" + std::to_string(requestId)
-                                + " generation=" + std::to_string(transactionGeneration)
-                                + " exception_class=unknown"
-                                + " completed_pages="
-                                + std::to_string(completedPageCount)
-                                + " first_page=" + std::to_string(firstPage ? 1 : 0)
-                                + " monotonic_us="
-                                + std::to_string(TelemetryClock::monotonicUs()));
+                                " request=" +
+                                std::to_string(requestId) + " generation=" +
+                                std::to_string(transactionGeneration) + " exception_class=unknown" +
+                                " completed_pages=" + std::to_string(completedPageCount) +
+                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
                             throw;
                         }
                         if (!written.success) {
@@ -528,26 +493,24 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                             terminal.superseded = written.superseded;
                             terminal.error = written.error;
                             terminal.message = written.message.empty()
-                                ? "Failed to persist library page"
-                                : written.message;
+                                                   ? "Failed to persist library page"
+                                                   : written.message;
                             sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             publishTerminal(std::move(terminal));
                             return;
                         }
 
-                        auto &target = view.collectionType == "tvshows"
-                            ? showsByView : moviesByView;
+                        auto& target =
+                            view.collectionType == "tvshows" ? showsByView : moviesByView;
                         if (target.empty() || target.back().first != view.name)
-                            target.emplace_back(view.name,
-                                                std::vector<MediaItem>{});
-                        auto &bounded = target.back().second;
+                            target.emplace_back(view.name, std::vector<MediaItem>{});
+                        auto& bounded = target.back().second;
                         if (bounded.size() < 24) {
-                            const std::size_t count = std::min<std::size_t>(
-                                24 - bounded.size(), page.items.size());
+                            const std::size_t count =
+                                std::min<std::size_t>(24 - bounded.size(), page.items.size());
                             bounded.insert(bounded.end(), page.items.begin(),
-                                           page.items.begin()
-                                               + static_cast<std::ptrdiff_t>(count));
+                                           page.items.begin() + static_cast<std::ptrdiff_t>(count));
                         }
 
                         FullPopulationUpdate update;
@@ -556,8 +519,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                         update.firstPage = firstPage;
                         update.view = view;
                         update.page = page;
-                        update.views = firstPage ? views
-                                                : std::vector<LibraryView>{};
+                        update.views = firstPage ? views : std::vector<LibraryView>{};
                         update.metadataTotal = metadataTotal;
                         update.metadataCompleted = metadataCompleted;
                         update.mediaCount = mediaCount;
@@ -567,8 +529,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
 
                         if (!page.hasMore || page.items.empty())
                             break;
-                        start = page.startIndex
-                            + static_cast<int>(page.items.size());
+                        start = page.startIndex + static_cast<int>(page.items.size());
                     }
                 }
 
@@ -597,8 +558,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 // Once finalize has committed the authoritative membership,
                 // the checkpoint is not cancellable: restart must not regress
                 // to the previous committed boundary.
-                const auto checkpoint = sync->writeSyncState(
-                    nowMs, nowMs, committedGeneration).get();
+                const auto checkpoint =
+                    sync->writeSyncState(nowMs, nowMs, committedGeneration).get();
                 terminal.checkpointCommitted = checkpoint.success;
                 terminal.checkpointMs = checkpoint.lastSuccessfulMs;
                 terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
@@ -606,8 +567,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                 if (!checkpoint.success) {
                     terminal.error = checkpoint.error;
                     terminal.message = checkpoint.message.empty()
-                        ? "Failed to write library sync checkpoint"
-                        : checkpoint.message;
+                                           ? "Failed to write library sync checkpoint"
+                                           : checkpoint.message;
                 }
                 terminal.success = checkpoint.success;
                 if (checkpoint.success) {
@@ -616,34 +577,36 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
                     m_lastReconcileMs = checkpoint.lastReconcileMs;
                 }
                 publishTerminal(std::move(terminal));
-            } catch (const std::exception &error) {
+            } catch (const std::exception& error) {
                 if (transactionStarted) {
-                    try { sync->abort(transactionGeneration).get(); } catch (...) { }
+                    try {
+                        sync->abort(transactionGeneration).get();
+                    } catch (...) {
+                    }
                 }
                 FullPopulationUpdate failure;
                 failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled
-                    && transactionGeneration != 0;
-                failure.error = failure.cancelled
-                    ? CatalogDbErrorCategory::Superseded
-                    : CatalogDbErrorCategory::SqliteError;
+                failure.superseded = !failure.cancelled && transactionGeneration != 0;
+                failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
+                                                  : CatalogDbErrorCategory::SqliteError;
                 failure.message = error.what();
                 publishTerminal(std::move(failure));
             } catch (...) {
                 if (transactionStarted) {
-                    try { sync->abort(transactionGeneration).get(); } catch (...) { }
+                    try {
+                        sync->abort(transactionGeneration).get();
+                    } catch (...) {
+                    }
                 }
                 FullPopulationUpdate failure;
                 failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled
-                    && transactionGeneration != 0;
-                failure.error = failure.cancelled
-                    ? CatalogDbErrorCategory::Superseded
-                    : CatalogDbErrorCategory::SqliteError;
+                failure.superseded = !failure.cancelled && transactionGeneration != 0;
+                failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
+                                                  : CatalogDbErrorCategory::SqliteError;
                 failure.message = "full library population failed unexpectedly";
                 publishTerminal(std::move(failure));
             }
-            });
+        });
     } catch (...) {
         m_fullSyncInFlight = false;
         throw;
@@ -651,12 +614,11 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t &request)
     return true;
 }
 
-bool LibraryCoordinator::takeFullPopulationUpdate(
-    std::uint64_t request, FullPopulationUpdate &update)
+bool LibraryCoordinator::takeFullPopulationUpdate(std::uint64_t request,
+                                                  FullPopulationUpdate& update)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (request == 0 || request != m_fullPopulationRequest
-        || m_fullPopulationUpdates.empty())
+    if (request == 0 || request != m_fullPopulationRequest || m_fullPopulationUpdates.empty())
         return false;
     update = std::move(m_fullPopulationUpdates.front());
     m_fullPopulationUpdates.pop_front();
@@ -671,21 +633,17 @@ void LibraryCoordinator::cancelFullPopulation() noexcept
 }
 
 std::future<CatalogDbSyncState> LibraryCoordinator::checkpointLiveCatalog(
-    std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
-    std::uint64_t committedGeneration)
+    std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs, std::uint64_t committedGeneration)
 {
-    return m_sync->writeSyncState(lastSuccessfulMs, lastReconcileMs,
-                                  committedGeneration);
+    return m_sync->writeSyncState(lastSuccessfulMs, lastReconcileMs, committedGeneration);
 }
 
 bool LibraryCoordinator::beginFullSync()
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_stopped || !m_running || m_startupInFlight || m_startupResultReady
-        || m_fullSyncInFlight || !m_fullPopulationUpdates.empty()
-        || m_safetyReconcileInFlight
-        || m_safetyReconcileResultReady || m_liveChangeActive
-        || m_hierarchyMutationInFlight)
+    if (m_stopped || !m_running || m_startupInFlight || m_startupResultReady ||
+        m_fullSyncInFlight || !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight ||
+        m_safetyReconcileResultReady || m_liveChangeActive || m_hierarchyMutationInFlight)
         return false;
     m_fullSyncInFlight = true;
     return true;
@@ -704,24 +662,20 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (requireMaintenanceDue) {
             const auto nowMs = coordinatorWallClockMs();
-            const bool due = m_lastReconcileMs <= 0
-                || nowMs < m_lastReconcileMs
-                || nowMs - m_lastReconcileMs >= kSafetyReconcileIntervalMs;
+            const bool due = m_lastReconcileMs <= 0 || nowMs < m_lastReconcileMs ||
+                             nowMs - m_lastReconcileMs >= kSafetyReconcileIntervalMs;
             if (!due)
                 return false;
         }
-        if (m_stopped || !m_running || !m_sync || m_manualOfflineMode
-            || m_startupInFlight || m_startupResultReady
-            || m_fullSyncInFlight || !m_fullPopulationUpdates.empty()
-            || m_safetyReconcileInFlight
-            || m_safetyReconcileResultReady || m_liveChangeActive
-            || m_hierarchyMutationInFlight)
+        if (m_stopped || !m_running || !m_sync || m_manualOfflineMode || m_startupInFlight ||
+            m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
+            m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive ||
+            m_hierarchyMutationInFlight)
             return false;
         if (m_safetyReconcileThread.joinable())
             priorThread = std::move(m_safetyReconcileThread);
         m_safetyReconcileInFlight = true;
-        m_safetyReconcileCancellation =
-            std::make_shared<std::atomic_bool>(false);
+        m_safetyReconcileCancellation = std::make_shared<std::atomic_bool>(false);
         m_safetyReconcileResult = {};
         m_safetyReconcileResultReady = false;
     }
@@ -739,14 +693,11 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
     const auto db = m_db;
     const auto scopeEpoch = m_scopeEpoch;
     try {
-        m_safetyReconcileThread = std::thread(
-            [this, cancellation, sync, db, scopeEpoch] {
+        m_safetyReconcileThread = std::thread([this, cancellation, sync, db, scopeEpoch] {
             SafetyReconcileResult result;
             std::uint64_t committedGeneration = 0;
             std::uint64_t operationGeneration = 0;
-            const auto cancelled = [&] {
-                return cancellation && cancellation->load();
-            };
+            const auto cancelled = [&] { return cancellation && cancellation->load(); };
             const auto nextCommittedGeneration = [&] {
                 std::lock_guard<std::mutex> guard(m_startupMutex);
                 return m_catalogGeneration + 1;
@@ -775,8 +726,7 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
                     CatalogDbJobMetadata metadata;
                     metadata.scopeEpoch = scopeEpoch;
                     metadata.cancellation = cancellation;
-                    const auto state = db->readSyncState(
-                        false, 0, 0, metadata).get();
+                    const auto state = db->readSyncState(false, 0, 0, metadata).get();
                     if (!state.success) {
                         result.error = state.error;
                         result.message = state.message;
@@ -798,11 +748,11 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
                         } else {
                             operationGeneration = nextCommittedGeneration();
                             if (state.lastSuccessfulMs > 0) {
-                                const auto catchUpGeneration =
-                                    operationGeneration;
-                                const auto catchUp = sync->catchUpChangedCatalog(
-                                    state.lastSuccessfulMs, cancellation,
-                                    catchUpGeneration).get();
+                                const auto catchUpGeneration = operationGeneration;
+                                const auto catchUp =
+                                    sync->catchUpChangedCatalog(state.lastSuccessfulMs,
+                                                                cancellation, catchUpGeneration)
+                                        .get();
                                 if (!catchUp.success) {
                                     result.cancelled = catchUp.cancelled;
                                     result.superseded = catchUp.superseded;
@@ -813,16 +763,12 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
                                 }
                                 result.checkpointMs = catchUp.checkpointMs;
                                 result.lastSuccessfulMs = catchUp.checkpointMs;
-                                committedGeneration =
-                                    commitGeneration(catchUpGeneration);
+                                committedGeneration = commitGeneration(catchUpGeneration);
                                 result.generation = committedGeneration;
-                                result.committedGeneration =
-                                    committedGeneration;
+                                result.committedGeneration = committedGeneration;
                                 {
-                                    std::lock_guard<std::mutex> guard(
-                                        m_startupMutex);
-                                    m_lastSuccessfulMs =
-                                        result.lastSuccessfulMs;
+                                    std::lock_guard<std::mutex> guard(m_startupMutex);
+                                    m_lastSuccessfulMs = result.lastSuccessfulMs;
                                 }
                             }
 
@@ -834,51 +780,43 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
                                 committedGeneration = operationGeneration;
                                 const auto transactionGeneration =
                                     sync->nextTransactionGeneration();
-                                const auto reconciled =
-                                    sync->reconcileAuthoritativeMembership(
-                                        cancellation, transactionGeneration,
-                                        committedGeneration).get();
+                                const auto reconciled = sync->reconcileAuthoritativeMembership(
+                                                                cancellation, transactionGeneration,
+                                                                committedGeneration)
+                                                            .get();
                                 if (!reconciled.success) {
                                     result.cancelled = reconciled.cancelled;
                                     result.superseded = reconciled.superseded;
                                     result.error = reconciled.error;
                                     result.message = reconciled.message;
                                 } else {
-                                    committedGeneration =
-                                        commitGeneration(committedGeneration);
+                                    committedGeneration = commitGeneration(committedGeneration);
                                     result.generation = committedGeneration;
-                                    result.committedGeneration =
-                                        committedGeneration;
+                                    result.committedGeneration = committedGeneration;
                                     const auto nowMs = coordinatorWallClockMs();
                                     // The authoritative commit is already
                                     // durable.  Finish its checkpoint without
                                     // cancellation so restart cannot regress
                                     // to the prior committed boundary.
-                                    auto checkpoint = sync->writeSyncState(
-                                        nowMs, nowMs, committedGeneration)
-                                        .get();
+                                    auto checkpoint =
+                                        sync->writeSyncState(nowMs, nowMs, committedGeneration)
+                                            .get();
                                     result.success = true;
                                     result.checkpointMs = checkpoint.success
-                                        ? checkpoint.lastSuccessfulMs
-                                        : result.checkpointMs;
-                                    result.lastSuccessfulMs =
-                                        checkpoint.success
-                                            ? checkpoint.lastSuccessfulMs
-                                            : result.lastSuccessfulMs;
-                                    result.lastReconcileMs =
-                                        checkpoint.success
-                                            ? checkpoint.lastReconcileMs
-                                            : result.lastReconcileMs;
+                                                              ? checkpoint.lastSuccessfulMs
+                                                              : result.checkpointMs;
+                                    result.lastSuccessfulMs = checkpoint.success
+                                                                  ? checkpoint.lastSuccessfulMs
+                                                                  : result.lastSuccessfulMs;
+                                    result.lastReconcileMs = checkpoint.success
+                                                                 ? checkpoint.lastReconcileMs
+                                                                 : result.lastReconcileMs;
                                     if (checkpoint.success) {
-                                        std::lock_guard<std::mutex> guard(
-                                            m_startupMutex);
-                                        m_lastSuccessfulMs =
-                                            result.lastSuccessfulMs;
-                                        m_lastReconcileMs =
-                                            result.lastReconcileMs;
+                                        std::lock_guard<std::mutex> guard(m_startupMutex);
+                                        m_lastSuccessfulMs = result.lastSuccessfulMs;
+                                        m_lastReconcileMs = result.lastReconcileMs;
                                     }
-                                    if (!checkpoint.success
-                                        && result.message.empty()) {
+                                    if (!checkpoint.success && result.message.empty()) {
                                         result.error = checkpoint.error;
                                         result.message = checkpoint.message;
                                     }
@@ -887,19 +825,17 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
                         }
                     }
                 }
-            } catch (const std::exception &error) {
+            } catch (const std::exception& error) {
                 result.error = CatalogDbErrorCategory::SqliteError;
                 result.message = error.what();
             } catch (...) {
                 result.error = CatalogDbErrorCategory::SqliteError;
                 result.message = "safety reconcile failed unexpectedly";
             }
-            result.generation = std::max(result.generation,
-                                         committedGeneration);
-            result.committedGeneration = std::max(
-                result.committedGeneration, committedGeneration);
+            result.generation = std::max(result.generation, committedGeneration);
+            result.committedGeneration = std::max(result.committedGeneration, committedGeneration);
             publish(std::move(result));
-            });
+        });
     } catch (...) {
         m_safetyReconcileInFlight = false;
         throw;
@@ -919,8 +855,7 @@ bool LibraryCoordinator::requestSafetyReconcileForTest()
 }
 #endif
 
-bool LibraryCoordinator::takeSafetyReconcileResult(
-    SafetyReconcileResult &result)
+bool LibraryCoordinator::takeSafetyReconcileResult(SafetyReconcileResult& result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (!m_safetyReconcileResultReady || m_safetyReconcileInFlight)
@@ -930,13 +865,13 @@ bool LibraryCoordinator::takeSafetyReconcileResult(
     return true;
 }
 
-bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
+bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t& request)
 {
     std::thread priorThread;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || m_manualOfflineMode
-            || m_homeRailInFlight || m_homeRailResultReady)
+        if (m_stopped || !m_running || m_manualOfflineMode || m_homeRailInFlight ||
+            m_homeRailResultReady)
             return false;
         if (m_homeRailThread.joinable())
             priorThread = std::move(m_homeRailThread);
@@ -958,27 +893,26 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
         const std::uint64_t requestId = request;
         m_homeRailResult = {};
         m_homeRailResultReady = false;
-        m_homeRailThread = std::thread(
-            [this, session, cancellation, requestId] {
+        m_homeRailThread = std::thread([this, session, cancellation, requestId] {
             HomeRailResult result;
             result.request = requestId;
             HttpClient railClient;
             std::string continueError;
             std::string recentError;
             const bool continueOk = RouteRequest(session).run(
-                [&](const std::string &base) {
+                [&](const std::string& base) {
                     return JellyfinApi::getResumeItems(
-                        base, session.accessToken, session.userId,
-                        session.deviceId, 12, result.continueWatching,
-                        continueError, railClient, cancellation.get());
-                }, continueError);
+                        base, session.accessToken, session.userId, session.deviceId, 12,
+                        result.continueWatching, continueError, railClient, cancellation.get());
+                },
+                continueError);
             const bool recentOk = RouteRequest(session).run(
-                [&](const std::string &base) {
-                    return JellyfinApi::getLatestItems(
-                        base, session.accessToken, session.userId,
-                        session.deviceId, 16, result.recentlyAdded,
-                        recentError, railClient, cancellation.get());
-                }, recentError);
+                [&](const std::string& base) {
+                    return JellyfinApi::getLatestItems(base, session.accessToken, session.userId,
+                                                       session.deviceId, 16, result.recentlyAdded,
+                                                       recentError, railClient, cancellation.get());
+                },
+                recentError);
             result.cancelled = cancellation && cancellation->load();
             result.continueValid = continueOk && !result.cancelled;
             result.recentlyAddedValid = recentOk && !result.cancelled;
@@ -1005,12 +939,11 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t &request)
     return true;
 }
 
-bool LibraryCoordinator::takeHomeRailResult(
-    std::uint64_t request, HomeRailResult &result)
+bool LibraryCoordinator::takeHomeRailResult(std::uint64_t request, HomeRailResult& result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (!m_homeRailResultReady || m_homeRailInFlight
-        || request == 0 || m_homeRailResult.request != request)
+    if (!m_homeRailResultReady || m_homeRailInFlight || request == 0 ||
+        m_homeRailResult.request != request)
         return false;
     result = std::move(m_homeRailResult);
     m_homeRailResultReady = false;
@@ -1024,32 +957,29 @@ void LibraryCoordinator::cancelHomeRailRefresh() noexcept
         m_homeRailCancellation->store(true);
 }
 
-bool LibraryCoordinator::requestHierarchy(
-    const std::vector<MediaItem> &shows, std::uint64_t generation,
-    bool forceReconcile, std::uint64_t &request)
+bool LibraryCoordinator::requestHierarchy(const std::vector<MediaItem>& shows,
+                                          std::uint64_t generation, bool forceReconcile,
+                                          std::uint64_t& request)
 {
     if (shows.empty() || generation == 0)
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query
-        || m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
-        || !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight
-        || m_safetyReconcileResultReady || m_liveChangeActive)
+    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
+        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
+        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
         return false;
 
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-    if (m_hierarchyRequests.size() >= 8
-        || generation < m_hierarchyGeneration)
+    if (m_hierarchyRequests.size() >= 8 || generation < m_hierarchyGeneration)
         return false;
-    for (const auto &entry : m_hierarchyAccepted) {
+    for (const auto& entry : m_hierarchyAccepted) {
         if (entry.second.kind == HierarchyTaskKind::HomePrefetch)
             return false;
     }
     request = ++m_hierarchyRequest;
     auto cancellation = std::make_shared<std::atomic_bool>(false);
-    HierarchyRequest task{request, generation, forceReconcile,
-                          HierarchyTaskKind::HomePrefetch, {}, {}, shows,
-                          cancellation};
+    HierarchyRequest task{request, generation, forceReconcile, HierarchyTaskKind::HomePrefetch,
+                          {},      {},         shows,          cancellation};
     m_hierarchyAccepted.emplace(request, task);
     m_hierarchyGeneration = generation;
     m_hierarchyCompleted = 0;
@@ -1064,16 +994,14 @@ bool LibraryCoordinator::requestHierarchy(
     return true;
 }
 
-bool LibraryCoordinator::requestSeriesSeasons(const MediaItem &series,
-                                               std::uint64_t &request)
+bool LibraryCoordinator::requestSeriesSeasons(const MediaItem& series, std::uint64_t& request)
 {
     if (series.id.empty())
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query
-        || m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
-        || !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight
-        || m_safetyReconcileResultReady || m_liveChangeActive)
+    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
+        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
+        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
         return false;
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     if (m_hierarchyRequests.size() >= 8)
@@ -1084,7 +1012,7 @@ bool LibraryCoordinator::requestSeriesSeasons(const MediaItem &series,
     task.kind = HierarchyTaskKind::SeriesSeasons;
     task.series = series;
     task.cancellation = std::make_shared<std::atomic_bool>(false);
-    for (const auto &entry : m_hierarchyAccepted) {
+    for (const auto& entry : m_hierarchyAccepted) {
         if (coordinatorHierarchyIdentityMatches(entry.second, task))
             return false;
     }
@@ -1096,17 +1024,15 @@ bool LibraryCoordinator::requestSeriesSeasons(const MediaItem &series,
     return true;
 }
 
-bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem &series,
-                                                const MediaItem &season,
-                                                std::uint64_t &request)
+bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem& series, const MediaItem& season,
+                                               std::uint64_t& request)
 {
     if (series.id.empty() || season.id.empty())
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query
-        || m_startupInFlight || m_startupResultReady || m_fullSyncInFlight
-        || !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight
-        || m_safetyReconcileResultReady || m_liveChangeActive)
+    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
+        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
+        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
         return false;
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     if (m_hierarchyRequests.size() >= 8)
@@ -1118,7 +1044,7 @@ bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem &series,
     task.series = series;
     task.season = season;
     task.cancellation = std::make_shared<std::atomic_bool>(false);
-    for (const auto &entry : m_hierarchyAccepted) {
+    for (const auto& entry : m_hierarchyAccepted) {
         if (coordinatorHierarchyIdentityMatches(entry.second, task))
             return false;
     }
@@ -1130,25 +1056,22 @@ bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem &series,
     return true;
 }
 
-bool LibraryCoordinator::takeHierarchyResult(
-    std::uint64_t request, HierarchyResult &result)
+bool LibraryCoordinator::takeHierarchyResult(std::uint64_t request, HierarchyResult& result)
 {
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     if (request == 0 || m_hierarchyResults.empty())
         return false;
-    const auto found = std::find_if(m_hierarchyResults.begin(),
-                                    m_hierarchyResults.end(),
-                                    [request](const HierarchyResult &value) {
-        return value.request == request;
-    });
+    const auto found =
+        std::find_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
+                     [request](const HierarchyResult& value) { return value.request == request; });
     if (found == m_hierarchyResults.end())
         return false;
     result = std::move(*found);
     m_hierarchyResults.erase(found);
     if (result.terminal) {
         m_hierarchyAccepted.erase(request);
-        if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest
-            && m_hierarchyResults.empty()) {
+        if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest &&
+            m_hierarchyResults.empty()) {
             m_hierarchyMutationInFlight = false;
         }
     }
@@ -1162,22 +1085,21 @@ void LibraryCoordinator::cancelHierarchyRequest(std::uint64_t request) noexcept
     if (accepted == m_hierarchyAccepted.end())
         return;
     accepted->second.cancellation->store(true);
-    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(),
-                                             m_hierarchyRequests.end(),
-                                             [request](const HierarchyRequest &value) {
-        return value.request == request;
-    }), m_hierarchyRequests.end());
-    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(),
-                                            m_hierarchyResults.end(),
-                                            [request](const HierarchyResult &value) {
-        return value.request == request;
-    }), m_hierarchyResults.end());
+    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(), m_hierarchyRequests.end(),
+                                             [request](const HierarchyRequest& value) {
+                                                 return value.request == request;
+                                             }),
+                              m_hierarchyRequests.end());
+    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
+                                            [request](const HierarchyResult& value) {
+                                                return value.request == request;
+                                            }),
+                             m_hierarchyResults.end());
     // The cancellation API is fire-and-forget.  Removing an active request
     // also suppresses its terminal publication once the network future
     // unwinds, so a caller that is leaving cannot strand scheduler state.
     m_hierarchyAccepted.erase(accepted);
-    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest
-        && m_hierarchyResults.empty())
+    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
         m_hierarchyMutationInFlight = false;
     m_hierarchyWake.notify_one();
 }
@@ -1186,7 +1108,7 @@ void LibraryCoordinator::cancelHierarchy() noexcept
 {
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     std::vector<std::uint64_t> homeRequests;
-    for (const auto &entry : m_hierarchyAccepted) {
+    for (const auto& entry : m_hierarchyAccepted) {
         if (entry.second.kind == HierarchyTaskKind::HomePrefetch)
             homeRequests.push_back(entry.first);
     }
@@ -1203,18 +1125,19 @@ void LibraryCoordinator::cancelHierarchy() noexcept
     // still be unwinding a network future; allowing the next request into the
     // queue keeps that worker serialized without letting its results reserve
     // the request slot forever.
-    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(),
-                                             m_hierarchyRequests.end(),
-                                             [](const HierarchyRequest &value) {
-        return value.kind == HierarchyTaskKind::HomePrefetch;
-    }), m_hierarchyRequests.end());
-    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(),
-                                            m_hierarchyResults.end(),
-                                            [](const HierarchyResult &value) {
-        return value.kind == HierarchyTaskKind::HomePrefetch;
-    }), m_hierarchyResults.end());
-    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest
-        && m_hierarchyResults.empty())
+    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(), m_hierarchyRequests.end(),
+                                             [](const HierarchyRequest& value) {
+                                                 return value.kind ==
+                                                        HierarchyTaskKind::HomePrefetch;
+                                             }),
+                              m_hierarchyRequests.end());
+    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
+                                            [](const HierarchyResult& value) {
+                                                return value.kind ==
+                                                       HierarchyTaskKind::HomePrefetch;
+                                            }),
+                             m_hierarchyResults.end());
+    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
         m_hierarchyMutationInFlight = false;
     m_hierarchyWake.notify_one();
 }
@@ -1226,9 +1149,8 @@ void LibraryCoordinator::hierarchyWorker()
         std::shared_ptr<std::atomic_bool> cancellation;
         {
             std::unique_lock<std::mutex> lock(m_hierarchyMutex);
-            m_hierarchyWake.wait(lock, [&] {
-                return m_hierarchyStop || !m_hierarchyRequests.empty();
-            });
+            m_hierarchyWake.wait(lock,
+                                 [&] { return m_hierarchyStop || !m_hierarchyRequests.empty(); });
             if (m_hierarchyStop)
                 return;
             request = std::move(m_hierarchyRequests.front());
@@ -1238,10 +1160,8 @@ void LibraryCoordinator::hierarchyWorker()
             m_hierarchyActiveCancellation = cancellation;
         }
 
-        const auto cancelled = [&] {
-            return cancellation && cancellation->load();
-        };
-        const auto loadSeasons = [&](const MediaItem &series) {
+        const auto cancelled = [&] { return cancellation && cancellation->load(); };
+        const auto loadSeasons = [&](const MediaItem& series) {
             HierarchyResult result;
             result.kind = request.kind;
             result.seriesId = series.id;
@@ -1255,12 +1175,12 @@ void LibraryCoordinator::hierarchyWorker()
             std::string error;
             std::vector<MediaItem> seasons;
             const bool networkOk = RouteRequest(m_session).run(
-                [&](const std::string &base) {
-                    return JellyfinApi::getSeasons(
-                        base, m_session.accessToken, m_session.userId,
-                        m_session.deviceId, series.id, seasons, error,
-                        cancellation.get());
-                }, error);
+                [&](const std::string& base) {
+                    return JellyfinApi::getSeasons(base, m_session.accessToken, m_session.userId,
+                                                   m_session.deviceId, series.id, seasons, error,
+                                                   cancellation.get());
+                },
+                error);
             if (cancelled()) {
                 result.cancelled = true;
                 result.error = CatalogDbErrorCategory::Superseded;
@@ -1277,12 +1197,12 @@ void LibraryCoordinator::hierarchyWorker()
                 metadata.scopeEpoch = m_scopeEpoch;
                 metadata.cancellation = cancellation;
                 std::map<std::string, std::vector<MediaItem>> episodesBySeason;
-                for (const auto &season : seasons)
-                    episodesBySeason.emplace(season.id,
-                                             std::vector<MediaItem>{});
-                const auto written = m_db->stageSeriesHierarchy(
-                    series, seasons, episodesBySeason, 0,
-                    coordinatorWallClockMs(), false, metadata).get();
+                for (const auto& season : seasons)
+                    episodesBySeason.emplace(season.id, std::vector<MediaItem>{});
+                const auto written =
+                    m_db->stageSeriesHierarchy(series, seasons, episodesBySeason, 0,
+                                               coordinatorWallClockMs(), false, metadata)
+                        .get();
                 if (written.cancelled || written.superseded || !written.success) {
                     result.cancelled = written.cancelled;
                     result.superseded = written.superseded;
@@ -1301,8 +1221,7 @@ void LibraryCoordinator::hierarchyWorker()
             result.seasons = std::move(seasons);
             return result;
         };
-        const auto loadEpisodes = [&](const MediaItem &series,
-                                      const MediaItem &season) {
+        const auto loadEpisodes = [&](const MediaItem& series, const MediaItem& season) {
             HierarchyResult result;
             result.kind = request.kind;
             result.seriesId = series.id;
@@ -1316,12 +1235,12 @@ void LibraryCoordinator::hierarchyWorker()
             std::string error;
             std::vector<MediaItem> episodes;
             const bool networkOk = RouteRequest(m_session).run(
-                [&](const std::string &base) {
-                    return JellyfinApi::getEpisodes(
-                        base, m_session.accessToken, m_session.userId,
-                        m_session.deviceId, series.id, season.id, episodes,
-                        error, cancellation.get());
-                }, error);
+                [&](const std::string& base) {
+                    return JellyfinApi::getEpisodes(base, m_session.accessToken, m_session.userId,
+                                                    m_session.deviceId, series.id, season.id,
+                                                    episodes, error, cancellation.get());
+                },
+                error);
             if (cancelled()) {
                 result.cancelled = true;
                 result.error = CatalogDbErrorCategory::Superseded;
@@ -1337,9 +1256,10 @@ void LibraryCoordinator::hierarchyWorker()
                 CatalogDbJobMetadata metadata;
                 metadata.scopeEpoch = m_scopeEpoch;
                 metadata.cancellation = cancellation;
-                const auto written = m_db->reconcileSeasonHierarchy(
-                    series, season, episodes, 0, coordinatorWallClockMs(),
-                    metadata).get();
+                const auto written =
+                    m_db->reconcileSeasonHierarchy(series, season, episodes, 0,
+                                                   coordinatorWallClockMs(), metadata)
+                        .get();
                 if (written.cancelled || written.superseded || !written.success) {
                     result.cancelled = written.cancelled;
                     result.superseded = written.superseded;
@@ -1371,8 +1291,7 @@ void LibraryCoordinator::hierarchyWorker()
             // A Home lifetime may discard its active request while the
             // network future unwinds.  A direct caller keeps its request
             // accepted until it consumes the terminal publication.
-            if (m_hierarchyAccepted.find(request.request)
-                == m_hierarchyAccepted.end()) {
+            if (m_hierarchyAccepted.find(request.request) == m_hierarchyAccepted.end()) {
                 return;
             }
             result.request = request.request;
@@ -1391,7 +1310,7 @@ void LibraryCoordinator::hierarchyWorker()
                 terminal.terminal = true;
                 publish(std::move(terminal));
             } else {
-                for (const auto &series : request.shows) {
+                for (const auto& series : request.shows) {
                     if (cancelled()) {
                         terminal.cancelled = true;
                         terminal.error = CatalogDbErrorCategory::Superseded;
@@ -1403,16 +1322,14 @@ void LibraryCoordinator::hierarchyWorker()
                     result.kind = request.kind;
                     result.seriesId = series.id;
                     if (m_query) {
-                        const auto cached = m_query->seasons(
-                            series.id, cancellation).get();
+                        const auto cached = m_query->seasons(series.id, cancellation).get();
                         if (cached.success) {
                             result.cachedSeasons = std::move(cached.items);
                             if (!result.cachedSeasons.empty()) {
                                 HierarchyResult cachedResult;
                                 cachedResult.kind = request.kind;
                                 cachedResult.seriesId = series.id;
-                                cachedResult.cachedSeasons =
-                                    result.cachedSeasons;
+                                cachedResult.cachedSeasons = result.cachedSeasons;
                                 cachedResult.cacheOnly = true;
                                 publish(std::move(cachedResult));
                                 result.cachedSeasons.clear();
@@ -1439,7 +1356,7 @@ void LibraryCoordinator::hierarchyWorker()
                     result.seasons = seasonRefresh.seasons;
 
                     bool complete = true;
-                    for (const auto &season : result.seasons) {
+                    for (const auto& season : result.seasons) {
                         if (cancelled()) {
                             complete = false;
                             terminal.cancelled = true;
@@ -1466,9 +1383,8 @@ void LibraryCoordinator::hierarchyWorker()
                     if (result.success) {
                         ++completed;
                         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-                        if (m_hierarchyActiveRequest
-                            && m_hierarchyActiveRequest->request
-                                == request.request) {
+                        if (m_hierarchyActiveRequest &&
+                            m_hierarchyActiveRequest->request == request.request) {
                             ++m_hierarchyCompleted;
                         }
                     } else {
@@ -1484,12 +1400,13 @@ void LibraryCoordinator::hierarchyWorker()
                     if (terminal.message.empty())
                         terminal.message = "hierarchy refresh cancelled";
                 }
-                if (!terminal.cancelled && !failed
-                    && completed == request.shows.size()) {
+                if (!terminal.cancelled && !failed && completed == request.shows.size()) {
                     const std::int64_t nowMs = coordinatorWallClockMs();
-                    const auto checkpoint = m_sync->writeSyncState(
-                        nowMs, request.forceReconcile ? nowMs : 0,
-                        request.generation, cancellation).get();
+                    const auto checkpoint =
+                        m_sync
+                            ->writeSyncState(nowMs, request.forceReconcile ? nowMs : 0,
+                                             request.generation, cancellation)
+                            .get();
                     terminal.checkpointCommitted = checkpoint.success;
                     terminal.checkpointMs = checkpoint.lastSuccessfulMs;
                     terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
@@ -1499,13 +1416,10 @@ void LibraryCoordinator::hierarchyWorker()
                     terminal.message = checkpoint.message;
                     if (checkpoint.success) {
                         std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-                        if (m_hierarchyActiveRequest
-                            && m_hierarchyActiveRequest->request
-                                == request.request) {
-                            m_hierarchyLastSuccessfulMs =
-                                checkpoint.lastSuccessfulMs;
-                            m_hierarchyLastReconcileMs =
-                                checkpoint.lastReconcileMs;
+                        if (m_hierarchyActiveRequest &&
+                            m_hierarchyActiveRequest->request == request.request) {
+                            m_hierarchyLastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                            m_hierarchyLastReconcileMs = checkpoint.lastReconcileMs;
                         }
                     }
                 } else if (!terminal.cancelled && failed) {
@@ -1513,15 +1427,14 @@ void LibraryCoordinator::hierarchyWorker()
                 }
                 publish(std::move(terminal));
             }
-        } catch (const std::exception &error) {
+        } catch (const std::exception& error) {
             terminal.request = request.request;
             terminal.generation = request.generation;
             terminal.kind = request.kind;
             terminal.terminal = true;
             terminal.cancelled = cancelled();
-            terminal.error = terminal.cancelled
-                ? CatalogDbErrorCategory::Superseded
-                : CatalogDbErrorCategory::SqliteError;
+            terminal.error = terminal.cancelled ? CatalogDbErrorCategory::Superseded
+                                                : CatalogDbErrorCategory::SqliteError;
             terminal.message = error.what();
             publish(std::move(terminal));
         } catch (...) {
@@ -1530,31 +1443,27 @@ void LibraryCoordinator::hierarchyWorker()
             terminal.kind = request.kind;
             terminal.terminal = true;
             terminal.cancelled = cancelled();
-            terminal.error = terminal.cancelled
-                ? CatalogDbErrorCategory::Superseded
-                : CatalogDbErrorCategory::SqliteError;
+            terminal.error = terminal.cancelled ? CatalogDbErrorCategory::Superseded
+                                                : CatalogDbErrorCategory::SqliteError;
             terminal.message = "hierarchy refresh failed unexpectedly";
             publish(std::move(terminal));
         }
 
         {
             std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-            if (m_hierarchyActiveRequest
-                && m_hierarchyActiveRequest->request == request.request) {
+            if (m_hierarchyActiveRequest && m_hierarchyActiveRequest->request == request.request) {
                 m_hierarchyActiveRequest.reset();
                 m_hierarchyActiveCancellation.reset();
             }
-            if (m_hierarchyRequests.empty()
-                && !m_hierarchyActiveRequest
-                && m_hierarchyResults.empty()) {
+            if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest &&
+                m_hierarchyResults.empty()) {
                 m_hierarchyMutationInFlight = false;
             }
         }
     }
 }
 
-bool LibraryCoordinator::requestLiveChange(
-    const JellyfinLibraryChangeBatch &batch)
+bool LibraryCoordinator::requestLiveChange(const JellyfinLibraryChangeBatch& batch)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (m_stopped || !m_running || !m_sync)
@@ -1564,7 +1473,7 @@ bool LibraryCoordinator::requestLiveChange(
     return accepted;
 }
 
-bool LibraryCoordinator::takeLiveChangeResult(LiveLibraryChangeResult &result)
+bool LibraryCoordinator::takeLiveChangeResult(LiveLibraryChangeResult& result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (!m_liveChangeResult)
@@ -1617,15 +1526,12 @@ void LibraryCoordinator::liveChangeWorker()
             }
             if (m_liveChangeStop)
                 return;
-            const bool serializedSlotOpen = !m_startupInFlight
-                && !m_startupResultReady && !m_fullSyncInFlight
-                && m_fullPopulationUpdates.empty()
-                && !m_safetyReconcileInFlight
-                && !m_safetyReconcileResultReady
-                && !m_liveChangeActive && !m_liveChangeResult
-                && !m_hierarchyMutationInFlight;
-            if (!serializedSlotOpen
-                || !m_liveChangeRequests.pop(batch)) {
+            const bool serializedSlotOpen =
+                !m_startupInFlight && !m_startupResultReady && !m_fullSyncInFlight &&
+                m_fullPopulationUpdates.empty() && !m_safetyReconcileInFlight &&
+                !m_safetyReconcileResultReady && !m_liveChangeActive && !m_liveChangeResult &&
+                !m_hierarchyMutationInFlight;
+            if (!serializedSlotOpen || !m_liveChangeRequests.pop(batch)) {
                 m_liveChangeWake.wait_for(lock, std::chrono::milliseconds(5));
                 continue;
             }
@@ -1638,8 +1544,7 @@ void LibraryCoordinator::liveChangeWorker()
             identity.generation = m_catalogGeneration;
             identity.request = ++m_liveChangeRequest;
             m_liveChangeActive = identity;
-            m_liveChangeCancellation =
-                std::make_shared<std::atomic_bool>(false);
+            m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
             cancellation = m_liveChangeCancellation;
         }
 
@@ -1649,9 +1554,7 @@ void LibraryCoordinator::liveChangeWorker()
         std::uint64_t committedGeneration = identity.generation;
         std::uint64_t operationGeneration = 0;
         bool catchUpSucceeded = !batch.catchUpRequired;
-        const auto cancelled = [&] {
-            return cancellation && cancellation->load();
-        };
+        const auto cancelled = [&] { return cancellation && cancellation->load(); };
         const auto nextCommittedGeneration = [&] {
             std::lock_guard<std::mutex> lock(m_startupMutex);
             return m_catalogGeneration + 1;
@@ -1672,12 +1575,9 @@ void LibraryCoordinator::liveChangeWorker()
             // Discarding a result or accepting a newer worker identity makes
             // this publication stale. It must never be consumed by the next
             // live batch.
-            if (!m_liveChangeActive
-                || !(*m_liveChangeActive == identity)
-                || m_liveChangeResult)
+            if (!m_liveChangeActive || !(*m_liveChangeActive == identity) || m_liveChangeResult)
                 return;
-            value.generation = std::max(value.generation,
-                                        committedGeneration);
+            value.generation = std::max(value.generation, committedGeneration);
             m_liveChangeResult = std::move(value);
             m_liveChangeWake.notify_one();
         };
@@ -1694,8 +1594,7 @@ void LibraryCoordinator::liveChangeWorker()
                 CatalogDbJobMetadata metadata;
                 metadata.scopeEpoch = m_scopeEpoch;
                 metadata.cancellation = cancellation;
-                const auto state = m_db->readSyncState(
-                    false, 0, 0, metadata).get();
+                const auto state = m_db->readSyncState(false, 0, 0, metadata).get();
                 if (!state.success) {
                     result.error = state.error;
                     result.message = state.message;
@@ -1715,11 +1614,12 @@ void LibraryCoordinator::liveChangeWorker()
                         result.error = CatalogDbErrorCategory::Superseded;
                         result.message = "live library change cancelled";
                     } else if (state.lastSuccessfulMs > 0) {
-                        const auto catchUpGeneration =
-                            nextOperationGeneration();
-                        const auto catchUp = m_sync->catchUpChangedCatalog(
-                            state.lastSuccessfulMs, cancellation,
-                            catchUpGeneration).get();
+                        const auto catchUpGeneration = nextOperationGeneration();
+                        const auto catchUp =
+                            m_sync
+                                ->catchUpChangedCatalog(state.lastSuccessfulMs, cancellation,
+                                                        catchUpGeneration)
+                                .get();
                         if (!catchUp.success) {
                             result.cancelled = catchUp.cancelled;
                             result.superseded = catchUp.superseded;
@@ -1729,48 +1629,41 @@ void LibraryCoordinator::liveChangeWorker()
                             catchUpSucceeded = true;
                             result.checkpointMs = catchUp.checkpointMs;
                             result.lastSuccessfulMs = catchUp.checkpointMs;
-                            result.generation = commitGeneration(
-                                catchUpGeneration);
+                            result.generation = commitGeneration(catchUpGeneration);
                             result.committedGeneration = result.generation;
                             {
-                                std::lock_guard<std::mutex> lock(
-                                    m_startupMutex);
+                                std::lock_guard<std::mutex> lock(m_startupMutex);
                                 m_lastSuccessfulMs = result.lastSuccessfulMs;
                             }
                         }
                     } else {
                         committedGeneration = nextOperationGeneration();
-                        const auto transactionGeneration =
-                            m_sync->nextTransactionGeneration();
+                        const auto transactionGeneration = m_sync->nextTransactionGeneration();
                         const auto reconciled =
-                            m_sync->reconcileAuthoritativeMembership(
-                                cancellation, transactionGeneration,
-                                committedGeneration).get();
+                            m_sync
+                                ->reconcileAuthoritativeMembership(
+                                    cancellation, transactionGeneration, committedGeneration)
+                                .get();
                         if (!reconciled.success) {
                             result.cancelled = reconciled.cancelled;
                             result.superseded = reconciled.superseded;
                             result.error = reconciled.error;
                             result.message = reconciled.message;
                         } else {
-                            result.generation = commitGeneration(
-                                committedGeneration);
+                            result.generation = commitGeneration(committedGeneration);
                             result.committedGeneration = result.generation;
-                            const std::int64_t nowMs =
-                                coordinatorWallClockMs();
+                            const std::int64_t nowMs = coordinatorWallClockMs();
                             // The authoritative membership commit is already
                             // durable. Finish this checkpoint even if the
                             // caller requested cancellation meanwhile.
-                            const auto checkpoint = m_sync->writeSyncState(
-                                nowMs, nowMs, committedGeneration).get();
+                            const auto checkpoint =
+                                m_sync->writeSyncState(nowMs, nowMs, committedGeneration).get();
                             if (checkpoint.success) {
                                 catchUpSucceeded = true;
                                 result.checkpointMs = checkpoint.lastSuccessfulMs;
-                                result.lastSuccessfulMs =
-                                    checkpoint.lastSuccessfulMs;
-                                result.lastReconcileMs =
-                                    checkpoint.lastReconcileMs;
-                                std::lock_guard<std::mutex> lock(
-                                    m_startupMutex);
+                                result.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                                result.lastReconcileMs = checkpoint.lastReconcileMs;
+                                std::lock_guard<std::mutex> lock(m_startupMutex);
                                 m_lastSuccessfulMs = result.lastSuccessfulMs;
                                 m_lastReconcileMs = result.lastReconcileMs;
                             } else if (result.message.empty()) {
@@ -1782,51 +1675,44 @@ void LibraryCoordinator::liveChangeWorker()
                 }
             }
 
-            const bool catchUpFailed = batch.catchUpRequired
-                && !catchUpSucceeded;
-            if (!catchUpFailed && result.error == CatalogDbErrorCategory::None
-                && !result.cancelled && !result.superseded) {
-                if (batch.itemsAdded.empty() && batch.itemsRemoved.empty()
-                    && batch.itemsUpdated.empty()
-                    && !batch.catchUpRequired) {
+            const bool catchUpFailed = batch.catchUpRequired && !catchUpSucceeded;
+            if (!catchUpFailed && result.error == CatalogDbErrorCategory::None &&
+                !result.cancelled && !result.superseded) {
+                if (batch.itemsAdded.empty() && batch.itemsRemoved.empty() &&
+                    batch.itemsUpdated.empty() && !batch.catchUpRequired) {
                     result.success = true;
                 } else {
-                    auto applied = m_sync->applyLibraryChanges(
-                        batch, cancellation, nextOperationGeneration()).get();
+                    auto applied =
+                        m_sync->applyLibraryChanges(batch, cancellation, nextOperationGeneration())
+                            .get();
                     const bool userDataChanged = result.userDataChanged;
                     const auto priorGeneration = result.generation;
                     result = std::move(applied);
                     result.userDataChanged = userDataChanged;
-                    result.generation = std::max(result.generation,
-                                                 priorGeneration);
-                    result.catchUpRequired = batch.catchUpRequired
-                        || result.catchUpRequired;
+                    result.generation = std::max(result.generation, priorGeneration);
+                    result.catchUpRequired = batch.catchUpRequired || result.catchUpRequired;
                     if (result.success) {
-                        result.generation = commitGeneration(
-                            nextOperationGeneration());
+                        result.generation = commitGeneration(nextOperationGeneration());
                         result.committedGeneration = result.generation;
                     }
                 }
             }
-        } catch (const std::exception &error) {
+        } catch (const std::exception& error) {
             result.cancelled = cancelled();
             result.superseded = !result.cancelled;
-            result.error = result.cancelled
-                ? CatalogDbErrorCategory::Superseded
-                : CatalogDbErrorCategory::SqliteError;
+            result.error = result.cancelled ? CatalogDbErrorCategory::Superseded
+                                            : CatalogDbErrorCategory::SqliteError;
             result.message = error.what();
         } catch (...) {
             result.cancelled = cancelled();
             result.superseded = !result.cancelled;
-            result.error = result.cancelled
-                ? CatalogDbErrorCategory::Superseded
-                : CatalogDbErrorCategory::SqliteError;
+            result.error = result.cancelled ? CatalogDbErrorCategory::Superseded
+                                            : CatalogDbErrorCategory::SqliteError;
             result.message = "live library change failed unexpectedly";
         }
         if (batch.catchUpRequired) {
             std::lock_guard<std::mutex> lock(m_startupMutex);
-            const bool transferredBarrierSucceeded = catchUpSucceeded
-                && result.success;
+            const bool transferredBarrierSucceeded = catchUpSucceeded && result.success;
             if (transferredBarrierSucceeded) {
                 m_liveChangeDrainPendingCatchUp = false;
             } else if (!m_liveChangeStop) {
@@ -1842,8 +1728,7 @@ void LibraryCoordinator::liveChangeWorker()
             }
         }
         result.generation = std::max(result.generation, committedGeneration);
-        result.committedGeneration = std::max(
-            result.committedGeneration, committedGeneration);
+        result.committedGeneration = std::max(result.committedGeneration, committedGeneration);
         publish(std::move(result));
     }
 }
@@ -1910,7 +1795,7 @@ void LibraryCoordinator::stop() noexcept
         m_hierarchyStop = true;
         if (m_hierarchyActiveCancellation)
             m_hierarchyActiveCancellation->store(true);
-        for (auto &request : m_hierarchyRequests) {
+        for (auto& request : m_hierarchyRequests) {
             if (request.cancellation)
                 request.cancellation->store(true);
             HierarchyResult result;
@@ -1966,15 +1851,12 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     status.lastReconcileMs = m_lastReconcileMs;
     status.manualOffline = m_manualOfflineMode;
     const auto nowMs = coordinatorWallClockMs();
-    status.safetyReconcileDue = status.lastReconcileMs <= 0
-        || nowMs < status.lastReconcileMs
-        || nowMs - status.lastReconcileMs >= kSafetyReconcileIntervalMs;
-    status.maintenanceDue = status.safetyReconcileDue
-        && !status.manualOffline;
-    status.cancelRequested = m_startupCancellation
-        && m_startupCancellation->load();
-    status.inFlight = status.inFlight || status.startupInFlight
-        || status.fullSyncInFlight || status.safetyReconcileInFlight;
+    status.safetyReconcileDue = status.lastReconcileMs <= 0 || nowMs < status.lastReconcileMs ||
+                                nowMs - status.lastReconcileMs >= kSafetyReconcileIntervalMs;
+    status.maintenanceDue = status.safetyReconcileDue && !status.manualOffline;
+    status.cancelRequested = m_startupCancellation && m_startupCancellation->load();
+    status.inFlight = status.inFlight || status.startupInFlight || status.fullSyncInFlight ||
+                      status.safetyReconcileInFlight;
     return status;
 }
 

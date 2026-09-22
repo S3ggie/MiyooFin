@@ -8,7 +8,8 @@ namespace miyoofin {
 /// Persistent authentication session.
 /// Saved to disk as key=value lines.
 /// The password is never saved — only the access token.
-struct Session {
+struct Session
+{
     std::string serverUrl;
     std::string serverId;
     /// Optional verified local route.  serverUrl remains the canonical identity.
@@ -24,12 +25,14 @@ struct Session {
     bool manualOfflineMode = false;
 
     /// True if the session contains enough data to attempt token validation.
-    bool valid() const {
+    bool valid() const
+    {
         return !accessToken.empty() && !userId.empty() && !serverUrl.empty();
     }
 
     /// Reset all fields to empty.
-    void clear() {
+    void clear()
+    {
         serverUrl.clear();
         serverId.clear();
         localServerUrl.clear();
@@ -52,10 +55,10 @@ struct Session {
     static bool remove();
 
     /// Save to an explicit path (for testing).
-    bool saveTo(const std::string &path) const;
+    bool saveTo(const std::string& path) const;
 
     /// Load from an explicit path (for testing).
-    static Session loadFrom(const std::string &path);
+    static Session loadFrom(const std::string& path);
 };
 
 } // namespace miyoofin

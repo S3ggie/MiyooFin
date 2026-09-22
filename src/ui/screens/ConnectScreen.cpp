@@ -13,8 +13,7 @@ ConnectScreen::ConnectScreen(const std::string& savedUrl) : m_savedUrl(savedUrl)
 #ifdef MIYOOFIN_TEST_BUILD
 ConnectScreen::ConnectScreen(const std::string& savedUrl, ConnectionAttempt attempt)
     : m_savedUrl(savedUrl), m_connectionAttempt(std::move(attempt))
-{
-}
+{}
 #endif
 
 ConnectScreen::~ConnectScreen()
@@ -107,9 +106,10 @@ void ConnectScreen::startConnection()
 #endif
     m_connectThread = std::thread([this, url, cancellation
 #ifdef MIYOOFIN_TEST_BUILD
-                                    , connectionAttempt
+                                   ,
+                                   connectionAttempt
 #endif
-                                   ]() {
+    ]() {
         ServerInfo info;
         std::string err;
         bool ok = false;

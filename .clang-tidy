@@ -1,0 +1,10 @@
+Checks: >-
+  -*,
+  bugprone-argument-comment,
+  bugprone-suspicious-missing-comma,
+  performance-move-const-arg,
+  performance-no-automatic-move,
+  performance-unnecessary-copy-initialization
+WarningsAsErrors: ''
+HeaderFilterRegex: '(^|/)(src|include|tools)/'
+FormatStyle: file

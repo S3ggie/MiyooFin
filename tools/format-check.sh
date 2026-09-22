@@ -5,28 +5,66 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 repo_root=$(CDPATH= cd "$script_dir/.." && pwd)
 cd "$repo_root"
 
-# Keep this list intentionally narrow.  It covers the production files cleaned
-# in the professional-polish pass without imposing a repository-wide rewrite.
-format_sources="
-src/diagnostics/UiDiagnostics.cpp
-src/download/DownloadManager.cpp
-src/ui/screens/HomeScreen.cpp
-src/ui/screens/HomeScreenArtwork.cpp
-src/ui/screens/HomeScreenDownloads.cpp
-src/ui/screens/HomeScreenHierarchy.cpp
-src/ui/screens/HomeScreenNavigation.cpp
-src/ui/screens/HomeScreenOffline.cpp
-src/ui/screens/HomeScreenRefresh.cpp
-src/ui/screens/HomeScreenRender.cpp
-src/ui/screens/HomeScreenSettings.cpp
-src/ui/screens/HomeScreenSync.cpp
-src/ui/screens/HomeScreenSyncApply.cpp
-"
+# The formatting boundary is first-party implementation and test code plus
+# the small standalone tools. Vendored/imported/generated code and shell/
+# python tooling remain outside this check. git ls-files keeps the source set
+# explicit and prevents untracked build output from being scanned. Keep the
+# intermediate list NUL-delimited so tracked paths remain safe even if they
+# contain whitespace.
+source_list=$(mktemp "${TMPDIR:-/tmp}/miyoofin-format.XXXXXX")
+trap 'rm -f "$source_list"' EXIT HUP INT TERM
+git ls-files -z -- 'src/**' 'include/**' 'tools/**' 'tests/**' | python3 -c '
+import os
+import sys
 
-if command -v clang-format >/dev/null 2>&1; then
-    for source in $format_sources; do
-        clang-format --dry-run --Werror --style=file "$source"
-    done
+extensions = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+roots = ("src", "include", "tools", "tests")
+excluded_directories = {
+    "external",
+    "generated",
+    "imported",
+    "third-party",
+    "third_party",
+    "vendor",
+}
+excluded_files = {
+    "src/image/stb_image_impl.cpp",
+}
+for raw_path in sys.stdin.buffer.read().split(b"\0"):
+    if not raw_path:
+        continue
+    path = os.fsdecode(raw_path)
+    parts = path.split("/")
+    if parts[0] not in roots or not any(path.endswith(extension) for extension in extensions):
+        continue
+    if path in excluded_files:
+        continue
+    if any(part.casefold() in excluded_directories for part in parts[1:]):
+        continue
+    sys.stdout.buffer.write(raw_path + b"\0")
+' >"$source_list"
+
+if [ ! -s "$source_list" ]; then
+    echo "format check failed: no first-party C/C++ sources found"
+    exit 1
+fi
+
+clang_format=${CLANG_FORMAT:-clang-format}
+if command -v "$clang_format" >/dev/null 2>&1; then
+    python3 - "$source_list" "$clang_format" <<'PY'
+import os
+import subprocess
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    sources = [os.fsdecode(path) for path in handle.read().split(b"\0") if path]
+
+for source in sources:
+    subprocess.run(
+        [sys.argv[2], "--dry-run", "--Werror", "--style=file", source],
+        check=True,
+    )
+PY
     echo "clang-format check passed"
     exit 0
 fi
@@ -38,8 +76,9 @@ fi
 # first, so prose and string data cannot trigger the fallback.  Single
 # statement bodies and loop-header semicolons are intentionally outside this
 # fallback's scope; clang-format is the authoritative check when installed.
-python3 - "$format_sources" <<'PY'
+python3 - "$source_list" <<'PY'
 import re
+import os
 import sys
 
 
@@ -157,7 +196,9 @@ def remove_control_headers(line):
 
 def remove_single_statement_lambdas(line):
     masked = list(line)
-    lambda_start = re.compile(r"\[[^]]*\]\s*(?:\([^)]*\))?\s*\{")
+    lambda_start = re.compile(
+        r"\[[^]]*\]\s*(?:\([^)]*\))?\s*(?:mutable\s*)?\{"
+    )
     for match in lambda_start.finditer(line):
         opening = line.rfind("{", match.start(), match.end())
         closing = matching_brace(line, opening)
@@ -172,7 +213,8 @@ def remove_single_statement_lambdas(line):
     return "".join(masked)
 
 
-sources = sys.argv[1].split()
+with open(sys.argv[1], "rb") as handle:
+    sources = [os.fsdecode(path) for path in handle.read().split(b"\0") if path]
 violations = []
 for source in sources:
     with open(source, encoding="utf-8") as handle:
@@ -181,6 +223,13 @@ for source in sources:
         if has_inline_braced_control(line):
             violations.append(f"{source}:{number}: inline braced control flow")
             continue
+        # clang-format may wrap a loop header before its closing parenthesis.
+        # Its semicolons are still header syntax, not multiple statements.
+        incomplete_control = re.search(r"\b(for|while|if|switch)\s*\(", line)
+        if incomplete_control:
+            opening = line.find("(", incomplete_control.start())
+            if matching_paren(line, opening) is None:
+                continue
         if line.count(";") >= 2:
             # A for-loop header has two semicolons by definition.  Removing
             # its parenthesized header avoids treating that syntax as a body.

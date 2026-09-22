@@ -163,12 +163,22 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 test-sanitize:
 	@$(MAKE) SANITIZE=1 test
 
-.PHONY: refactor-check format-check
+.PHONY: refactor-check format-check clang-tidy
 refactor-check:
 	@sh tools/refactor-check.sh
 
 format-check:
 	@sh tools/format-check.sh
+
+# Opt-in host-only clang-tidy run. bear records the exact host compile
+# commands used by this Makefile; the generated compilation database is not
+# tracked because it contains machine-specific paths and flags.
+clang-tidy:
+	@command -v clang-tidy >/dev/null 2>&1 || { echo "clang-tidy is required (opt-in)"; exit 1; }
+	@command -v bear >/dev/null 2>&1 || { echo "bear is required to generate compile_commands.json (opt-in)"; exit 1; }
+	@echo "  [TIDY] recording host compile commands"
+	@bear -- $(MAKE) clean all
+	@clang-tidy $(SRCS) -p . --config-file=.clang-tidy --quiet
 
 $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | $(TEST_DIR)
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
@@ -442,7 +452,8 @@ help:
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
 	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1, separate output/sanitize tree)"
-	@echo "  make format-check — Check maintained C++ control-flow formatting"
+	@echo "  make format-check — Check first-party C/C++ formatting"
+	@echo "  make clang-tidy — Opt-in host-only clang-tidy run (requires bear)"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make desktop-run — Run the host desktop development runtime"

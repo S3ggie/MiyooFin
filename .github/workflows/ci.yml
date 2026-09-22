@@ -19,7 +19,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libsdl2-dev libsdl2-ttf-dev \
-            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+            libcurl4-openssl-dev libjson-c-dev clang-format-18 python3 xvfb
+          clang-format-18 --version
+
+      - name: First-party C/C++ formatting
+        # Keep CI on the documented clang-format 18 toolchain.
+        run: CLANG_FORMAT=clang-format-18 make format-check
 
       - name: Build host application
         run: make -j2

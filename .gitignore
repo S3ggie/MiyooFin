@@ -1,5 +1,6 @@
 # Build outputs
 output/
+compile_commands.json
 
 # Editor temp files
 *~

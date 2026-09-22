@@ -224,6 +224,11 @@ CatalogDb::enqueueMediaPageUpsert(const CatalogDbMediaPageWrite& page,
     command->enqueuedMonotonicUs = telemetryNowIfEnabled();
     auto future = command->result.get_future();
     std::lock_guard<std::mutex> lock(m_mutex);
+    command->metadata.generation =
+        command->metadata.generation ? command->metadata.generation : m_generation;
+    command->metadata.scopeEpoch =
+        command->metadata.scopeEpoch ? command->metadata.scopeEpoch : m_requestedEpoch;
+    command->diagnosticScopeHash = m_requestedScopeKey;
     if (m_stopping || m_pendingJobs >= kMaxPendingJobs) {
         CatalogDbMediaPageUpsertResult r;
         r.error = CatalogDbErrorCategory::ScopeNotReady;
@@ -232,21 +237,22 @@ CatalogDb::enqueueMediaPageUpsert(const CatalogDbMediaPageWrite& page,
         command->result.set_value(std::move(r));
         return future;
     }
-    command->metadata.generation =
-        command->metadata.generation ? command->metadata.generation : m_generation;
-    command->metadata.scopeEpoch =
-        command->metadata.scopeEpoch ? command->metadata.scopeEpoch : m_requestedEpoch;
     m_mediaPageUpsertCommands.push_back(command);
     ++m_pendingJobs;
-    catalogDiagnostic("page_enqueue request=" + std::to_string(page.request) + " generation=" +
-                      std::to_string(command->metadata.generation) + " page_kind=" +
-                      (page.collectionType == "movies"    ? "movies"
-                       : page.collectionType == "tvshows" ? "tvshows"
-                                                          : "unknown") +
-                      " page_index=" + std::to_string(page.ordinalStart) +
-                      " view_ordinal=" + std::to_string(page.viewOrdinal) +
-                      " final=" + std::to_string(page.finalPage ? 1 : 0) +
-                      " queue_depth=" + std::to_string(m_pendingJobs));
+    const std::string source =
+        page.diagnosticSource.empty() ? "unspecified" : page.diagnosticSource;
+    catalogDiagnostic(
+        "page_enqueue request=" + std::to_string(page.request) +
+        " generation=" + std::to_string(command->metadata.generation) +
+        " scope_epoch=" + std::to_string(command->metadata.scopeEpoch) + " scope_hash=" +
+        (command->diagnosticScopeHash.empty() ? "none" : command->diagnosticScopeHash) +
+        " page_kind=" +
+        (page.collectionType == "movies"    ? "movies"
+         : page.collectionType == "tvshows" ? "tvshows"
+                                            : "unknown") +
+        " source=" + source + " page_index=" + std::to_string(page.ordinalStart) +
+        " view_ordinal=" + std::to_string(page.viewOrdinal) + " final=" +
+        std::to_string(page.finalPage ? 1 : 0) + " queue_depth=" + std::to_string(m_pendingJobs));
     catalogDiagnostic("page_submit_enqueued");
     m_wake.notify_one();
     return future;
@@ -257,15 +263,19 @@ void CatalogDb::logMediaPageTransition(const std::shared_ptr<MediaPageUpsertComm
                                        std::size_t attempt)
 {
     const auto& page = command->page;
-    std::string line = std::string(event) + " request=" + std::to_string(page.request) +
-                       " generation=" + std::to_string(command->metadata.generation) +
-                       " page_kind=" +
-                       (page.collectionType == "movies"    ? "movies"
-                        : page.collectionType == "tvshows" ? "tvshows"
-                                                           : "unknown") +
-                       " page_index=" + std::to_string(page.ordinalStart) +
-                       " view_ordinal=" + std::to_string(page.viewOrdinal) +
-                       " final=" + std::to_string(page.finalPage ? 1 : 0);
+    std::string line =
+        std::string(event) + " request=" + std::to_string(page.request) +
+        " generation=" + std::to_string(command->metadata.generation) +
+        " scope_epoch=" + std::to_string(command->metadata.scopeEpoch) + " scope_hash=" +
+        (command->diagnosticScopeHash.empty() ? "none" : command->diagnosticScopeHash) +
+        " page_kind=" +
+        (page.collectionType == "movies"    ? "movies"
+         : page.collectionType == "tvshows" ? "tvshows"
+                                            : "unknown") +
+        " source=" + (page.diagnosticSource.empty() ? "unspecified" : page.diagnosticSource) +
+        " page_index=" + std::to_string(page.ordinalStart) +
+        " view_ordinal=" + std::to_string(page.viewOrdinal) +
+        " final=" + std::to_string(page.finalPage ? 1 : 0);
     if (attempt != 0)
         line += " attempt=" + std::to_string(attempt);
     if (command->enqueuedMonotonicUs != 0) {

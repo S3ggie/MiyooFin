@@ -269,7 +269,8 @@ void HomeScreen::update(Uint32 dt)
 {
     if (!m_catalogScopeReadyLogged && catalogScopeReady()) {
         m_catalogScopeReadyLogged = true;
-        uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready");
+        uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready epoch=" +
+                            std::to_string(catalogScopeEpoch()) + " identity=query");
     }
     if (m_logoutArmed && !m_logoutRequested) {
         if (dt >= m_logoutTimer) {

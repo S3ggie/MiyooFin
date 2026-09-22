@@ -3,6 +3,7 @@
 #include "../net/HttpClient.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
+#include "../data/CatalogPrimitives.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
 #include <algorithm>
@@ -28,6 +29,15 @@ bool coordinatorLiveChangeIsEmpty(const miyoofin::JellyfinLibraryChangeBatch& ba
 {
     return !batch.catchUpRequired && !batch.userDataChanged && batch.itemsAdded.empty() &&
            batch.itemsUpdated.empty() && batch.itemsRemoved.empty();
+}
+
+void appendCoordinatorGateReason(std::string& reasons, const char* reason, bool blocked)
+{
+    if (!blocked)
+        return;
+    if (!reasons.empty())
+        reasons += ',';
+    reasons += reason;
 }
 
 bool coordinatorHierarchyIdentityMatches(const miyoofin::library::HierarchyRequest& left,
@@ -82,6 +92,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
 {
     if (!kCoordinatorStartupSyncEnabled) {
         (void)catalogHasRows;
+        uiDiagnostics().log("[LibraryCoordinator] startup_sync_rejected phase=disabled");
         return false;
     }
 
@@ -89,130 +100,178 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     // it after releasing the mutex. The worker takes this same mutex to
     // publish its result, so joining while locked can deadlock at the handoff.
     std::thread priorThread;
+    std::string admissionDiagnostic;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || m_startupInFlight || m_fullSyncInFlight ||
-            !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight ||
-            m_safetyReconcileResultReady || m_liveChangeActive || m_hierarchyMutationInFlight)
-            return false;
-        if (m_startupThread.joinable())
-            priorThread = std::move(m_startupThread);
+        const bool stopped = m_stopped;
+        const bool notRunning = !m_running;
+        const bool missingSync = !m_sync;
+        const bool startupInFlight = m_startupInFlight;
+        const bool fullSyncInFlight = m_fullSyncInFlight;
+        const bool pendingPopulationUpdates = !m_fullPopulationUpdates.empty();
+        const bool safetyReconcileInFlight = m_safetyReconcileInFlight;
+        const bool safetyReconcileResultReady = m_safetyReconcileResultReady;
+        const bool liveChangeActive = m_liveChangeActive.has_value();
+        const bool hierarchyMutationInFlight = m_hierarchyMutationInFlight;
+        if (stopped || notRunning || missingSync || startupInFlight || fullSyncInFlight ||
+            pendingPopulationUpdates || safetyReconcileInFlight || safetyReconcileResultReady ||
+            liveChangeActive || hierarchyMutationInFlight) {
+            std::string reasons;
+            appendCoordinatorGateReason(reasons, "stopped", stopped);
+            appendCoordinatorGateReason(reasons, "not_running", notRunning);
+            appendCoordinatorGateReason(reasons, "missing_sync", missingSync);
+            appendCoordinatorGateReason(reasons, "startup_in_flight", startupInFlight);
+            appendCoordinatorGateReason(reasons, "full_sync_in_flight", fullSyncInFlight);
+            appendCoordinatorGateReason(reasons, "pending_population_updates",
+                                        pendingPopulationUpdates);
+            appendCoordinatorGateReason(reasons, "safety_reconcile_in_flight",
+                                        safetyReconcileInFlight);
+            appendCoordinatorGateReason(reasons, "safety_reconcile_result_ready",
+                                        safetyReconcileResultReady);
+            appendCoordinatorGateReason(reasons, "live_change_active", liveChangeActive);
+            appendCoordinatorGateReason(reasons, "hierarchy_mutation_in_flight",
+                                        hierarchyMutationInFlight);
+            admissionDiagnostic = "[LibraryCoordinator] startup_sync_rejected phase=admission"
+                                  " catalog_has_rows=" +
+                                  std::to_string(catalogHasRows ? 1 : 0) + " reasons=" + reasons;
+        } else {
+            if (m_startupThread.joinable())
+                priorThread = std::move(m_startupThread);
 
-        // Reserve the startup slot while the prior thread is being joined so
-        // another caller cannot start a second operation in the gap.
-        m_startupInFlight = true;
-        m_startupCancellation = std::make_shared<std::atomic_bool>(false);
+            // Reserve the startup slot while the prior thread is being joined so
+            // another caller cannot start a second operation in the gap.
+            m_startupInFlight = true;
+            m_startupCancellation = std::make_shared<std::atomic_bool>(false);
+        }
+    }
+    if (!admissionDiagnostic.empty()) {
+        uiDiagnostics().log(admissionDiagnostic);
+        return false;
     }
     if (priorThread.joinable())
         priorThread.join();
 
+    std::string postJoinDiagnostic;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         if (m_stopped || !m_running || !m_sync) {
+            std::string reasons;
+            appendCoordinatorGateReason(reasons, "stopped", m_stopped);
+            appendCoordinatorGateReason(reasons, "not_running", !m_running);
+            appendCoordinatorGateReason(reasons, "missing_sync", !m_sync);
+            postJoinDiagnostic = "[LibraryCoordinator] startup_sync_rejected phase=post_join"
+                                 " catalog_has_rows=" +
+                                 std::to_string(catalogHasRows ? 1 : 0) + " reasons=" + reasons;
             m_startupInFlight = false;
-            return false;
-        }
+        } else {
+            const auto cancellation = m_startupCancellation;
+            const auto sync = m_sync;
+            const auto db = m_db;
+            const auto scopeEpoch = m_scopeEpoch;
+            m_startupResult = {};
+            m_startupResultReady = false;
+            m_startupThread =
+                std::thread([this, catalogHasRows, cancellation, sync, db, scopeEpoch] {
+                    StartupSyncResult result;
+                    const auto cancelled = [&] { return cancellation && cancellation->load(); };
 
-        const auto cancellation = m_startupCancellation;
-        const auto sync = m_sync;
-        const auto db = m_db;
-        const auto scopeEpoch = m_scopeEpoch;
-        m_startupResult = {};
-        m_startupResultReady = false;
-        m_startupThread = std::thread([this, catalogHasRows, cancellation, sync, db, scopeEpoch] {
-            StartupSyncResult result;
-            const auto cancelled = [&] { return cancellation && cancellation->load(); };
-
-            if (!db || scopeEpoch == 0) {
-                result.error = CatalogDbErrorCategory::ScopeNotReady;
-                result.message = "CatalogDb scope is unavailable";
-            } else if (cancelled()) {
-                result.cancelled = true;
-                result.error = CatalogDbErrorCategory::Superseded;
-                result.message = "startup sync cancelled";
-            } else {
-                CatalogDbJobMetadata metadata;
-                metadata.scopeEpoch = scopeEpoch;
-                metadata.cancellation = cancellation;
-                const auto state = db->readSyncState(false, 0, 0, metadata).get();
-                const std::int64_t nowMs = coordinatorWallClockMs();
-                if (!state.success) {
-                    result.mode = StartupSyncMode::FullReconcile;
-                } else {
-                    result.generation = state.committedGeneration;
-                    result.committedGeneration = state.committedGeneration;
-                    result.lastSuccessfulMs = state.lastSuccessfulMs;
-                    result.lastReconcileMs = state.lastReconcileMs;
-                    if (result.generation > 0)
-                        sync->seedTransactionGeneration(result.generation);
-                    {
-                        std::lock_guard<std::mutex> lock(m_startupMutex);
-                        if (result.generation > m_catalogGeneration)
-                            m_catalogGeneration = result.generation;
-                        m_lastSuccessfulMs = result.lastSuccessfulMs;
-                        m_lastReconcileMs = result.lastReconcileMs;
-                    }
-
-                    const bool validCheckpoint = catalogHasRows && state.lastSuccessfulMs > 0 &&
-                                                 result.generation > 0 &&
-                                                 state.lastReconcileMs <= state.lastSuccessfulMs &&
-                                                 nowMs >= state.lastSuccessfulMs;
-                    if (!validCheckpoint ||
-                        nowMs - state.lastReconcileMs >= 24LL * 60 * 60 * 1000) {
-                        result.mode = StartupSyncMode::FullReconcile;
-                    } else if (nowMs - state.lastSuccessfulMs < 15LL * 60 * 1000) {
-                        result.mode = StartupSyncMode::SkipFresh;
-                    } else if (nowMs - state.lastSuccessfulMs < 24LL * 60 * 60 * 1000) {
-                        result.mode = StartupSyncMode::DeltaCatchUp;
+                    if (!db || scopeEpoch == 0) {
+                        result.error = CatalogDbErrorCategory::ScopeNotReady;
+                        result.message = "CatalogDb scope is unavailable";
+                    } else if (cancelled()) {
+                        result.cancelled = true;
+                        result.error = CatalogDbErrorCategory::Superseded;
+                        result.message = "startup sync cancelled";
                     } else {
-                        result.mode = StartupSyncMode::FullReconcile;
-                    }
-                }
+                        CatalogDbJobMetadata metadata;
+                        metadata.scopeEpoch = scopeEpoch;
+                        metadata.cancellation = cancellation;
+                        const auto state = db->readSyncState(false, 0, 0, metadata).get();
+                        const std::int64_t nowMs = coordinatorWallClockMs();
+                        if (!state.success) {
+                            result.mode = StartupSyncMode::FullReconcile;
+                        } else {
+                            result.generation = state.committedGeneration;
+                            result.committedGeneration = state.committedGeneration;
+                            result.lastSuccessfulMs = state.lastSuccessfulMs;
+                            result.lastReconcileMs = state.lastReconcileMs;
+                            if (result.generation > 0)
+                                sync->seedTransactionGeneration(result.generation);
+                            {
+                                std::lock_guard<std::mutex> lock(m_startupMutex);
+                                if (result.generation > m_catalogGeneration)
+                                    m_catalogGeneration = result.generation;
+                                m_lastSuccessfulMs = result.lastSuccessfulMs;
+                                m_lastReconcileMs = result.lastReconcileMs;
+                            }
 
-                if (cancelled()) {
-                    result.cancelled = true;
-                    result.error = CatalogDbErrorCategory::Superseded;
-                    result.message = "startup sync cancelled";
-                } else if (result.mode == StartupSyncMode::DeltaCatchUp) {
-                    std::uint64_t committedGeneration = 0;
+                            const bool validCheckpoint =
+                                catalogHasRows && state.lastSuccessfulMs > 0 &&
+                                result.generation > 0 &&
+                                state.lastReconcileMs <= state.lastSuccessfulMs &&
+                                nowMs >= state.lastSuccessfulMs;
+                            if (!validCheckpoint ||
+                                nowMs - state.lastReconcileMs >= 24LL * 60 * 60 * 1000) {
+                                result.mode = StartupSyncMode::FullReconcile;
+                            } else if (nowMs - state.lastSuccessfulMs < 15LL * 60 * 1000) {
+                                result.mode = StartupSyncMode::SkipFresh;
+                            } else if (nowMs - state.lastSuccessfulMs < 24LL * 60 * 60 * 1000) {
+                                result.mode = StartupSyncMode::DeltaCatchUp;
+                            } else {
+                                result.mode = StartupSyncMode::FullReconcile;
+                            }
+                        }
+
+                        if (cancelled()) {
+                            result.cancelled = true;
+                            result.error = CatalogDbErrorCategory::Superseded;
+                            result.message = "startup sync cancelled";
+                        } else if (result.mode == StartupSyncMode::DeltaCatchUp) {
+                            std::uint64_t committedGeneration = 0;
+                            {
+                                std::lock_guard<std::mutex> lock(m_startupMutex);
+                                committedGeneration = m_catalogGeneration + 1;
+                            }
+                            const auto catchUp =
+                                sync->catchUpChangedCatalog(state.lastSuccessfulMs, cancellation,
+                                                            committedGeneration)
+                                    .get();
+                            result.success = catchUp.success;
+                            result.cancelled = catchUp.cancelled;
+                            result.superseded = catchUp.superseded;
+                            result.error = catchUp.error;
+                            result.message = catchUp.message;
+                            result.checkpointMs = catchUp.checkpointMs;
+                            if (catchUp.success) {
+                                result.committedGeneration = committedGeneration;
+                                result.generation = committedGeneration;
+                                result.lastSuccessfulMs = catchUp.checkpointMs;
+                                std::lock_guard<std::mutex> lock(m_startupMutex);
+                                m_catalogGeneration =
+                                    std::max(m_catalogGeneration, committedGeneration);
+                                m_lastSuccessfulMs = result.lastSuccessfulMs;
+                            }
+                        } else {
+                            // SkipFresh and FullReconcile are both successful policy
+                            // decisions.  Home owns only the still-unmigrated full
+                            // walk; it cannot run until this operation is complete.
+                            result.success = true;
+                        }
+                    }
+
                     {
                         std::lock_guard<std::mutex> lock(m_startupMutex);
-                        committedGeneration = m_catalogGeneration + 1;
+                        m_startupResult = std::move(result);
+                        m_startupResultReady = true;
+                        m_startupInFlight = false;
                     }
-                    const auto catchUp =
-                        sync->catchUpChangedCatalog(state.lastSuccessfulMs, cancellation,
-                                                    committedGeneration)
-                            .get();
-                    result.success = catchUp.success;
-                    result.cancelled = catchUp.cancelled;
-                    result.superseded = catchUp.superseded;
-                    result.error = catchUp.error;
-                    result.message = catchUp.message;
-                    result.checkpointMs = catchUp.checkpointMs;
-                    if (catchUp.success) {
-                        result.committedGeneration = committedGeneration;
-                        result.generation = committedGeneration;
-                        result.lastSuccessfulMs = catchUp.checkpointMs;
-                        std::lock_guard<std::mutex> lock(m_startupMutex);
-                        m_catalogGeneration = std::max(m_catalogGeneration, committedGeneration);
-                        m_lastSuccessfulMs = result.lastSuccessfulMs;
-                    }
-                } else {
-                    // SkipFresh and FullReconcile are both successful policy
-                    // decisions.  Home owns only the still-unmigrated full
-                    // walk; it cannot run until this operation is complete.
-                    result.success = true;
-                }
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(m_startupMutex);
-                m_startupResult = std::move(result);
-                m_startupResultReady = true;
-                m_startupInFlight = false;
-            }
-            m_startupWake.notify_all();
-        });
+                    m_startupWake.notify_all();
+                });
+        }
+    }
+    if (!postJoinDiagnostic.empty()) {
+        uiDiagnostics().log(postJoinDiagnostic);
+        return false;
     }
     return true;
 }
@@ -235,381 +294,485 @@ bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult& result)
 bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
 {
     std::thread priorThread;
+    std::string admissionDiagnostic;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (m_stopped || !m_running || !m_sync || !m_db || m_scopeEpoch == 0 || m_startupInFlight ||
-            m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
-            m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive ||
-            m_hierarchyMutationInFlight)
-            return false;
-        if (m_fullPopulationThread.joinable())
-            priorThread = std::move(m_fullPopulationThread);
-        m_fullSyncInFlight = true;
-        m_fullPopulationCancellation = std::make_shared<std::atomic_bool>(false);
-        m_fullPopulationUpdates.clear();
-        request = ++m_fullPopulationRequest;
-        m_fullPopulationGeneration = 0;
+        const bool stopped = m_stopped;
+        const bool notRunning = !m_running;
+        const bool missingSync = !m_sync;
+        const bool missingDb = !m_db;
+        const bool scopeNotReady = m_scopeEpoch == 0;
+        const bool startupInFlight = m_startupInFlight;
+        const bool startupResultReady = m_startupResultReady;
+        const bool fullSyncInFlight = m_fullSyncInFlight;
+        const bool pendingPopulationUpdates = !m_fullPopulationUpdates.empty();
+        const bool safetyReconcileInFlight = m_safetyReconcileInFlight;
+        const bool safetyReconcileResultReady = m_safetyReconcileResultReady;
+        const bool liveChangeActive = m_liveChangeActive.has_value();
+        const bool hierarchyMutationInFlight = m_hierarchyMutationInFlight;
+        if (stopped || notRunning || missingSync || missingDb || scopeNotReady || startupInFlight ||
+            startupResultReady || fullSyncInFlight || pendingPopulationUpdates ||
+            safetyReconcileInFlight || safetyReconcileResultReady || liveChangeActive ||
+            hierarchyMutationInFlight) {
+            std::string reasons;
+            appendCoordinatorGateReason(reasons, "stopped", stopped);
+            appendCoordinatorGateReason(reasons, "not_running", notRunning);
+            appendCoordinatorGateReason(reasons, "missing_sync", missingSync);
+            appendCoordinatorGateReason(reasons, "missing_db", missingDb);
+            appendCoordinatorGateReason(reasons, "scope_not_ready", scopeNotReady);
+            appendCoordinatorGateReason(reasons, "startup_in_flight", startupInFlight);
+            appendCoordinatorGateReason(reasons, "startup_result_ready", startupResultReady);
+            appendCoordinatorGateReason(reasons, "full_sync_in_flight", fullSyncInFlight);
+            appendCoordinatorGateReason(reasons, "pending_population_updates",
+                                        pendingPopulationUpdates);
+            appendCoordinatorGateReason(reasons, "safety_reconcile_in_flight",
+                                        safetyReconcileInFlight);
+            appendCoordinatorGateReason(reasons, "safety_reconcile_result_ready",
+                                        safetyReconcileResultReady);
+            appendCoordinatorGateReason(reasons, "live_change_active", liveChangeActive);
+            appendCoordinatorGateReason(reasons, "hierarchy_mutation_in_flight",
+                                        hierarchyMutationInFlight);
+            admissionDiagnostic =
+                "[LibraryCoordinator] full_population_rejected phase=admission request=" +
+                std::to_string(request) +
+                " current_request=" + std::to_string(m_fullPopulationRequest) +
+                " generation=" + std::to_string(m_fullPopulationGeneration) +
+                " scope_epoch=" + std::to_string(m_scopeEpoch) + " reasons=" + reasons;
+        } else {
+            if (m_fullPopulationThread.joinable())
+                priorThread = std::move(m_fullPopulationThread);
+            m_fullSyncInFlight = true;
+            m_fullPopulationCancellation = std::make_shared<std::atomic_bool>(false);
+            m_fullPopulationUpdates.clear();
+            request = ++m_fullPopulationRequest;
+            m_fullPopulationGeneration = 0;
+        }
+    }
+    if (!admissionDiagnostic.empty()) {
+        uiDiagnostics().log(admissionDiagnostic);
+        return false;
     }
     if (priorThread.joinable())
         priorThread.join();
 
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_db) {
-        m_fullSyncInFlight = false;
-        return false;
-    }
-
-    const auto sync = m_sync;
-    const auto db = m_db;
-    const Session session = m_session;
-    const auto cancellation = m_fullPopulationCancellation;
-    const std::uint64_t requestId = request;
-    const std::uint64_t scopeEpoch = m_scopeEpoch;
+    std::string postJoinDiagnostic;
     try {
-        m_fullPopulationThread = std::thread([this, sync, db, session, cancellation, requestId,
-                                              scopeEpoch] {
-            FullPopulationUpdate terminal;
-            terminal.request = requestId;
-            terminal.terminal = true;
-            std::uint64_t transactionGeneration = 0;
-            std::uint64_t committedGeneration = 0;
-            bool transactionStarted = false;
-            bool transactionCommitted = false;
-            std::vector<LibraryView> views;
-            std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
-            std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
-            std::size_t metadataTotal = 0;
-            std::size_t metadataCompleted = 0;
-            std::size_t mediaCount = 0;
-            std::size_t requestCount = 0;
-            std::size_t completedPageCount = 0;
-            bool firstPage = true;
+        {
+            std::lock_guard<std::mutex> lock(m_startupMutex);
+            if (m_stopped || !m_running || !m_sync || !m_db) {
+                std::string reasons;
+                appendCoordinatorGateReason(reasons, "stopped", m_stopped);
+                appendCoordinatorGateReason(reasons, "not_running", !m_running);
+                appendCoordinatorGateReason(reasons, "missing_sync", !m_sync);
+                appendCoordinatorGateReason(reasons, "missing_db", !m_db);
+                postJoinDiagnostic =
+                    "[LibraryCoordinator] full_population_rejected phase=post_join request=" +
+                    std::to_string(request) +
+                    " current_request=" + std::to_string(m_fullPopulationRequest) +
+                    " generation=" + std::to_string(m_fullPopulationGeneration) +
+                    " scope_epoch=" + std::to_string(m_scopeEpoch) + " reasons=" + reasons;
+                m_fullSyncInFlight = false;
+            } else {
+                const auto sync = m_sync;
+                const auto db = m_db;
+                const Session session = m_session;
+                const auto cancellation = m_fullPopulationCancellation;
+                const std::uint64_t requestId = request;
+                const std::uint64_t scopeEpoch = m_scopeEpoch;
+                const std::string scopeHash =
+                    (session.serverUrl.empty() || session.userId.empty())
+                        ? "none"
+                        : catalog::scopeKey(session.serverUrl, session.userId);
+                m_fullPopulationThread = std::thread([this, sync, db, session, cancellation,
+                                                      requestId, scopeEpoch, scopeHash] {
+                    FullPopulationUpdate terminal;
+                    terminal.request = requestId;
+                    terminal.terminal = true;
+                    std::uint64_t transactionGeneration = 0;
+                    std::uint64_t committedGeneration = 0;
+                    bool transactionStarted = false;
+                    bool transactionCommitted = false;
+                    std::vector<LibraryView> views;
+                    std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
+                    std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
+                    std::size_t metadataTotal = 0;
+                    std::size_t metadataCompleted = 0;
+                    std::size_t mediaCount = 0;
+                    std::size_t requestCount = 0;
+                    std::size_t completedPageCount = 0;
+                    bool firstPage = true;
 
-            const auto cancelled = [&] { return cancellation && cancellation->load(); };
-            const auto publish = [this, requestId](FullPopulationUpdate value) {
-                std::lock_guard<std::mutex> guard(m_startupMutex);
-                // A request cannot normally be superseded while this worker is
-                // alive, but retain the identity check so a stale publication
-                // can never be consumed by a later Home fetch.
-                if (requestId != m_fullPopulationRequest)
-                    return;
-                value.request = requestId;
-                if (value.terminal)
-                    m_fullSyncInFlight = false;
-                m_fullPopulationUpdates.push_back(std::move(value));
-                const auto& published = m_fullPopulationUpdates.back();
-                std::string kind =
-                    published.terminal
-                        ? (published.success
-                               ? "terminal_success"
-                               : (published.cancelled || published.superseded ? "terminal_cancel"
-                                                                              : "terminal_failure"))
-                        : (published.firstPage ? "first_page" : "page");
-                uiDiagnostics().log(
-                    "[LibraryCoordinator] full_population_publish request=" +
-                    std::to_string(published.request) +
-                    " generation=" + std::to_string(published.generation) + " kind=" + kind +
-                    " queue_depth=" + std::to_string(m_fullPopulationUpdates.size()) +
-                    " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
-            };
-            const auto publishTerminal = [&](FullPopulationUpdate value) {
-                value.request = requestId;
-                value.generation = transactionCommitted ? committedGeneration : m_catalogGeneration;
-                value.committedGeneration =
-                    transactionCommitted ? committedGeneration : m_catalogGeneration;
-                value.terminal = true;
-                value.committed = transactionCommitted;
-                value.views = views;
-                value.moviesByView = moviesByView;
-                value.showsByView = showsByView;
-                value.metadataTotal = metadataTotal;
-                value.metadataCompleted = metadataCompleted;
-                value.mediaCount = mediaCount;
-                value.requestCount = requestCount;
-                publish(std::move(value));
-            };
-            const auto failForCancellation = [&] {
-                FullPopulationUpdate value;
-                value.cancelled = true;
-                value.error = CatalogDbErrorCategory::Superseded;
-                value.message = "full library population cancelled";
-                publishTerminal(std::move(value));
-            };
+                    const auto cancelled = [&] { return cancellation && cancellation->load(); };
+                    const auto publish = [this, requestId, scopeEpoch,
+                                          scopeHash](FullPopulationUpdate value) {
+                        std::string diagnostic;
+                        {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            // A request cannot normally be superseded while this worker is
+                            // alive, but retain the identity check so a stale publication
+                            // can never be consumed by a later Home fetch.
+                            if (requestId != m_fullPopulationRequest) {
+                                diagnostic =
+                                    "[LibraryCoordinator] "
+                                    "full_population_publish_rejected request=" +
+                                    std::to_string(requestId) +
+                                    " current_request=" + std::to_string(m_fullPopulationRequest) +
+                                    " generation=" + std::to_string(value.generation) +
+                                    " current_generation=" +
+                                    std::to_string(m_fullPopulationGeneration) +
+                                    " scope_epoch=" + std::to_string(scopeEpoch) +
+                                    " scope_hash=" + scopeHash + " source=full_population" +
+                                    " reason=request_mismatch";
+                            } else {
+                                value.request = requestId;
+                                if (value.terminal)
+                                    m_fullSyncInFlight = false;
+                                m_fullPopulationUpdates.push_back(std::move(value));
+                                const auto& published = m_fullPopulationUpdates.back();
+                                std::string kind =
+                                    published.terminal
+                                        ? (published.success
+                                               ? "terminal_success"
+                                               : (published.cancelled || published.superseded
+                                                      ? "terminal_cancel"
+                                                      : "terminal_failure"))
+                                        : (published.firstPage ? "first_page" : "page");
+                                diagnostic =
+                                    "[LibraryCoordinator] full_population_publish request=" +
+                                    std::to_string(published.request) +
+                                    " generation=" + std::to_string(published.generation) +
+                                    " scope_epoch=" + std::to_string(scopeEpoch) +
+                                    " scope_hash=" + scopeHash + " source=full_population" +
+                                    " kind=" + kind + " queue_depth=" +
+                                    std::to_string(m_fullPopulationUpdates.size()) +
+                                    " monotonic_us=" +
+                                    std::to_string(TelemetryClock::monotonicUs());
+                            }
+                        }
+                        uiDiagnostics().log(diagnostic);
+                    };
+                    const auto publishTerminal = [&](FullPopulationUpdate value) {
+                        value.request = requestId;
+                        value.generation =
+                            transactionCommitted ? committedGeneration : m_catalogGeneration;
+                        value.committedGeneration =
+                            transactionCommitted ? committedGeneration : m_catalogGeneration;
+                        value.terminal = true;
+                        value.committed = transactionCommitted;
+                        value.views = views;
+                        value.moviesByView = moviesByView;
+                        value.showsByView = showsByView;
+                        value.metadataTotal = metadataTotal;
+                        value.metadataCompleted = metadataCompleted;
+                        value.mediaCount = mediaCount;
+                        value.requestCount = requestCount;
+                        publish(std::move(value));
+                    };
+                    const auto failForCancellation = [&] {
+                        FullPopulationUpdate value;
+                        value.cancelled = true;
+                        value.error = CatalogDbErrorCategory::Superseded;
+                        value.message = "full library population cancelled";
+                        publishTerminal(std::move(value));
+                    };
 
-            try {
-                if (!db || scopeEpoch == 0) {
-                    terminal.error = CatalogDbErrorCategory::ScopeNotReady;
-                    terminal.message = "CatalogDb scope is unavailable";
-                    publishTerminal(std::move(terminal));
-                    return;
-                }
-                if (cancelled()) {
-                    failForCancellation();
-                    return;
-                }
+                    try {
+                        if (!db || scopeEpoch == 0) {
+                            terminal.error = CatalogDbErrorCategory::ScopeNotReady;
+                            terminal.message = "CatalogDb scope is unavailable";
+                            publishTerminal(std::move(terminal));
+                            return;
+                        }
+                        if (cancelled()) {
+                            failForCancellation();
+                            return;
+                        }
 
-                {
-                    std::lock_guard<std::mutex> guard(m_startupMutex);
-                    committedGeneration = m_catalogGeneration + 1;
-                }
-                transactionGeneration = sync->nextTransactionGeneration();
-                {
-                    std::lock_guard<std::mutex> guard(m_startupMutex);
-                    m_fullPopulationGeneration = transactionGeneration;
-                }
-                const auto begin = sync->begin(transactionGeneration).get();
-                if (!begin.success) {
-                    terminal.error = begin.error;
-                    terminal.message = begin.message;
-                    publishTerminal(std::move(terminal));
-                    return;
-                }
-                transactionStarted = true;
+                        {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            committedGeneration = m_catalogGeneration + 1;
+                        }
+                        transactionGeneration = sync->nextTransactionGeneration();
+                        {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            m_fullPopulationGeneration = transactionGeneration;
+                        }
+                        const auto begin = sync->begin(transactionGeneration).get();
+                        if (!begin.success) {
+                            terminal.error = begin.error;
+                            terminal.message = begin.message;
+                            publishTerminal(std::move(terminal));
+                            return;
+                        }
+                        transactionStarted = true;
 
-                std::string viewsError;
-                HttpClient client;
-                if (!RouteRequest(session).run(
-                        [&](const std::string& base) {
-                            return JellyfinApi::getViews(base, session.accessToken, session.userId,
-                                                         session.deviceId, views, viewsError,
-                                                         client, cancellation.get());
-                        },
-                        viewsError)) {
-                    terminal.message =
-                        viewsError.empty() ? "Failed to fetch libraries" : viewsError;
-                    sync->abort(transactionGeneration).get();
-                    transactionStarted = false;
-                    publishTerminal(std::move(terminal));
-                    return;
-                }
-                views.erase(std::remove_if(views.begin(), views.end(),
-                                           [](const LibraryView& view) {
-                                               return !coordinatorSupportedLibraryView(view);
-                                           }),
-                            views.end());
+                        std::string viewsError;
+                        HttpClient client;
+                        if (!RouteRequest(session).run(
+                                [&](const std::string& base) {
+                                    return JellyfinApi::getViews(
+                                        base, session.accessToken, session.userId, session.deviceId,
+                                        views, viewsError, client, cancellation.get());
+                                },
+                                viewsError)) {
+                            terminal.message =
+                                viewsError.empty() ? "Failed to fetch libraries" : viewsError;
+                            sync->abort(transactionGeneration).get();
+                            transactionStarted = false;
+                            publishTerminal(std::move(terminal));
+                            return;
+                        }
+                        views.erase(std::remove_if(views.begin(), views.end(),
+                                                   [](const LibraryView& view) {
+                                                       return !coordinatorSupportedLibraryView(
+                                                           view);
+                                                   }),
+                                    views.end());
 
-                for (std::size_t viewOrdinal = 0; viewOrdinal < views.size(); ++viewOrdinal) {
-                    const auto& view = views[viewOrdinal];
-                    const std::string types = view.collectionType == "tvshows" ? "Series" : "Movie";
-                    int start = 0;
-                    bool firstPageForView = true;
-                    for (;;) {
+                        for (std::size_t viewOrdinal = 0; viewOrdinal < views.size();
+                             ++viewOrdinal) {
+                            const auto& view = views[viewOrdinal];
+                            const std::string types =
+                                view.collectionType == "tvshows" ? "Series" : "Movie";
+                            int start = 0;
+                            bool firstPageForView = true;
+                            for (;;) {
+                                if (cancelled()) {
+                                    sync->abort(transactionGeneration).get();
+                                    transactionStarted = false;
+                                    failForCancellation();
+                                    return;
+                                }
+                                LibraryItemsPage page;
+                                std::string pageError;
+                                ++requestCount;
+                                if (!RouteRequest(session).run(
+                                        [&](const std::string& base) {
+                                            return JellyfinApi::getLibraryItemsPage(
+                                                base, session.accessToken, session.userId,
+                                                session.deviceId, view.id, types, start, 48, page,
+                                                pageError, client, cancellation.get());
+                                        },
+                                        pageError)) {
+                                    terminal.cancelled = cancelled();
+                                    terminal.superseded =
+                                        !terminal.cancelled && cancellation && cancellation->load();
+                                    terminal.error = terminal.cancelled
+                                                         ? CatalogDbErrorCategory::Superseded
+                                                         : CatalogDbErrorCategory::None;
+                                    terminal.message = pageError.empty()
+                                                           ? "Failed to fetch library page"
+                                                           : pageError;
+                                    sync->abort(transactionGeneration).get();
+                                    transactionStarted = false;
+                                    publishTerminal(std::move(terminal));
+                                    return;
+                                }
+
+                                if (firstPageForView) {
+                                    metadataTotal +=
+                                        page.totalRecordCount > 0
+                                            ? static_cast<std::size_t>(page.totalRecordCount)
+                                            : page.items.size();
+                                    firstPageForView = false;
+                                }
+                                metadataCompleted += page.items.size();
+                                mediaCount += page.items.size();
+
+                                CatalogDbMediaPageWrite writePage;
+                                writePage.items = page.items;
+                                writePage.viewId = view.id;
+                                writePage.viewName = view.name;
+                                writePage.collectionType = view.collectionType;
+                                writePage.ordinalStart = static_cast<std::size_t>(start);
+                                writePage.viewOrdinal = static_cast<int>(viewOrdinal);
+                                writePage.syncGeneration = transactionGeneration;
+                                writePage.request = requestId;
+                                writePage.diagnosticSource = "full_population";
+                                writePage.finalPage = !page.hasMore;
+                                CatalogDbMediaPageUpsertResult written;
+                                try {
+                                    written = sync->stage(writePage).get();
+                                    if (written.success)
+                                        ++completedPageCount;
+                                    uiDiagnostics().log(
+                                        "[LibraryCoordinator] full_population_stage_complete"
+                                        " request=" +
+                                        std::to_string(requestId) +
+                                        " generation=" + std::to_string(transactionGeneration) +
+                                        " scope_epoch=" + std::to_string(scopeEpoch) +
+                                        " scope_hash=" + scopeHash +
+                                        " source=full_population page_kind=" +
+                                        (writePage.collectionType == "movies"    ? "movies"
+                                         : writePage.collectionType == "tvshows" ? "tvshows"
+                                                                                 : "unknown") +
+                                        " page_index=" + std::to_string(writePage.ordinalStart) +
+                                        " status=" +
+                                        (written.success ? "success"
+                                                         : (written.cancelled || written.superseded
+                                                                ? "cancelled"
+                                                                : "failure")) +
+                                        " error=" +
+                                        std::to_string(static_cast<unsigned>(written.error)) +
+                                        " completed_pages=" + std::to_string(completedPageCount) +
+                                        " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                        " monotonic_us=" +
+                                        std::to_string(TelemetryClock::monotonicUs()));
+                                } catch (const std::exception&) {
+                                    uiDiagnostics().log(
+                                        "[LibraryCoordinator] full_population_stage_exception"
+                                        " request=" +
+                                        std::to_string(requestId) +
+                                        " generation=" + std::to_string(transactionGeneration) +
+                                        " exception_class=std_exception" +
+                                        " completed_pages=" + std::to_string(completedPageCount) +
+                                        " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                        " monotonic_us=" +
+                                        std::to_string(TelemetryClock::monotonicUs()));
+                                    throw;
+                                } catch (...) {
+                                    uiDiagnostics().log(
+                                        "[LibraryCoordinator] full_population_stage_exception"
+                                        " request=" +
+                                        std::to_string(requestId) +
+                                        " generation=" + std::to_string(transactionGeneration) +
+                                        " exception_class=unknown" +
+                                        " completed_pages=" + std::to_string(completedPageCount) +
+                                        " first_page=" + std::to_string(firstPage ? 1 : 0) +
+                                        " monotonic_us=" +
+                                        std::to_string(TelemetryClock::monotonicUs()));
+                                    throw;
+                                }
+                                if (!written.success) {
+                                    terminal.cancelled = written.cancelled;
+                                    terminal.superseded = written.superseded;
+                                    terminal.error = written.error;
+                                    terminal.message = written.message.empty()
+                                                           ? "Failed to persist library page"
+                                                           : written.message;
+                                    sync->abort(transactionGeneration).get();
+                                    transactionStarted = false;
+                                    publishTerminal(std::move(terminal));
+                                    return;
+                                }
+
+                                auto& target =
+                                    view.collectionType == "tvshows" ? showsByView : moviesByView;
+                                if (target.empty() || target.back().first != view.name)
+                                    target.emplace_back(view.name, std::vector<MediaItem>{});
+                                auto& bounded = target.back().second;
+                                if (bounded.size() < 24) {
+                                    const std::size_t count = std::min<std::size_t>(
+                                        24 - bounded.size(), page.items.size());
+                                    bounded.insert(bounded.end(), page.items.begin(),
+                                                   page.items.begin() +
+                                                       static_cast<std::ptrdiff_t>(count));
+                                }
+
+                                FullPopulationUpdate update;
+                                update.generation = committedGeneration;
+                                update.pageValid = true;
+                                update.firstPage = firstPage;
+                                update.view = view;
+                                update.page = page;
+                                update.views = firstPage ? views : std::vector<LibraryView>{};
+                                update.metadataTotal = metadataTotal;
+                                update.metadataCompleted = metadataCompleted;
+                                update.mediaCount = mediaCount;
+                                update.requestCount = requestCount;
+                                publish(std::move(update));
+                                firstPage = false;
+
+                                if (!page.hasMore || page.items.empty())
+                                    break;
+                                start = page.startIndex + static_cast<int>(page.items.size());
+                            }
+                        }
+
                         if (cancelled()) {
                             sync->abort(transactionGeneration).get();
                             transactionStarted = false;
                             failForCancellation();
                             return;
                         }
-                        LibraryItemsPage page;
-                        std::string pageError;
-                        ++requestCount;
-                        if (!RouteRequest(session).run(
-                                [&](const std::string& base) {
-                                    return JellyfinApi::getLibraryItemsPage(
-                                        base, session.accessToken, session.userId, session.deviceId,
-                                        view.id, types, start, 48, page, pageError, client,
-                                        cancellation.get());
-                                },
-                                pageError)) {
-                            terminal.cancelled = cancelled();
-                            terminal.superseded =
-                                !terminal.cancelled && cancellation && cancellation->load();
-                            terminal.error = terminal.cancelled ? CatalogDbErrorCategory::Superseded
-                                                                : CatalogDbErrorCategory::None;
-                            terminal.message =
-                                pageError.empty() ? "Failed to fetch library page" : pageError;
-                            sync->abort(transactionGeneration).get();
-                            transactionStarted = false;
+                        const auto finalized = sync->finalize(transactionGeneration).get();
+                        transactionStarted = false;
+                        if (!finalized.success) {
+                            terminal.error = finalized.error;
+                            terminal.message = finalized.message;
                             publishTerminal(std::move(terminal));
                             return;
                         }
-
-                        if (firstPageForView) {
-                            metadataTotal += page.totalRecordCount > 0
-                                                 ? static_cast<std::size_t>(page.totalRecordCount)
-                                                 : page.items.size();
-                            firstPageForView = false;
+                        transactionCommitted = true;
+                        const std::int64_t nowMs = coordinatorWallClockMs();
+                        {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            if (committedGeneration > m_catalogGeneration)
+                                m_catalogGeneration = committedGeneration;
                         }
-                        metadataCompleted += page.items.size();
-                        mediaCount += page.items.size();
-
-                        CatalogDbMediaPageWrite writePage;
-                        writePage.items = page.items;
-                        writePage.viewId = view.id;
-                        writePage.viewName = view.name;
-                        writePage.collectionType = view.collectionType;
-                        writePage.ordinalStart = static_cast<std::size_t>(start);
-                        writePage.viewOrdinal = static_cast<int>(viewOrdinal);
-                        writePage.syncGeneration = transactionGeneration;
-                        writePage.request = requestId;
-                        writePage.finalPage = !page.hasMore;
-                        CatalogDbMediaPageUpsertResult written;
-                        try {
-                            written = sync->stage(writePage).get();
-                            if (written.success)
-                                ++completedPageCount;
-                            uiDiagnostics().log(
-                                "[LibraryCoordinator] full_population_stage_complete"
-                                " request=" +
-                                std::to_string(requestId) + " generation=" +
-                                std::to_string(transactionGeneration) + " page_kind=" +
-                                (writePage.collectionType == "movies"    ? "movies"
-                                 : writePage.collectionType == "tvshows" ? "tvshows"
-                                                                         : "unknown") +
-                                " page_index=" + std::to_string(writePage.ordinalStart) +
-                                " status=" +
-                                (written.success
-                                     ? "success"
-                                     : (written.cancelled || written.superseded ? "cancelled"
-                                                                                : "failure")) +
-                                " error=" + std::to_string(static_cast<unsigned>(written.error)) +
-                                " completed_pages=" + std::to_string(completedPageCount) +
-                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
-                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
-                        } catch (const std::exception&) {
-                            uiDiagnostics().log(
-                                "[LibraryCoordinator] full_population_stage_exception"
-                                " request=" +
-                                std::to_string(requestId) +
-                                " generation=" + std::to_string(transactionGeneration) +
-                                " exception_class=std_exception" +
-                                " completed_pages=" + std::to_string(completedPageCount) +
-                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
-                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
-                            throw;
-                        } catch (...) {
-                            uiDiagnostics().log(
-                                "[LibraryCoordinator] full_population_stage_exception"
-                                " request=" +
-                                std::to_string(requestId) + " generation=" +
-                                std::to_string(transactionGeneration) + " exception_class=unknown" +
-                                " completed_pages=" + std::to_string(completedPageCount) +
-                                " first_page=" + std::to_string(firstPage ? 1 : 0) +
-                                " monotonic_us=" + std::to_string(TelemetryClock::monotonicUs()));
-                            throw;
+                        terminal.committed = true;
+                        // Once finalize has committed the authoritative membership,
+                        // the checkpoint is not cancellable: restart must not regress
+                        // to the previous committed boundary.
+                        const auto checkpoint =
+                            sync->writeSyncState(nowMs, nowMs, committedGeneration).get();
+                        terminal.checkpointCommitted = checkpoint.success;
+                        terminal.checkpointMs = checkpoint.lastSuccessfulMs;
+                        terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                        terminal.lastReconcileMs = checkpoint.lastReconcileMs;
+                        if (!checkpoint.success) {
+                            terminal.error = checkpoint.error;
+                            terminal.message = checkpoint.message.empty()
+                                                   ? "Failed to write library sync checkpoint"
+                                                   : checkpoint.message;
                         }
-                        if (!written.success) {
-                            terminal.cancelled = written.cancelled;
-                            terminal.superseded = written.superseded;
-                            terminal.error = written.error;
-                            terminal.message = written.message.empty()
-                                                   ? "Failed to persist library page"
-                                                   : written.message;
-                            sync->abort(transactionGeneration).get();
-                            transactionStarted = false;
-                            publishTerminal(std::move(terminal));
-                            return;
+                        terminal.success = checkpoint.success;
+                        if (checkpoint.success) {
+                            std::lock_guard<std::mutex> guard(m_startupMutex);
+                            m_lastSuccessfulMs = checkpoint.lastSuccessfulMs;
+                            m_lastReconcileMs = checkpoint.lastReconcileMs;
                         }
-
-                        auto& target =
-                            view.collectionType == "tvshows" ? showsByView : moviesByView;
-                        if (target.empty() || target.back().first != view.name)
-                            target.emplace_back(view.name, std::vector<MediaItem>{});
-                        auto& bounded = target.back().second;
-                        if (bounded.size() < 24) {
-                            const std::size_t count =
-                                std::min<std::size_t>(24 - bounded.size(), page.items.size());
-                            bounded.insert(bounded.end(), page.items.begin(),
-                                           page.items.begin() + static_cast<std::ptrdiff_t>(count));
+                        publishTerminal(std::move(terminal));
+                    } catch (const std::exception& error) {
+                        if (transactionStarted) {
+                            try {
+                                sync->abort(transactionGeneration).get();
+                            } catch (...) {
+                            }
                         }
-
-                        FullPopulationUpdate update;
-                        update.generation = committedGeneration;
-                        update.pageValid = true;
-                        update.firstPage = firstPage;
-                        update.view = view;
-                        update.page = page;
-                        update.views = firstPage ? views : std::vector<LibraryView>{};
-                        update.metadataTotal = metadataTotal;
-                        update.metadataCompleted = metadataCompleted;
-                        update.mediaCount = mediaCount;
-                        update.requestCount = requestCount;
-                        publish(std::move(update));
-                        firstPage = false;
-
-                        if (!page.hasMore || page.items.empty())
-                            break;
-                        start = page.startIndex + static_cast<int>(page.items.size());
-                    }
-                }
-
-                if (cancelled()) {
-                    sync->abort(transactionGeneration).get();
-                    transactionStarted = false;
-                    failForCancellation();
-                    return;
-                }
-                const auto finalized = sync->finalize(transactionGeneration).get();
-                transactionStarted = false;
-                if (!finalized.success) {
-                    terminal.error = finalized.error;
-                    terminal.message = finalized.message;
-                    publishTerminal(std::move(terminal));
-                    return;
-                }
-                transactionCommitted = true;
-                const std::int64_t nowMs = coordinatorWallClockMs();
-                {
-                    std::lock_guard<std::mutex> guard(m_startupMutex);
-                    if (committedGeneration > m_catalogGeneration)
-                        m_catalogGeneration = committedGeneration;
-                }
-                terminal.committed = true;
-                // Once finalize has committed the authoritative membership,
-                // the checkpoint is not cancellable: restart must not regress
-                // to the previous committed boundary.
-                const auto checkpoint =
-                    sync->writeSyncState(nowMs, nowMs, committedGeneration).get();
-                terminal.checkpointCommitted = checkpoint.success;
-                terminal.checkpointMs = checkpoint.lastSuccessfulMs;
-                terminal.lastSuccessfulMs = checkpoint.lastSuccessfulMs;
-                terminal.lastReconcileMs = checkpoint.lastReconcileMs;
-                if (!checkpoint.success) {
-                    terminal.error = checkpoint.error;
-                    terminal.message = checkpoint.message.empty()
-                                           ? "Failed to write library sync checkpoint"
-                                           : checkpoint.message;
-                }
-                terminal.success = checkpoint.success;
-                if (checkpoint.success) {
-                    std::lock_guard<std::mutex> guard(m_startupMutex);
-                    m_lastSuccessfulMs = checkpoint.lastSuccessfulMs;
-                    m_lastReconcileMs = checkpoint.lastReconcileMs;
-                }
-                publishTerminal(std::move(terminal));
-            } catch (const std::exception& error) {
-                if (transactionStarted) {
-                    try {
-                        sync->abort(transactionGeneration).get();
+                        FullPopulationUpdate failure;
+                        failure.cancelled = cancelled();
+                        failure.superseded = !failure.cancelled && transactionGeneration != 0;
+                        failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
+                                                          : CatalogDbErrorCategory::SqliteError;
+                        failure.message = error.what();
+                        publishTerminal(std::move(failure));
                     } catch (...) {
+                        if (transactionStarted) {
+                            try {
+                                sync->abort(transactionGeneration).get();
+                            } catch (...) {
+                            }
+                        }
+                        FullPopulationUpdate failure;
+                        failure.cancelled = cancelled();
+                        failure.superseded = !failure.cancelled && transactionGeneration != 0;
+                        failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
+                                                          : CatalogDbErrorCategory::SqliteError;
+                        failure.message = "full library population failed unexpectedly";
+                        publishTerminal(std::move(failure));
                     }
-                }
-                FullPopulationUpdate failure;
-                failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled && transactionGeneration != 0;
-                failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
-                                                  : CatalogDbErrorCategory::SqliteError;
-                failure.message = error.what();
-                publishTerminal(std::move(failure));
-            } catch (...) {
-                if (transactionStarted) {
-                    try {
-                        sync->abort(transactionGeneration).get();
-                    } catch (...) {
-                    }
-                }
-                FullPopulationUpdate failure;
-                failure.cancelled = cancelled();
-                failure.superseded = !failure.cancelled && transactionGeneration != 0;
-                failure.error = failure.cancelled ? CatalogDbErrorCategory::Superseded
-                                                  : CatalogDbErrorCategory::SqliteError;
-                failure.message = "full library population failed unexpectedly";
-                publishTerminal(std::move(failure));
+                });
             }
-        });
+        }
     } catch (...) {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
         m_fullSyncInFlight = false;
         throw;
+    }
+    if (!postJoinDiagnostic.empty()) {
+        uiDiagnostics().log(postJoinDiagnostic);
+        return false;
     }
     return true;
 }

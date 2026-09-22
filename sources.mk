@@ -133,5 +133,9 @@ MIYOOFIN_TEST_EXCLUDED_SRCS := \
     $(SRC_DIR)/ui/screens/InputDiagnosticsScreen.cpp
 
 MIYOOFIN_TEST_SRCS := $(filter-out $(MIYOOFIN_TEST_EXCLUDED_SRCS),$(MIYOOFIN_PROD_SRCS))
+# ConnectScreen has a deterministic test seam for its worker ownership and
+# cancellation lifecycle, so link its production implementation into the
+# focused host test archive without linking the application entry point.
+MIYOOFIN_TEST_SRCS += $(SRC_DIR)/ui/screens/ConnectScreen.cpp
 MIYOOFIN_TEST_SRCS += $(SRC_DIR)/catalog/CatalogDbTestCommands.cpp
 MIYOOFIN_TEST_SRCS += $(TELEMETRY_TEST_SRCS)

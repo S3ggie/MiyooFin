@@ -425,11 +425,10 @@ static void testLoginKeyboardBackDeletes()
 //     started exactly once; the target is never joinable here).
 // Matching runs on comment-stripped token text (string literals preserved,
 // so a URL cannot end the strip early), so explanatory comments mentioning
-// joinable/join can never satisfy the check. Detach-after-assign
-// (ConnectScreen) and single-shot workers (one assignment per owner
-// lifetime, joined in leave()/dtor) are covered by the explicit allowlists
-// below — each row pins the member plus its proof token — never by
-// silence. A new `= std::thread(` site in any audited file that matches
+// joinable/join can never satisfy the check. Single-shot workers (one
+// assignment per owner lifetime, joined in leave()/dtor) are covered by the
+// explicit allowlist below — each row pins the member plus its proof token —
+// never by silence. A new `= std::thread(` site in any audited file that matches
 // none of these fails the test, and a new TU that spawns threads must be
 // added to kThreadAuditFiles (the audit scans listed files; it cannot
 // discover files it is not told about). Member-init (`: m_x(...)`) and
@@ -461,12 +460,6 @@ static const char *const kThreadAuditFiles[] = {
     "src/ui/screens/SeriesScreenWorker.cpp",
     "src/ui/screens/ServerEntryScreen.cpp",
     "src/update/UpdateManager.cpp",
-};
-
-// Detach-after-assign: the target is never joinable, so no terminate.
-// Each row pins exactly one assignment plus the detach call.
-static const ThreadAuditAllow kThreadDetach[] = {
-    {"src/ui/screens/ConnectScreen.cpp", "m_connectThread"},
 };
 
 // Single-shot workers: exactly one assignment per owner lifetime, joined
@@ -580,12 +573,7 @@ static void auditThreadFile(const char *path)
         }
         const std::string assignTok = member + "=std::thread(";
         bool pass = false;
-        if (threadAuditAllowed(kThreadDetach, sizeof(kThreadDetach) /
-                                                 sizeof(kThreadDetach[0]),
-                               file, member)) {
-            pass = threadTokenCount(hay, assignTok) == 1u &&
-                   hay.find(member + ".detach()") != std::string::npos;
-        } else if (threadAuditAllowed(
+        if (threadAuditAllowed(
                        kThreadSingleShot,
                        sizeof(kThreadSingleShot) / sizeof(kThreadSingleShot[0]),
                        file, member)) {
@@ -643,3 +631,78 @@ static void testThreadRestartGuards()
     std::printf("[test] std::thread restart guards OK\n");
 }
 
+static void testConnectScreenWorkerLifecycle()
+{
+    std::printf("[test] ConnectScreen cancellation and destruction lifecycle\n");
+
+    std::atomic<bool> leaveStarted{false};
+    std::atomic<bool> leaveCancelled{false};
+    {
+        ConnectScreen screen(
+            "http://blocked.test",
+            [&](const std::string&, ServerInfo&, std::string& error,
+                const std::atomic<bool>* cancelled) {
+                leaveStarted.store(true);
+                while (!cancelled->load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                leaveCancelled.store(true);
+                error = "cancelled";
+                return false;
+            });
+        screen.enter();
+        for (int i = 0; i < 100 && !leaveStarted.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        CHECK(leaveStarted.load());
+        screen.leave();
+        for (int i = 0; i < 100 && !leaveCancelled.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        CHECK(leaveCancelled.load());
+    }
+
+    std::atomic<bool> destructionStarted{false};
+    std::atomic<bool> destructionCancelled{false};
+    {
+        auto screen = std::make_unique<ConnectScreen>(
+            "http://blocked.test",
+            [&](const std::string&, ServerInfo&, std::string& error,
+                const std::atomic<bool>* cancelled) {
+                destructionStarted.store(true);
+                while (!cancelled->load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                destructionCancelled.store(true);
+                error = "cancelled";
+                return false;
+            });
+        screen->enter();
+        for (int i = 0; i < 100 && !destructionStarted.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        CHECK(destructionStarted.load());
+    }
+    CHECK(destructionCancelled.load());
+    std::printf("[test] ConnectScreen cancellation and destruction lifecycle OK\n");
+}
+
+static void testNoDetachedProductionThreads()
+{
+    std::printf("[test] no detached production threads\n");
+    for (const char *path : kThreadAuditFiles) {
+        const std::string source = sourceTokenString(stripSourceComments(readTestBytes(path)));
+        CHECK(source.find(".detach(") == std::string::npos);
+        CHECK(source.find("pthread_detach(") == std::string::npos);
+    }
+    std::printf("[test] no detached production threads OK\n");
+}
+
+static void testHomeRailTelemetryCountsOneOperation()
+{
+    std::printf("[test] Home rail telemetry counts one coordinator operation\n");
+    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string startup = sourceFunction(source, "bool HomeScreen::startFetch(");
+    CHECK(!startup.empty());
+    const std::string rail = sourceBetween(startup, "if (railStarted) {", "for (;;)");
+    CHECK(!rail.empty());
+    CHECK(threadTokenCount(sourceTokenString(rail), "++requestCount") == 1u);
+    CHECK(threadTokenCount(sourceTokenString(startup),
+                          "requestHomeRailRefresh(railRequest)") == 1u);
+    std::printf("[test] Home rail telemetry counts one coordinator operation OK\n");
+}

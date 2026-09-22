@@ -29,6 +29,7 @@
 #include "../src/data/MediaItem.hpp"
 #include "../src/ui/BitmapFont.hpp"
 #include "../src/ui/screens/HomeScreen.hpp"
+#include "../src/ui/screens/ConnectScreen.hpp"
 #include "../src/ui/screens/ServerEntryScreen.hpp"
 #include "../src/ui/screens/LoginScreen.hpp"
 #include "../src/ui/OnScreenKeyboard.hpp"

@@ -104,10 +104,10 @@ HttpClient::~HttpClient()
 }
 
 bool HttpClient::get(const std::string& url, std::string& responseBody, long& httpCode,
-                     std::string& error)
+                     std::string& error, const std::atomic<bool>* cancelled)
 {
     HttpResponse response;
-    if (!perform("GET", url, {}, {}, response, error))
+    if (!perform("GET", url, {}, {}, response, error, cancelled))
         return false;
 
     responseBody = response.body;

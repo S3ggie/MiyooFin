@@ -52,7 +52,8 @@ class HttpClient
 
     /// Perform a GET request.
     /// @return true if the HTTP status code is 200 and the body is non-empty.
-    bool get(const std::string& url, std::string& responseBody, long& httpCode, std::string& error);
+    bool get(const std::string& url, std::string& responseBody, long& httpCode, std::string& error,
+             const std::atomic<bool>* cancelled = nullptr);
 
     /// Perform a POST request with the given headers and body.
     /// @param url          Full URL to fetch.

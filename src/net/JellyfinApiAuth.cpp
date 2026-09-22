@@ -57,7 +57,8 @@ AuthError JellyfinApi::classifyAuthError(long httpStatus, const std::string& bod
 // Public API
 // ===================================================================
 
-bool JellyfinApi::getSystemInfo(const std::string& baseUrl, ServerInfo& info, std::string& error)
+bool JellyfinApi::getSystemInfo(const std::string& baseUrl, ServerInfo& info, std::string& error,
+                                const std::atomic<bool>* cancelled)
 {
     HttpClient client;
     client.setTimeoutSec(5);
@@ -67,7 +68,7 @@ bool JellyfinApi::getSystemInfo(const std::string& baseUrl, ServerInfo& info, st
     long httpCode = 0;
 
     TelemetryRequestScope request(RequestKind::SystemInfo);
-    if (!client.get(url, body, httpCode, error)) {
+    if (!client.get(url, body, httpCode, error, cancelled)) {
         return false;
     }
 

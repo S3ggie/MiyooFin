@@ -5,7 +5,10 @@
 
 namespace miyoofin {
 
-static std::int64_t wallClockMs(){return (std::int64_t)std::time(nullptr)*1000;}
+static std::int64_t wallClockMs()
+{
+    return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+}
 static void makeMediaTabsBounded(std::vector<TabData> &tabs);
 
 static std::vector<TabData> emptyHomeTabs()
@@ -91,54 +94,67 @@ void HomeScreen::applyPendingPresentation(
     }
 }
 
-void HomeScreen::applyPresentationProjection() {
+void HomeScreen::applyPresentationProjection()
+{
     // Called from finishFetch() after the offline worker path has populated
     // m_cachedSnapshot / m_haveCachedSnapshot.  Not called directly from
     // the Settings toggle (that path now drives startFetch() so the worker
     // builds the snapshot on a background thread).
-    if (!m_haveCachedSnapshot) return;
+    if (!m_haveCachedSnapshot)
+        return;
     // Offline hierarchy comes from durable DownloadStore metadata.  The
     // legacy catalog is not a runtime authority; an empty catalog lets the
     // projection synthesize only the downloaded branches it needs.
     OfflineCatalogSnapshot catalog;
-    OfflineLibraryProjection projection(m_cachedSnapshot,catalog,m_downloads?m_downloads->snapshot():DownloadSnapshot{});
+    OfflineLibraryProjection projection(
+        m_cachedSnapshot, catalog,
+        m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
     m_fetchOfflineMovies.clear();
     m_fetchOfflineSnapshot=m_cachedSnapshot;
     const std::vector<MediaItem> offlineMovies = projection.movies();
     std::set<std::string> offlineMovieIds;
-    for (const auto &item : offlineMovies) offlineMovieIds.insert(item.id);
+    for (const auto &item : offlineMovies)
+        offlineMovieIds.insert(item.id);
     for (auto &view : m_fetchOfflineSnapshot.movies) {
         std::vector<MediaItem> filtered;
-        for (const auto &item : view.items)
-            if (offlineMovieIds.count(item.id)) filtered.push_back(item);
-        view.items=std::move(filtered);
+        for (const auto &item : view.items) {
+            if (offlineMovieIds.count(item.id))
+                filtered.push_back(item);
+        }
+        view.items = std::move(filtered);
     }
     for (auto &view : m_fetchOfflineSnapshot.shows) {
         std::vector<MediaItem> filtered;
         for (const auto &item : view.items) {
-            if (projection.playable(item.id) || !projection.seasons(item.id).empty())
+            if (projection.playable(item.id)
+                || !projection.seasons(item.id).empty())
                 filtered.push_back(item);
         }
-        view.items=std::move(filtered);
+        view.items = std::move(filtered);
     }
-    m_fetchOfflineTabs=offlineTabsFromSnapshot(m_fetchOfflineSnapshot);
+    m_fetchOfflineTabs = offlineTabsFromSnapshot(m_fetchOfflineSnapshot);
     for (auto &tab : m_fetchOfflineTabs) {
-        if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
-        if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
+        if (tab.name == "Movies")
+            tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows")
+            tab.rows = {{"Shows", {}}};
     }
-    m_fetchOfflinePrepared=true;
+    m_fetchOfflinePrepared = true;
     applyOfflineProjection();
 }
-void HomeScreen::restoreOnlinePresentation() {
+void HomeScreen::restoreOnlinePresentation()
+{
     // Restores tabs from m_cachedSnapshot (the snapshot taken at last sync).
     // Note: the Settings offline-mode toggle no longer calls this directly;
     // it drives startFetch() instead.  This function remains available for
     // finishFetch() and other callers that need immediate tab restoration.
-    if (!m_haveCachedSnapshot) return;
+    if (!m_haveCachedSnapshot)
+        return;
     const std::string focusedLabel = focusedHomeRowLabel();
-    const std::vector<TabData> previous=m_tabs; const int selected=m_activeTab;
-    m_tabs=tabsFromSnapshot(m_cachedSnapshot);
-    m_activeTab=transitionTabIndex(previous,selected,m_tabs);
+    const std::vector<TabData> previous = m_tabs;
+    const int selected = m_activeTab;
+    m_tabs = tabsFromSnapshot(m_cachedSnapshot);
+    m_activeTab = transitionTabIndex(previous, selected, m_tabs);
     restoreHomeRowFocus(focusedLabel);
     resetMediaPaging();
     clampNavigation();
@@ -375,8 +391,10 @@ void HomeScreen::finishSafetyReconcile()
 static void makeMediaTabsBounded(std::vector<TabData> &tabs)
 {
     for (auto &tab : tabs) {
-        if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
-        if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
+        if (tab.name == "Movies")
+            tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows")
+            tab.rows = {{"Shows", {}}};
     }
 }
 void HomeScreen::finishFetch()
@@ -461,7 +479,15 @@ void HomeScreen::finishFetch()
             + " generation=" + std::to_string(presentation.diagnosticGeneration));
     }
     if (!m_fetchPublished) {
-        if(!m_fetchError.empty()){m_libraryOffline=m_haveCachedSnapshot;if(m_libraryOffline)applyOfflineProjection();if(!m_haveCachedSnapshot && !m_offlineModeFetchPending)m_loadState=LoadState::Error;printf("[HomeScreen] Fetch failed: %s\n",m_fetchError.c_str());m_fetchPublished=true;}
+        if (!m_fetchError.empty()) {
+            m_libraryOffline = m_haveCachedSnapshot;
+            if (m_libraryOffline)
+                applyOfflineProjection();
+            if (!m_haveCachedSnapshot && !m_offlineModeFetchPending)
+                m_loadState = LoadState::Error;
+            printf("[HomeScreen] Fetch failed: %s\n", m_fetchError.c_str());
+            m_fetchPublished = true;
+        }
         // Startup rails can arrive before catalog content.  Keep Home in
         // Loading for that intermediate presentation so the provisional page
         // can still publish later.
@@ -473,7 +499,23 @@ void HomeScreen::finishFetch()
             }
             const HomeMediaWindows warmWindows = mediaWindowsFromTabs(publishedTabs);
             const std::string focusedLabel = focusedHomeRowLabel();
-             const std::vector<TabData> previous=m_tabs;const int selected=m_activeTab;m_tabs=std::move(publishedTabs);makeMediaTabsBounded(m_tabs);m_activeTab=transitionTabIndex(previous,selected,m_tabs);m_libraryOffline=false;if(m_session.manualOfflineMode)applyPresentationProjection();else resetMediaPaging();restoreHomeRowFocus(focusedLabel);m_loadState=LoadState::Ready;clampNavigation();printf("[HomeScreen] Library loaded: %zu tabs\n",m_tabs.size());uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");m_fetchPublished = true;
+            const std::vector<TabData> previous = m_tabs;
+            const int selected = m_activeTab;
+            m_tabs = std::move(publishedTabs);
+            makeMediaTabsBounded(m_tabs);
+            m_activeTab = transitionTabIndex(previous, selected, m_tabs);
+            m_libraryOffline = false;
+            if (m_session.manualOfflineMode)
+                applyPresentationProjection();
+            else
+                resetMediaPaging();
+            restoreHomeRowFocus(focusedLabel);
+            m_loadState = LoadState::Ready;
+            clampNavigation();
+            printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
+            uiDiagnostics().log(
+                "[HomeScreen] startup stage=loading_state_cleared");
+            m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
                 m_movieWindow = warmWindows.movies;

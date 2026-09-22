@@ -8,11 +8,19 @@ cd "$repo_root"
 # Keep this list intentionally narrow.  It covers the production files cleaned
 # in the professional-polish pass without imposing a repository-wide rewrite.
 format_sources="
+src/diagnostics/UiDiagnostics.cpp
 src/download/DownloadManager.cpp
+src/ui/screens/HomeScreen.cpp
 src/ui/screens/HomeScreenArtwork.cpp
+src/ui/screens/HomeScreenDownloads.cpp
+src/ui/screens/HomeScreenHierarchy.cpp
+src/ui/screens/HomeScreenNavigation.cpp
+src/ui/screens/HomeScreenOffline.cpp
 src/ui/screens/HomeScreenRefresh.cpp
 src/ui/screens/HomeScreenRender.cpp
+src/ui/screens/HomeScreenSettings.cpp
 src/ui/screens/HomeScreenSync.cpp
+src/ui/screens/HomeScreenSyncApply.cpp
 "
 
 if command -v clang-format >/dev/null 2>&1; then

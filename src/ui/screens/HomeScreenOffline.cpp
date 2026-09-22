@@ -19,8 +19,10 @@ void HomeScreen::prepareOfflineProjection()
 
     // Keep the tab skeleton but defer population until media pages are fetched.
     for (auto &tab : m_fetchOfflineTabs) {
-        if (tab.name == "Movies") tab.rows = {{"Movies", {}}};
-        if (tab.name == "Shows") tab.rows = {{"Shows", {}}};
+        if (tab.name == "Movies")
+            tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows")
+            tab.rows = {{"Shows", {}}};
     }
 
     // Filter each show view to items that are playable or have offline seasons.
@@ -42,7 +44,8 @@ void HomeScreen::applyOfflineProjection()
 {
     const std::vector<TabData> previous = m_tabs;
     const int selected = m_activeTab;
-    if (!m_fetchOfflinePrepared) return;
+    if (!m_fetchOfflinePrepared)
+        return;
 
     m_tabs = std::move(m_fetchOfflineTabs);
     m_activeTab = transitionTabIndex(previous, selected, m_tabs);

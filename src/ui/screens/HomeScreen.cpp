@@ -64,9 +64,12 @@ HomeScreen::~HomeScreen()
 
 void HomeScreen::requestStopAllWorkers() noexcept
 {
-    if (m_moviePage.cancellation) m_moviePage.cancellation->store(true);
-    if (m_showPage.cancellation) m_showPage.cancellation->store(true);
-    if (m_animePage.cancellation) m_animePage.cancellation->store(true);
+    if (m_moviePage.cancellation)
+        m_moviePage.cancellation->store(true);
+    if (m_showPage.cancellation)
+        m_showPage.cancellation->store(true);
+    if (m_animePage.cancellation)
+        m_animePage.cancellation->store(true);
     // Close hierarchy submission before cancelling the fetch.  The fetch
     // worker resolves its bounded series and submits the hierarchy request;
     // this lock makes teardown and that final submission mutually exclusive.
@@ -78,8 +81,10 @@ void HomeScreen::requestStopAllWorkers() noexcept
         if (m_fetchCancellation)
             m_fetchCancellation->store(true);
     }
-    if (m_libraryCoordinator) m_libraryCoordinator->cancelStartupSync();
-    if (m_libraryCoordinator) m_libraryCoordinator->cancelFullPopulation();
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelStartupSync();
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->cancelFullPopulation();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelLiveChange();
     if (m_libraryCoordinator)
@@ -89,9 +94,15 @@ void HomeScreen::requestStopAllWorkers() noexcept
     m_updateManager.cancel();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelHierarchy();
-    { std::lock_guard<std::mutex> lock(m_posterMutex); m_stopPosterWorker = true; }
+    {
+        std::lock_guard<std::mutex> lock(m_posterMutex);
+        m_stopPosterWorker = true;
+    }
     m_posterWake.notify_all();
-    { std::lock_guard<std::mutex> lock(m_decodeMutex); m_stopDecodeWorker = true; }
+    {
+        std::lock_guard<std::mutex> lock(m_decodeMutex);
+        m_stopDecodeWorker = true;
+    }
     m_decodeWake.notify_one();
 }
 
@@ -101,9 +112,12 @@ void HomeScreen::joinAllWorkers()
         m_fetchThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
-    for (auto &thread : m_posterThreads)
-        if (thread.joinable()) thread.join();
-    if (m_decodeThread.joinable()) m_decodeThread.join();
+    for (auto &thread : m_posterThreads) {
+        if (thread.joinable())
+            thread.join();
+    }
+    if (m_decodeThread.joinable())
+        m_decodeThread.join();
 }
 
 // EXIT-ONLY: permanently requests all background workers stop (flags are
@@ -114,9 +128,22 @@ void HomeScreen::cancelAsyncWork() noexcept
     requestStopAllWorkers();
 }
 
-void HomeScreen::updateContinueWatchingRow(std::vector<TabData> &tabs, const std::vector<MediaItem> &items) { miyoofin::updateContinueWatchingRow(tabs, items); }
-std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::tabsFromSnapshot(s); }
-std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(const LibrarySnapshot &s) { return miyoofin::offlineTabsFromSnapshot(s); }
+void HomeScreen::updateContinueWatchingRow(
+    std::vector<TabData> &tabs, const std::vector<MediaItem> &items)
+{
+    miyoofin::updateContinueWatchingRow(tabs, items);
+}
+
+std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
+{
+    return miyoofin::tabsFromSnapshot(s);
+}
+
+std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(
+    const LibrarySnapshot &s)
+{
+    return miyoofin::offlineTabsFromSnapshot(s);
+}
 library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
                                                  const std::string &type,
                                                  int alphabetLetter,
@@ -139,8 +166,10 @@ library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
 
     std::size_t start = 0;
     if (after.valid) {
-        while (start < items.size() && items[start].id != after.id) ++start;
-        if (start < items.size()) ++start;
+        while (start < items.size() && items[start].id != after.id)
+            ++start;
+        if (start < items.size())
+            ++start;
     }
     const std::size_t pageLimit = std::max<std::size_t>(1, limit);
     const std::size_t end = std::min(items.size(), start + pageLimit);
@@ -158,8 +187,17 @@ library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
     }
     return page;
 }
-std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData> &tabs) { return miyoofin::tabNames(tabs); }
-int HomeScreen::transitionTabIndex(const std::vector<TabData> &from, int selected, const std::vector<TabData> &to) { return miyoofin::transitionTabIndex(from, selected, to); }
+std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData> &tabs)
+{
+    return miyoofin::tabNames(tabs);
+}
+
+int HomeScreen::transitionTabIndex(const std::vector<TabData> &from,
+                                   int selected,
+                                   const std::vector<TabData> &to)
+{
+    return miyoofin::transitionTabIndex(from, selected, to);
+}
 
 const char *HomeScreen::lastApiRouteValue()
 {
@@ -167,7 +205,9 @@ const char *HomeScreen::lastApiRouteValue()
 }
 
 std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
-{ return miyoofin::combineMovieViews(views); }
+{
+    return miyoofin::combineMovieViews(views);
+}
 
 void HomeScreen::rebuildShowsPresentation()
 {
@@ -242,8 +282,12 @@ void HomeScreen::update(Uint32 dt)
         uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready");
     }
     if (m_logoutArmed && !m_logoutRequested) {
-        if (dt >= m_logoutTimer) { m_logoutTimer = 0; m_logoutArmed = false; }
-        else m_logoutTimer -= dt;
+        if (dt >= m_logoutTimer) {
+            m_logoutTimer = 0;
+            m_logoutArmed = false;
+        } else {
+            m_logoutTimer -= dt;
+        }
     }
     consumeHierarchyResults();
     if (m_fetchReady.load()) {
@@ -276,21 +320,37 @@ void HomeScreen::update(Uint32 dt)
     }
     if (m_loadState == LoadState::Ready)
         updateMediaPaging();
-    if (m_downloadRefreshTimer > dt) m_downloadRefreshTimer-=dt; else m_downloadRefreshTimer=0;
-    if (m_loadState == LoadState::Ready && (activeTabNamed("Downloads") || activeTabNamed("Settings"))) refreshDownloads();
+    if (m_downloadRefreshTimer > dt) {
+        m_downloadRefreshTimer -= dt;
+    } else {
+        m_downloadRefreshTimer = 0;
+    }
+    if (m_loadState == LoadState::Ready
+        && (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
+        refreshDownloads();
+    }
     // Reconcile before draining: an in-flight decode can complete between a
     // directional input and this update, so it must see the new viewport.
-    if (m_loadState == LoadState::Ready)
-        { UiDiagnostics::Scope scope("HomeScreen::updateArtworkWorkingSet"); updateShowsDecodeWorkingSet(); }
-    { UiDiagnostics::Scope scope("HomeScreen::publishDecodedArtwork"); drainDecodedArtwork(); }
+    if (m_loadState == LoadState::Ready) {
+        UiDiagnostics::Scope scope("HomeScreen::updateArtworkWorkingSet");
+        updateShowsDecodeWorkingSet();
+    }
+    {
+        UiDiagnostics::Scope scope("HomeScreen::publishDecodedArtwork");
+        drainDecodedArtwork();
+    }
 
     // Attempt selected artwork load (identity guard prevents repeats)
-    if (m_loadState == LoadState::Ready)
-        { UiDiagnostics::Scope scope("HomeScreen::queueSelectedArtwork"); tryLoadSelectedArtwork(); }
+    if (m_loadState == LoadState::Ready) {
+        UiDiagnostics::Scope scope("HomeScreen::queueSelectedArtwork");
+        tryLoadSelectedArtwork();
+    }
 
     // Queue missing visible row artwork for background decode.
-    if (m_loadState == LoadState::Ready)
-        { UiDiagnostics::Scope scope("HomeScreen::queueVisibleArtwork"); tryLoadOneRowArtwork(); }
+    if (m_loadState == LoadState::Ready) {
+        UiDiagnostics::Scope scope("HomeScreen::queueVisibleArtwork");
+        tryLoadOneRowArtwork();
+    }
 
     // Poll OTA update manager for stage changes.
     m_updateManager.pollDone();

@@ -144,18 +144,22 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority)
 std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySnapshot &snapshot)
 {
     std::vector<PosterJob> out;
-    for (auto &job : planHomePosterJobs(snapshot))
-        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+    for (auto &job : planHomePosterJobs(snapshot)) {
+        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
+                                  job.width, job.height))
             out.push_back(std::move(job));
+    }
     return out;
 }
 
 std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std::vector<MediaItem> &seasons)
 {
     std::vector<PosterJob> out;
-    for (auto &job : planSeasonPosterJobs(seasons))
-        if (!ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height))
+    for (auto &job : planSeasonPosterJobs(seasons)) {
+        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
+                                  job.width, job.height))
             out.push_back(std::move(job));
+    }
     return out;
 }
 
@@ -167,22 +171,23 @@ void HomeScreen::posterWorker()
         PosterJob job;
         {
             std::unique_lock<std::mutex> lock(m_posterMutex);
-            m_posterWake.wait(lock,[&]{
+            m_posterWake.wait(lock, [&] {
                 return m_stopPosterWorker
                     || !m_highPriorityPosterJobs.empty()
                     || (!m_initialPopulationInProgress.load()
                         && !m_lowPriorityPosterJobs.empty());
             });
-            if(m_stopPosterWorker) return;
+            if (m_stopPosterWorker)
+                return;
             // High-priority jobs are always processed first.
             if (!m_highPriorityPosterJobs.empty()) {
-                job=std::move(m_highPriorityPosterJobs.front());
+                job = std::move(m_highPriorityPosterJobs.front());
                 m_highPriorityPosterJobs.erase(m_highPriorityPosterJobs.begin());
             } else if (shouldProcessPosterJob(
                        false, m_initialPopulationInProgress.load())) {
                 // Only pop a low-priority job when the defer contract
                 // allows it — i.e. initial population is finished.
-                job=std::move(m_lowPriorityPosterJobs.front());
+                job = std::move(m_lowPriorityPosterJobs.front());
                 m_lowPriorityPosterJobs.erase(m_lowPriorityPosterJobs.begin());
             } else {
                 // Low-priority job is present but deferred; re-enter wait
@@ -190,42 +195,63 @@ void HomeScreen::posterWorker()
                 continue;
             }
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster, static_cast<uint32_t>(
-                    m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
+                WorkerId::HomePoster,
+                static_cast<uint32_t>(m_highPriorityPosterJobs.size()
+                                     + m_lowPriorityPosterJobs.size()));
             performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true);
         }
 
-        bool complete=false;
-        if(ImageCache::isCached(job.itemId,job.imageType,job.imageTag,job.width,job.height)) {
-            complete=true;
+        bool complete = false;
+        if (ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
+                                 job.width, job.height)) {
+            complete = true;
         } else {
-            BinaryHttpResponse response; std::string error;
-            TelemetryRequestScope request(RequestKind::Artwork); TelemetryArtworkScope artwork(ArtworkContext::HomePoster);
-            if(RouteRequest(m_session).run([&](const std::string &base){
-                    return client.getBinary(buildImageUrl(base,job.itemId,job.imageType,job.imageTag,job.width,job.height),JellyfinApi::buildAuthHeaders(m_session.accessToken,m_session.deviceId),
-                    response,error,512*1024)&&response.ok();},error)&&!response.data.empty())
-                complete=ImageCache::writeToCache(job.itemId,job.imageType,job.imageTag,job.width,job.height,response.data.data(),response.data.size());
+            BinaryHttpResponse response;
+            std::string error;
+            TelemetryRequestScope request(RequestKind::Artwork);
+            TelemetryArtworkScope artwork(ArtworkContext::HomePoster);
+            if (RouteRequest(m_session).run(
+                    [&](const std::string &base) {
+                        return client.getBinary(
+                                   buildImageUrl(base, job.itemId,
+                                                 job.imageType, job.imageTag,
+                                                 job.width, job.height),
+                                   JellyfinApi::buildAuthHeaders(
+                                       m_session.accessToken, m_session.deviceId),
+                                   response, error, 512 * 1024)
+                            && response.ok();
+                    },
+                    error)
+                && !response.data.empty()) {
+                complete = ImageCache::writeToCache(
+                    job.itemId, job.imageType, job.imageTag, job.width,
+                    job.height, response.data.data(), response.data.size());
+            }
         }
-        if (complete) performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster);
-        else performanceTelemetry().addWorkerFailed(WorkerId::HomePoster);
+        if (complete)
+            performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster);
+        else
+            performanceTelemetry().addWorkerFailed(WorkerId::HomePoster);
         m_artworkCompleted.fetch_add(1);
         {
             std::lock_guard<std::mutex> lock(m_posterMutex);
             // Erase the key on BOTH success and failure so that a later
             // queuePosterJobs call can re-admit it.  On success the
-            // isCached shortcut (line 283) prevents a redundant HTTP
-            // fetch when the file is still on disk; on failure the
+            // cache check above prevents a redundant HTTP fetch when the file
+            // is still on disk; on failure the
             // network path runs again.  This also allows recovery after
             // the ImageCache janitor evicts a previously-downloaded file.
             const std::string key = posterJobKey(job);
             m_artworkProgressKeys.erase(key);
             if (m_artworkCompleted.load() >= m_artworkTotal.load()
                 && m_highPriorityPosterJobs.empty()
-                && m_lowPriorityPosterJobs.empty())
+                && m_lowPriorityPosterJobs.empty()) {
                 m_artworkActive.store(false);
+            }
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster, static_cast<uint32_t>(
-                    m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
+                WorkerId::HomePoster,
+                static_cast<uint32_t>(m_highPriorityPosterJobs.size()
+                                     + m_lowPriorityPosterJobs.size()));
         }
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
     }

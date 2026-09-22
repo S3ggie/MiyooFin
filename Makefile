@@ -163,9 +163,12 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 test-sanitize:
 	@$(MAKE) SANITIZE=1 test
 
-.PHONY: refactor-check
+.PHONY: refactor-check format-check
 refactor-check:
 	@sh tools/refactor-check.sh
+
+format-check:
+	@sh tools/format-check.sh
 
 $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | $(TEST_DIR)
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
@@ -439,6 +442,7 @@ help:
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
 	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1, separate output/sanitize tree)"
+	@echo "  make format-check — Check maintained C++ control-flow formatting"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"
 	@echo "  make desktop-run — Run the host desktop development runtime"

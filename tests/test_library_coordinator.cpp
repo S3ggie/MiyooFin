@@ -257,7 +257,12 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     const auto startupLockReacquire =
         miyoofin_test::sourcePos(source, "const auto cancellation = m_startupCancellation");
     CHECK(priorMove < priorJoin && priorJoin < startupLockReacquire);
-    const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.cpp");
+    const auto homeControllerHeader =
+        miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.hpp");
+    const auto homeUpdate = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const auto homeFetchLifecycle =
+        miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(miyoofin_test::sourceContains(homeSync, "startStartupSync(initialPagePublished)"));
     CHECK(miyoofin_test::sourceContains(homeSync, "takeStartupSyncResult"));
     CHECK(miyoofin_test::sourceContains(homeSync, "requestFullPopulation(populationRequest)"));
@@ -270,12 +275,32 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->stage("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->finalize("));
     const auto startupGuard =
-        miyoofin_test::sourcePos(homeSync, "m_initialPopulationInProgress = true");
+        miyoofin_test::sourcePos(homeSync, "m_initialPopulationInProgress.store(true)");
     const auto coordinatorStart =
         miyoofin_test::sourcePos(homeSync, "startStartupSync(initialPagePublished)");
     CHECK(startupGuard != std::string::npos);
     CHECK(coordinatorStart != std::string::npos);
     CHECK(startupGuard < coordinatorStart);
+    CHECK(
+        miyoofin_test::sourceContains(homeControllerHeader, "std::shared_ptr<const Presentation>"));
+    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "previousTabs"));
+    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "previousAnimeItemIds"));
+    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "fetchGeneration"));
+    CHECK(miyoofin_test::sourceContains(homeFetchLifecycle, "m_animeItemIds.clear()"));
+    CHECK(miyoofin_test::sourceContains(
+        homeFetchLifecycle, "m_loadState == LoadState::Ready && !m_tabs.empty(), m_animeItemIds"));
+    CHECK(miyoofin_test::sourceContains(homeSync,
+                                        "presentation.fetchGeneration != m_fetchGeneration.load"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "m_pendingPresentation->fetchGeneration"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "update.firstPage && !initialPagePublished"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "manualOfflineMode"));
+    CHECK(miyoofin_test::sourceContains(homeSync,
+                                        "[HomeScreen] full_population_consumer identity_mismatch"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "m_libraryCoordinator->stop"));
+    const auto stopRequest = miyoofin_test::sourcePos(homeUpdate, "requestStopAllWorkers()");
+    const auto controllerJoin = miyoofin_test::sourcePos(homeUpdate, "joinAllWorkers()");
+    CHECK(stopRequest < controllerJoin);
+    CHECK(!miyoofin_test::sourceContains(homeUpdate, "m_libraryCoordinator->stop"));
     std::printf("[test] LibraryCoordinator single startup driver OK\n");
 }
 

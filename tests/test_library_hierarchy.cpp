@@ -514,7 +514,9 @@ void testHomeHierarchyLateRequestRace()
     const auto hierarchySource =
         miyoofin_test::readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
     const auto homeSource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
-    const auto syncSource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const auto syncSource =
+        miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.cpp");
+    const auto applySource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     const auto homeHeader = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.hpp");
 
     // The generation guard must run before any cached/live artwork is queued
@@ -532,15 +534,18 @@ void testHomeHierarchyLateRequestRace()
     CHECK(miyoofin_test::sourceContains(homeHeader, "bool m_hierarchySubmissionClosed = false"));
     CHECK(miyoofin_test::sourceContains(hierarchySource, "m_hierarchySubmissionClosed"));
     CHECK(miyoofin_test::sourceContains(hierarchySource,
-                                        "m_fetchCancellation && m_fetchCancellation->load()"));
-    CHECK(miyoofin_test::sourceContains(homeSource,
+                                        "m_libraryFetch && m_libraryFetch->cancelled()"));
+    CHECK(miyoofin_test::sourceContains(syncSource,
                                         "m_libraryCoordinator->status().committedGeneration"));
     const auto closeGate =
         miyoofin_test::sourcePos(homeSource, "m_hierarchySubmissionClosed = true");
     const auto fetchCancel =
-        miyoofin_test::sourcePos(homeSource, "m_fetchCancellation->store(true)");
+        miyoofin_test::sourcePos(homeSource, "m_libraryFetch->requestStopAllWorkers()");
     CHECK(closeGate < fetchCancel);
-    CHECK(miyoofin_test::sourceContains(syncSource, "requestHierarchy(resolvedItems"));
+    CHECK(
+        miyoofin_test::sourceContains(applySource, "requestHierarchy(presentation.hierarchyShows"));
+    CHECK(miyoofin_test::sourcePos(syncSource, "HomeScreen::") == std::string::npos);
+    CHECK(miyoofin_test::sourcePos(syncSource, "HomeScreen*") == std::string::npos);
 
     // This is the deterministic interleaving that used to admit a late
     // request: teardown closed the submission gate in the block above while

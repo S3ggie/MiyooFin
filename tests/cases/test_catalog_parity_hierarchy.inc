@@ -256,7 +256,7 @@ static void testCatalogDbMediaPagePreservesViewMembership()
 void testLibraryCacheHomeParityHarness()
 {
     const std::string syncSource =
-        readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     CHECK(syncSource.find("m_metadataActive.store(true)")
           != std::string::npos);
     CHECK(syncSource.find("m_metadataCompleted.store")
@@ -264,7 +264,9 @@ void testLibraryCacheHomeParityHarness()
     CHECK(syncSource.find("collectBoundedSeriesIds")
           != std::string::npos);
     CHECK(syncSource.find("itemsByIds") != std::string::npos);
-    CHECK(syncSource.find("requestHierarchy") != std::string::npos);
+    const std::string applySource =
+        readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(applySource.find("requestHierarchy") != std::string::npos);
     CHECK(syncSource.find("refreshSeasons") == std::string::npos);
     CHECK(syncSource.find("refreshEpisodes") == std::string::npos);
     CHECK(syncSource.find("writeSyncState") == std::string::npos);
@@ -361,7 +363,8 @@ static void testHomeSkipsUnsupportedLibraryViews()
     CHECK(source.find("views.erase(std::remove_if") != std::string::npos);
     CHECK(source.find("getLibraryItemsPage") != std::string::npos);
     CHECK(source.find("sync->stage") != std::string::npos);
-    const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string homeSource =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     CHECK(homeSource.find("requestFullPopulation") != std::string::npos);
     CHECK(homeSource.find("beginTopLevelSync") == std::string::npos);
     CHECK(homeSource.find("finalizeTopLevelSync") == std::string::npos);
@@ -372,7 +375,8 @@ static void testHomeSkipsUnsupportedLibraryViews()
 static void testHomeOptionalRailFailuresDoNotStopCatalogPopulation()
 {
     std::printf("[test] Home optional rail failures are isolated\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string source =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     CHECK(source.find("bool optionalRailFailed") != std::string::npos);
     CHECK(source.find("bool catalogRefreshFailed") != std::string::npos);
     CHECK(source.find("optionalRailFailed=true") != std::string::npos);
@@ -634,15 +638,19 @@ static void testCatalogScopeConfiguredBeforeHomePopulation()
 static void testHomePublishesAfterFirstBoundedPage()
 {
     std::printf("[test] Home publishes after first bounded page\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string source =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
+    const std::string controllerHeader =
+        readTestBytes("src/ui/screens/HomeLibraryController.hpp");
     const std::string lifecycle = readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string apply = readTestBytes(
         "src/ui/screens/HomeScreenSyncApply.cpp");
-    CHECK(source.find("m_fetchReady") != std::string::npos);
-    CHECK(source.find("m_fetchComplete") != std::string::npos);
+    CHECK(controllerHeader.find("m_fetchReady") != std::string::npos);
+    CHECK(controllerHeader.find("m_fetchComplete") != std::string::npos);
     CHECK(source.find("first bounded page") != std::string::npos);
-    CHECK(apply.find("m_fetchReady.store(true)") != std::string::npos);
-    CHECK(lifecycle.find("if (m_fetchReady.load())") != std::string::npos);
+    CHECK(source.find("m_fetchReady.store(true)") != std::string::npos);
+    CHECK(lifecycle.find("m_libraryFetch && m_libraryFetch->ready()") !=
+          std::string::npos);
     CHECK(source.find("m_fetchDone.store(true);\n                    }")
           == std::string::npos);
     CHECK(source.find("&& (!movies.items.empty() || !shows.items.empty())")
@@ -660,7 +668,8 @@ static void testHomePublishesAfterFirstBoundedPage()
 static void testHomeDiscardsColdProvisionalFailure()
 {
     std::printf("[test] Home discards cold provisional failure/cancel\n");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes(
         "src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!sync.empty() && !apply.empty());
@@ -670,16 +679,16 @@ static void testHomeDiscardsColdProvisionalFailure()
     CHECK(!finish.empty());
     // The first page is explicitly provisional, while both a failed terminal
     // update and a cancelled/superseded update provide the failure message.
-    CHECK(sourceContains(sync, "pending.tabs = std::move(firstPageTabs)"));
+    CHECK(sourceContains(sync, "pending.tabs = buildTabs(cw, ra, moviesByView, showsByView)"));
     CHECK(sourceContains(sync, "pending.remoteSnapshot = firstPageSnapshot"));
-    CHECK(sourceContains(sync, "publish()"));
+    CHECK(sourceContains(sync, "publishPending()"));
     CHECK(sourceContains(sync, "update.cancelled || update.superseded"));
     // Cold-start failure handling must not be gated on prior valid content.
     CHECK(sourceContains(finish,
-                         "if (presentation.complete && !m_fetchCatalogCommitted.load()"));
-    CHECK(sourceContains(finish, "if (m_fetchPreviousContentValid)"));
+                         "if (presentation.complete && !presentation.catalogCommitted"));
+    CHECK(sourceContains(finish, "if (presentation.previousContentValid)"));
     CHECK(sourceContains(finish, "m_tabs = emptyHomeTabs();"));
-    CHECK(sourceContains(finish, "m_fetchResult.clear();"));
+    CHECK(sourceContains(finish, "m_fetchRailCW.clear();"));
     CHECK(sourceContains(finish, "m_homeRailsApplied = true;"));
     CHECK(sourceContains(finish, "m_fetchPostFinalizeApplied = true;"));
     CHECK(sourceContains(finish,
@@ -687,16 +696,17 @@ static void testHomeDiscardsColdProvisionalFailure()
     // The post-finalize rail projection is after the terminal branch, so the
     // branch must arm both guards before it can return to that code.
     CHECK(sourcePos(finish, "m_homeRailsApplied = true;")
-          < sourcePos(finish, "if (m_homeRailsReady.load() && !m_homeRailsApplied)"));
+          < sourcePos(finish, "if (presentation.railsReady && !m_homeRailsApplied)"));
     CHECK(sourcePos(finish, "m_fetchPostFinalizeApplied = true;")
-          < sourcePos(finish, "if (m_fetchComplete.load() && !m_fetchPostFinalizeApplied)"));
+          < sourcePos(finish, "if (presentation.complete && !m_fetchPostFinalizeApplied)"));
     std::printf("[test] Home discards cold provisional failure/cancel OK\n");
 }
 
 static void testHomeDoesNotPublishRailOnlyPresentation()
 {
     std::printf("[test] Home keeps rail-only cold start loading\n");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes(
         "src/ui/screens/HomeScreenSyncApply.cpp");
     const std::string finish = sourceFunction(
@@ -710,18 +720,21 @@ static void testHomeDoesNotPublishRailOnlyPresentation()
           < sourcePos(firstPageSource, "pending.continueValid = cwOk"));
     CHECK(sourceContains(finish, "else if (presentation.contentValid)"));
     CHECK(sourcePos(finish, "else if (presentation.contentValid)")
-          < sourcePos(finish, "if (m_homeRailsReady.load() && !m_homeRailsApplied)"));
+          < sourcePos(finish, "if (presentation.railsReady && !m_homeRailsApplied)"));
     std::printf("[test] Home keeps rail-only cold start loading OK\n");
 }
 
 static void testHomePendingCompletionPublicationOrdering()
 {
     std::printf("[test] Home pending completion publication ordering\n");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes(
         "src/ui/screens/HomeScreenSyncApply.cpp");
     const std::string publish = sourceFunction(
-        apply, "void HomeScreen::publishPendingPresentation(");
+        sync, "void HomeLibraryController::publish(");
+    const std::string fetchWorker = sourceFunction(
+        sync, "void HomeLibraryController::fetchWorker(");
     const std::string finish = sourceFunction(
         apply, "void HomeScreen::finishFetch(");
     CHECK(!sync.empty() && !publish.empty() && !finish.empty());
@@ -735,18 +748,18 @@ static void testHomePendingCompletionPublicationOrdering()
                          "if (presentation.complete && !m_fetchPostFinalizeApplied)"));
 
     const auto firstComplete = sourcePos(sync, "pending.complete = true;");
-    const auto firstPublish = sourcePos(sync, "publish();");
+    const auto firstPublish = sourcePos(sync, "publishPending();");
     const auto lastComplete = sourceRPos(sync, "pending.complete = true;");
-    const auto lastPublish = sourceRPos(sync, "publish();");
+    const auto lastPublish = sourceRPos(sync, "publishPending();");
     CHECK(firstComplete != std::string::npos);
     CHECK(firstPublish != std::string::npos);
     CHECK(lastComplete != std::string::npos);
     CHECK(lastPublish != std::string::npos);
     CHECK(firstComplete < firstPublish);
     CHECK(lastComplete < lastPublish);
-    CHECK(sourceRPos(sync, "m_fetchComplete.store(true)")
+    CHECK(sourceRPos(fetchWorker, "m_fetchComplete.store(true)")
           == std::string::npos);
-    CHECK(sourceRPos(sync, "m_fetchReady.store(true)")
+    CHECK(sourceRPos(fetchWorker, "m_fetchReady.store(true)")
           == std::string::npos);
     std::printf("[test] Home pending completion publication ordering OK\n");
 }
@@ -754,8 +767,11 @@ static void testHomePendingCompletionPublicationOrdering()
 static void testHomePreservesAnimeMembershipDuringBoundedReads()
 {
     std::printf("[test] Home preserves Anime membership during bounded reads\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(source.find("m_animeItemIds") != std::string::npos);
+    const std::string source =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
+    const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    CHECK(source.find("pending.animeItemIds") != std::string::npos);
+    CHECK(apply.find("m_animeItemIds.insert") != std::string::npos);
     CHECK(source.find("isAnimeSeries") != std::string::npos);
     CHECK(source.find("CachedLibraryView classificationView") == std::string::npos);
     CHECK(source.find("view.name") != std::string::npos);

@@ -16,6 +16,8 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
 {
     if (m_libraryCoordinator)
         m_libraryCoordinator->setManualOfflineMode(session.manualOfflineMode);
+    m_libraryFetch = std::make_unique<HomeLibraryController>(
+        m_session, m_libraryQuery.get(), m_libraryCoordinator.get(), m_downloads.get());
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
@@ -36,12 +38,12 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
 
 std::uint64_t HomeScreen::catalogScopeEpoch() const
 {
-    return m_libraryQuery ? m_libraryQuery->scopeEpoch() : 0;
+    return m_libraryFetch ? m_libraryFetch->catalogScopeEpoch() : 0;
 }
 
 std::uint64_t HomeScreen::committedCatalogGeneration() const
 {
-    return m_libraryCoordinator ? m_libraryCoordinator->status().committedGeneration : 0;
+    return m_libraryFetch ? m_libraryFetch->committedCatalogGeneration() : 0;
 }
 
 bool HomeScreen::catalogScopeReady() const
@@ -64,30 +66,22 @@ void HomeScreen::requestStopAllWorkers() noexcept
         m_showPage.cancellation->store(true);
     if (m_animePage.cancellation)
         m_animePage.cancellation->store(true);
-    // Close hierarchy submission before cancelling the fetch.  The fetch
-    // worker resolves its bounded series and submits the hierarchy request;
-    // this lock makes teardown and that final submission mutually exclusive.
+    // Close hierarchy submission before cancelling the fetch.  The controller
+    // publishes bounded hierarchy data and finishFetch submits it; this lock
+    // makes teardown and that final submission mutually exclusive.
     {
         std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
         m_hierarchySubmissionClosed = true;
         m_hierarchyActive.store(false);
         m_hierarchyRequestReady.store(false);
-        if (m_fetchCancellation)
-            m_fetchCancellation->store(true);
+        if (m_libraryFetch)
+            m_libraryFetch->requestStopAllWorkers();
     }
-    if (m_libraryCoordinator)
-        m_libraryCoordinator->cancelStartupSync();
-    if (m_libraryCoordinator)
-        m_libraryCoordinator->cancelFullPopulation();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelLiveChange();
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelSafetyReconcile();
-    if (m_libraryCoordinator)
-        m_libraryCoordinator->cancelHomeRailRefresh();
     m_updateManager.cancel();
-    if (m_libraryCoordinator)
-        m_libraryCoordinator->cancelHierarchy();
     {
         std::lock_guard<std::mutex> lock(m_posterMutex);
         m_stopPosterWorker = true;
@@ -102,8 +96,8 @@ void HomeScreen::requestStopAllWorkers() noexcept
 
 void HomeScreen::joinAllWorkers()
 {
-    if (m_fetchThread.joinable())
-        m_fetchThread.join();
+    if (m_libraryFetch)
+        m_libraryFetch->joinAllWorkers();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
     for (auto& thread : m_posterThreads) {
@@ -213,10 +207,7 @@ void HomeScreen::rebuildShowsPresentation()
     m_animeWindow.clear();
     const auto& views = (presentationOffline() ? m_offlineSnapshot : m_cachedSnapshot).shows;
     std::set<std::string> animeItemIds;
-    {
-        std::lock_guard<std::mutex> lock(m_fetchMutex);
-        animeItemIds = m_animeItemIds;
-    }
+    animeItemIds = m_animeItemIds;
     std::set<std::string> seenShows;
     std::set<std::string> seenAnime;
     for (const auto& item : rawWindow) {
@@ -249,7 +240,7 @@ void HomeScreen::enter()
     printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab, m_userName.c_str());
     uiDiagnostics().log("[HomeScreen] startup stage=home_entered");
     if (m_loadState == LoadState::Loading) {
-        if (!m_fetchDone) {
+        if (!m_libraryFetch || !m_libraryFetch->done()) {
             // The SQLite checkpoint is read by startFetch's worker before any
             // ChangedHierarchy request.  The first bounded page publishes the
             // minimum Home data; remaining population stays in the worker.
@@ -281,29 +272,26 @@ void HomeScreen::update(Uint32 dt)
         }
     }
     consumeHierarchyResults();
-    if (m_fetchReady.load()) {
+    if (m_libraryFetch && m_libraryFetch->ready()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();
     }
     if (m_loadState == LoadState::Ready) {
         updateLiveLibraryChanges();
-        if (m_homeRailRefreshInFlight && m_libraryCoordinator) {
-            library::HomeRailResult railResult;
-            if (m_libraryCoordinator->takeHomeRailResult(m_homeRailRefreshRequest, railResult) &&
-                railResult.request == m_homeRailRefreshRequest) {
-                m_homeRailContinueValid = railResult.continueValid;
-                m_homeRailRecentValid = railResult.recentlyAddedValid;
+        if (m_homeRailRefreshInFlight && m_libraryFetch) {
+            HomeLibraryController::RailPresentation rail;
+            if (m_libraryFetch->takeHomeRailRefresh(rail)) {
+                m_homeRailContinueValid = rail.continueValid;
+                m_homeRailRecentValid = rail.recentlyAddedValid;
                 if (m_homeRailContinueValid)
-                    m_homeRailContinueWatching = railResult.continueWatching;
+                    m_homeRailContinueWatching = std::move(rail.continueWatching);
                 if (m_homeRailRecentValid)
-                    m_homeRailRecentlyAdded = railResult.recentlyAdded;
-                m_homeRailRefreshSucceeded = railResult.success;
-                m_homeRailRefreshError = railResult.error;
-                m_homeRailRefreshDone.store(true);
+                    m_homeRailRecentlyAdded = std::move(rail.recentlyAdded);
+                m_homeRailRefreshSucceeded = rail.success;
+                m_homeRailRefreshError = std::move(rail.error);
+                finishHomeRailRefresh();
             }
         }
-        if (m_homeRailRefreshDone.load())
-            finishHomeRailRefresh();
         finishSafetyReconcile();
         if (m_libraryCoordinator && m_libraryCoordinator->requestMaintenance())
             m_safetyReconcileInFlight = true;

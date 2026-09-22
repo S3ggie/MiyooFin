@@ -17,7 +17,7 @@ bool HomeScreen::requestHierarchy(const std::vector<MediaItem>& shows, std::uint
 
     std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
     if (m_hierarchySubmissionClosed || generation == 0 || m_hierarchyActive.load() ||
-        (m_fetchCancellation && m_fetchCancellation->load()))
+        (m_libraryFetch && m_libraryFetch->cancelled()))
         return false;
     std::vector<MediaItem> pending;
     for (const auto& show : shows) {
@@ -164,7 +164,8 @@ void HomeScreen::posterWorker()
             std::unique_lock<std::mutex> lock(m_posterMutex);
             m_posterWake.wait(lock, [&] {
                 return m_stopPosterWorker || !m_highPriorityPosterJobs.empty() ||
-                       (!m_initialPopulationInProgress.load() && !m_lowPriorityPosterJobs.empty());
+                       ((!m_libraryFetch || !m_libraryFetch->initialPopulationInProgress()) &&
+                        !m_lowPriorityPosterJobs.empty());
             });
             if (m_stopPosterWorker)
                 return;
@@ -172,7 +173,9 @@ void HomeScreen::posterWorker()
             if (!m_highPriorityPosterJobs.empty()) {
                 job = std::move(m_highPriorityPosterJobs.front());
                 m_highPriorityPosterJobs.erase(m_highPriorityPosterJobs.begin());
-            } else if (shouldProcessPosterJob(false, m_initialPopulationInProgress.load())) {
+            } else if (shouldProcessPosterJob(false,
+                                              m_libraryFetch &&
+                                                  m_libraryFetch->initialPopulationInProgress())) {
                 // Only pop a low-priority job when the defer contract
                 // allows it — i.e. initial population is finished.
                 job = std::move(m_lowPriorityPosterJobs.front());

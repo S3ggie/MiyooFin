@@ -71,6 +71,8 @@ static void testHomeIncrementalPublicationPolicy()
     CHECK(sourceContains(render, "homeSyncStatus(true)"));
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
+    const std::string controller =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string coordinator = readTestBytes(
         "src/library/LibraryCoordinator.cpp");
     CHECK(!sync.empty());
@@ -88,9 +90,9 @@ static void testHomeIncrementalPublicationPolicy()
                          "status.maintenanceDue = status.safetyReconcileDue"));
     CHECK(sourceContains(apply, "m_cachedSnapshot.continueWatching"));
     CHECK(sourceContains(apply, "PendingPresentation"));
-    CHECK(sourceContains(apply, "publishPendingPresentation"));
+    CHECK(sourceContains(controller, "HomeLibraryController::publish"));
     CHECK(sourceContains(apply, "takePendingPresentation"));
-    CHECK(sourceContains(apply, "std::make_shared<const PendingPresentation>"));
+    CHECK(sourceContains(controller, "std::make_shared<const Presentation>"));
     CHECK(sourceLacks(sync, "m_syncState"));
     CHECK(sourceLacks(sync, "m_fetchStats"));
     CHECK(sourceLacks(sync, "m_tabs ="));
@@ -329,15 +331,16 @@ static void testHomeRailPosterPlanning()
 static void testInitialHomeArtworkScheduling()
 {
     std::printf("[test] initial Home artwork scheduling\n");
-    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string source=
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     CHECK(!source.empty());
-    CHECK(sourceContains(source, "queuePosterJobs(planHomeRailPosterJobs(cw, ra), true)"));
+    CHECK(sourceContains(source, "addArtwork(pending, planHomeRailPosterJobs(cw, ra), true)"));
     // Structural: the page-poster call must stay gated on `start == 0` (the
     // unconditioned `, true)` variant in this file would requeue every page
     // on every validation). The gating expression itself lives inline in the
     // call argument, so no unit can observe it; the scan pins the shape.
     CHECK(sourceLacks(source, "queuePosterJobs(planMediaPagePosterJobs(page.items), true)"));
-    CHECK(sourceContains(source, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
+    CHECK(sourceContains(source, "addArtwork(pending, planMediaPagePosterJobs(page.items),"));
     CHECK(sourceContains(source, "update.firstPage"));
     const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
     CHECK(!coordinator.empty());
@@ -345,8 +348,9 @@ static void testInitialHomeArtworkScheduling()
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!apply.empty());
     CHECK(sourceContains(apply, "queuePosterJobs(planMediaPagePosterJobs(result.items), true)"));
-    CHECK(sourceContains(source, "m_artworkPlanningComplete.store(false)"));
-    CHECK(sourceContains(source, "m_artworkPlanningComplete.store(artworkPlanningComplete)"));
+    const std::string controller = source;
+    CHECK(sourceContains(controller, "m_artworkPlanningComplete.store(false)"));
+    CHECK(sourceContains(controller, "m_artworkPlanningComplete.store(artworkPlanningComplete)"));
     const std::string hierarchy=readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
     CHECK(!hierarchy.empty());
     // Structural: the poster worker owns its client/loop in this
@@ -468,7 +472,8 @@ static void testRecentlyAddedWarmPublication()
 static void testWarmHomeCatalogWindows()
 {
     std::printf("[test] warm Home catalog windows\n");
-    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string source=
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply=readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!source.empty());
     CHECK(!apply.empty());
@@ -528,7 +533,8 @@ static void testAnimeSelectionSurvivesSharedWindowTrim()
 static void testCoordinatorCommittedGenerationStatus()
 {
     std::printf("[test] coordinator committed generation/status\n");
-    const std::string sync=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync=
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string home=readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string coordinator=readTestBytes(
         "src/library/LibraryCoordinator.cpp");
@@ -546,7 +552,7 @@ static void testCoordinatorCommittedGenerationStatus()
                          "status.committedGeneration = m_catalogGeneration"));
     CHECK(sourceContains(coordinator,
                          "status.maintenanceDue = status.safetyReconcileDue"));
-    CHECK(sourceContains(home,
+    CHECK(sourceContains(sync,
                          "m_libraryCoordinator->status().committedGeneration"));
     CHECK(sourceContains(sync, "committedCatalogGeneration()"));
     CHECK(sourceLacks(sync,"m_topLevelSyncGeneration"));
@@ -678,7 +684,8 @@ static void testDecideHomeStartupSync()
 static void testHomeStartupSyncSourceOrder()
 {
     std::printf("[test] Home startup sync source order assertions\n");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     const std::string coordinator = readTestBytes(
         "src/library/LibraryCoordinator.cpp");
@@ -701,7 +708,7 @@ static void testHomeStartupSyncSourceOrder()
     // terminal pending publication (after the population walk) so they don't
     // block the UI thread.  Use rfind to skip the earlier incremental
     // publications.
-    const auto terminalPublishPos = sourceRPos(sync, "publish();");
+    const auto terminalPublishPos = sourceRPos(sync, "publishPending();");
     const auto janitorPos = sourcePos(sync, "ImageCache::runJanitor()");
     const auto prefetchPos = sourcePos(sync, "collectBoundedSeriesIds");
     CHECK(terminalPublishPos != std::string::npos);
@@ -711,12 +718,12 @@ static void testHomeStartupSyncSourceOrder()
     CHECK(prefetchPos < terminalPublishPos);
     // Incremental rail-apply must be gated on m_homeRailsReady, not
     // m_fetchComplete
-    CHECK(sourceContains(apply, "m_homeRailsReady.load() && !m_homeRailsApplied"));
+    CHECK(sourceContains(apply, "presentation.railsReady && !m_homeRailsApplied"));
     // Existing source substrings that scan tests pin
     CHECK(sourceContains(coordinator, "catchUpChangedCatalog"));
     CHECK(sourceContains(coordinator, "reconcileAuthoritativeMembership"));
     CHECK(sourceContains(sync, "planHomeRailPosterJobs(cw, ra)"));
-    CHECK(sourceContains(sync, "queuePosterJobs(planMediaPagePosterJobs(page.items),"));
+    CHECK(sourceContains(sync, "addArtwork(pending, planMediaPagePosterJobs(page.items),"));
     CHECK(sourceContains(sync, "update.firstPage"));
     // Startup rails are fields of the immutable pending presentation.  The
     // worker publishes them and finishFetch consumes them on the SDL thread.
@@ -726,7 +733,7 @@ static void testHomeStartupSyncSourceOrder()
     // m_initialPopulationInProgress must be set before the startup rails
     // fetch so a queued UserDataChanged cannot start a competing rail
     // refresh during the startup window.
-    const auto initPopPos = sourcePos(sync, "m_initialPopulationInProgress = true");
+    const auto initPopPos = sourcePos(sync, "m_initialPopulationInProgress.store(true)");
     const auto railsFetchPos = sourcePos(
         sync, "requestHomeRailRefresh(railRequest)");
     CHECK(initPopPos != std::string::npos);
@@ -866,6 +873,8 @@ static void testHomeRailRefreshCoordinatorPath()
     const std::string header = readTestBytes("src/ui/screens/HomeScreen.hpp");
     const std::string home = readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string controller =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     const std::string refresh = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
     const std::string coordinator = readTestBytes(
@@ -890,9 +899,9 @@ static void testHomeRailRefreshCoordinatorPath()
     // Both rails are consumed from the immutable coordinator result.  A
     // partial failure only updates the valid rail, retaining cached content
     // for the failed one, and the row label is restored around the mutation.
-    CHECK(sourceContains(home, "takeHomeRailResult"));
-    CHECK(sourceContains(home, "railResult.continueValid"));
-    CHECK(sourceContains(home, "railResult.recentlyAddedValid"));
+    CHECK(sourceContains(home, "takeHomeRailRefresh"));
+    CHECK(sourceContains(home, "rail.continueValid"));
+    CHECK(sourceContains(home, "rail.recentlyAddedValid"));
     const std::string finish = sourceFunction(
         apply, "void HomeScreen::finishHomeRailRefresh(");
     CHECK(sourceContains(finish, "m_homeRailContinueValid"));
@@ -907,9 +916,9 @@ static void testHomeRailRefreshCoordinatorPath()
     // thread, so startup/live/resume cannot create duplicate Home workers.
     CHECK(sourceContains(sync, "m_homeRailRefreshPending = true"));
     CHECK(sourceContains(finish, "startHomeRailRefresh()"));
-    CHECK(sourceContains(home, "cancelHomeRailRefresh()"));
-    CHECK(sourceContains(sync, "requestHomeRailRefresh(request)"));
-    CHECK(sourceContains(home, "takeHomeRailResult"));
+    CHECK(sourceContains(controller, "cancelHomeRailRefresh()"));
+    CHECK(sourceContains(controller, "requestHomeRailRefresh(request)"));
+    CHECK(sourceContains(controller, "takeHomeRailResult"));
     CHECK(sourceCount(coordinator, "m_homeRailThread = std::thread") == 1);
     CHECK(sourceLacks(header, "m_resumeRefreshInFlight"));
     std::printf("[test] Home rail refresh coordinator path OK\n");
@@ -1316,7 +1325,8 @@ static void testOfflineModeToggleDrivesFetchPath()
     std::printf("[test] Offline mode toggle drives fetch path\n");
 
     const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     const std::string hdr = readTestBytes("src/ui/screens/HomeScreen.hpp");
     CHECK(!nav.empty());
@@ -1358,7 +1368,8 @@ static void testOfflineModeToggleDrivesFetchPath()
     CHECK(sourceContains(toggleCode, "m_offlineModeFetchPending"));
 
     // startFetch() must return bool so callers can detect in-flight.
-    CHECK(sourceContains(sync, "bool HomeScreen::startFetch()"));
+    CHECK(sourceContains(readTestBytes("src/ui/screens/HomeScreenSync.cpp"),
+                        "bool HomeScreen::startFetch()"));
     CHECK(sourceContains(hdr, "bool startFetch()"));
 
     // finishFetch() must re-fetch when the pending flag is set.
@@ -1370,7 +1381,7 @@ static void testOfflineModeToggleDrivesFetchPath()
     CHECK(sourceContains(sync, "pending.haveCachedSnapshot = true"));
     CHECK(sourceContains(sync, "pending.cacheSaved = true"));
     CHECK(sourceContains(apply, "m_haveCachedSnapshot = true"));
-    CHECK(sourceContains(apply, "m_fetchCacheSaved = presentation.cacheSaved"));
+    CHECK(sourceContains(apply, "m_fetchError = presentation.error"));
 
     std::printf("[test] Offline mode toggle drives fetch path OK\n");
 }
@@ -1504,7 +1515,7 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
     std::printf("[test] Offline toggle cancels in-flight fetch and uses cache\n");
 
     const std::string nav = readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    const std::string sync = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string sync = readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string offline = readTestBytes("src/ui/screens/HomeScreenOffline.cpp");
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!nav.empty());
@@ -1534,11 +1545,11 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
             : nav.substr(toggleStart, toggleEnd - toggleStart);
         CHECK(!toggleCode.empty());
         // Must set cancellation flag before startFetch()
-        CHECK(sourceContains(toggleCode, "m_fetchCancellation->store(true)"));
+        CHECK(sourceContains(toggleCode, "m_libraryFetch->cancelFetch()"));
         // Must try the cached path when entering offline mode
         CHECK(sourceContains(toggleCode, "tryApplyCachedOfflineSnapshot()"));
         // The cancellation store must appear before the startFetch() call
-        const auto cancelPos = sourcePos(toggleCode, "m_fetchCancellation->store(true)");
+        const auto cancelPos = sourcePos(toggleCode, "m_libraryFetch->cancelFetch()");
         const auto fetchPos = sourcePos(toggleCode, "startFetch()");
         CHECK(cancelPos != std::string::npos);
         CHECK(fetchPos != std::string::npos);
@@ -1557,7 +1568,7 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
     // with the current catalog generation folded into the signature.  The
     // SDL thread applies those fields after taking the immutable handoff.
     {
-        CHECK(sourceContains(sync, "pending.offlineSnapshotCache = pending.cachedSnapshot"));
+        CHECK(sourceContains(sync, "pending.offlineSnapshotCache = pending.preparedOfflineSnapshot"));
         CHECK(sourceContains(sync, "pending.offlineCacheValid = true"));
         CHECK(sourceContains(sync, "pending.offlineSignature = computeOfflineSignature(downloads,"));
         CHECK(sourceContains(sync, "committedCatalogGeneration()"));
@@ -1565,6 +1576,26 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
         CHECK(sourceContains(apply, "m_haveOfflineSnapshotCache = true"));
         CHECK(sourceContains(apply, "m_offlineSignature = presentation.offlineSignature"));
         CHECK(sourceContains(apply, "m_haveOfflineSignature = true"));
+    }
+
+    // Cancellation during metadata loading must retire the worker instead of
+    // returning with metadataActive/fetchDone stuck.  The terminal handoff is
+    // what lets the UI join and perform the deferred mode-switch retry.
+    {
+        const std::string worker =
+            sourceFunction(sync, "void HomeLibraryController::fetchWorker(");
+        CHECK(sourceContains(worker, "finishCancelledOfflineFetch"));
+        CHECK(sourceContains(worker, "pending.error = \"Library refresh cancelled\""));
+        CHECK(sourceContains(worker, "pending.complete = true"));
+        CHECK(sourceContains(worker, "pending.cancelled = true"));
+        CHECK(sourceContains(worker, "m_metadataActive.store(false)"));
+        CHECK(sourceContains(worker, "m_fetchDone.store(true)"));
+        CHECK(sourceContains(worker, "completeTelemetry(Outcome::Cancelled)"));
+        CHECK(sourceContains(apply,
+                            "if (presentation.complete && m_offlineModeFetchPending)"));
+        CHECK(sourceContains(apply, "m_offlineModeFetchPending = false"));
+        CHECK(sourceContains(apply,
+                            "if (presentation.cancelled && !m_offlineModeFetchPending)"));
     }
 
     // tryApplyCachedOfflineSnapshot must exist and use the cache.
@@ -1581,7 +1612,7 @@ static void testOfflineToggleCancelsFetchAndUsesCache()
     // computeOfflineSignature must exist and use isAvailable.
     {
         CHECK(sourceContains(offline, "HomeScreen::computeOfflineSignature("));
-        CHECK(sourceContains(offline, "OfflineLibraryQuery::isAvailable"));
+        CHECK(sourceContains(sync, "OfflineLibraryQuery::isAvailable"));
     }
 
     std::printf("[test] Offline toggle cancels in-flight fetch and uses cache OK\n");

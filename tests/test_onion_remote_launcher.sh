@@ -113,14 +113,15 @@ grep -q 'sync()' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper do
 ! grep -Eq 'RB_POWER_OFF|RB_KEXEC|system\(|execle|popen\(' "$ROOT/tools/miyoo/miyoofin-reboot.c" || fail 'reboot helper exposes unsafe reboot capability'
 echo '[test] Onion remote reboot static contract OK'
 
-grep -q 'm_fetchCancellation' "$ROOT/src/ui/screens/HomeScreen.hpp" || fail 'Home fetch has no teardown cancellation token'
-grep -q 'm_fetchCancellation.*store' "$ROOT/src/ui/screens/HomeScreen.cpp" || fail 'Home destructor does not cancel the library fetch'
-grep -q 'cancelled' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home library fetch does not propagate cancellation'
-if grep -q 'readLibrarySnapshot' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still uses full CatalogDb snapshot read'; fi
-if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeScreenSync.cpp"; then fail 'online Home startup still waits on full CatalogDb seed'; fi
+grep -q 'm_fetchCancellation' "$ROOT/src/ui/screens/HomeLibraryController.hpp" || fail 'Home controller has no fetch cancellation token'
+grep -q 'm_libraryFetch->requestStopAllWorkers' "$ROOT/src/ui/screens/HomeScreen.cpp" || fail 'Home destructor does not cancel the library controller'
+grep -q 'm_fetchCancellation.*store' "$ROOT/src/ui/screens/HomeLibraryController.cpp" || fail 'Home controller does not propagate cancellation'
+if grep -q 'readLibrarySnapshot' "$ROOT/src/ui/screens/HomeLibraryController.cpp"; then fail 'online Home startup still uses full CatalogDb snapshot read'; fi
+if grep -q 'seedLibrarySnapshot.*\.get' "$ROOT/src/ui/screens/HomeLibraryController.cpp"; then fail 'online Home startup still waits on full CatalogDb seed'; fi
 grep -q 'getResumeItems' "$ROOT/src/library/LibraryCoordinator.cpp" || fail 'Coordinator lost bounded Continue Watching request'
 grep -q 'getLatestItems' "$ROOT/src/library/LibraryCoordinator.cpp" || fail 'Coordinator lost bounded Recently Added request'
-grep -q 'm_libraryQuery->movies' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
+grep -q 'm_libraryQuery->movies' "$ROOT/src/ui/screens/HomeLibraryController.cpp" || fail 'Home library controller lost bounded CatalogDb paging'
+grep -q 'requestMediaPage' "$ROOT/src/ui/screens/HomeScreenSync.cpp" || fail 'Home navigation lost bounded CatalogDb paging'
 grep -q 'configureCatalogScopeForSession();' "$ROOT/src/app/App.cpp" || fail 'online startup does not configure CatalogDb scope for the session'
 if ! awk '
     /configureCatalogScopeForSession\(\);/ { configured = NR }

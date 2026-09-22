@@ -2,26 +2,29 @@
 
 ## Required checks
 
-From the repository root, run the following before submitting a first-party
-change:
+From the repository root, run `make ci-local` before normal pushes. It runs
+the authoritative clang-format-18 check, host build, tests and boundary checks,
+ASan+UBSan tests, scripted UI tests, and `git diff --check`:
 
 ```shell
-make format-check
-make -j2
-make test -j2
-make refactor-check
-git diff --check
+make ci-local
 ```
 
-`make format-check` is authoritative whenever `clang-format` is installed. It
-covers tracked first-party C and C++ files under `src/`, `include/`, `tools/`,
-and `tests/`, while excluding vendored/imported code, generated output, and
-non-C/C++ tool scripts. Minimal environments without clang-format retain a
-deliberately narrow fallback for obvious same-line control-flow and statement
-regressions; that fallback is not a replacement for clang-format. CI pins the
-formatter to the Ubuntu `clang-format-18` package and invokes it as
-`clang-format-18`; use `CLANG_FORMAT=clang-format-18 make format-check` locally
-when matching CI.
+Before substantial or refactor work, run the superset, which also performs the
+ARM cross-build and `make verify-arm`:
+
+```shell
+make ci-local-full
+```
+
+The aggregate checks require `clang-format-18`, `xvfb-run`, and (for the full
+run) Docker plus the `miyoofin-toolchain` image. Missing required tools are
+validation failures. `make format-check` retains its narrow fallback for
+minimal environments, but that fallback must not be claimed as CI-equivalent;
+`ci-local` always preflights and invokes `clang-format-18` explicitly. The
+format check covers tracked first-party C and C++ files under `src/`,
+`include/`, `tools/`, and `tests/`, while excluding vendored/imported code,
+generated output, and non-C/C++ tool scripts.
 
 Host and ARM C++ builds use `-Wall -Wextra -Wpedantic`. The host build's only
 intentional warning exception is `-Wno-unused-parameter` for the vendored

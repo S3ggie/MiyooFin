@@ -22,18 +22,10 @@ jobs:
             libcurl4-openssl-dev libjson-c-dev clang-format-18 python3 xvfb
           clang-format-18 --version
 
-      - name: First-party C/C++ formatting
-        # Keep CI on the documented clang-format 18 toolchain.
-        run: CLANG_FORMAT=clang-format-18 make format-check
-
-      - name: Build host application
-        run: make -j2
-
-      - name: Tests and refactor boundary checks
-        # tools/refactor-check.sh runs `make test` and `git diff --check` and
-        # enforces the module boundaries and test-only source registration.
-        # xvfb provides a display for the SDL-backed host tests on the runner.
-        run: xvfb-run -a sh tools/refactor-check.sh
+      - name: Host build, tests, and boundary checks
+        # The shared local host phase keeps the authoritative formatter and
+        # refactor/boundary checks identical between CI and local validation.
+        run: sh tools/ci-local-host.sh
 
   ui-script:
     # Headless scripted-input UI harness (docs/ui-script-harness.md):
@@ -166,14 +158,7 @@ jobs:
           # make verify-arm and the cross build below expect this local tag.
           docker tag "$IMAGE" miyoofin-toolchain:latest
 
-      - name: Cross-build ARM binaries
-        # Same invocation as the Makefile's `onionos` target, minus the
-        # blob preconditions (check-miyoo-libs) that CI cannot satisfy.
-        # `mkdir -p` is normally done by the `onionos` target itself.
-        run: |
-          mkdir -p output/build-arm
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/build miyoofin-toolchain \
-            make -f Makefile.cross PERF_TELEMETRY="$PERF_TELEMETRY" RELEASE=1 all bridge reporter
-
-      - name: Verify ARM binaries
-        run: make verify-arm
+      - name: Cross-build ARM binaries and verify
+        # The shared script intentionally uses Makefile.cross directly rather
+        # than `make onionos`, preserving CI's no-device-blobs semantics.
+        run: sh tools/ci-arm.sh

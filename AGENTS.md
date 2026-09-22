@@ -162,13 +162,16 @@ Do not claim hardware behavior is verified unless it was actually tested on the 
 
 ## Validation
 
-For normal C++ changes, run as applicable:
+For normal C++ changes, run:
 
 ```sh
-make test -j2
-make -j2
-git diff --check
+make ci-local
 ```
+
+Run `make ci-local` before normal pushes. Before substantial or refactor work,
+run `make ci-local-full`, which adds the ARM cross-build and `make verify-arm`.
+Missing required CI tools are validation failures. The narrow formatter fallback
+is not CI-equivalent and must not be reported as authoritative CI validation.
 
 For first-party C/C++ changes, also run `make format-check`; CI runs the
 authoritative clang-format path. The opt-in host-only `make clang-tidy` target

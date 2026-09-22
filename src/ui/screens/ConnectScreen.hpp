@@ -22,7 +22,7 @@ class ConnectScreen : public Screen
     explicit ConnectScreen(const std::string& savedUrl);
 #ifdef MIYOOFIN_TEST_BUILD
     using ConnectionAttempt = std::function<bool(const std::string&, ServerInfo&, std::string&,
-                                                  const std::atomic<bool>*)>;
+                                                 const std::atomic<bool>*)>;
     ConnectScreen(const std::string& savedUrl, ConnectionAttempt attempt);
 #endif
     ~ConnectScreen() override;

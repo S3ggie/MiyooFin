@@ -71,7 +71,7 @@ jobs:
               echo "(missing $dir/result.txt)"
             fi
             echo "::endgroup::"
-            for log in app.log stub.log; do
+            for log in app.log stub.log ui-stall.log; do
               path="$dir/$log"
               echo "::group::ui-script/$scenario/$log (last 200 lines)"
               if [[ -f "$path" ]]; then

@@ -115,10 +115,10 @@ public:
                     return;
                 readHierarchyRequest(client);
                 if (static_cast<int>(i) == m_blockedRequest) {
-                    m_connected.store(true, std::memory_order_release);
-                    while (!m_release.load(std::memory_order_acquire))
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(1));
+                    std::unique_lock<std::mutex> lock(m_mutex);
+                    m_blocked = true;
+                    m_cv.notify_all();
+                    m_cv.wait(lock, [this] { return m_release; });
                 }
                 sendHierarchyResponse(client, m_responses[i].second,
                                       m_responses[i].first);
@@ -138,19 +138,29 @@ public:
 
     std::string url() const { return hierarchyUrl(m_listener); }
 
-    bool connected() const
+    bool waitUntilBlocked(std::chrono::milliseconds timeout)
     {
-        return m_connected.load(std::memory_order_acquire);
+        std::unique_lock<std::mutex> lock(m_mutex);
+        return m_cv.wait_for(lock, timeout, [this] { return m_blocked; });
     }
 
-    void release() { m_release.store(true, std::memory_order_release); }
+    void release()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_release = true;
+        }
+        m_cv.notify_all();
+    }
 
 private:
     int m_listener = -1;
     std::vector<std::pair<int, std::string>> m_responses;
     int m_blockedRequest = -1;
-    std::atomic_bool m_connected{false};
-    std::atomic_bool m_release{false};
+    mutable std::mutex m_mutex;
+    std::condition_variable m_cv;
+    bool m_blocked = false;
+    bool m_release = false;
     std::thread m_thread;
 };
 
@@ -217,9 +227,7 @@ void testHierarchyCachedFirstAndPartialFailure()
 
     std::uint64_t request = 0;
     CHECK(coordinator->requestHierarchy({series}, 7, false, request));
-    for (int i = 0; i < 500 && !server.connected(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(server.connected());
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     library::HierarchyResult cached;
     bool sawCachedFirst = false;
@@ -310,31 +318,38 @@ void testHierarchyStopJoinsActiveWork()
     std::uint64_t request = 0;
     CHECK(coordinator->requestHierarchy(
         {hierarchySeries("series-stop")}, 3, false, request));
-    for (int i = 0; i < 500 && !server.connected(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(server.connected());
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
-    std::atomic_bool stopReturned{false};
+    std::mutex stopMutex;
+    std::condition_variable stopCv;
+    bool stopEntered = false;
     std::thread stopper([&] {
+        {
+            std::lock_guard<std::mutex> lock(stopMutex);
+            stopEntered = true;
+        }
+        stopCv.notify_all();
         coordinator->stop();
-        stopReturned.store(true, std::memory_order_release);
     });
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    CHECK(!stopReturned.load(std::memory_order_acquire));
+    {
+        std::unique_lock<std::mutex> lock(stopMutex);
+        CHECK(stopCv.wait_for(lock, std::chrono::seconds(2),
+                              [&] { return stopEntered; }));
+    }
     server.release();
     stopper.join();
-    CHECK(stopReturned.load(std::memory_order_acquire));
+    CHECK(coordinator->stopped() && !coordinator->running());
 
     library::HierarchyResult terminal;
     bool sawTerminal = false;
-    for (int i = 0; i < 100 && !sawTerminal; ++i) {
-        if (coordinator->takeHierarchyResult(request, terminal))
-            sawTerminal = terminal.terminal;
-        else
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    while (coordinator->takeHierarchyResult(request, terminal)) {
+        if (terminal.terminal) {
+            sawTerminal = true;
+            break;
+        }
     }
-    CHECK(sawTerminal);
-    CHECK(terminal.terminal && terminal.cancelled
+    CHECK(sawTerminal && terminal.request == request && terminal.cancelled
+          && !terminal.success
           && !terminal.checkpointCommitted);
     coordinator.reset();
     db.reset();
@@ -368,9 +383,7 @@ void testHierarchyCancellationAllowsHomeReentry()
     std::uint64_t oldRequest = 0;
     CHECK(coordinator->requestHierarchy(
         {hierarchySeries("series-old")}, 20, false, oldRequest));
-    for (int i = 0; i < 500 && !server.connected(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(server.connected());
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     coordinator->cancelHierarchy();
     std::uint64_t newRequest = 0;
@@ -416,9 +429,7 @@ void testHierarchyMutationSerializesLiveChanges()
     std::uint64_t hierarchyRequest = 0;
     CHECK(coordinator->requestSeriesSeasons(
         hierarchySeries("series-live-serialization"), hierarchyRequest));
-    for (int i = 0; i < 500 && !server.connected(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(server.connected());
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     JellyfinLibraryChangeBatch batch;
     batch.itemsUpdated.push_back("live-item");
@@ -484,9 +495,7 @@ void testHierarchyStopPublishesQueuedCancellation()
     std::uint64_t activeRequest = 0;
     CHECK(coordinator->requestSeriesSeasons(
         hierarchySeries("series-active"), activeRequest));
-    for (int i = 0; i < 500 && !server.connected(); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    CHECK(server.connected());
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     std::uint64_t queuedRequest = 0;
     CHECK(coordinator->requestSeriesSeasons(

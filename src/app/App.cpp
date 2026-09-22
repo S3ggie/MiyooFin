@@ -165,7 +165,13 @@ bool App::init()
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    uiDiagnostics().start();
+    const char *desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
+    const char *diagnosticsPath = std::getenv("MIYOOFIN_UI_DIAGNOSTICS");
+    if (desktopInput && desktopInput[0] != '\0' && desktopInput[0] != '0'
+        && diagnosticsPath && diagnosticsPath[0] != '\0')
+        uiDiagnostics().start(diagnosticsPath);
+    else
+        uiDiagnostics().start();
     uiDiagnostics().log("[App] startup stage=diagnostics_started");
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {

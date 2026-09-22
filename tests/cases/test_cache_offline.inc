@@ -141,7 +141,8 @@ static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
 static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
-    const std::string source=readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string source=
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
     const auto manualOffline=source.find("if (session.manualOfflineMode)");
     CHECK(manualOffline!=std::string::npos);

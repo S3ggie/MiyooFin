@@ -20,6 +20,7 @@
 #include "../ShowsBrowser.hpp"
 #include "../HomeTabs.hpp"
 #include "../HomeArtworkPlan.hpp"
+#include "HomeLibraryController.hpp"
 #include "../../diagnostics/TelemetryIds.hpp"
 #include "../../update/UpdateManager.hpp"
 #include <atomic>
@@ -185,31 +186,7 @@ class HomeScreen : public Screen
     std::map<std::string, SDL_Surface*> m_cardSurfaceCache;
 
     // --- Offline snapshot cache (public for testing) -----------------------
-    struct OfflineSnapshotSignature
-    {
-        std::size_t availableItemCount = 0;
-        std::uint64_t totalDownloadedBytes = 0;
-        std::uint64_t localBytes = 0;
-        std::uint64_t reservedBytes = 0;
-        // Catalog epoch at build time: a cheap identity for the catalog
-        // metadata (titles, artwork tags, playback state) backing the
-        // snapshot.  Bumped at each top-level sync commit, so a
-        // metadata-only sync cannot compare equal against an older cache.
-        // (Hierarchy-only season/episode commits are not covered.)
-        std::uint64_t catalogGeneration = 0;
-        std::set<std::string> availableItemIds;
-        bool operator==(const OfflineSnapshotSignature& o) const
-        {
-            return availableItemCount == o.availableItemCount &&
-                   totalDownloadedBytes == o.totalDownloadedBytes && localBytes == o.localBytes &&
-                   reservedBytes == o.reservedBytes && catalogGeneration == o.catalogGeneration &&
-                   availableItemIds == o.availableItemIds;
-        }
-        bool operator!=(const OfflineSnapshotSignature& o) const
-        {
-            return !(*this == o);
-        }
-    };
+    using OfflineSnapshotSignature = HomeLibraryController::OfflineSnapshotSignature;
     static OfflineSnapshotSignature computeOfflineSignature(const DownloadSnapshot& downloads,
                                                             std::uint64_t catalogGeneration = 0);
 
@@ -317,66 +294,20 @@ class HomeScreen : public Screen
     std::vector<OfflinePlaybackEntry> m_missingJournalEntries;
     std::string m_journalDiscardConfirmId;
 
-    // Background fetch
-    std::thread m_fetchThread;
-    std::shared_ptr<std::atomic<bool>> m_fetchCancellation;
-    std::atomic<bool> m_fetchDone{false};
-    std::atomic<bool> m_fetchReady{false};
-    std::atomic<bool> m_fetchComplete{false};
+    // Background fetch ownership lives in HomeLibraryController.  Home keeps
+    // only the SDL-side application bookkeeping.
+    std::unique_ptr<HomeLibraryController> m_libraryFetch;
     bool m_fetchPublished = false;
     bool m_fetchPostFinalizeApplied = false;
     bool m_fetchFailureRestored = false;
-    std::mutex m_fetchMutex;
-    struct PendingPresentation
-    {
-        std::vector<TabData> tabs;
-        LibrarySnapshot cachedSnapshot;
-        LibrarySnapshot remoteSnapshot;
-        bool haveCachedSnapshot = false;
-        bool contentValid = false;
-        bool libraryOffline = false;
-        bool cacheSaved = false;
-        bool complete = false;
-        bool catalogCommitted = false;
-        bool stale = false;
-        bool railsReady = false;
-        std::vector<MediaItem> continueWatching;
-        std::vector<MediaItem> recentlyAdded;
-        bool continueValid = false;
-        bool recentlyAddedValid = false;
-        bool offlineCacheValid = false;
-        OfflineSnapshotSignature offlineSignature;
-        LibrarySnapshot offlineSnapshotCache;
-        std::string error;
-        // Diagnostic-only handoff identity; these fields do not participate
-        // in presentation selection or fetch completion.
-        std::uint64_t diagnosticRequest = 0;
-        std::uint64_t diagnosticGeneration = 0;
-        std::size_t diagnosticCompletedPages = 0;
-        std::string diagnosticStage;
-    };
-    std::shared_ptr<const PendingPresentation> m_pendingPresentation;
     std::string m_fetchError;
-    std::vector<TabData> m_fetchResult;
     LibrarySnapshot m_cachedSnapshot;
     LibrarySnapshot m_offlineSnapshot;
     LibrarySnapshot m_remoteSnapshot;
-    std::vector<TabData> m_fetchPreviousTabs;
-    LibrarySnapshot m_fetchPreviousCachedSnapshot;
-    LibrarySnapshot m_fetchPreviousRemoteSnapshot;
-    bool m_fetchPreviousHaveCachedSnapshot = false;
-    bool m_fetchPreviousLibraryOffline = false;
-    bool m_fetchPreviousContentValid = false;
-    std::atomic<bool> m_fetchCatalogCommitted{false};
-    bool m_fetchCacheSaved = false;
     std::vector<MediaItem> m_fetchRailCW;
     std::vector<MediaItem> m_fetchRailRA;
     bool m_fetchRailCWValid = false;
     bool m_fetchRailRAValid = false;
-    bool m_fetchOfflinePrepared = false;
-    std::vector<TabData> m_fetchOfflineTabs;
-    std::vector<MediaItem> m_fetchOfflineMovies;
-    LibrarySnapshot m_fetchOfflineSnapshot;
     bool m_haveCachedSnapshot = false;
     /// Set when the user toggles offline mode while a fetch is in-flight.
     /// finishFetch() re-fetches to synchronize the tabs with the new mode.
@@ -391,13 +322,9 @@ class HomeScreen : public Screen
     LibrarySnapshot m_offlineSnapshotCache;
     bool m_haveOfflineSnapshotCache = false;
     LibrarySyncSchedule m_syncSchedule;
-    std::atomic<size_t> m_metadataCompleted{0}, m_metadataTotal{0};
-    std::atomic<bool> m_metadataActive{false};
     std::atomic<size_t> m_artworkCompleted{0}, m_artworkTotal{0};
     std::atomic<bool> m_artworkActive{false};
-    std::atomic<bool> m_artworkPlanningComplete{false};
     bool m_libraryOffline = false;
-    std::atomic<bool> m_initialPopulationInProgress{false};
     bool m_catalogScopeReadyLogged = false;
     bool m_firstMediaPageReadLogged = false;
     bool m_firstMediaPageReadCompletedLogged = false;
@@ -452,10 +379,10 @@ class HomeScreen : public Screen
 
     /// Start a background library fetch.  Returns true if a new fetch was
     /// actually started; false if a previous fetch is still in-flight.
+    using PendingPresentation = HomeLibraryController::Presentation;
     bool startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
-    void publishPendingPresentation(PendingPresentation presentation);
     bool takePendingPresentation(PendingPresentation& presentation);
     void applyPendingPresentation(const PendingPresentation& presentation);
     void applyPresentationProjection();
@@ -486,10 +413,8 @@ class HomeScreen : public Screen
 
     bool m_safetyReconcileInFlight = false;
     bool m_homeSyncActive = false;
-    std::atomic<bool> m_homeRailRefreshDone{false};
     bool m_homeRailRefreshInFlight = false;
     bool m_homeRailRefreshPending = false;
-    std::uint64_t m_homeRailRefreshRequest = 0;
     bool m_homeRailRefreshSucceeded = false;
     bool m_homeRailContinueValid = false;
     bool m_homeRailRecentValid = false;
@@ -501,7 +426,6 @@ class HomeScreen : public Screen
 
     /// Incremental rail publication during startup: set by the fetch worker
     /// after rails are fetched but before the full walk completes.
-    std::atomic<bool> m_homeRailsReady{false};
     bool m_homeRailsApplied = false;
     void updateLiveLibraryChanges();
     bool liveChangeAffectsHome(const library::LiveLibraryChangeResult& result) const;

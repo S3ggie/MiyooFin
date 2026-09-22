@@ -696,8 +696,10 @@ static void testNoDetachedProductionThreads()
 static void testHomeRailTelemetryCountsOneOperation()
 {
     std::printf("[test] Home rail telemetry counts one coordinator operation\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    const std::string startup = sourceFunction(source, "bool HomeScreen::startFetch(");
+    const std::string source =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
+    const std::string startup =
+        sourceFunction(source, "void HomeLibraryController::fetchWorker(");
     CHECK(!startup.empty());
     const std::string rail = sourceBetween(startup, "if (railStarted) {", "for (;;)");
     CHECK(!rail.empty());

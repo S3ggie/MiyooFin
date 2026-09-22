@@ -424,9 +424,6 @@ bool HomeScreen::handleAction(Action action)
     if (m_loadState == LoadState::Error) {
         if (action == Action::Confirm) {
             m_loadState = LoadState::Loading;
-            m_fetchDone = false;
-            m_fetchError.clear();
-            m_fetchResult.clear();
             startFetch();
             return true;
         }
@@ -477,8 +474,8 @@ bool HomeScreen::handleAction(Action action)
                 // Cancel any in-flight fetch so the mode switch happens as
                 // soon as the fetch notices cancellation (bounded: between
                 // pages), instead of running the old mode's sync to completion.
-                if (m_fetchCancellation)
-                    m_fetchCancellation->store(true);
+                if (m_libraryFetch)
+                    m_libraryFetch->cancelFetch();
                 // When entering offline mode, try the instant cached path
                 // first — avoids a full fetch when downloads haven't changed.
                 if (m_session.manualOfflineMode && tryApplyCachedOfflineSnapshot()) {

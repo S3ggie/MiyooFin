@@ -275,14 +275,17 @@ static void testCatalogDbBoundedMediaPaging()
     CHECK(staleScopeFuture.get().superseded);
 
     const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const std::string controllerSource =
+        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     CHECK(homeSource.find("m_libraryQuery->movies") != std::string::npos);
-    CHECK(homeSource.find("std::thread([this") != std::string::npos);
+    CHECK(controllerSource.find("std::thread(&HomeLibraryController::fetchWorker") !=
+          std::string::npos);
     const std::string coordinatorSource =
         readTestBytes("src/library/LibraryCoordinator.cpp");
     CHECK(coordinatorSource.find("getLibraryItemsPage") != std::string::npos);
-    CHECK(homeSource.find("seedLibrarySnapshot") == std::string::npos);
-    CHECK(homeSource.find("readLibrarySnapshot") == std::string::npos);
-    CHECK(homeSource.find("home_items") == std::string::npos);
+    CHECK(controllerSource.find("seedLibrarySnapshot") == std::string::npos);
+    CHECK(controllerSource.find("readLibrarySnapshot") == std::string::npos);
+    CHECK(controllerSource.find("home_items") == std::string::npos);
     const std::string refreshSource = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
     CHECK(refreshSource.find("home_items") == std::string::npos);
     CHECK(homeSource.find("m_movieMaster=combineMovieViews") == std::string::npos);

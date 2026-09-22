@@ -162,9 +162,9 @@ std::string HomeScreen::syncStatusText() const
         return "";
     if (m_homeSyncActive)
         return homeSyncStatus(true);
-    const std::string artworkStatus =
-        artworkSyncStatus(m_artworkActive.load(), m_artworkPlanningComplete.load(),
-                          ShowsSyncProgress{m_artworkCompleted.load(), m_artworkTotal.load()});
+    const std::string artworkStatus = artworkSyncStatus(
+        m_artworkActive.load(), m_libraryFetch && m_libraryFetch->artworkPlanningComplete(),
+        ShowsSyncProgress{m_artworkCompleted.load(), m_artworkTotal.load()});
     if (!artworkStatus.empty())
         return artworkStatus;
     const std::size_t hierarchyCompleted = m_hierarchyCompleted.load();
@@ -172,12 +172,16 @@ std::string HomeScreen::syncStatusText() const
     const bool hierarchyInProgress =
         hierarchyTotal != 0 && (m_hierarchyActive.load() || hierarchyCompleted < hierarchyTotal);
     const ShowsSyncProgress progress =
-        hierarchyInProgress ? ShowsSyncProgress{hierarchyCompleted, hierarchyTotal}
-                            : ShowsSyncProgress{m_metadataCompleted.load(), m_metadataTotal.load()};
+        hierarchyInProgress
+            ? ShowsSyncProgress{hierarchyCompleted, hierarchyTotal}
+            : ShowsSyncProgress{m_libraryFetch ? m_libraryFetch->metadataCompleted() : 0,
+                                m_libraryFetch ? m_libraryFetch->metadataTotal() : 0};
     return librarySyncStatus(
         m_activeTab, m_haveCachedSnapshot, m_libraryOffline || m_hierarchyOffline.load(),
-        m_syncSchedule.inFlight || m_metadataActive.load(), m_syncSchedule.hasSucceeded, progress,
-        m_hierarchyActive.load() || m_metadataActive.load(), activeTabNamed("Shows"));
+        m_syncSchedule.inFlight || (m_libraryFetch && m_libraryFetch->metadataActive()),
+        m_syncSchedule.hasSucceeded, progress,
+        m_hierarchyActive.load() || (m_libraryFetch && m_libraryFetch->metadataActive()),
+        activeTabNamed("Shows"));
 }
 
 void HomeScreen::drawInfoPanel(SDL_Surface* fb)

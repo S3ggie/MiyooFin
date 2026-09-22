@@ -163,12 +163,18 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 test-sanitize:
 	@$(MAKE) SANITIZE=1 test
 
-.PHONY: refactor-check format-check clang-tidy
+.PHONY: refactor-check format-check clang-tidy ci-local ci-local-full
 refactor-check:
 	@sh tools/refactor-check.sh
 
 format-check:
 	@sh tools/format-check.sh
+
+ci-local:
+	@sh tools/ci-local.sh
+
+ci-local-full:
+	@sh tools/ci-local-full.sh
 
 # Opt-in host-only clang-tidy run. bear records the exact host compile
 # commands used by this Makefile; the generated compilation database is not
@@ -453,6 +459,8 @@ help:
 	@echo "  make test    — Run unit tests"
 	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1, separate output/sanitize tree)"
 	@echo "  make format-check — Check first-party C/C++ formatting"
+	@echo "  make ci-local — Run required local CI checks"
+	@echo "  make ci-local-full — Run local CI checks plus ARM verification"
 	@echo "  make clang-tidy — Opt-in host-only clang-tidy run (requires bear)"
 	@echo "  make bridge  — Build HTTPS bridge helper (host)"
 	@echo "  make bridge-test — Run bridge parsing tests"

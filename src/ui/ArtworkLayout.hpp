@@ -12,96 +12,131 @@
 namespace miyoofin {
 
 /// Returned by artworkBoxSize().
-struct ArtworkBox {
+struct ArtworkBox
+{
     int w;
     int h;
 };
 
 /// The single source of truth for display/cache artwork selection.
-struct DisplayArtwork {
+struct DisplayArtwork
+{
     ImageType imageType = ImageType::Primary;
     std::string tag;
     int width = 0;
     int height = 0;
-    bool valid() const { return !tag.empty() && width > 0 && height > 0; }
+    bool valid() const
+    {
+        return !tag.empty() && width > 0 && height > 0;
+    }
 };
 
-inline DisplayArtwork displayArtworkForItem(const MediaItem &item)
+inline DisplayArtwork displayArtworkForItem(const MediaItem& item)
 {
     const int w = item.type == "episode" ? 128 : 64;
     const int h = item.type == "episode" ? 72 : 96;
     if (item.type == "episode") {
         auto thumb = item.imageTags.find("Thumb");
-        if (thumb != item.imageTags.end() && !thumb->second.empty()) return {ImageType::Thumb, thumb->second, w, h};
+        if (thumb != item.imageTags.end() && !thumb->second.empty())
+            return {ImageType::Thumb, thumb->second, w, h};
     }
     auto primary = item.imageTags.find("Primary");
-    if (primary != item.imageTags.end() && !primary->second.empty()) return {ImageType::Primary, primary->second, w, h};
+    if (primary != item.imageTags.end() && !primary->second.empty())
+        return {ImageType::Primary, primary->second, w, h};
     return {};
 }
 
-inline const char *imageTypeName(ImageType type) { return type == ImageType::Thumb ? "Thumb" : "Primary"; }
+inline const char* imageTypeName(ImageType type)
+{
+    return type == ImageType::Thumb ? "Thumb" : "Primary";
+}
 
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
 static constexpr int ROW_ARTWORK_RAM_LIMIT = 64;
 static constexpr int MOVIE_ARTWORK_DECODE_BUDGET = 4;
-struct MovieArtworkRange { int first; int lastExclusive; };
+struct MovieArtworkRange
+{
+    int first;
+    int lastExclusive;
+};
 inline MovieArtworkRange movieVisibleArtworkRange(int scrollRow, int itemCount)
 {
-    if (scrollRow < 0) scrollRow = 0;
+    if (scrollRow < 0)
+        scrollRow = 0;
     int first = scrollRow * 9;
-    if (first > itemCount) first = itemCount;
+    if (first > itemCount)
+        first = itemCount;
     int last = first + 36;
-    if (last > itemCount) last = itemCount;
+    if (last > itemCount)
+        last = itemCount;
     return {first, last};
 }
 
 // Pure Movies grid helpers.  The grid is deliberately index based so it is
 // independent of SDL and straightforward to test.
-inline int movieGridRow(int index) { return index < 0 ? 0 : index / 9; }
-inline int movieGridColumn(int index) { return index < 0 ? 0 : index % 9; }
+inline int movieGridRow(int index)
+{
+    return index < 0 ? 0 : index / 9;
+}
+inline int movieGridColumn(int index)
+{
+    return index < 0 ? 0 : index % 9;
+}
 inline int moveMovieGrid(int index, int count, int deltaRow, int deltaCol)
 {
-    if (count <= 0) return 0;
-    if (index < 0) index = 0;
-    if (index >= count) index = count - 1;
+    if (count <= 0)
+        return 0;
+    if (index < 0)
+        index = 0;
+    if (index >= count)
+        index = count - 1;
     int row = movieGridRow(index) + deltaRow, col = movieGridColumn(index) + deltaCol;
-    if (col < 0 || col >= 9 || row < 0) return index;
+    if (col < 0 || col >= 9 || row < 0)
+        return index;
     int target = row * 9 + col;
     if (target >= count) {
-        if (deltaRow > 0) target = count - 1; // nearest valid item in final row
-        else return index;
+        if (deltaRow > 0)
+            target = count - 1; // nearest valid item in final row
+        else
+            return index;
     }
     return target;
 }
 inline int clampMovieGridScroll(int selected, int itemCount, int scrollRow)
 {
-    if (itemCount <= 0) return 0;
+    if (itemCount <= 0)
+        return 0;
     int lastRow = (itemCount - 1) / 9;
     int row = movieGridRow(selected);
-    if (row < scrollRow) scrollRow = row;
-    if (row >= scrollRow + 4) scrollRow = row - 3;
+    if (row < scrollRow)
+        scrollRow = row;
+    if (row >= scrollRow + 4)
+        scrollRow = row - 3;
     int maxScroll = lastRow > 3 ? lastRow - 3 : 0;
-    if (scrollRow < 0) scrollRow = 0;
+    if (scrollRow < 0)
+        scrollRow = 0;
     return scrollRow > maxScroll ? maxScroll : scrollRow;
 }
 
 /// Status of a row-artwork load attempt.
-enum class RowArtworkStatus {
-    NotAttempted,   ///< Never tried (eligible for loading)
-    Loaded,         ///< Decoded image is in RAM
-    Failed          ///< Tried once and failed; do not retry
+enum class RowArtworkStatus
+{
+    NotAttempted, ///< Never tried (eligible for loading)
+    Loaded,       ///< Decoded image is in RAM
+    Failed        ///< Tried once and failed; do not retry
 };
 
 /// Per-key row-artwork tracking entry (B5d2a).
-struct RowArtworkEntry {
+struct RowArtworkEntry
+{
     RowArtworkStatus status = RowArtworkStatus::NotAttempted;
-    std::shared_ptr<DecodedImage> image;  ///< Valid only when status == Loaded
+    std::shared_ptr<DecodedImage> image; ///< Valid only when status == Loaded
 };
 
 /// Return the selected-top-artwork box dimensions for a given media item.
 ///   movie / show / anything-else  →  64 × 96
 ///   episode                      → 128 × 72
-inline ArtworkBox artworkBoxSize(const MediaItem &item)
+inline ArtworkBox artworkBoxSize(const MediaItem& item)
 {
     if (item.type == "episode")
         return {128, 72};
@@ -116,8 +151,7 @@ inline constexpr int rowStripHeight()
 
 /// Compute the virtual X position of card at index ci in a row with
 /// mixed-width cards.  Cards start at startX with gap pixels between them.
-inline int cardXPosition(const std::vector<MediaItem> &items, int ci,
-                          int startX = 4, int gap = 6)
+inline int cardXPosition(const std::vector<MediaItem>& items, int ci, int startX = 4, int gap = 6)
 {
     int x = startX;
     for (int i = 0; i < ci && i < (int)items.size(); ++i)
@@ -127,14 +161,14 @@ inline int cardXPosition(const std::vector<MediaItem> &items, int ci,
 
 /// Total pixel width from startX through the right edge of the last card
 /// (no trailing gap).
-inline int totalRowWidth(const std::vector<MediaItem> &items,
-                          int startX = 4, int gap = 6)
+inline int totalRowWidth(const std::vector<MediaItem>& items, int startX = 4, int gap = 6)
 {
-    if (items.empty()) return 0;
+    if (items.empty())
+        return 0;
     int x = startX;
-    for (const auto &item : items)
+    for (const auto& item : items)
         x += artworkBoxSize(item).w + gap;
-    return x - gap;   // remove trailing gap
+    return x - gap; // remove trailing gap
 }
 
 /// Horizontal pixel offset used when drawing one Home rail.  Only the focused
@@ -154,15 +188,14 @@ inline int rowCardScrollOffset(int rowIdx, int activeRow, int activeScroll)
 ///   startX      – virtual X of the first card (e.g. 4)
 ///   gap         – pixels between cards (e.g. 6)
 /// Returns the clamped pixel scroll offset (never negative).
-inline int clampCardScroll(const std::vector<MediaItem> &items, int activeCard,
-                            int curScroll, int viewWidth,
-                            int startX = 4, int gap = 6)
+inline int clampCardScroll(const std::vector<MediaItem>& items, int activeCard, int curScroll,
+                           int viewWidth, int startX = 4, int gap = 6)
 {
     if (items.empty() || activeCard < 0 || activeCard >= (int)items.size())
         return 0;
 
     int scroll = curScroll;
-    int cardX  = startX;
+    int cardX = startX;
     for (int ci = 0; ci < (int)items.size(); ++ci) {
         int w = artworkBoxSize(items[ci]).w;
         if (ci == activeCard) {
@@ -175,19 +208,22 @@ inline int clampCardScroll(const std::vector<MediaItem> &items, int activeCard,
         }
         cardX += w + gap;
     }
-    if (scroll < 0) scroll = 0;
+    if (scroll < 0)
+        scroll = 0;
     return scroll;
 }
 
 /// Build the row-artwork identity key for a media item (B5d2a).
 /// Format: "itemId:imageType:imageTag:WxH".
-inline std::string buildRowArtworkKey(const MediaItem &item)
+inline std::string buildRowArtworkKey(const MediaItem& item)
 {
     DisplayArtwork artwork = displayArtworkForItem(item);
-    if (!artwork.valid()) return {};
+    if (!artwork.valid())
+        return {};
     char buf[512];
-    std::snprintf(buf, sizeof(buf), "%s:%s:%s:%dx%d",
-                  item.id.c_str(), imageTypeName(artwork.imageType), artwork.tag.c_str(), artwork.width, artwork.height);
+    std::snprintf(buf, sizeof(buf), "%s:%s:%s:%dx%d", item.id.c_str(),
+                  imageTypeName(artwork.imageType), artwork.tag.c_str(), artwork.width,
+                  artwork.height);
     return std::string(buf);
 }
 

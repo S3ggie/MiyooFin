@@ -11,27 +11,19 @@ namespace miyoofin {
 // Checkpoint B4: Library fetching API methods
 // ===================================================================
 
-bool JellyfinApi::getViews(const std::string &baseUrl,
-                           const std::string &accessToken,
-                           const std::string &userId,
-                           const std::string &deviceId,
-                           std::vector<LibraryView> &views,
-                           std::string &error,
-                           const std::atomic<bool> *cancelled)
+bool JellyfinApi::getViews(const std::string& baseUrl, const std::string& accessToken,
+                           const std::string& userId, const std::string& deviceId,
+                           std::vector<LibraryView>& views, std::string& error,
+                           const std::atomic<bool>* cancelled)
 {
     HttpClient client;
-    return getViews(baseUrl, accessToken, userId, deviceId, views, error,
-                    client, cancelled);
+    return getViews(baseUrl, accessToken, userId, deviceId, views, error, client, cancelled);
 }
 
-bool JellyfinApi::getViews(const std::string &baseUrl,
-                           const std::string &accessToken,
-                           const std::string &userId,
-                           const std::string &deviceId,
-                           std::vector<LibraryView> &views,
-                           std::string &error,
-                           HttpClient &client,
-                           const std::atomic<bool> *cancelled)
+bool JellyfinApi::getViews(const std::string& baseUrl, const std::string& accessToken,
+                           const std::string& userId, const std::string& deviceId,
+                           std::vector<LibraryView>& views, std::string& error, HttpClient& client,
+                           const std::atomic<bool>* cancelled)
 {
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
@@ -39,13 +31,13 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::Views);
     if (!client.perform("GET", url, headers, {}, response, error, cancelled)) {
-        if (error.empty()) error = "Could not reach server";
+        if (error.empty())
+            error = "Could not reach server";
         return false;
     }
     if (!response.ok()) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "Failed to fetch libraries (HTTP %ld)",
-                      response.status);
+        std::snprintf(buf, sizeof(buf), "Failed to fetch libraries (HTTP %ld)", response.status);
         error = buf;
         return false;
     }
@@ -59,61 +51,64 @@ bool JellyfinApi::getViews(const std::string &baseUrl,
         error = "Malformed library views response";
         return false;
     }
-    for (const auto &s : itemStrs) {
+    for (const auto& s : itemStrs) {
         LibraryView v;
-        v.id             = jsonStringField(s, "Id");
-        v.name           = jsonStringField(s, "Name");
+        v.id = jsonStringField(s, "Id");
+        v.name = jsonStringField(s, "Name");
         v.collectionType = jsonStringField(s, "CollectionType");
-        if (!v.id.empty()) views.push_back(std::move(v));
+        if (!v.id.empty())
+            views.push_back(std::move(v));
     }
     return true;
 }
 
-bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
-                                      const std::string &accessToken,
-                                      const std::string &userId,
-                                      const std::string &deviceId,
-                                      const std::string &parentId,
-                                      const std::string &includeItemTypes,
-                                      int startIndex, int limit,
-                                      LibraryItemsPage &page,
-                                      std::string &error,
-                                      const std::atomic<bool> *cancelled)
+bool JellyfinApi::getLibraryItemsPage(const std::string& baseUrl, const std::string& accessToken,
+                                      const std::string& userId, const std::string& deviceId,
+                                      const std::string& parentId,
+                                      const std::string& includeItemTypes, int startIndex,
+                                      int limit, LibraryItemsPage& page, std::string& error,
+                                      const std::atomic<bool>* cancelled)
 {
     HttpClient client;
-    return getLibraryItemsPage(baseUrl, accessToken, userId, deviceId,
-                               parentId, includeItemTypes, startIndex, limit,
-                               page, error, client, cancelled);
+    return getLibraryItemsPage(baseUrl, accessToken, userId, deviceId, parentId, includeItemTypes,
+                               startIndex, limit, page, error, client, cancelled);
 }
 
-bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
-                                      const std::string &accessToken,
-                                      const std::string &userId,
-                                      const std::string &deviceId,
-                                      const std::string &parentId,
-                                      const std::string &includeItemTypes,
-                                      int startIndex, int limit,
-                                      LibraryItemsPage &page,
-                                      std::string &error,
-                                      HttpClient &client,
-                                      const std::atomic<bool> *cancelled)
+bool JellyfinApi::getLibraryItemsPage(const std::string& baseUrl, const std::string& accessToken,
+                                      const std::string& userId, const std::string& deviceId,
+                                      const std::string& parentId,
+                                      const std::string& includeItemTypes, int startIndex,
+                                      int limit, LibraryItemsPage& page, std::string& error,
+                                      HttpClient& client, const std::atomic<bool>* cancelled)
 {
-    if (startIndex < 0 || limit <= 0) { error = "Invalid library page"; return false; }
-    if (cancelled && cancelled->load()) { error = "Callback aborted"; return false; }
+    if (startIndex < 0 || limit <= 0) {
+        error = "Invalid library page";
+        return false;
+    }
+    if (cancelled && cancelled->load()) {
+        error = "Callback aborted";
+        return false;
+    }
     client.setTimeoutSec(15);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::LibraryItemsPage);
-    if (!client.perform("GET", buildLibraryItemsUrl(baseUrl, userId, parentId,
-                                                     includeItemTypes, startIndex, limit).c_str(),
-                       buildAuthHeaders(accessToken, deviceId), {}, response,
-                       error, cancelled)) {
-        if (error.empty()) error = "Could not reach server";
+    if (!client.perform(
+            "GET",
+            buildLibraryItemsUrl(baseUrl, userId, parentId, includeItemTypes, startIndex, limit)
+                .c_str(),
+            buildAuthHeaders(accessToken, deviceId), {}, response, error, cancelled)) {
+        if (error.empty())
+            error = "Could not reach server";
         return false;
     }
-    if (!response.ok()) { error = "Failed to fetch library page"; return false; }
+    if (!response.ok()) {
+        error = "Failed to fetch library page";
+        return false;
+    }
     page = {};
     page.startIndex = jsonIntField(response.body, "StartIndex");
-    if (page.startIndex == 0 && startIndex != 0) page.startIndex = startIndex;
+    if (page.startIndex == 0 && startIndex != 0)
+        page.startIndex = startIndex;
     page.totalRecordCount = jsonIntField(response.body, "TotalRecordCount");
     const std::string rawItems = jsonRawValue(response.body, "Items");
     if (rawItems.empty() || rawItems.front() != '[') {
@@ -125,20 +120,18 @@ bool JellyfinApi::getLibraryItemsPage(const std::string &baseUrl,
         error = "Malformed library page response";
         return false;
     }
-    for (const auto &raw : itemStrings)
+    for (const auto& raw : itemStrings)
         page.items.push_back(jsonToMediaItem(raw));
     page.hasMore = page.startIndex + static_cast<int>(page.items.size()) < page.totalRecordCount;
     std::printf("[JellyfinApi] library_page_success start=%d count=%zu total=%d more=%d\n",
-                page.startIndex, page.items.size(), page.totalRecordCount,
-                page.hasMore ? 1 : 0);
+                page.startIndex, page.items.size(), page.totalRecordCount, page.hasMore ? 1 : 0);
     return true;
 }
 
-bool JellyfinApi::getChangedCatalogItems(
-    const std::string &baseUrl, const std::string &accessToken,
-    const std::string &userId, const std::string &deviceId,
-    std::int64_t sinceMs, std::vector<MediaItem> &items,
-    std::string &error, const std::atomic<bool> *cancelled)
+bool JellyfinApi::getChangedCatalogItems(const std::string& baseUrl, const std::string& accessToken,
+                                         const std::string& userId, const std::string& deviceId,
+                                         std::int64_t sinceMs, std::vector<MediaItem>& items,
+                                         std::string& error, const std::atomic<bool>* cancelled)
 {
     if (sinceMs <= 0) {
         error = "missing sync checkpoint";
@@ -148,7 +141,8 @@ bool JellyfinApi::getChangedCatalogItems(
     // MinDateLastSaved is second-granular.  Include the preceding second so
     // an item saved at the checkpoint boundary cannot be skipped.
     std::time_t seconds = static_cast<std::time_t>(sinceMs / 1000);
-    if (seconds > 0) --seconds;
+    if (seconds > 0)
+        --seconds;
     std::tm utc{};
 #if defined(_WIN32)
     gmtime_s(&utc, &seconds);
@@ -170,24 +164,23 @@ bool JellyfinApi::getChangedCatalogItems(
             error = "Callback aborted";
             return false;
         }
-        const std::string url = baseUrl + "/Users/" + userId
-            + "/Items?Recursive=true&IncludeItemTypes=Movie,Series"
-              "&SortBy=DateLastSaved&SortOrder=Ascending"
-              "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
-              "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
-              "IndexNumber,Etag&MinDateLastSaved=" + stamp
-            + "&StartIndex=" + std::to_string(startIndex)
-            + "&Limit=" + std::to_string(limit);
+        const std::string url = baseUrl + "/Users/" + userId +
+                                "/Items?Recursive=true&IncludeItemTypes=Movie,Series"
+                                "&SortBy=DateLastSaved&SortOrder=Ascending"
+                                "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+                                "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
+                                "IndexNumber,Etag&MinDateLastSaved=" +
+                                stamp + "&StartIndex=" + std::to_string(startIndex) +
+                                "&Limit=" + std::to_string(limit);
         HttpResponse response;
         TelemetryRequestScope request(RequestKind::ChangedCatalogItems);
-        if (!client.perform("GET", url, headers, {}, response, error,
-                            cancelled)) {
-            if (error.empty()) error = "Could not reach server";
+        if (!client.perform("GET", url, headers, {}, response, error, cancelled)) {
+            if (error.empty())
+                error = "Could not reach server";
             return false;
         }
         if (!response.ok()) {
-            error = "Changed catalog items failed (HTTP "
-                + std::to_string(response.status) + ")";
+            error = "Changed catalog items failed (HTTP " + std::to_string(response.status) + ")";
             return false;
         }
 
@@ -205,7 +198,7 @@ bool JellyfinApi::getChangedCatalogItems(
             error = "Changed catalog result exceeds bounded limit";
             return false;
         }
-        for (const auto &raw : itemStrings) {
+        for (const auto& raw : itemStrings) {
             MediaItem item = jsonToMediaItem(raw);
             if (item.id.empty() || (item.type != "movie" && item.type != "show")) {
                 error = "Malformed changed catalog item";
@@ -225,11 +218,11 @@ bool JellyfinApi::getChangedCatalogItems(
     }
 }
 
-bool JellyfinApi::getItemsByIds(
-    const std::string &baseUrl, const std::string &accessToken,
-    const std::string &userId, const std::string &deviceId,
-    const std::vector<std::string> &itemIds, std::vector<MediaItem> &items,
-    std::string &error, const std::atomic<bool> *cancelled)
+bool JellyfinApi::getItemsByIds(const std::string& baseUrl, const std::string& accessToken,
+                                const std::string& userId, const std::string& deviceId,
+                                const std::vector<std::string>& itemIds,
+                                std::vector<MediaItem>& items, std::string& error,
+                                const std::atomic<bool>* cancelled)
 {
     constexpr std::size_t maxItemIds = 64;
     items.clear();
@@ -237,7 +230,7 @@ bool JellyfinApi::getItemsByIds(
         error = "item-by-ID query exceeds bounded limit";
         return false;
     }
-    for (const auto &id : itemIds) {
+    for (const auto& id : itemIds) {
         if (id.empty()) {
             error = "item-by-ID query contains an empty ID";
             return false;
@@ -249,28 +242,28 @@ bool JellyfinApi::getItemsByIds(
     }
 
     std::string joinedIds;
-    for (const auto &id : itemIds) {
-        if (!joinedIds.empty()) joinedIds += ',';
+    for (const auto& id : itemIds) {
+        if (!joinedIds.empty())
+            joinedIds += ',';
         joinedIds += id;
     }
-    const std::string url = baseUrl + "/Users/" + userId + "/Items?Ids="
-        + joinedIds
-        + "&IncludeItemTypes=Movie,Series,Season,Episode"
-          "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
-          "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
-          "IndexNumber,Etag";
+    const std::string url = baseUrl + "/Users/" + userId + "/Items?Ids=" + joinedIds +
+                            "&IncludeItemTypes=Movie,Series,Season,Episode"
+                            "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+                            "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,"
+                            "IndexNumber,Etag";
     HttpClient client;
     client.setTimeoutSec(15);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::ItemsByIds);
-    if (!client.perform("GET", url.c_str(), buildAuthHeaders(accessToken, deviceId),
-                       {}, response, error, cancelled)) {
-        if (error.empty()) error = "Could not reach server";
+    if (!client.perform("GET", url.c_str(), buildAuthHeaders(accessToken, deviceId), {}, response,
+                        error, cancelled)) {
+        if (error.empty())
+            error = "Could not reach server";
         return false;
     }
     if (!response.ok()) {
-        error = "Items by ID failed (HTTP "
-            + std::to_string(response.status) + ")";
+        error = "Items by ID failed (HTTP " + std::to_string(response.status) + ")";
         return false;
     }
     const std::string rawItems = jsonRawValue(response.body, "Items");
@@ -283,11 +276,10 @@ bool JellyfinApi::getItemsByIds(
         error = "Malformed items-by-ID response";
         return false;
     }
-    for (const auto &raw : itemStrings) {
+    for (const auto& raw : itemStrings) {
         MediaItem item = jsonToMediaItem(raw);
-        if (item.id.empty()
-            || (item.type != "movie" && item.type != "show"
-                && item.type != "season" && item.type != "episode")) {
+        if (item.id.empty() || (item.type != "movie" && item.type != "show" &&
+                                item.type != "season" && item.type != "episode")) {
             error = "Malformed items-by-ID item";
             items.clear();
             return false;
@@ -297,114 +289,97 @@ bool JellyfinApi::getItemsByIds(
     return true;
 }
 
-
-std::string JellyfinApi::buildLibraryItemsUrl(const std::string &baseUrl,
-                                              const std::string &userId,
-                                              const std::string &parentId,
-                                              const std::string &includeItemTypes,
-                                              int startIndex,
+std::string JellyfinApi::buildLibraryItemsUrl(const std::string& baseUrl, const std::string& userId,
+                                              const std::string& parentId,
+                                              const std::string& includeItemTypes, int startIndex,
                                               int limit)
 {
     return baseUrl + "/Users/" + userId + "/Items?ParentId=" + parentId +
-        "&IncludeItemTypes=" + includeItemTypes +
-        "&SortBy=SortName&SortOrder=Ascending&Recursive=true"
-        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber,IndexNumber,Etag"
-        "&StartIndex=" + std::to_string(startIndex) +
-        "&Limit=" + std::to_string(limit);
+           "&IncludeItemTypes=" + includeItemTypes +
+           "&SortBy=SortName&SortOrder=Ascending&Recursive=true"
+           "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,RunTimeTicks,SeriesName,"
+           "SeriesId,SeasonId,ParentIndexNumber,IndexNumber,Etag"
+           "&StartIndex=" +
+           std::to_string(startIndex) + "&Limit=" + std::to_string(limit);
 }
 
-bool JellyfinApi::getResumeItems(const std::string &baseUrl,
-                                 const std::string &accessToken,
-                                 const std::string &userId,
-                                 const std::string &deviceId,
-                                 int limit,
-                                 std::vector<MediaItem> &items,
-                                 std::string &error,
-                                 const std::atomic<bool> *cancelled)
+bool JellyfinApi::getResumeItems(const std::string& baseUrl, const std::string& accessToken,
+                                 const std::string& userId, const std::string& deviceId, int limit,
+                                 std::vector<MediaItem>& items, std::string& error,
+                                 const std::atomic<bool>* cancelled)
 {
     HttpClient client;
-    return getResumeItems(baseUrl, accessToken, userId, deviceId, limit,
-                          items, error, client, cancelled);
+    return getResumeItems(baseUrl, accessToken, userId, deviceId, limit, items, error, client,
+                          cancelled);
 }
 
-bool JellyfinApi::getResumeItems(const std::string &baseUrl,
-                                 const std::string &accessToken,
-                                 const std::string &userId,
-                                 const std::string &deviceId,
-                                 int limit,
-                                 std::vector<MediaItem> &items,
-                                 std::string &error,
-                                 HttpClient &client,
-                                 const std::atomic<bool> *cancelled)
+bool JellyfinApi::getResumeItems(const std::string& baseUrl, const std::string& accessToken,
+                                 const std::string& userId, const std::string& deviceId, int limit,
+                                 std::vector<MediaItem>& items, std::string& error,
+                                 HttpClient& client, const std::atomic<bool>* cancelled)
 {
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
     char urlBuf[512];
     std::snprintf(urlBuf, sizeof(urlBuf),
-        "%s/Users/%s/Items/Resume?Limit=%d&Recursive=true"
-        "&IncludeItemTypes=Movie,Episode"
-        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
-        "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber",
-        baseUrl.c_str(), userId.c_str(), limit);
+                  "%s/Users/%s/Items/Resume?Limit=%d&Recursive=true"
+                  "&IncludeItemTypes=Movie,Episode"
+                  "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags,"
+                  "RunTimeTicks,SeriesName,SeriesId,SeasonId,ParentIndexNumber",
+                  baseUrl.c_str(), userId.c_str(), limit);
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::ResumeItems);
     if (!client.perform("GET", urlBuf, headers, {}, response, error, cancelled)) {
-        if (error.empty()) error = "Could not reach server";
+        if (error.empty())
+            error = "Could not reach server";
         return false;
     }
     if (!response.ok()) {
-        if (response.status == 401) { error = "Unauthorized"; return false; }
+        if (response.status == 401) {
+            error = "Unauthorized";
+            return false;
+        }
         // Only a genuinely missing endpoint is treated as an empty rail.
         // Any other non-2xx must be a failure so callers never overwrite a
         // valid cached Continue Watching row with an empty transient error.
-        if (response.status == 404) return true;
-        error = "Resume request failed (HTTP "
-            + std::to_string(response.status) + ")";
+        if (response.status == 404)
+            return true;
+        error = "Resume request failed (HTTP " + std::to_string(response.status) + ")";
         return false;
     }
     auto itemStrs = jsonExtractArray(response.body, "Items");
-    for (const auto &s : itemStrs)
+    for (const auto& s : itemStrs)
         items.push_back(jsonToMediaItem(s));
     return true;
 }
 
-std::string JellyfinApi::buildLatestUrl(const std::string &baseUrl,
-                                        const std::string &userId,
+std::string JellyfinApi::buildLatestUrl(const std::string& baseUrl, const std::string& userId,
                                         int limit)
 {
     char urlBuf[512];
     std::snprintf(urlBuf, sizeof(urlBuf),
-        "%s/Users/%s/Items/Latest?Limit=%d"
-        "&GroupItems=false"
-        "&IncludeItemTypes=Movie,Series"
-        "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags",
-        baseUrl.c_str(), userId.c_str(), limit);
+                  "%s/Users/%s/Items/Latest?Limit=%d"
+                  "&GroupItems=false"
+                  "&IncludeItemTypes=Movie,Series"
+                  "&Fields=Overview,Genres,CommunityRating,UserData,ImageTags",
+                  baseUrl.c_str(), userId.c_str(), limit);
     return std::string(urlBuf);
 }
 
-bool JellyfinApi::getLatestItems(const std::string &baseUrl,
-                                 const std::string &accessToken,
-                                 const std::string &userId,
-                                 const std::string &deviceId,
-                                 int limit,
-                                 std::vector<MediaItem> &items,
-                                 std::string &error,
-                                 const std::atomic<bool> *cancelled)
+bool JellyfinApi::getLatestItems(const std::string& baseUrl, const std::string& accessToken,
+                                 const std::string& userId, const std::string& deviceId, int limit,
+                                 std::vector<MediaItem>& items, std::string& error,
+                                 const std::atomic<bool>* cancelled)
 {
     HttpClient client;
-    return getLatestItems(baseUrl, accessToken, userId, deviceId, limit,
-                          items, error, client, cancelled);
+    return getLatestItems(baseUrl, accessToken, userId, deviceId, limit, items, error, client,
+                          cancelled);
 }
 
-bool JellyfinApi::getLatestItems(const std::string &baseUrl,
-                                 const std::string &accessToken,
-                                 const std::string &userId,
-                                 const std::string &deviceId,
-                                 int limit,
-                                 std::vector<MediaItem> &items,
-                                 std::string &error,
-                                 HttpClient &client,
-                                 const std::atomic<bool> *cancelled)
+bool JellyfinApi::getLatestItems(const std::string& baseUrl, const std::string& accessToken,
+                                 const std::string& userId, const std::string& deviceId, int limit,
+                                 std::vector<MediaItem>& items, std::string& error,
+                                 HttpClient& client, const std::atomic<bool>* cancelled)
 {
     client.setTimeoutSec(10);
     auto headers = buildAuthHeaders(accessToken, deviceId);
@@ -412,17 +387,21 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::LatestItems);
     if (!client.perform("GET", url.c_str(), headers, {}, response, error, cancelled)) {
-        if (error.empty()) error = "Could not reach server";
+        if (error.empty())
+            error = "Could not reach server";
         return false;
     }
     if (!response.ok()) {
-        if (response.status == 401) { error = "Unauthorized"; return false; }
+        if (response.status == 401) {
+            error = "Unauthorized";
+            return false;
+        }
         // Only a genuinely missing endpoint is treated as an empty rail.
         // Any other non-2xx must be a failure so callers never overwrite a
         // valid cached Recently Added row with an empty transient error.
-        if (response.status == 404) return true;
-        error = "Latest request failed (HTTP "
-            + std::to_string(response.status) + ")";
+        if (response.status == 404)
+            return true;
+        error = "Latest request failed (HTTP " + std::to_string(response.status) + ")";
         return false;
     }
     // /Items/Latest may return a direct array or {Items:[...]}
@@ -430,25 +409,29 @@ bool JellyfinApi::getLatestItems(const std::string &baseUrl,
     if (itemStrs.empty()) {
         size_t bpos = response.body.find('[');
         if (bpos != std::string::npos) {
-            size_t p = bpos + 1; int d = 1;
+            size_t p = bpos + 1;
+            int d = 1;
             while (p < response.body.size() && d > 0) {
-                if (response.body[p] == '"') { p++;
-                    while (p < response.body.size() && response.body[p]!='"') {
-                        if (response.body[p] == '\\') p++;
-                        p++; }
-                } else if (response.body[p] == '[') d++;
-                else if (response.body[p] == ']') d--;
+                if (response.body[p] == '"') {
+                    p++;
+                    while (p < response.body.size() && response.body[p] != '"') {
+                        if (response.body[p] == '\\')
+                            p++;
+                        p++;
+                    }
+                } else if (response.body[p] == '[')
+                    d++;
+                else if (response.body[p] == ']')
+                    d--;
                 p++;
             }
             if (d == 0 && p > bpos + 2)
-                itemStrs = splitJsonArrayContent(
-                    response.body.substr(bpos + 1, p - bpos - 2));
+                itemStrs = splitJsonArrayContent(response.body.substr(bpos + 1, p - bpos - 2));
         }
     }
-    for (const auto &s : itemStrs)
+    for (const auto& s : itemStrs)
         items.push_back(jsonToMediaItem(s));
     return true;
 }
-
 
 } // namespace miyoofin

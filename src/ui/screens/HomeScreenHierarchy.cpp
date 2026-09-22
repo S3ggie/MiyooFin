@@ -9,22 +9,19 @@
 
 namespace miyoofin {
 
-bool HomeScreen::requestHierarchy(const std::vector<MediaItem> &shows,
-                                  std::uint64_t generation,
+bool HomeScreen::requestHierarchy(const std::vector<MediaItem>& shows, std::uint64_t generation,
                                   bool forceReconcile)
 {
     if (!m_libraryCoordinator)
         return false;
 
     std::lock_guard<std::mutex> lock(m_hierarchyStateMutex);
-    if (m_hierarchySubmissionClosed || generation == 0
-        || m_hierarchyActive.load()
-        || (m_fetchCancellation && m_fetchCancellation->load()))
+    if (m_hierarchySubmissionClosed || generation == 0 || m_hierarchyActive.load() ||
+        (m_fetchCancellation && m_fetchCancellation->load()))
         return false;
     std::vector<MediaItem> pending;
-    for (const auto &show : shows) {
-        if (!show.id.empty() && show.type == "show"
-            && !m_seasonPrefetchedIds.count(show.id))
+    for (const auto& show : shows) {
+        if (!show.id.empty() && show.type == "show" && !m_seasonPrefetchedIds.count(show.id))
             pending.push_back(show);
     }
 
@@ -32,8 +29,7 @@ bool HomeScreen::requestHierarchy(const std::vector<MediaItem> &shows,
         return false;
 
     std::uint64_t request = 0;
-    if (!m_libraryCoordinator->requestHierarchy(
-            pending, generation, forceReconcile, request))
+    if (!m_libraryCoordinator->requestHierarchy(pending, generation, forceReconcile, request))
         return false;
 
     m_hierarchyRequest.store(request);
@@ -91,8 +87,8 @@ void HomeScreen::consumeHierarchyResults()
             continue;
         }
 
-        if (!result.checkpointCommitted && !result.success && !result.cancelled
-                   && !result.superseded) {
+        if (!result.checkpointCommitted && !result.success && !result.cancelled &&
+            !result.superseded) {
             m_hierarchyOffline.store(true);
         }
         m_hierarchyActive.store(false);
@@ -100,13 +96,10 @@ void HomeScreen::consumeHierarchyResults()
     }
 }
 
-std::string HomeScreen::posterJobKey(const PosterJob &job)
+std::string HomeScreen::posterJobKey(const PosterJob& job)
 {
-    return job.itemId + ":"
-        + std::to_string(static_cast<int>(job.imageType)) + ":"
-        + job.imageTag + ":"
-        + std::to_string(job.width) + "x"
-        + std::to_string(job.height);
+    return job.itemId + ":" + std::to_string(static_cast<int>(job.imageType)) + ":" + job.imageTag +
+           ":" + std::to_string(job.width) + "x" + std::to_string(job.height);
 }
 
 bool HomeScreen::shouldProcessPosterJob(bool highPriority, bool populationInProgress)
@@ -118,7 +111,7 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority)
 {
     std::lock_guard<std::mutex> lock(m_posterMutex);
     std::vector<PosterJob> newJobs;
-    for (auto &job : jobs) {
+    for (auto& job : jobs) {
         const std::string key = posterJobKey(job);
         if (m_artworkProgressKeys.insert(key).second) {
             newJobs.push_back(std::move(job));
@@ -126,38 +119,36 @@ void HomeScreen::queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority)
             m_artworkActive.store(true);
         }
     }
-    auto &target = highPriority ? m_highPriorityPosterJobs
-                                : m_lowPriorityPosterJobs;
+    auto& target = highPriority ? m_highPriorityPosterJobs : m_lowPriorityPosterJobs;
     if (highPriority) {
         for (auto it = newJobs.rbegin(); it != newJobs.rend(); ++it)
             target.insert(target.begin(), std::move(*it));
     } else {
-        for (auto &job : newJobs)
+        for (auto& job : newJobs)
             target.push_back(std::move(job));
     }
     performanceTelemetry().setWorkerQueueDepth(
-        WorkerId::HomePoster, static_cast<uint32_t>(
-            m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
+        WorkerId::HomePoster,
+        static_cast<uint32_t>(m_highPriorityPosterJobs.size() + m_lowPriorityPosterJobs.size()));
     m_posterWake.notify_all();
 }
 
-std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySnapshot &snapshot)
+std::vector<HomeScreen::PosterJob> HomeScreen::collectPosterJobs(const LibrarySnapshot& snapshot)
 {
     std::vector<PosterJob> out;
-    for (auto &job : planHomePosterJobs(snapshot)) {
-        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
-                                  job.width, job.height))
+    for (auto& job : planHomePosterJobs(snapshot)) {
+        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag, job.width, job.height))
             out.push_back(std::move(job));
     }
     return out;
 }
 
-std::vector<HomeScreen::PosterJob> HomeScreen::collectSeasonPosterJobs(const std::vector<MediaItem> &seasons)
+std::vector<HomeScreen::PosterJob>
+HomeScreen::collectSeasonPosterJobs(const std::vector<MediaItem>& seasons)
 {
     std::vector<PosterJob> out;
-    for (auto &job : planSeasonPosterJobs(seasons)) {
-        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
-                                  job.width, job.height))
+    for (auto& job : planSeasonPosterJobs(seasons)) {
+        if (!ImageCache::isCached(job.itemId, job.imageType, job.imageTag, job.width, job.height))
             out.push_back(std::move(job));
     }
     return out;
@@ -172,10 +163,8 @@ void HomeScreen::posterWorker()
         {
             std::unique_lock<std::mutex> lock(m_posterMutex);
             m_posterWake.wait(lock, [&] {
-                return m_stopPosterWorker
-                    || !m_highPriorityPosterJobs.empty()
-                    || (!m_initialPopulationInProgress.load()
-                        && !m_lowPriorityPosterJobs.empty());
+                return m_stopPosterWorker || !m_highPriorityPosterJobs.empty() ||
+                       (!m_initialPopulationInProgress.load() && !m_lowPriorityPosterJobs.empty());
             });
             if (m_stopPosterWorker)
                 return;
@@ -183,8 +172,7 @@ void HomeScreen::posterWorker()
             if (!m_highPriorityPosterJobs.empty()) {
                 job = std::move(m_highPriorityPosterJobs.front());
                 m_highPriorityPosterJobs.erase(m_highPriorityPosterJobs.begin());
-            } else if (shouldProcessPosterJob(
-                       false, m_initialPopulationInProgress.load())) {
+            } else if (shouldProcessPosterJob(false, m_initialPopulationInProgress.load())) {
                 // Only pop a low-priority job when the defer contract
                 // allows it — i.e. initial population is finished.
                 job = std::move(m_lowPriorityPosterJobs.front());
@@ -195,15 +183,13 @@ void HomeScreen::posterWorker()
                 continue;
             }
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster,
-                static_cast<uint32_t>(m_highPriorityPosterJobs.size()
-                                     + m_lowPriorityPosterJobs.size()));
+                WorkerId::HomePoster, static_cast<uint32_t>(m_highPriorityPosterJobs.size() +
+                                                            m_lowPriorityPosterJobs.size()));
             performanceTelemetry().setWorkerActive(WorkerId::HomePoster, true);
         }
 
         bool complete = false;
-        if (ImageCache::isCached(job.itemId, job.imageType, job.imageTag,
-                                 job.width, job.height)) {
+        if (ImageCache::isCached(job.itemId, job.imageType, job.imageTag, job.width, job.height)) {
             complete = true;
         } else {
             BinaryHttpResponse response;
@@ -211,21 +197,19 @@ void HomeScreen::posterWorker()
             TelemetryRequestScope request(RequestKind::Artwork);
             TelemetryArtworkScope artwork(ArtworkContext::HomePoster);
             if (RouteRequest(m_session).run(
-                    [&](const std::string &base) {
-                        return client.getBinary(
-                                   buildImageUrl(base, job.itemId,
-                                                 job.imageType, job.imageTag,
-                                                 job.width, job.height),
-                                   JellyfinApi::buildAuthHeaders(
-                                       m_session.accessToken, m_session.deviceId),
-                                   response, error, 512 * 1024)
-                            && response.ok();
+                    [&](const std::string& base) {
+                        return client.getBinary(buildImageUrl(base, job.itemId, job.imageType,
+                                                              job.imageTag, job.width, job.height),
+                                                JellyfinApi::buildAuthHeaders(m_session.accessToken,
+                                                                              m_session.deviceId),
+                                                response, error, 512 * 1024) &&
+                               response.ok();
                     },
-                    error)
-                && !response.data.empty()) {
-                complete = ImageCache::writeToCache(
-                    job.itemId, job.imageType, job.imageTag, job.width,
-                    job.height, response.data.data(), response.data.size());
+                    error) &&
+                !response.data.empty()) {
+                complete = ImageCache::writeToCache(job.itemId, job.imageType, job.imageTag,
+                                                    job.width, job.height, response.data.data(),
+                                                    response.data.size());
             }
         }
         if (complete)
@@ -243,15 +227,13 @@ void HomeScreen::posterWorker()
             // the ImageCache janitor evicts a previously-downloaded file.
             const std::string key = posterJobKey(job);
             m_artworkProgressKeys.erase(key);
-            if (m_artworkCompleted.load() >= m_artworkTotal.load()
-                && m_highPriorityPosterJobs.empty()
-                && m_lowPriorityPosterJobs.empty()) {
+            if (m_artworkCompleted.load() >= m_artworkTotal.load() &&
+                m_highPriorityPosterJobs.empty() && m_lowPriorityPosterJobs.empty()) {
                 m_artworkActive.store(false);
             }
             performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::HomePoster,
-                static_cast<uint32_t>(m_highPriorityPosterJobs.size()
-                                     + m_lowPriorityPosterJobs.size()));
+                WorkerId::HomePoster, static_cast<uint32_t>(m_highPriorityPosterJobs.size() +
+                                                            m_lowPriorityPosterJobs.size()));
         }
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
     }

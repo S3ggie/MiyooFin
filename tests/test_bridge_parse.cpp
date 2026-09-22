@@ -9,21 +9,21 @@
 
 static int g_failures = 0;
 
-#define CHECK(cond) \
-    do { \
-        if (!(cond)) { \
-            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            ++g_failures; \
-        } \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                          \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
-#define CHECK_EQ(a, b) \
-    do { \
-        if ((a) != (b)) { \
-            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", \
-                        __FILE__, __LINE__, std::string(b).c_str(), std::string(a).c_str()); \
-            ++g_failures; \
-        } \
+#define CHECK_EQ(a, b)                                                                             \
+    do {                                                                                           \
+        if ((a) != (b)) {                                                                          \
+            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", __FILE__, __LINE__,         \
+                        std::string(b).c_str(), std::string(a).c_str());                           \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
 // -------------------------------------------------------------------
@@ -143,7 +143,7 @@ static void testFindHeaderNoColon()
 static void testParseGet()
 {
     std::printf("[test] parse_request: GET /stream\n");
-    const char *raw = "GET /stream HTTP/1.1\r\n"
+    const char* raw = "GET /stream HTTP/1.1\r\n"
                       "Host: 127.0.0.1:18080\r\n"
                       "\r\n";
     HttpRequest req = parse_request(raw, std::strlen(raw));
@@ -157,7 +157,7 @@ static void testParseGet()
 static void testParseHead()
 {
     std::printf("[test] parse_request: HEAD /stream\n");
-    const char *raw = "HEAD /stream HTTP/1.1\r\n"
+    const char* raw = "HEAD /stream HTTP/1.1\r\n"
                       "Host: 127.0.0.1:18080\r\n"
                       "\r\n";
     HttpRequest req = parse_request(raw, std::strlen(raw));
@@ -170,7 +170,7 @@ static void testParseHead()
 static void testParseGetWithRange()
 {
     std::printf("[test] parse_request: GET with Range\n");
-    const char *raw = "GET /stream HTTP/1.1\r\n"
+    const char* raw = "GET /stream HTTP/1.1\r\n"
                       "Range: bytes=12345-\r\n"
                       "Host: 127.0.0.1:18080\r\n"
                       "\r\n";
@@ -185,7 +185,7 @@ static void testParseGetWithRange()
 static void testParseGetWithRangeCaseInsensitive()
 {
     std::printf("[test] parse_request: Range header case-insensitive\n");
-    const char *raw = "GET /stream HTTP/1.1\r\n"
+    const char* raw = "GET /stream HTTP/1.1\r\n"
                       "range: bytes=100-200\r\n"
                       "Host: 127.0.0.1\r\n"
                       "\r\n";
@@ -193,7 +193,7 @@ static void testParseGetWithRangeCaseInsensitive()
     CHECK(req.valid);
     CHECK_EQ(req.range, "bytes=100-200");
 
-    const char *raw2 = "GET /stream HTTP/1.1\r\n"
+    const char* raw2 = "GET /stream HTTP/1.1\r\n"
                        "RANGE: bytes=500-\r\n"
                        "Host: 127.0.0.1\r\n"
                        "\r\n";
@@ -214,7 +214,7 @@ static void testParseInvalid()
 static void testParseMethodLowercase()
 {
     std::printf("[test] parse_request: lowercase method uppercased\n");
-    const char *raw = "get /stream HTTP/1.1\r\n\r\n";
+    const char* raw = "get /stream HTTP/1.1\r\n\r\n";
     HttpRequest req = parse_request(raw, std::strlen(raw));
     CHECK(req.valid);
     CHECK_EQ(req.method, "GET");
@@ -227,7 +227,7 @@ static void testParseMethodLowercase()
 static void testStatusLine301()
 {
     std::printf("[test] parse_status_line: HTTP/1.1 301\n");
-    const char *line = "HTTP/1.1 301 Moved Permanently\r\n";
+    const char* line = "HTTP/1.1 301 Moved Permanently\r\n";
     CHECK(parse_status_line(line, std::strlen(line)) == 301);
     std::printf("[test] parse_status_line: 301 OK\n");
 }
@@ -235,7 +235,7 @@ static void testStatusLine301()
 static void testStatusLine200()
 {
     std::printf("[test] parse_status_line: HTTP/1.1 200\n");
-    const char *line = "HTTP/1.1 200 OK\r\n";
+    const char* line = "HTTP/1.1 200 OK\r\n";
     CHECK(parse_status_line(line, std::strlen(line)) == 200);
     std::printf("[test] parse_status_line: 200 OK\n");
 }
@@ -243,7 +243,7 @@ static void testStatusLine200()
 static void testStatusLine206()
 {
     std::printf("[test] parse_status_line: HTTP/1.1 206\n");
-    const char *line = "HTTP/1.1 206 Partial Content\r\n";
+    const char* line = "HTTP/1.1 206 Partial Content\r\n";
     CHECK(parse_status_line(line, std::strlen(line)) == 206);
     std::printf("[test] parse_status_line: 206 OK\n");
 }
@@ -251,7 +251,7 @@ static void testStatusLine206()
 static void testStatusLineHTTP2()
 {
     std::printf("[test] parse_status_line: HTTP/2 200\n");
-    const char *line = "HTTP/2 200\r\n";
+    const char* line = "HTTP/2 200\r\n";
     CHECK(parse_status_line(line, std::strlen(line)) == 200);
     std::printf("[test] parse_status_line: HTTP/2 200 OK\n");
 }
@@ -301,10 +301,10 @@ static void testIsMedia()
 static void testAllowedHeaders()
 {
     std::printf("[test] is_allowed_response_header\n");
-    CHECK( is_allowed_response_header("Content-Type", 12));
-    CHECK( is_allowed_response_header("Content-Length", 14));
-    CHECK( is_allowed_response_header("Content-Range", 13));
-    CHECK( is_allowed_response_header("Accept-Ranges", 13));
+    CHECK(is_allowed_response_header("Content-Type", 12));
+    CHECK(is_allowed_response_header("Content-Length", 14));
+    CHECK(is_allowed_response_header("Content-Range", 13));
+    CHECK(is_allowed_response_header("Accept-Ranges", 13));
     CHECK(!is_allowed_response_header("Location", 8));
     CHECK(!is_allowed_response_header("Transfer-Encoding", 17));
     CHECK(!is_allowed_response_header("Server", 6));
@@ -312,8 +312,8 @@ static void testAllowedHeaders()
     CHECK(!is_allowed_response_header("Connection", 10));
     CHECK(!is_allowed_response_header("Keep-Alive", 10));
     // Case-insensitive check
-    CHECK( is_allowed_response_header("content-type", 12));
-    CHECK( is_allowed_response_header("CONTENT-TYPE", 12));
+    CHECK(is_allowed_response_header("content-type", 12));
+    CHECK(is_allowed_response_header("CONTENT-TYPE", 12));
     std::printf("[test] is_allowed_response_header OK\n");
 }
 
@@ -323,7 +323,7 @@ static void testAllowedHeaders()
 static void testExtractHeaderName()
 {
     std::printf("[test] extract_header_name\n");
-    const char *line = "Content-Type: video/mp4\r\n";
+    const char* line = "Content-Type: video/mp4\r\n";
     CHECK_EQ(extract_header_name(line, std::strlen(line)), "Content-Type");
     std::printf("[test] extract_header_name OK\n");
 }
@@ -331,11 +331,11 @@ static void testExtractHeaderName()
 static void testExtractHeaderValue()
 {
     std::printf("[test] extract_header_value\n");
-    const char *line = "Content-Type: video/mp4\r\n";
+    const char* line = "Content-Type: video/mp4\r\n";
     CHECK_EQ(extract_header_value(line, std::strlen(line)), "video/mp4");
-    const char *line2 = "Content-Range: bytes 0-12345/12346\r\n";
+    const char* line2 = "Content-Range: bytes 0-12345/12346\r\n";
     CHECK_EQ(extract_header_value(line2, std::strlen(line2)), "bytes 0-12345/12346");
-    const char *line3 = "Accept-Ranges: bytes\r\n";
+    const char* line3 = "Accept-Ranges: bytes\r\n";
     CHECK_EQ(extract_header_value(line3, std::strlen(line3)), "bytes");
     std::printf("[test] extract_header_value OK\n");
 }
@@ -357,22 +357,22 @@ static void testStatusReason()
 static void testAllowedHeadersCaseInsensitive()
 {
     std::printf("[test] is_allowed_response_header: full case-insensitive\n");
-    CHECK( is_allowed_response_header("Content-Type", 12));
-    CHECK( is_allowed_response_header("content-type", 12));
-    CHECK( is_allowed_response_header("CONTENT-TYPE", 12));
-    CHECK( is_allowed_response_header("CoNtEnT-TyPe", 12));
-    CHECK( is_allowed_response_header("Content-Length", 14));
-    CHECK( is_allowed_response_header("content-length", 14));
-    CHECK( is_allowed_response_header("CONTENT-LENGTH", 14));
-    CHECK( is_allowed_response_header("CoNtEnT-LeNgTh", 14));
-    CHECK( is_allowed_response_header("Content-Range", 13));
-    CHECK( is_allowed_response_header("content-range", 13));
-    CHECK( is_allowed_response_header("CONTENT-RANGE", 13));
-    CHECK( is_allowed_response_header("CoNtEnT-RaNgE", 13));
-    CHECK( is_allowed_response_header("Accept-Ranges", 13));
-    CHECK( is_allowed_response_header("accept-ranges", 13));
-    CHECK( is_allowed_response_header("ACCEPT-RANGES", 13));
-    CHECK( is_allowed_response_header("AcCePt-RaNgEs", 13));
+    CHECK(is_allowed_response_header("Content-Type", 12));
+    CHECK(is_allowed_response_header("content-type", 12));
+    CHECK(is_allowed_response_header("CONTENT-TYPE", 12));
+    CHECK(is_allowed_response_header("CoNtEnT-TyPe", 12));
+    CHECK(is_allowed_response_header("Content-Length", 14));
+    CHECK(is_allowed_response_header("content-length", 14));
+    CHECK(is_allowed_response_header("CONTENT-LENGTH", 14));
+    CHECK(is_allowed_response_header("CoNtEnT-LeNgTh", 14));
+    CHECK(is_allowed_response_header("Content-Range", 13));
+    CHECK(is_allowed_response_header("content-range", 13));
+    CHECK(is_allowed_response_header("CONTENT-RANGE", 13));
+    CHECK(is_allowed_response_header("CoNtEnT-RaNgE", 13));
+    CHECK(is_allowed_response_header("Accept-Ranges", 13));
+    CHECK(is_allowed_response_header("accept-ranges", 13));
+    CHECK(is_allowed_response_header("ACCEPT-RANGES", 13));
+    CHECK(is_allowed_response_header("AcCePt-RaNgEs", 13));
     CHECK(!is_allowed_response_header("Location", 8));
     CHECK(!is_allowed_response_header("Transfer-Encoding", 17));
     CHECK(!is_allowed_response_header("Server", 6));
@@ -429,36 +429,75 @@ static void testFindHeaderOtherHeadersCaseInsensitive()
 static void testCaseInsensitiveRouting()
 {
     std::printf("[test] case-insensitive routing (header_cb logic)\n");
-    auto route = [](const char *line, size_t len,
-                    std::string &ct, std::string &cl,
-                    std::string &cr, std::string &ar) {
+    auto route = [](const char* line, size_t len, std::string& ct, std::string& cl, std::string& cr,
+                    std::string& ar) {
         std::string name = extract_header_name(line, len);
         if (!name.empty() && is_allowed_response_header(name.c_str(), name.size())) {
-            for (auto &ch : name) if (ch >= 'A' && ch <= 'Z') ch += 32;
+            for (auto& ch : name)
+                if (ch >= 'A' && ch <= 'Z')
+                    ch += 32;
             std::string val = extract_header_value(line, len);
-            if      (name == "content-type")   ct = val;
-            else if (name == "content-length")  cl = val;
-            else if (name == "content-range")   cr = val;
-            else if (name == "accept-ranges")   ar = val;
+            if (name == "content-type")
+                ct = val;
+            else if (name == "content-length")
+                cl = val;
+            else if (name == "content-range")
+                cr = val;
+            else if (name == "accept-ranges")
+                ar = val;
         }
     };
-    { std::string a,b,c,d; const char *l="content-range: bytes 100000-100999/1881607835\r\n";
-      route(l, std::strlen(l), a,b,c,d);
-      CHECK_EQ(c, "bytes 100000-100999/1881607835"); CHECK(b.empty()); CHECK(a.empty()); CHECK(d.empty()); }
-    { std::string a,b,c,d; const char *l="CONTENT-RANGE: bytes 100-199/1000\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(c, "bytes 100-199/1000"); }
-    { std::string a,b,c,d; const char *l="CoNtEnT-RaNgE: bytes 100-199/1000\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(c, "bytes 100-199/1000"); }
-    { std::string a,b,c,d; const char *l="Content-Range: bytes 100-199/1000\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(c, "bytes 100-199/1000"); }
-    { std::string a,b,c,d; const char *l="content-type: video/x-matroska\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(a, "video/x-matroska"); }
-    { std::string a,b,c,d; const char *l="content-length: 1000\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(b, "1000"); }
-    { std::string a,b,c,d; const char *l="accept-ranges: bytes\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(d, "bytes"); }
-    { std::string a,b,c,d; const char *l="ACCEPT-RANGES: bytes\r\n";
-      route(l, std::strlen(l), a,b,c,d); CHECK_EQ(d, "bytes"); }
+    {
+        std::string a, b, c, d;
+        const char* l = "content-range: bytes 100000-100999/1881607835\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(c, "bytes 100000-100999/1881607835");
+        CHECK(b.empty());
+        CHECK(a.empty());
+        CHECK(d.empty());
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "CONTENT-RANGE: bytes 100-199/1000\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(c, "bytes 100-199/1000");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "CoNtEnT-RaNgE: bytes 100-199/1000\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(c, "bytes 100-199/1000");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "Content-Range: bytes 100-199/1000\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(c, "bytes 100-199/1000");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "content-type: video/x-matroska\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(a, "video/x-matroska");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "content-length: 1000\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(b, "1000");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "accept-ranges: bytes\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(d, "bytes");
+    }
+    {
+        std::string a, b, c, d;
+        const char* l = "ACCEPT-RANGES: bytes\r\n";
+        route(l, std::strlen(l), a, b, c, d);
+        CHECK_EQ(d, "bytes");
+    }
     std::printf("[test] case-insensitive routing (header_cb logic) OK\n");
 }
 
@@ -468,10 +507,14 @@ static void testCaseInsensitiveRouting()
 static void testContentRangeValuePreservation()
 {
     std::printf("[test] Content-Range value preservation\n");
-    { const char *l = "content-range: bytes 100000-100999/1881607835\r\n";
-      CHECK_EQ(extract_header_value(l, std::strlen(l)), "bytes 100000-100999/1881607835"); }
-    { const char *l = "Content-Range: bytes 0-999/1000\r\n";
-      CHECK_EQ(extract_header_value(l, std::strlen(l)), "bytes 0-999/1000"); }
+    {
+        const char* l = "content-range: bytes 100000-100999/1881607835\r\n";
+        CHECK_EQ(extract_header_value(l, std::strlen(l)), "bytes 100000-100999/1881607835");
+    }
+    {
+        const char* l = "Content-Range: bytes 0-999/1000\r\n";
+        CHECK_EQ(extract_header_value(l, std::strlen(l)), "bytes 0-999/1000");
+    }
     std::string hdrs = "content-range: bytes 100-199/1000\r\n\r\n";
     CHECK_EQ(find_header_ci(hdrs, "content-range"), "bytes 100-199/1000");
     std::printf("[test] Content-Range value preservation OK\n");

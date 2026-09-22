@@ -8,13 +8,13 @@ namespace miyoofin {
 
 /// Check whether a relative path (after stripping the MiyooFin/ prefix)
 /// is on the update whitelist.
-bool isWhitelistedAppPath(const std::string &relativeOut);
+bool isWhitelistedAppPath(const std::string& relativeOut);
 
 /// Check whether a relative install path must land executable (mode 0755).
 /// Single source of truth for executable install modes: the OTA installer
 /// (installMode) derives from this, so newly whitelisted miyoofin-* helpers
 /// and scripts cannot drift into a 0644 install again.
-bool isExecutableInstallPath(const std::string &rel);
+bool isExecutableInstallPath(const std::string& rel);
 
 /// Validate a single tar entry.  Returns true if the entry is safe to
 /// extract, setting *normalizedOut* to the path relative to the app root
@@ -28,8 +28,7 @@ bool isExecutableInstallPath(const std::string &rel);
 /// Note: symlink/hardlink detection is handled separately in the
 /// collapsed tar -tvzf pass (tarListAndDetectLinks), before this
 /// function is called.
-bool isSafeTarEntry(const std::string &entry,
-                    std::string &normalizedOut);
+bool isSafeTarEntry(const std::string& entry, std::string& normalizedOut);
 
 /// Build a safe install plan from a `tar -tzf`-style listing (one path
 /// per line).  Each entry must pass isSafeTarEntry and be whitelisted.
@@ -38,9 +37,8 @@ bool isSafeTarEntry(const std::string &entry,
 /// The required binary `miyoofin` is guaranteed to be LAST.
 /// Sets *error* and returns empty if any entry is unsafe or if the
 /// required `miyoofin` binary is missing from the archive.
-std::vector<std::string> buildInstallPlan(
-    const std::vector<std::string> &tarListing,
-    std::string &error);
+std::vector<std::string> buildInstallPlan(const std::vector<std::string>& tarListing,
+                                          std::string& error);
 
 } // namespace miyoofin
 

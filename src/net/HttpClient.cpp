@@ -14,16 +14,16 @@ namespace miyoofin {
 // -------------------------------------------------------------------
 // libcurl write callback — appends data to a std::string.
 // -------------------------------------------------------------------
-static size_t writeCallback(void *contents, size_t size, size_t nmemb, void *userp)
+static size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t total = size * nmemb;
-    auto *s = static_cast<std::string *>(userp);
-    s->append(static_cast<const char *>(contents), total);
+    auto* s = static_cast<std::string*>(userp);
+    s->append(static_cast<const char*>(contents), total);
     return total;
 }
-static int cancelCallback(void *userp, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+static int cancelCallback(void* userp, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 {
-    const auto *cancelled = static_cast<const std::atomic<bool> *>(userp);
+    const auto* cancelled = static_cast<const std::atomic<bool>*>(userp);
     return cancelled && cancelled->load(std::memory_order_acquire);
 }
 
@@ -31,20 +31,21 @@ static int cancelCallback(void *userp, curl_off_t, curl_off_t, curl_off_t, curl_
 // libcurl write callback for binary data — appends to a vector,
 // aborting if the maximum size is exceeded.
 // -------------------------------------------------------------------
-struct BinaryWriteContext {
-    std::vector<unsigned char> *data;
-    size_t                      maxSize;
-    bool                        exceeded;
+struct BinaryWriteContext
+{
+    std::vector<unsigned char>* data;
+    size_t maxSize;
+    bool exceeded;
 };
 
-static size_t binaryWriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
+static size_t binaryWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t total = size * nmemb;
-    auto *ctx = static_cast<BinaryWriteContext *>(userp);
+    auto* ctx = static_cast<BinaryWriteContext*>(userp);
 
     if (ctx->data->size() + total > ctx->maxSize) {
         ctx->exceeded = true;
-        return 0;  // returning 0 aborts the transfer
+        return 0; // returning 0 aborts the transfer
     }
 
     size_t offset = ctx->data->size();
@@ -59,32 +60,28 @@ static size_t binaryWriteCallback(void *contents, size_t size, size_t nmemb, voi
 /// Otherwise return the default "Transport: ..." string.
 static std::string classifyTransportError(CURLcode res)
 {
-    if (shouldShowClockError(res == CURLE_PEER_FAILED_VERIFICATION,
-                             std::time(nullptr))) {
+    if (shouldShowClockError(res == CURLE_PEER_FAILED_VERIFICATION, std::time(nullptr))) {
         return kClockErrorMessage;
     }
     return std::string("Transport: ") + curl_easy_strerror(res);
 }
 
-static void recordNetworkRequest(TelemetryTimer &timer, uint8_t method,
-                                 long httpStatus, CURLcode curlCode,
-                                 size_t rxBytes, size_t txBytes,
-                                 bool cancelled, bool truncated) noexcept
+static void recordNetworkRequest(TelemetryTimer& timer, uint8_t method, long httpStatus,
+                                 CURLcode curlCode, size_t rxBytes, size_t txBytes, bool cancelled,
+                                 bool truncated) noexcept
 {
-    PerformanceTelemetry &telemetry = performanceTelemetry();
+    PerformanceTelemetry& telemetry = performanceTelemetry();
     if (!timer.active() || !telemetry.enabledFast())
         return;
 
     TelemetryRecord record{};
     record.header.record_type = RecordType::NetworkRequest;
-    record.payload.network_request.request_kind = static_cast<uint16_t>(
-        currentRequestKind());
-    record.payload.network_request.route_kind = static_cast<uint8_t>(
-        currentRouteKind());
+    record.payload.network_request.request_kind = static_cast<uint16_t>(currentRequestKind());
+    record.payload.network_request.route_kind = static_cast<uint8_t>(currentRouteKind());
     record.payload.network_request.method = method;
     record.payload.network_request.duration_us = timer.elapsedUs();
-    record.payload.network_request.http_status = static_cast<uint32_t>(
-        httpStatus < 0 ? 0 : httpStatus);
+    record.payload.network_request.http_status =
+        static_cast<uint32_t>(httpStatus < 0 ? 0 : httpStatus);
     record.payload.network_request.curl_code = static_cast<uint32_t>(curlCode);
     record.payload.network_request.rx_payload_bytes = static_cast<uint64_t>(rxBytes);
     record.payload.network_request.tx_body_bytes = static_cast<uint64_t>(txBytes);
@@ -106,10 +103,8 @@ HttpClient::~HttpClient()
         curl_easy_cleanup(m_curl);
 }
 
-bool HttpClient::get(const std::string &url,
-                     std::string &responseBody,
-                     long &httpCode,
-                     std::string &error)
+bool HttpClient::get(const std::string& url, std::string& responseBody, long& httpCode,
+                     std::string& error)
 {
     HttpResponse response;
     if (!perform("GET", url, {}, {}, response, error))
@@ -133,20 +128,15 @@ bool HttpClient::get(const std::string &url,
     return true;
 }
 
-bool HttpClient::post(const std::string &url,
-                      const std::vector<std::string> &headers,
-                      const std::string &postBody,
-                      HttpResponse &response,
-                      std::string &error)
+bool HttpClient::post(const std::string& url, const std::vector<std::string>& headers,
+                      const std::string& postBody, HttpResponse& response, std::string& error)
 {
     return perform("POST", url, headers, postBody, response, error);
 }
 
-bool HttpClient::getBinary(const std::string &url,
-                           const std::vector<std::string> &headers,
-                           BinaryHttpResponse &response,
-                           std::string &error,
-                           size_t maxSize, const std::atomic<bool> *cancelled)
+bool HttpClient::getBinary(const std::string& url, const std::vector<std::string>& headers,
+                           BinaryHttpResponse& response, std::string& error, size_t maxSize,
+                           const std::atomic<bool>* cancelled)
 {
     response.status = 0;
     response.transportCode = 0;
@@ -154,7 +144,7 @@ bool HttpClient::getBinary(const std::string &url,
     response.truncated = false;
     error.clear();
 
-    CURL *curl = m_curl ? m_curl : (m_curl = curl_easy_init());
+    CURL* curl = m_curl ? m_curl : (m_curl = curl_easy_init());
     if (!curl) {
         error = "Failed to initialise libcurl easy handle";
         return false;
@@ -174,18 +164,26 @@ bool HttpClient::getBinary(const std::string &url,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    if (!configureTls(curl, url, &error)) return false;
+    if (!configureTls(curl, url, &error))
+        return false;
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
-    if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
-    else { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L); }
+    if (cancelled) {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+    }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, ua);
 
     // Custom headers
-    struct curl_slist *headerList = nullptr;
-    for (const auto &h : headers) {
+    struct curl_slist* headerList = nullptr;
+    for (const auto& h : headers) {
         headerList = curl_slist_append(headerList, h.c_str());
     }
     if (headerList)
@@ -196,8 +194,7 @@ bool HttpClient::getBinary(const std::string &url,
     response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
-        recordNetworkRequest(timer, 1, response.status, res,
-                             response.data.size(), 0,
+        recordNetworkRequest(timer, 1, response.status, res, response.data.size(), 0,
                              res == CURLE_ABORTED_BY_CALLBACK, ctx.exceeded);
         error = std::string("Transport: ") + curl_easy_strerror(res);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
@@ -214,25 +211,23 @@ bool HttpClient::getBinary(const std::string &url,
         response.data.clear();
     }
 
-    recordNetworkRequest(timer, 1, response.status, res,
-                         response.data.size(), 0, false, response.truncated);
+    recordNetworkRequest(timer, 1, response.status, res, response.data.size(), 0, false,
+                         response.truncated);
 
     return true;
 }
 
-bool HttpClient::perform(const std::string &method,
-                         const std::string &url,
-                         const std::vector<std::string> &headers,
-                         const std::string &postBody,
-                         HttpResponse &response,
-                         std::string &error, const std::atomic<bool> *cancelled)
+bool HttpClient::perform(const std::string& method, const std::string& url,
+                         const std::vector<std::string>& headers, const std::string& postBody,
+                         HttpResponse& response, std::string& error,
+                         const std::atomic<bool>* cancelled)
 {
     response.status = 0;
     response.transportCode = 0;
     response.body.clear();
     error.clear();
 
-    CURL *curl = m_curl ? m_curl : (m_curl = curl_easy_init());
+    CURL* curl = m_curl ? m_curl : (m_curl = curl_easy_init());
     if (!curl) {
         error = "Failed to initialise libcurl easy handle";
         return false;
@@ -247,18 +242,26 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    if (!configureTls(curl, url, &error)) return false;
+    if (!configureTls(curl, url, &error))
+        return false;
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 8192L);
-    if (cancelled) { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); }
-    else { curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr); curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr); curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L); }
+    if (cancelled) {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelCallback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, nullptr);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, nullptr);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+    }
 
     char ua[128];
     std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, ua);
 
     // Custom headers (if any)
-    struct curl_slist *headerList = nullptr;
-    for (const auto &h : headers) {
+    struct curl_slist* headerList = nullptr;
+    for (const auto& h : headers) {
         headerList = curl_slist_append(headerList, h.c_str());
     }
 
@@ -280,10 +283,9 @@ bool HttpClient::perform(const std::string &method,
     response.transportCode = static_cast<int>(res);
 
     if (res != CURLE_OK) {
-        recordNetworkRequest(timer, method == "POST" ? 2 : 1,
-                             response.status, res, response.body.size(),
-                             postBody.size(), res == CURLE_ABORTED_BY_CALLBACK,
-                             false);
+        recordNetworkRequest(timer, method == "POST" ? 2 : 1, response.status, res,
+                             response.body.size(), postBody.size(),
+                             res == CURLE_ABORTED_BY_CALLBACK, false);
         error = classifyTransportError(res);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
         curl_slist_free_all(headerList);
@@ -294,9 +296,8 @@ bool HttpClient::perform(const std::string &method,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
     curl_slist_free_all(headerList);
 
-    recordNetworkRequest(timer, method == "POST" ? 2 : 1,
-                         response.status, res, response.body.size(),
-                         postBody.size(), false, false);
+    recordNetworkRequest(timer, method == "POST" ? 2 : 1, response.status, res,
+                         response.body.size(), postBody.size(), false, false);
 
     return true;
 }
@@ -305,34 +306,35 @@ bool HttpClient::perform(const std::string &method,
 // downloadToFile — streaming file download with resume support
 // -------------------------------------------------------------------
 
-struct FileWriteContext {
-    FILE *f;
-    std::uint64_t *outBytes;
+struct FileWriteContext
+{
+    FILE* f;
+    std::uint64_t* outBytes;
     std::uint64_t written;
 };
 
-static size_t fileWriteCallback(void *contents, size_t size, size_t nmemb,
-                                void *userp)
+static size_t fileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t total = size * nmemb;
-    auto *ctx = static_cast<FileWriteContext *>(userp);
+    auto* ctx = static_cast<FileWriteContext*>(userp);
     size_t w = std::fwrite(contents, 1, total, ctx->f);
     ctx->written += w;
     return w;
 }
 
 /// Combined cancel + progress context for XFERINFOFUNCTION.
-struct FileXferContext {
-    const std::atomic<bool> *cancelled;
-    DownloadProgress         progress;
-    std::uint64_t            lastReportedMs;
-    std::uint64_t            lastTotal;
+struct FileXferContext
+{
+    const std::atomic<bool>* cancelled;
+    DownloadProgress progress;
+    std::uint64_t lastReportedMs;
+    std::uint64_t lastTotal;
 };
 
-static int fileXferCallback(void *userp, curl_off_t dltotal,
-                            curl_off_t, curl_off_t dlnow, curl_off_t)
+static int fileXferCallback(void* userp, curl_off_t dltotal, curl_off_t, curl_off_t dlnow,
+                            curl_off_t)
 {
-    auto *ctx = static_cast<FileXferContext *>(userp);
+    auto* ctx = static_cast<FileXferContext*>(userp);
 
     // Cancel check
     if (ctx->cancelled && ctx->cancelled->load(std::memory_order_acquire))
@@ -345,10 +347,10 @@ static int fileXferCallback(void *userp, curl_off_t dltotal,
         if (total != ctx->lastTotal)
             ctx->lastTotal = total;
 
-        auto nowMs = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
+        auto nowMs =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count());
         auto elapsed = nowMs - ctx->lastReportedMs;
         if (ctx->lastReportedMs == 0 || elapsed >= 250 ||
             (ctx->lastTotal > 0 && received >= ctx->lastTotal)) {
@@ -360,28 +362,24 @@ static int fileXferCallback(void *userp, curl_off_t dltotal,
     return 0;
 }
 
-bool HttpClient::downloadToFile(const std::string &url,
-                                const std::vector<std::string> &headers,
-                                const std::string &destTmpPath,
-                                std::string &error,
-                                std::uint64_t *outBytes,
-                                DownloadProgress progress,
-                                const std::atomic<bool> *cancelled,
-                                long timeoutSec,
-                                long connectTimeoutSec,
-                                std::uint64_t resumeFrom)
+bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::string>& headers,
+                                const std::string& destTmpPath, std::string& error,
+                                std::uint64_t* outBytes, DownloadProgress progress,
+                                const std::atomic<bool>* cancelled, long timeoutSec,
+                                long connectTimeoutSec, std::uint64_t resumeFrom)
 {
     error.clear();
-    if (outBytes) *outBytes = 0;
+    if (outBytes)
+        *outBytes = 0;
 
-    CURL *curl = m_curl ? m_curl : (m_curl = curl_easy_init());
+    CURL* curl = m_curl ? m_curl : (m_curl = curl_easy_init());
     if (!curl) {
         error = "Failed to initialise libcurl easy handle";
         return false;
     }
 
-    const char *mode = (resumeFrom > 0) ? "ab" : "wb";
-    FILE *f = std::fopen(destTmpPath.c_str(), mode);
+    const char* mode = (resumeFrom > 0) ? "ab" : "wb";
+    FILE* f = std::fopen(destTmpPath.c_str(), mode);
     if (!f) {
         error = "Failed to open output file: " + destTmpPath;
         return false;
@@ -413,14 +411,14 @@ bool HttpClient::downloadToFile(const std::string &url,
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
     // Range header for resume
-    struct curl_slist *headerList = nullptr;
+    struct curl_slist* headerList = nullptr;
     if (resumeFrom > 0) {
         char range[64];
         std::snprintf(range, sizeof(range), "Range: bytes=%lu-",
                       static_cast<unsigned long>(resumeFrom));
         headerList = curl_slist_append(headerList, range);
     }
-    for (const auto &h : headers) {
+    for (const auto& h : headers) {
         headerList = curl_slist_append(headerList, h.c_str());
     }
     if (headerList)
@@ -460,7 +458,7 @@ bool HttpClient::downloadToFile(const std::string &url,
         // Re-configure without Range header
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &writeCtx);
         headerList = nullptr;
-        for (const auto &h : headers) {
+        for (const auto& h : headers) {
             headerList = curl_slist_append(headerList, h.c_str());
         }
         if (headerList)
@@ -486,8 +484,13 @@ bool HttpClient::downloadToFile(const std::string &url,
         // means the server has nothing more to send — the .part file
         // is already complete.  Leave it intact and report success.
         if (httpStatus == 416 && resumeFrom > 0) {
-            if (f) { std::fflush(f); std::fclose(f); f = nullptr; }
-            if (outBytes) *outBytes = resumeFrom;
+            if (f) {
+                std::fflush(f);
+                std::fclose(f);
+                f = nullptr;
+            }
+            if (outBytes)
+                *outBytes = resumeFrom;
             return true;
         }
 
@@ -516,7 +519,8 @@ bool HttpClient::downloadToFile(const std::string &url,
         std::fclose(f);
     }
 
-    if (outBytes) *outBytes = writeCtx.written;
+    if (outBytes)
+        *outBytes = writeCtx.written;
 
     recordNetworkRequest(timer, 1, httpStatus, res, writeCtx.written, 0,
                          res == CURLE_ABORTED_BY_CALLBACK, false);

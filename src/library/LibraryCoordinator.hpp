@@ -27,12 +27,17 @@ class LibrarySync;
 
 /// Session-owned boundary for the shared online library services.
 ///
-enum class StartupSyncMode { SkipFresh, DeltaCatchUp, FullReconcile };
+enum class StartupSyncMode
+{
+    SkipFresh,
+    DeltaCatchUp,
+    FullReconcile
+};
 
-inline constexpr std::int64_t kSafetyReconcileIntervalMs =
-    24LL * 60 * 60 * 1000;
+inline constexpr std::int64_t kSafetyReconcileIntervalMs = 24LL * 60 * 60 * 1000;
 
-struct StartupSyncResult {
+struct StartupSyncResult
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -50,7 +55,8 @@ struct StartupSyncResult {
 /// population.  Page data is published only after its CatalogDb stage has
 /// committed, allowing Home to render the first bounded page while the worker
 /// continues the remaining walk.
-struct FullPopulationUpdate {
+struct FullPopulationUpdate
+{
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
     std::uint64_t committedGeneration = 0;
@@ -83,7 +89,8 @@ struct FullPopulationUpdate {
 /// reconcile.  `generation` is the last committed Home catalog epoch, not an
 /// attempted generation: cancellation after a catch-up commit therefore
 /// cannot make Home forget work that is already durable.
-struct SafetyReconcileResult {
+struct SafetyReconcileResult
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -99,7 +106,8 @@ struct SafetyReconcileResult {
 /// Immutable publication from the coordinator-owned Home rail worker.  A
 /// failed optional rail leaves its valid flag clear; consumers must retain
 /// their previous value for that rail.
-struct HomeRailResult {
+struct HomeRailResult
+{
     std::uint64_t request = 0;
     bool success = false;
     bool cancelled = false;
@@ -110,12 +118,18 @@ struct HomeRailResult {
     std::string error;
 };
 
-enum class HierarchyTaskKind { HomePrefetch, SeriesSeasons, SeasonEpisodes };
+enum class HierarchyTaskKind
+{
+    HomePrefetch,
+    SeriesSeasons,
+    SeasonEpisodes
+};
 
 /// One serialized hierarchy task.  The coordinator owns the cancellation
 /// token after accepting the request; callers only retain the request id and
 /// consume immutable results.
-struct HierarchyRequest {
+struct HierarchyRequest
+{
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
     bool forceReconcile = false;
@@ -129,7 +143,8 @@ struct HierarchyRequest {
 /// Per-series and terminal publications from the coordinator-owned hierarchy
 /// worker.  A result may contain the cached seasons observed before the raw
 /// refresh; this preserves cache-first artwork scheduling on Home.
-struct HierarchyResult {
+struct HierarchyResult
+{
     std::uint64_t request = 0;
     std::uint64_t generation = 0;
     std::uint64_t committedGeneration = 0;
@@ -151,25 +166,25 @@ struct HierarchyResult {
     std::int64_t lastReconcileMs = 0;
 };
 
-struct LiveChangeIdentity {
+struct LiveChangeIdentity
+{
     std::uint64_t worker = 0;
     std::uint64_t generation = 0;
     std::uint64_t request = 0;
 
-    bool operator==(const LiveChangeIdentity &other) const
+    bool operator==(const LiveChangeIdentity& other) const
     {
-        return worker == other.worker && generation == other.generation
-            && request == other.request;
+        return worker == other.worker && generation == other.generation && request == other.request;
     }
 };
 
 /// The coordinator owns the lifecycle of LibrarySync and LibraryQuery and the
 /// top-level startup sync policy.  LibrarySync remains the lower-level
 /// CatalogDb/network primitive; this class is the one startup sync driver.
-class LibraryCoordinator {
-public:
-    LibraryCoordinator(Session session, std::shared_ptr<CatalogDb> db,
-                       std::uint64_t scopeEpoch);
+class LibraryCoordinator
+{
+  public:
+    LibraryCoordinator(Session session, std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);
     ~LibraryCoordinator();
 
     LibraryCoordinator(const LibraryCoordinator&) = delete;
@@ -181,16 +196,15 @@ public:
     /// Start the coordinator-owned persisted-checkpoint decision and bounded
     /// startup catch-up.
     bool startStartupSync(bool catalogHasRows);
-    bool takeStartupSyncResult(StartupSyncResult &result);
+    bool takeStartupSyncResult(StartupSyncResult& result);
     /// Cancel and join the startup operation without stopping session scope.
     void cancelStartupSync() noexcept;
 
     /// Start one coordinator-owned full library population.  Incremental page
     /// publications become available through takeFullPopulationUpdate(); the
     /// terminal publication releases the serialized full-sync gate.
-    bool requestFullPopulation(std::uint64_t &request);
-    bool takeFullPopulationUpdate(std::uint64_t request,
-                                  FullPopulationUpdate &update);
+    bool requestFullPopulation(std::uint64_t& request);
+    bool takeFullPopulationUpdate(std::uint64_t request, FullPopulationUpdate& update);
     void cancelFullPopulation() noexcept;
 
     /// Reserve/release the legacy full population slot.  Kept for callers
@@ -200,9 +214,9 @@ public:
 
     /// Checkpoint a serialized live-catalog commit without exposing the
     /// LibrarySync transaction primitive to HomeScreen.
-    std::future<CatalogDbSyncState> checkpointLiveCatalog(
-        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
-        std::uint64_t committedGeneration);
+    std::future<CatalogDbSyncState> checkpointLiveCatalog(std::int64_t lastSuccessfulMs,
+                                                          std::int64_t lastReconcileMs,
+                                                          std::uint64_t committedGeneration);
 
     /// Apply the coordinator-owned maintenance policy and, when due, start
     /// one serialized safety catch-up/reconcile.  The coordinator owns the
@@ -219,29 +233,27 @@ public:
     /// mode.  The coordinator, not HomeScreen, decides whether maintenance is
     /// due or suppressed.
     void setManualOfflineMode(bool manualOffline) noexcept;
-    bool takeSafetyReconcileResult(SafetyReconcileResult &result);
+    bool takeSafetyReconcileResult(SafetyReconcileResult& result);
     void cancelSafetyReconcile() noexcept;
 
     /// Start one coordinator-owned Continue Watching/Recently Added refresh.
     /// The result is published atomically for the SDL thread to take later;
     /// a refresh never mutates HomeScreen state directly.
-    bool requestHomeRailRefresh(std::uint64_t &request);
-    bool takeHomeRailResult(std::uint64_t request, HomeRailResult &result);
+    bool requestHomeRailRefresh(std::uint64_t& request);
+    bool takeHomeRailResult(std::uint64_t request, HomeRailResult& result);
     void cancelHomeRailRefresh() noexcept;
 
     /// Queue one serialized hierarchy walk for Home.  Results are published
     /// per series followed by one terminal checkpoint result.
-    bool requestHierarchy(const std::vector<MediaItem> &shows,
-                          std::uint64_t generation, bool forceReconcile,
-                          std::uint64_t &request);
+    bool requestHierarchy(const std::vector<MediaItem>& shows, std::uint64_t generation,
+                          bool forceReconcile, std::uint64_t& request);
     /// Queue one series-seasons or one season-episodes mutation through the
     /// same serialized hierarchy scheduler used by Home.  Results are
     /// immutable and are consumed with takeHierarchyResult().
-    bool requestSeriesSeasons(const MediaItem &series,
-                              std::uint64_t &request);
-    bool requestSeasonEpisodes(const MediaItem &series, const MediaItem &season,
-                               std::uint64_t &request);
-    bool takeHierarchyResult(std::uint64_t request, HierarchyResult &result);
+    bool requestSeriesSeasons(const MediaItem& series, std::uint64_t& request);
+    bool requestSeasonEpisodes(const MediaItem& series, const MediaItem& season,
+                               std::uint64_t& request);
+    bool takeHierarchyResult(std::uint64_t request, HierarchyResult& result);
     void cancelHierarchyRequest(std::uint64_t request) noexcept;
     /// Cancel the current Home lifetime, invalidate/discard its publications,
     /// and release the request slot for the next Home lifetime.  The worker
@@ -251,8 +263,8 @@ public:
     /// Queue a live change for the next serialized consumer. Requests made
     /// during startup or full sync are retained rather than applied. The
     /// coordinator-owned worker drains and applies the queued batch.
-    bool requestLiveChange(const JellyfinLibraryChangeBatch &batch);
-    bool takeLiveChangeResult(LiveLibraryChangeResult &result);
+    bool requestLiveChange(const JellyfinLibraryChangeBatch& batch);
+    bool takeLiveChangeResult(LiveLibraryChangeResult& result);
     void cancelLiveChange() noexcept;
     void discardLiveChangeResults() noexcept;
 
@@ -274,11 +286,18 @@ public:
     // The application-facing coordinator boundary does not expose its raw
     // sync service.  Migration tests still need the service for direct
     // CatalogDb fixture setup, so keep that seam explicitly test-only.
-    std::shared_ptr<LibrarySync> syncForTestSetup() const { return m_sync; }
+    std::shared_ptr<LibrarySync> syncForTestSetup() const
+    {
+        return m_sync;
+    }
 #endif
 
-    std::shared_ptr<LibraryQuery> query() const { return m_query; }
-    struct Status {
+    std::shared_ptr<LibraryQuery> query() const
+    {
+        return m_query;
+    }
+    struct Status
+    {
         bool inFlight = false;
         bool startupInFlight = false;
         bool fullSyncInFlight = false;
@@ -300,7 +319,7 @@ public:
     };
     Status status() const;
 
-private:
+  private:
     bool requestSafetyReconcile(bool requireMaintenanceDue);
     void liveChangeWorker();
     void hierarchyWorker();

@@ -21,18 +21,21 @@ namespace miyoofin {
 // ELF / ARM helpers
 // -------------------------------------------------------------------
 
-bool isElfMagic(const unsigned char *buf, std::size_t len)
+bool isElfMagic(const unsigned char* buf, std::size_t len)
 {
-    if (len < 4) return false;
+    if (len < 4)
+        return false;
     return buf[0] == 0x7f && buf[1] == 'E' && buf[2] == 'L' && buf[3] == 'F';
 }
 
-bool isElfArm(const unsigned char *buf, std::size_t len)
+bool isElfArm(const unsigned char* buf, std::size_t len)
 {
     // ELF header: e_machine is at offset 18 (2 bytes, little-endian on ARM).
     // ARM machine number is 0x28.
-    if (len < 20) return false;
-    if (!isElfMagic(buf, len)) return false;
+    if (len < 20)
+        return false;
+    if (!isElfMagic(buf, len))
+        return false;
     std::uint16_t e_machine = static_cast<std::uint16_t>(buf[18] | (buf[19] << 8));
     return e_machine == 0x28;
 }
@@ -41,62 +44,71 @@ bool isElfArm(const unsigned char *buf, std::size_t len)
 // Internal helpers — C++ / POSIX only, no shell
 // -------------------------------------------------------------------
 
-static bool pathExists(const std::string &path)
+static bool pathExists(const std::string& path)
 {
-    struct stat st {};
+    struct stat st
+    {};
     return ::stat(path.c_str(), &st) == 0;
 }
 
 /// Recursively remove a directory tree (rm -rf equivalent in C++).
 /// Uses lstat to avoid following symlinks — symlinks are unlinked,
 /// not recursed into.
-static bool rmrf(const std::string &path)
+static bool rmrf(const std::string& path)
 {
-    struct stat st {};
-    if (::lstat(path.c_str(), &st) != 0) return true; // already gone
+    struct stat st
+    {};
+    if (::lstat(path.c_str(), &st) != 0)
+        return true; // already gone
 
     if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode)) {
         return ::unlink(path.c_str()) == 0;
     }
 
-    DIR *d = ::opendir(path.c_str());
-    if (!d) return false;
+    DIR* d = ::opendir(path.c_str());
+    if (!d)
+        return false;
 
-    struct dirent *ent;
+    struct dirent* ent;
     bool ok = true;
     while ((ent = ::readdir(d)) != nullptr) {
         if (ent->d_name[0] == '.' &&
-            (ent->d_name[1] == '\0' ||
-             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+            (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
             continue;
         std::string child = path + "/" + ent->d_name;
-        if (!rmrf(child)) ok = false;
+        if (!rmrf(child))
+            ok = false;
     }
     ::closedir(d);
-    if (::rmdir(path.c_str()) != 0) ok = false;
+    if (::rmdir(path.c_str()) != 0)
+        ok = false;
     return ok;
 }
 
 /// mkdir -p equivalent in C++.
-static bool mkdirp(const std::string &path)
+static bool mkdirp(const std::string& path)
 {
-    if (path.empty()) return true;
-    struct stat st {};
+    if (path.empty())
+        return true;
+    struct stat st
+    {};
     if (::stat(path.c_str(), &st) == 0) {
         return S_ISDIR(st.st_mode);
     }
     // Create parent first
     auto pos = path.rfind('/');
     if (pos != std::string::npos && pos > 0) {
-        if (!mkdirp(path.substr(0, pos))) return false;
+        if (!mkdirp(path.substr(0, pos)))
+            return false;
     }
     return ::mkdir(path.c_str(), 0755) == 0 || errno == EEXIST;
 }
 
-static bool mkdirPForFile(const std::string &filePath)
+static bool mkdirPForFile(const std::string& filePath)
 {
     auto pos = filePath.rfind('/');
-    if (pos == std::string::npos) return true;
+    if (pos == std::string::npos)
+        return true;
     return mkdirp(filePath.substr(0, pos));
 }
 
@@ -109,12 +121,10 @@ static bool mkdirPForFile(const std::string &filePath)
 /// missing.  Prefer an executable absolute path; otherwise fall back to "tar"
 /// and let execvp resolve it from PATH (a real tar error will surface if it
 /// truly is absent).
-static const char *findTar()
+static const char* findTar()
 {
-    static const char *tarPaths[] = {
-        "/bin/tar", "/usr/bin/tar", "/sbin/tar", "/usr/sbin/tar"
-    };
-    for (auto *tp : tarPaths)
+    static const char* tarPaths[] = {"/bin/tar", "/usr/bin/tar", "/sbin/tar", "/usr/sbin/tar"};
+    for (auto* tp : tarPaths)
         if (::access(tp, X_OK) == 0)
             return tp;
     return "tar";
@@ -122,9 +132,7 @@ static const char *findTar()
 
 /// Run a command via fork+execvp, capturing stdout into a pipe.
 /// Returns true on exit code 0.  stdoutOutput receives all stdout bytes.
-static bool runCaptured(const char *argv[],
-                        std::string &stdoutOutput,
-                        std::string &error)
+static bool runCaptured(const char* argv[], std::string& stdoutOutput, std::string& error)
 {
     int pipefd[2];
     if (::pipe(pipefd) != 0) {
@@ -150,7 +158,7 @@ static bool runCaptured(const char *argv[],
             ::dup2(devnull, STDERR_FILENO);
             ::close(devnull);
         }
-        ::execvp(argv[0], const_cast<char *const *>(argv));
+        ::execvp(argv[0], const_cast<char* const*>(argv));
         ::_exit(127);
     }
 
@@ -175,10 +183,13 @@ static bool runCaptured(const char *argv[],
 }
 
 /// Run a command via fork+execvp, no stdout capture.  stderr suppressed.
-static bool runSimple(const char *argv[], std::string &error)
+static bool runSimple(const char* argv[], std::string& error)
 {
     pid_t pid = ::fork();
-    if (pid < 0) { error = "fork failed"; return false; }
+    if (pid < 0) {
+        error = "fork failed";
+        return false;
+    }
 
     if (pid == 0) {
         int devnull = ::open("/dev/null", O_WRONLY);
@@ -187,7 +198,7 @@ static bool runSimple(const char *argv[], std::string &error)
             ::dup2(devnull, STDERR_FILENO);
             ::close(devnull);
         }
-        ::execvp(argv[0], const_cast<char *const *>(argv));
+        ::execvp(argv[0], const_cast<char* const*>(argv));
         ::_exit(127);
     }
 
@@ -207,8 +218,9 @@ static bool runSimple(const char *argv[], std::string &error)
 // -------------------------------------------------------------------
 
 /// Structure for a parsed tar verbose line.
-struct TarEntry {
-    std::string filename;   // normalized path (stripped MiyooFin/ prefix)
+struct TarEntry
+{
+    std::string filename; // normalized path (stripped MiyooFin/ prefix)
     bool isSymlink = false;
     bool isHardlink = false;
 };
@@ -217,13 +229,14 @@ struct TarEntry {
 /// and link type.  GNU tar format:
 ///   TYPE PERMS OWNER/GROUP SIZE DATE TIME NAME [-> LINK] [link to LINK]
 /// Returns true if the line was parseable.
-static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
+static bool parseTarVerboseLine(const std::string& line, TarEntry& out)
 {
-    if (line.empty()) return false;
+    if (line.empty())
+        return false;
 
     char type = line[0];
-    if (type != '-' && type != 'l' && type != 'h' &&
-        type != 'd' && type != 'b' && type != 'c' && type != 'p')
+    if (type != '-' && type != 'l' && type != 'h' && type != 'd' && type != 'b' && type != 'c' &&
+        type != 'p')
         return false;
 
     // Find the filename by locating the ISO datetime pattern and taking
@@ -235,37 +248,33 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
     for (size_t i = 1; i + 16 < lineLen; ++i) {
         // Match: DIGIT DIGIT DIGIT DIGIT '-' DIGIT DIGIT '-' DIGIT DIGIT
         //        ' ' DIGIT DIGIT ':' DIGIT DIGIT
-        if (std::isdigit(static_cast<unsigned char>(line[i]))   &&
-            std::isdigit(static_cast<unsigned char>(line[i+1])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+2])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+3])) &&
-            line[i+4] == '-' &&
-            std::isdigit(static_cast<unsigned char>(line[i+5])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+6])) &&
-            line[i+7] == '-' &&
-            std::isdigit(static_cast<unsigned char>(line[i+8])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+9])) &&
-            line[i+10] == ' ' &&
-            std::isdigit(static_cast<unsigned char>(line[i+11])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+12])) &&
-            line[i+13] == ':' &&
-            std::isdigit(static_cast<unsigned char>(line[i+14])) &&
-            std::isdigit(static_cast<unsigned char>(line[i+15]))) {
-            if (line[i+16] == ' ') {
+        if (std::isdigit(static_cast<unsigned char>(line[i])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 1])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 2])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 3])) && line[i + 4] == '-' &&
+            std::isdigit(static_cast<unsigned char>(line[i + 5])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 6])) && line[i + 7] == '-' &&
+            std::isdigit(static_cast<unsigned char>(line[i + 8])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 9])) && line[i + 10] == ' ' &&
+            std::isdigit(static_cast<unsigned char>(line[i + 11])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 12])) && line[i + 13] == ':' &&
+            std::isdigit(static_cast<unsigned char>(line[i + 14])) &&
+            std::isdigit(static_cast<unsigned char>(line[i + 15]))) {
+            if (line[i + 16] == ' ') {
                 nameStart = i + 17;
                 break;
             }
             // BusyBox prints seconds too: "HH:MM:SS name".
-            if (line[i+16] == ':' && i + 19 < lineLen &&
-                std::isdigit(static_cast<unsigned char>(line[i+17])) &&
-                std::isdigit(static_cast<unsigned char>(line[i+18])) &&
-                line[i+19] == ' ') {
+            if (line[i + 16] == ':' && i + 19 < lineLen &&
+                std::isdigit(static_cast<unsigned char>(line[i + 17])) &&
+                std::isdigit(static_cast<unsigned char>(line[i + 18])) && line[i + 19] == ' ') {
                 nameStart = i + 20;
                 break;
             }
         }
     }
-    if (nameStart == 0 || nameStart >= line.size()) return false;
+    if (nameStart == 0 || nameStart >= line.size())
+        return false;
 
     // Extract the full name portion
     std::string namePortion = line.substr(nameStart);
@@ -307,25 +316,24 @@ static bool parseTarVerboseLine(const std::string &line, TarEntry &out)
 
 /// Public wrapper around the static parseTarVerboseLine.
 /// Delegates to parseTarVerboseLine; does not duplicate logic.
-bool parseTarListingLine(const std::string &line, std::string &filename,
-                         bool &isSymlink, bool &isHardlink)
+bool parseTarListingLine(const std::string& line, std::string& filename, bool& isSymlink,
+                         bool& isHardlink)
 {
     TarEntry entry;
     if (!parseTarVerboseLine(line, entry))
         return false;
-    filename   = std::move(entry.filename);
-    isSymlink  = entry.isSymlink;
+    filename = std::move(entry.filename);
+    isSymlink = entry.isSymlink;
     isHardlink = entry.isHardlink;
     return true;
 }
 
 /// Collapse: run tar -tvzf once, parse output for filenames AND link detection.
 /// Returns the list of safe filenames (without MiyooFin/ prefix) or empty on error.
-static bool tarListAndDetectLinks(const std::string &tarGzPath,
-                                  std::vector<std::string> &filenames,
-                                  std::string &error)
+static bool tarListAndDetectLinks(const std::string& tarGzPath, std::vector<std::string>& filenames,
+                                  std::string& error)
 {
-    const char *tarBin = findTar();
+    const char* tarBin = findTar();
     if (!tarBin) {
         error = "tar not found in PATH";
         return false;
@@ -333,7 +341,7 @@ static bool tarListAndDetectLinks(const std::string &tarGzPath,
 
     // argv: tar -tvzf <path>
     std::string pathArg = tarGzPath;
-    const char *argv[] = { tarBin, "-tvzf", pathArg.c_str(), nullptr };
+    const char* argv[] = {tarBin, "-tvzf", pathArg.c_str(), nullptr};
 
     std::string output;
     if (!runCaptured(argv, output, error)) {
@@ -348,7 +356,8 @@ static bool tarListAndDetectLinks(const std::string &tarGzPath,
         // Trim trailing newline/carriage return
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
             line.pop_back();
-        if (line.empty()) continue;
+        if (line.empty())
+            continue;
 
         TarEntry entry;
         if (!parseTarVerboseLine(line, entry)) {
@@ -357,12 +366,12 @@ static bool tarListAndDetectLinks(const std::string &tarGzPath,
         }
 
         // Directory entries: skip (trailing /)
-        if (!entry.filename.empty() && entry.filename.back() == '/') continue;
+        if (!entry.filename.empty() && entry.filename.back() == '/')
+            continue;
 
         // Symlinks and hardlinks are forbidden (M2)
         if (entry.isSymlink || entry.isHardlink) {
-            error = "archive contains " +
-                    std::string(entry.isSymlink ? "symlink" : "hardlink") +
+            error = "archive contains " + std::string(entry.isSymlink ? "symlink" : "hardlink") +
                     " entry: " + entry.filename;
             return false;
         }
@@ -374,12 +383,10 @@ static bool tarListAndDetectLinks(const std::string &tarGzPath,
 }
 
 /// Extract only the listed paths from the tar archive via fork+execvp.
-static bool tarExtract(const std::string &tarGzPath,
-                       const std::string &destDir,
-                       const std::vector<std::string> &paths,
-                       std::string &error)
+static bool tarExtract(const std::string& tarGzPath, const std::string& destDir,
+                       const std::vector<std::string>& paths, std::string& error)
 {
-    const char *tarBin = findTar();
+    const char* tarBin = findTar();
     if (!tarBin) {
         error = "tar not found in PATH";
         return false;
@@ -393,7 +400,7 @@ static bool tarExtract(const std::string &tarGzPath,
     storage.push_back(tarGzPath);
     storage.push_back("-C");
     storage.push_back(destDir);
-    for (auto &p : paths) {
+    for (auto& p : paths) {
         storage.push_back("MiyooFin/" + p);
     }
     storage.push_back("2>/dev/null");
@@ -404,8 +411,9 @@ static bool tarExtract(const std::string &tarGzPath,
     // without it.  Stderr suppression is handled in runSimple.
     storage.pop_back(); // remove "2>/dev/null"
 
-    std::vector<const char *> argv;
-    for (auto &s : storage) argv.push_back(s.c_str());
+    std::vector<const char*> argv;
+    for (auto& s : storage)
+        argv.push_back(s.c_str());
     argv.push_back(nullptr);
 
     return runSimple(argv.data(), error);
@@ -413,35 +421,50 @@ static bool tarExtract(const std::string &tarGzPath,
 
 /// Copy a single file preserving mode bits.
 /// Checks stream errors and short writes (M6).
-static bool copyFile(const std::string &src, const std::string &dest)
+static bool copyFile(const std::string& src, const std::string& dest)
 {
-    struct stat st {};
-    if (::stat(src.c_str(), &st) != 0) return false;
+    struct stat st
+    {};
+    if (::stat(src.c_str(), &st) != 0)
+        return false;
     const auto expectedSize = static_cast<std::size_t>(st.st_size);
 
     int fdIn = ::open(src.c_str(), O_RDONLY);
-    if (fdIn < 0) return false;
+    if (fdIn < 0)
+        return false;
 
     mkdirPForFile(dest);
     int fdOut = ::open(dest.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fdOut < 0) { ::close(fdIn); return false; }
+    if (fdOut < 0) {
+        ::close(fdIn);
+        return false;
+    }
 
     std::size_t totalWritten = 0;
     char buf[8192];
     bool ok = true;
     while (true) {
         ssize_t n = ::read(fdIn, buf, sizeof(buf));
-        if (n < 0) { ok = false; break; }
-        if (n == 0) break;
+        if (n < 0) {
+            ok = false;
+            break;
+        }
+        if (n == 0)
+            break;
         ssize_t w = ::write(fdOut, buf, static_cast<std::size_t>(n));
-        if (w != n) { ok = false; break; }
+        if (w != n) {
+            ok = false;
+            break;
+        }
         totalWritten += static_cast<std::size_t>(w);
     }
 
-    if (ok && totalWritten != expectedSize) ok = false;
+    if (ok && totalWritten != expectedSize)
+        ok = false;
 
     ::close(fdIn);
-    if (::fchmod(fdOut, st.st_mode) != 0) ok = false;
+    if (::fchmod(fdOut, st.st_mode) != 0)
+        ok = false;
     ::close(fdOut);
 
     if (!ok) {
@@ -453,16 +476,15 @@ static bool copyFile(const std::string &src, const std::string &dest)
 
 /// Atomically install a single file: write .tmp -> fsync -> chmod -> rename.
 /// Opens the .tmp for writing to fsync the actual write fd (M6).
-static bool atomicInstallFile(const std::string &src,
-                              const std::string &dest,
-                              mode_t mode)
+static bool atomicInstallFile(const std::string& src, const std::string& dest, mode_t mode)
 {
     mkdirPForFile(dest);
 
     std::string tmpPath = dest + ".tmp";
 
     // Copy to .tmp
-    if (!copyFile(src, tmpPath)) return false;
+    if (!copyFile(src, tmpPath))
+        return false;
 
     // M6: fsync the write fd before rename.  Open for writing so we
     // fsync the fd that matters (not a reopened read-only fd).
@@ -485,12 +507,13 @@ static bool atomicInstallFile(const std::string &src,
 }
 
 /// fsync the parent directory of a path.
-static bool fsyncDir(const std::string &filePath)
+static bool fsyncDir(const std::string& filePath)
 {
     auto pos = filePath.rfind('/');
     std::string dir = (pos != std::string::npos) ? filePath.substr(0, pos) : ".";
-    DIR *d = ::opendir(dir.c_str());
-    if (!d) return false;
+    DIR* d = ::opendir(dir.c_str());
+    if (!d)
+        return false;
     ::fsync(::dirfd(d));
     ::closedir(d);
     return true;
@@ -500,7 +523,7 @@ static bool fsyncDir(const std::string &filePath)
 /// Delegates to isExecutableInstallPath() — the single source of truth
 /// shared with the install plan — so whitelisted binaries/scripts cannot
 /// drift out of the executable set unnoticed.
-static mode_t installMode(const std::string &rel)
+static mode_t installMode(const std::string& rel)
 {
     return isExecutableInstallPath(rel) ? 0755 : 0644;
 }
@@ -509,17 +532,16 @@ static mode_t installMode(const std::string &rel)
 // installUpdate
 // -------------------------------------------------------------------
 
-bool installUpdate(const std::string &appDir,
-                   const std::string &tarGzPath,
-                   const std::string &targetVersion,
-                   std::string &error,
-                   const std::atomic<bool> *cancelled,
-                   const std::function<void(int percent)> &progress)
+bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
+                   const std::string& targetVersion, std::string& error,
+                   const std::atomic<bool>* cancelled,
+                   const std::function<void(int percent)>& progress)
 {
     error.clear();
 
     auto report = [&](int pct) {
-        if (progress) progress(pct);
+        if (progress)
+            progress(pct);
     };
 
     auto checkCancelled = [&]() -> bool {
@@ -536,7 +558,8 @@ bool installUpdate(const std::string &appDir,
     mkdirp(stagingDir);
 
     std::vector<std::string> listingLines;
-    if (!tarListAndDetectLinks(tarGzPath, listingLines, error)) return false;
+    if (!tarListAndDetectLinks(tarGzPath, listingLines, error))
+        return false;
     report(10);
 
     // ---------------------------------------------------------------
@@ -545,16 +568,20 @@ bool installUpdate(const std::string &appDir,
     // Filter out directory entries (trailing /) — tar creates dirs
     // automatically during extraction.
     std::vector<std::string> filteredLines;
-    for (auto &line : listingLines) {
+    for (auto& line : listingLines) {
         if (!line.empty() && line.back() != '/')
             filteredLines.push_back(line);
     }
 
     std::vector<std::string> plan = buildInstallPlan(filteredLines, error);
-    if (plan.empty()) return false;
+    if (plan.empty())
+        return false;
     report(15);
 
-    if (checkCancelled()) { error = "cancelled"; return false; }
+    if (checkCancelled()) {
+        error = "cancelled";
+        return false;
+    }
 
     // ---------------------------------------------------------------
     // Step 3: Extract planned files to staging
@@ -562,10 +589,14 @@ bool installUpdate(const std::string &appDir,
     rmrf(stagingDir);
     mkdirp(stagingDir);
 
-    if (!tarExtract(tarGzPath, stagingDir, plan, error)) return false;
+    if (!tarExtract(tarGzPath, stagingDir, plan, error))
+        return false;
     report(30);
 
-    if (checkCancelled()) { error = "cancelled"; return false; }
+    if (checkCancelled()) {
+        error = "cancelled";
+        return false;
+    }
 
     // ---------------------------------------------------------------
     // Step 4: Sanity-check the miyoofin binary
@@ -574,7 +605,7 @@ bool installUpdate(const std::string &appDir,
         std::string binPath = stagingDir + "/MiyooFin/miyoofin";
         unsigned char elfHeader[20];
         std::ifstream ifs(binPath, std::ios::binary);
-        if (!ifs.read(reinterpret_cast<char *>(elfHeader), sizeof(elfHeader))) {
+        if (!ifs.read(reinterpret_cast<char*>(elfHeader), sizeof(elfHeader))) {
             error = "extracted miyoofin binary is too small or unreadable";
             return false;
         }
@@ -589,7 +620,10 @@ bool installUpdate(const std::string &appDir,
     }
     report(40);
 
-    if (checkCancelled()) { error = "cancelled"; return false; }
+    if (checkCancelled()) {
+        error = "cancelled";
+        return false;
+    }
 
     // ---------------------------------------------------------------
     // Step 5: Back up current copies of planned files
@@ -600,7 +634,7 @@ bool installUpdate(const std::string &appDir,
     // (rel, backupPath) — backupPath is where the original copy lives
     std::vector<std::pair<std::string, std::string>> backedUp;
 
-    for (auto &rel : plan) {
+    for (auto& rel : plan) {
         std::string destPath = appDir + "/" + rel;
         if (pathExists(destPath)) {
             std::string bakPath = backupDir + "/" + rel;
@@ -625,7 +659,7 @@ bool installUpdate(const std::string &appDir,
     // buildInstallPlan already guarantees miyoofin is last.
     std::vector<std::string> installed; // track for rollback
 
-    for (auto &rel : plan) {
+    for (auto& rel : plan) {
         std::string srcPath = stagingDir + "/MiyooFin/" + rel;
         std::string destPath = appDir + "/" + rel;
         mode_t mode = installMode(rel);
@@ -634,7 +668,7 @@ bool installUpdate(const std::string &appDir,
             error = "expected file missing from staging: " + rel;
             // Rollback installed files in reverse order
             for (auto it = installed.rbegin(); it != installed.rend(); ++it) {
-                for (auto &bak : backedUp) {
+                for (auto& bak : backedUp) {
                     if (bak.first == *it) {
                         copyFile(bak.second, appDir + "/" + bak.first);
                         break;
@@ -648,7 +682,7 @@ bool installUpdate(const std::string &appDir,
             error = "failed to install: " + rel;
             // Rollback in reverse order
             for (auto it = installed.rbegin(); it != installed.rend(); ++it) {
-                for (auto &bak : backedUp) {
+                for (auto& bak : backedUp) {
                     if (bak.first == *it) {
                         copyFile(bak.second, appDir + "/" + bak.first);
                         break;
@@ -660,8 +694,7 @@ bool installUpdate(const std::string &appDir,
 
         fsyncDir(destPath);
         installed.push_back(rel);
-        report(50 + (40 * static_cast<int>(installed.size())) /
-               static_cast<int>(plan.size()));
+        report(50 + (40 * static_cast<int>(installed.size())) / static_cast<int>(plan.size()));
         // NOTE: cancellation is intentionally NOT checked here (M5).
     }
 
@@ -679,8 +712,7 @@ bool installUpdate(const std::string &appDir,
             auto now = std::chrono::system_clock::now();
             auto tt = std::chrono::system_clock::to_time_t(now);
             char timeBuf[64];
-            std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%SZ",
-                          std::gmtime(&tt));
+            std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&tt));
 
             ofs << "{\n"
                 << "  \"from\": \"" << VERSION_STR << "\",\n"
@@ -691,17 +723,18 @@ bool installUpdate(const std::string &appDir,
 
             // fsync + rename
             int fd = ::open(tmpJson.c_str(), O_RDONLY);
-            if (fd >= 0) { ::fsync(fd); ::close(fd); }
+            if (fd >= 0) {
+                ::fsync(fd);
+                ::close(fd);
+            }
 
             if (::rename(tmpJson.c_str(), jsonPath.c_str()) != 0) {
-                std::fprintf(stderr,
-                    "[update] warning: failed to atomically write "
-                    "update-applied.json\n");
+                std::fprintf(stderr, "[update] warning: failed to atomically write "
+                                     "update-applied.json\n");
             }
             fsyncDir(jsonPath);
         } else {
-            std::fprintf(stderr,
-                "[update] warning: failed to create update-applied.json\n");
+            std::fprintf(stderr, "[update] warning: failed to create update-applied.json\n");
         }
     }
 

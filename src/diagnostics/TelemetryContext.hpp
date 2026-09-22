@@ -20,7 +20,7 @@ struct TelemetryContext
 
 inline thread_local TelemetryContext g_telemetryContext;
 
-inline TelemetryContext &telemetryContext() noexcept
+inline TelemetryContext& telemetryContext() noexcept
 {
     return g_telemetryContext;
 }
@@ -62,11 +62,26 @@ inline ArtworkContext currentArtworkContext() noexcept
 
 #else
 
-inline RequestKind currentRequestKind() noexcept { return RequestKind::Unknown; }
-inline RouteKind currentRouteKind() noexcept { return RouteKind::Unknown; }
-inline uint8_t currentRouteAttempt() noexcept { return 0; }
-inline bool currentRouteFallback() noexcept { return false; }
-inline ArtworkContext currentArtworkContext() noexcept { return ArtworkContext::Unknown; }
+inline RequestKind currentRequestKind() noexcept
+{
+    return RequestKind::Unknown;
+}
+inline RouteKind currentRouteKind() noexcept
+{
+    return RouteKind::Unknown;
+}
+inline uint8_t currentRouteAttempt() noexcept
+{
+    return 0;
+}
+inline bool currentRouteFallback() noexcept
+{
+    return false;
+}
+inline ArtworkContext currentArtworkContext() noexcept
+{
+    return ArtworkContext::Unknown;
+}
 
 #endif
 

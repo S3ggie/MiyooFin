@@ -7,40 +7,47 @@ using namespace miyoofin;
 
 namespace {
 
-struct HierarchyScope {
+struct HierarchyScope
+{
     std::string url;
     std::string user;
     std::string key;
 };
 
-HierarchyScope hierarchyScope(const char *name)
+HierarchyScope hierarchyScope(const char* name)
 {
     HierarchyScope scope;
-    scope.url = std::string("https://hierarchy-") + name + "-"
-        + std::to_string(static_cast<long long>(::getpid())) + ".example";
+    scope.url = std::string("https://hierarchy-") + name + "-" +
+                std::to_string(static_cast<long long>(::getpid())) + ".example";
     scope.user = std::string("hierarchy-") + name + "-user";
     scope.key = LibraryCache::scopeKey(scope.url, scope.user);
     const std::string base = "cache/library/" + scope.key + "/catalog.sqlite3";
-    const std::string files[] = {base, base + "-journal", base + "-wal",
-                                 base + "-shm", base + ".migrating",
+    const std::string files[] = {base,
+                                 base + "-journal",
+                                 base + "-wal",
+                                 base + "-shm",
+                                 base + ".migrating",
                                  base + ".migrating-journal",
                                  base + ".migrating-wal",
                                  base + ".migrating-shm"};
-    for (const auto &file : files)
+    for (const auto& file : files)
         std::remove(file.c_str());
     return scope;
 }
 
-void removeHierarchyScope(const HierarchyScope &scope)
+void removeHierarchyScope(const HierarchyScope& scope)
 {
     const std::string directory = "cache/library/" + scope.key;
     const std::string base = directory + "/catalog.sqlite3";
-    const std::string files[] = {base, base + "-journal", base + "-wal",
-                                 base + "-shm", base + ".migrating",
+    const std::string files[] = {base,
+                                 base + "-journal",
+                                 base + "-wal",
+                                 base + "-shm",
+                                 base + ".migrating",
                                  base + ".migrating-journal",
                                  base + ".migrating-wal",
                                  base + ".migrating-shm"};
-    for (const auto &file : files)
+    for (const auto& file : files)
         std::remove(file.c_str());
     ::rmdir(directory.c_str());
 }
@@ -57,8 +64,7 @@ int hierarchyListener()
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(0);
-    CHECK(::bind(listener, reinterpret_cast<sockaddr *>(&address),
-                 sizeof(address)) == 0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
     CHECK(::listen(listener, 8) == 0);
     return listener;
 }
@@ -67,8 +73,7 @@ std::string hierarchyUrl(int listener)
 {
     sockaddr_in address{};
     socklen_t size = sizeof(address);
-    CHECK(::getsockname(listener, reinterpret_cast<sockaddr *>(&address),
-                        &size) == 0);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &size) == 0);
     return "http://127.0.0.1:" + std::to_string(ntohs(address.sin_port));
 }
 
@@ -84,20 +89,20 @@ void readHierarchyRequest(int client)
     }
 }
 
-void sendHierarchyResponse(int client, const std::string &body, int status)
+void sendHierarchyResponse(int client, const std::string& body, int status)
 {
-    const char *text = status == 200 ? "OK" : "Internal Server Error";
-    const std::string response = "HTTP/1.1 " + std::to_string(status) + " "
-        + text + "\r\nContent-Type: application/json\r\nContent-Length: "
-        + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n"
-        + body;
+    const char* text = status == 200 ? "OK" : "Internal Server Error";
+    const std::string response =
+        "HTTP/1.1 " + std::to_string(status) + " " + text +
+        "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body;
     (void)::send(client, response.data(), response.size(), 0);
 }
 
-class HierarchyServer {
-public:
-    HierarchyServer(std::vector<std::pair<int, std::string>> responses,
-                    int blockedRequest = -1)
+class HierarchyServer
+{
+  public:
+    HierarchyServer(std::vector<std::pair<int, std::string>> responses, int blockedRequest = -1)
         : m_listener(hierarchyListener()), m_responses(std::move(responses)),
           m_blockedRequest(blockedRequest)
     {
@@ -107,8 +112,7 @@ public:
                 FD_ZERO(&readable);
                 FD_SET(m_listener, &readable);
                 timeval timeout{5, 0};
-                if (::select(m_listener + 1, &readable, nullptr, nullptr,
-                             &timeout) <= 0)
+                if (::select(m_listener + 1, &readable, nullptr, nullptr, &timeout) <= 0)
                     return;
                 const int client = ::accept(m_listener, nullptr, nullptr);
                 if (client < 0)
@@ -120,8 +124,7 @@ public:
                     m_cv.notify_all();
                     m_cv.wait(lock, [this] { return m_release; });
                 }
-                sendHierarchyResponse(client, m_responses[i].second,
-                                      m_responses[i].first);
+                sendHierarchyResponse(client, m_responses[i].second, m_responses[i].first);
                 ::close(client);
             }
         });
@@ -136,7 +139,10 @@ public:
             ::close(m_listener);
     }
 
-    std::string url() const { return hierarchyUrl(m_listener); }
+    std::string url() const
+    {
+        return hierarchyUrl(m_listener);
+    }
 
     bool waitUntilBlocked(std::chrono::milliseconds timeout)
     {
@@ -153,7 +159,7 @@ public:
         m_cv.notify_all();
     }
 
-private:
+  private:
     int m_listener = -1;
     std::vector<std::pair<int, std::string>> m_responses;
     int m_blockedRequest = -1;
@@ -164,7 +170,7 @@ private:
     std::thread m_thread;
 };
 
-MediaItem hierarchySeries(const std::string &id)
+MediaItem hierarchySeries(const std::string& id)
 {
     MediaItem series;
     series.id = id;
@@ -173,7 +179,7 @@ MediaItem hierarchySeries(const std::string &id)
     return series;
 }
 
-MediaItem hierarchySeason(const std::string &id, const std::string &seriesId)
+MediaItem hierarchySeason(const std::string& id, const std::string& seriesId)
 {
     MediaItem season;
     season.id = id;
@@ -183,9 +189,8 @@ MediaItem hierarchySeason(const std::string &id, const std::string &seriesId)
     return season;
 }
 
-bool takeHierarchyUntilTerminal(library::LibraryCoordinator &coordinator,
-                                std::uint64_t request,
-                                std::vector<library::HierarchyResult> &results)
+bool takeHierarchyUntilTerminal(library::LibraryCoordinator& coordinator, std::uint64_t request,
+                                std::vector<library::HierarchyResult>& results)
 {
     for (int i = 0; i < 1500; ++i) {
         library::HierarchyResult result;
@@ -212,17 +217,19 @@ void testHierarchyCachedFirstAndPartialFailure()
 
     const MediaItem series = hierarchySeries("series-partial");
     const MediaItem cachedSeason = hierarchySeason("season-cached", series.id);
-    CHECK(db->stageSeriesHierarchy(series, {cachedSeason},
-              {{cachedSeason.id, {}}}, 1, 1000, false).get().success);
+    CHECK(db->stageSeriesHierarchy(series, {cachedSeason}, {{cachedSeason.id, {}}}, 1, 1000, false)
+              .get()
+              .success);
 
-    HierarchyServer server({
-        {200, R"({"Items":[{"Id":"season-live","Type":"Season","Name":"Live Season","SeriesId":"series-partial"}]})"},
-        {500, R"({"Error":"episode failure"})"}}, 0);
+    HierarchyServer server(
+        {{200,
+          R"({"Items":[{"Id":"season-live","Type":"Season","Name":"Live Season","SeriesId":"series-partial"}]})"},
+         {500, R"({"Error":"episode failure"})"}},
+        0);
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     std::uint64_t request = 0;
@@ -233,9 +240,9 @@ void testHierarchyCachedFirstAndPartialFailure()
     bool sawCachedFirst = false;
     for (int i = 0; i < 200 && !sawCachedFirst; ++i) {
         if (coordinator->takeHierarchyResult(request, cached))
-            sawCachedFirst = cached.cacheOnly && !cached.terminal
-                && cached.cachedSeasons.size() == 1
-                && cached.cachedSeasons[0].id == cachedSeason.id;
+            sawCachedFirst = cached.cacheOnly && !cached.terminal &&
+                             cached.cachedSeasons.size() == 1 &&
+                             cached.cachedSeasons[0].id == cachedSeason.id;
         else
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -265,32 +272,30 @@ void testHierarchyCheckpointRequiresCompleteSuccessAndRejectsStaleGeneration()
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
-    HierarchyServer server({
-        {200, R"({"Items":[{"Id":"season-a","Type":"Season","Name":"Season A","SeriesId":"series-a"}]})"},
-        {200, R"({"Items":[]})"},
-        {200, R"({"Items":[{"Id":"season-b","Type":"Season","Name":"Season B","SeriesId":"series-b"}]})"},
-        {200, R"({"Items":[]})"}});
+    HierarchyServer server(
+        {{200,
+          R"({"Items":[{"Id":"season-a","Type":"Season","Name":"Season A","SeriesId":"series-a"}]})"},
+         {200, R"({"Items":[]})"},
+         {200,
+          R"({"Items":[{"Id":"season-b","Type":"Season","Name":"Season B","SeriesId":"series-b"}]})"},
+         {200, R"({"Items":[]})"}});
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
     std::uint64_t request = 0;
-    CHECK(coordinator->requestHierarchy(
-        {hierarchySeries("series-a"), hierarchySeries("series-b")},
-        12, true, request));
+    CHECK(coordinator->requestHierarchy({hierarchySeries("series-a"), hierarchySeries("series-b")},
+                                        12, true, request));
 
     std::vector<library::HierarchyResult> results;
     CHECK(takeHierarchyUntilTerminal(*coordinator, request, results));
     CHECK(results.size() >= 3);
-    CHECK(results.back().terminal && results.back().success
-          && results.back().checkpointCommitted
-          && results.back().lastReconcileMs > 0);
+    CHECK(results.back().terminal && results.back().success && results.back().checkpointCommitted &&
+          results.back().lastReconcileMs > 0);
     const auto state = db->readSyncState(false, 0, 0).get();
     CHECK(state.success && state.committedGeneration == 12);
-    CHECK(!coordinator->requestHierarchy(
-        {hierarchySeries("stale-series")}, 11, false, request));
+    CHECK(!coordinator->requestHierarchy({hierarchySeries("stale-series")}, 11, false, request));
 
     coordinator->stop();
     coordinator.reset();
@@ -307,17 +312,14 @@ void testHierarchyStopJoinsActiveWork()
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
-    HierarchyServer server({
-        {200, R"({"Items":[]})"}}, 0);
+    HierarchyServer server({{200, R"({"Items":[]})"}}, 0);
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
     std::uint64_t request = 0;
-    CHECK(coordinator->requestHierarchy(
-        {hierarchySeries("series-stop")}, 3, false, request));
+    CHECK(coordinator->requestHierarchy({hierarchySeries("series-stop")}, 3, false, request));
     CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     std::mutex stopMutex;
@@ -333,8 +335,7 @@ void testHierarchyStopJoinsActiveWork()
     });
     {
         std::unique_lock<std::mutex> lock(stopMutex);
-        CHECK(stopCv.wait_for(lock, std::chrono::seconds(2),
-                              [&] { return stopEntered; }));
+        CHECK(stopCv.wait_for(lock, std::chrono::seconds(2), [&] { return stopEntered; }));
     }
     server.release();
     stopper.join();
@@ -348,9 +349,8 @@ void testHierarchyStopJoinsActiveWork()
             break;
         }
     }
-    CHECK(sawTerminal && terminal.request == request && terminal.cancelled
-          && !terminal.success
-          && !terminal.checkpointCommitted);
+    CHECK(sawTerminal && terminal.request == request && terminal.cancelled && !terminal.success &&
+          !terminal.checkpointCommitted);
     coordinator.reset();
     db.reset();
     removeHierarchyScope(scope);
@@ -370,25 +370,20 @@ void testHierarchyCancellationAllowsHomeReentry()
     // hierarchy worker is still in the network call.  The second response is
     // the request accepted by the next Home screen before the old worker has
     // finished unwinding.
-    HierarchyServer server({
-        {200, R"({"Items":[]})"},
-        {200, R"({"Items":[]})"}}, 0);
+    HierarchyServer server({{200, R"({"Items":[]})"}, {200, R"({"Items":[]})"}}, 0);
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     std::uint64_t oldRequest = 0;
-    CHECK(coordinator->requestHierarchy(
-        {hierarchySeries("series-old")}, 20, false, oldRequest));
+    CHECK(coordinator->requestHierarchy({hierarchySeries("series-old")}, 20, false, oldRequest));
     CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     coordinator->cancelHierarchy();
     std::uint64_t newRequest = 0;
-    CHECK(coordinator->requestHierarchy(
-        {hierarchySeries("series-new")}, 20, false, newRequest));
+    CHECK(coordinator->requestHierarchy({hierarchySeries("series-new")}, 20, false, newRequest));
     CHECK(newRequest != oldRequest);
     library::HierarchyResult discarded;
     CHECK(!coordinator->takeHierarchyResult(oldRequest, discarded));
@@ -396,8 +391,8 @@ void testHierarchyCancellationAllowsHomeReentry()
     server.release();
     std::vector<library::HierarchyResult> results;
     CHECK(takeHierarchyUntilTerminal(*coordinator, newRequest, results));
-    CHECK(!results.empty() && results.back().terminal
-          && results.back().success && results.back().checkpointCommitted);
+    CHECK(!results.empty() && results.back().terminal && results.back().success &&
+          results.back().checkpointCommitted);
     CHECK(!coordinator->takeHierarchyResult(oldRequest, discarded));
 
     coordinator->stop();
@@ -416,19 +411,16 @@ void testHierarchyMutationSerializesLiveChanges()
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
 
-    HierarchyServer server({
-        {200, R"({"Items":[]})"},
-        {200, R"({"Items":[]})"}}, 0);
+    HierarchyServer server({{200, R"({"Items":[]})"}, {200, R"({"Items":[]})"}}, 0);
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     std::uint64_t hierarchyRequest = 0;
-    CHECK(coordinator->requestSeriesSeasons(
-        hierarchySeries("series-live-serialization"), hierarchyRequest));
+    CHECK(coordinator->requestSeriesSeasons(hierarchySeries("series-live-serialization"),
+                                            hierarchyRequest));
     CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     JellyfinLibraryChangeBatch batch;
@@ -450,8 +442,7 @@ void testHierarchyMutationSerializesLiveChanges()
     library::HierarchyResult hierarchyResult;
     bool hierarchyFinished = false;
     for (int i = 0; i < 1000 && !hierarchyFinished; ++i) {
-        if (coordinator->takeHierarchyResult(hierarchyRequest,
-                                             hierarchyResult)) {
+        if (coordinator->takeHierarchyResult(hierarchyRequest, hierarchyResult)) {
             hierarchyFinished = hierarchyResult.terminal;
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -461,8 +452,7 @@ void testHierarchyMutationSerializesLiveChanges()
 
     bool livePublishedAfterHierarchyFinished = false;
     for (int i = 0; i < 1000 && !livePublishedAfterHierarchyFinished; ++i) {
-        livePublishedAfterHierarchyFinished =
-            coordinator->takeLiveChangeResult(liveResult);
+        livePublishedAfterHierarchyFinished = coordinator->takeLiveChangeResult(liveResult);
         if (!livePublishedAfterHierarchyFinished)
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -483,23 +473,19 @@ void testHierarchyStopPublishesQueuedCancellation()
     CHECK(epoch != 0);
     CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
 
-    HierarchyServer server({
-        {200, R"({"Items":[]})"}}, 0);
+    HierarchyServer server({{200, R"({"Items":[]})"}}, 0);
     Session session;
     session.serverUrl = server.url();
     session.userId = scope.user;
-    auto coordinator = std::make_unique<library::LibraryCoordinator>(
-        session, db, epoch);
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
     coordinator->start();
 
     std::uint64_t activeRequest = 0;
-    CHECK(coordinator->requestSeriesSeasons(
-        hierarchySeries("series-active"), activeRequest));
+    CHECK(coordinator->requestSeriesSeasons(hierarchySeries("series-active"), activeRequest));
     CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
 
     std::uint64_t queuedRequest = 0;
-    CHECK(coordinator->requestSeriesSeasons(
-        hierarchySeries("series-queued"), queuedRequest));
+    CHECK(coordinator->requestSeriesSeasons(hierarchySeries("series-queued"), queuedRequest));
 
     std::thread stopper([&] { coordinator->stop(); });
     library::HierarchyResult queuedResult;
@@ -525,43 +511,36 @@ void testHierarchyStopPublishesQueuedCancellation()
 void testHomeHierarchyLateRequestRace()
 {
     std::printf("[test] Home hierarchy late-request race guard\n");
-    const auto hierarchySource = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenHierarchy.cpp");
-    const auto homeSource = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreen.cpp");
-    const auto syncSource = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreenSync.cpp");
-    const auto homeHeader = miyoofin_test::readTestBytes(
-        "src/ui/screens/HomeScreen.hpp");
+    const auto hierarchySource =
+        miyoofin_test::readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
+    const auto homeSource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
+    const auto syncSource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    const auto homeHeader = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.hpp");
 
     // The generation guard must run before any cached/live artwork is queued
     // and before a successful series can enter the prefetched set.
     const auto stale = miyoofin_test::sourcePos(
-        hierarchySource,
-        "if (result.generation != committedCatalogGeneration())");
-    CHECK(stale < miyoofin_test::sourcePos(
-        hierarchySource,
-        "queuePosterJobs(collectSeasonPosterJobs(result.cachedSeasons))"));
-    CHECK(stale < miyoofin_test::sourcePos(
-        hierarchySource, "m_seasonPrefetchedIds.insert(result.seriesId)"));
+        hierarchySource, "if (result.generation != committedCatalogGeneration())");
+    CHECK(stale <
+          miyoofin_test::sourcePos(
+              hierarchySource, "queuePosterJobs(collectSeasonPosterJobs(result.cachedSeasons))"));
+    CHECK(stale < miyoofin_test::sourcePos(hierarchySource,
+                                           "m_seasonPrefetchedIds.insert(result.seriesId)"));
 
     // Teardown closes the submission gate while holding the same state mutex
     // used by the fetch worker's final request acceptance.
-    CHECK(miyoofin_test::sourceContains(
-        homeHeader, "bool m_hierarchySubmissionClosed = false"));
-    CHECK(miyoofin_test::sourceContains(
-        hierarchySource, "m_hierarchySubmissionClosed"));
-    CHECK(miyoofin_test::sourceContains(
-        hierarchySource, "m_fetchCancellation && m_fetchCancellation->load()"));
-    CHECK(miyoofin_test::sourceContains(
-        homeSource, "m_libraryCoordinator->status().committedGeneration"));
-    const auto closeGate = miyoofin_test::sourcePos(
-        homeSource, "m_hierarchySubmissionClosed = true");
-    const auto fetchCancel = miyoofin_test::sourcePos(
-        homeSource, "m_fetchCancellation->store(true)");
+    CHECK(miyoofin_test::sourceContains(homeHeader, "bool m_hierarchySubmissionClosed = false"));
+    CHECK(miyoofin_test::sourceContains(hierarchySource, "m_hierarchySubmissionClosed"));
+    CHECK(miyoofin_test::sourceContains(hierarchySource,
+                                        "m_fetchCancellation && m_fetchCancellation->load()"));
+    CHECK(miyoofin_test::sourceContains(homeSource,
+                                        "m_libraryCoordinator->status().committedGeneration"));
+    const auto closeGate =
+        miyoofin_test::sourcePos(homeSource, "m_hierarchySubmissionClosed = true");
+    const auto fetchCancel =
+        miyoofin_test::sourcePos(homeSource, "m_fetchCancellation->store(true)");
     CHECK(closeGate < fetchCancel);
-    CHECK(miyoofin_test::sourceContains(
-        syncSource, "requestHierarchy(resolvedItems"));
+    CHECK(miyoofin_test::sourceContains(syncSource, "requestHierarchy(resolvedItems"));
 
     // This is the deterministic interleaving that used to admit a late
     // request: teardown closed the submission gate in the block above while
@@ -569,15 +548,15 @@ void testHomeHierarchyLateRequestRace()
     // Keep acceptance and every local publication in the same critical
     // section as the gate check.  The token-space checks avoid relying on
     // formatting while rejecting any intervening scope close.
-    const auto requestFunction = miyoofin_test::sourceFunction(
-        hierarchySource, "bool HomeScreen::requestHierarchy(");
+    const auto requestFunction =
+        miyoofin_test::sourceFunction(hierarchySource, "bool HomeScreen::requestHierarchy(");
     const auto tokenFunction = miyoofin_test::sourceTokenString(requestFunction);
-    const auto lockToken = miyoofin_test::sourceTokenString(
-        "std::lock_guard<std::mutex> lock(m_hierarchyStateMutex)");
-    const auto acceptanceToken = miyoofin_test::sourceTokenString(
-        "m_libraryCoordinator->requestHierarchy");
-    const auto publicationToken = miyoofin_test::sourceTokenString(
-        "m_hierarchyRequestReady.store(true)");
+    const auto lockToken =
+        miyoofin_test::sourceTokenString("std::lock_guard<std::mutex> lock(m_hierarchyStateMutex)");
+    const auto acceptanceToken =
+        miyoofin_test::sourceTokenString("m_libraryCoordinator->requestHierarchy");
+    const auto publicationToken =
+        miyoofin_test::sourceTokenString("m_hierarchyRequestReady.store(true)");
     const auto lockPos = tokenFunction.find(lockToken);
     const auto acceptancePos = tokenFunction.find(acceptanceToken);
     const auto publicationPos = tokenFunction.find(publicationToken);

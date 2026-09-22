@@ -3,12 +3,19 @@
 
 int main()
 {
-    testServerEntryKeyboardCaps(); testSettingsAddressEntryCancel();
-    testLoginKeyboardCaps(); testOnScreenKeyboardGrid(); testOnScreenKeyboardSpace();
-    testServerEntrySpace(); testLoginUsernameSpace(); testLoginPasswordSpace();
-    testSharedKeyboardLayoutConsistency(); testKeyboardVerticalNavActionRow();
+    testServerEntryKeyboardCaps();
+    testSettingsAddressEntryCancel();
+    testLoginKeyboardCaps();
+    testOnScreenKeyboardGrid();
+    testOnScreenKeyboardSpace();
+    testServerEntrySpace();
+    testLoginUsernameSpace();
+    testLoginPasswordSpace();
+    testSharedKeyboardLayoutConsistency();
+    testKeyboardVerticalNavActionRow();
     testUiDiagnostics();
-    testLoginBackRequestsServerEntry(); testLoginKeyboardBackDeletes();
+    testLoginBackRequestsServerEntry();
+    testLoginKeyboardBackDeletes();
     testThreadRestartGuards();
     return miyoofin_test::finish("ui-foundation");
 }

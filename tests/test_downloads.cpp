@@ -1,9 +1,9 @@
 #include "test_support.hpp"
 
-static std::string readFixture(const std::string &path)
+static std::string readFixture(const std::string& path)
 {
     std::string out;
-    FILE *file = std::fopen(path.c_str(), "rb");
+    FILE* file = std::fopen(path.c_str(), "rb");
     if (!file)
         return out;
     char buffer[128];
@@ -18,23 +18,38 @@ static std::string readFixture(const std::string &path)
 
 int main()
 {
-    testDownloadInterruptStates(); testHlsDownloadStore();
-    testDownloadRestartPersistence(); testDownloadsUiHelpers();
-    testDownloadHierarchy(); testDownloadSourceReconciliation();
-    testDownloadPlanBatchAccounting(); testHlsSizeEstimates();
-    testHlsFailureClassification(); testStartupReconcileSkip();
+    testDownloadInterruptStates();
+    testHlsDownloadStore();
+    testDownloadRestartPersistence();
+    testDownloadsUiHelpers();
+    testDownloadHierarchy();
+    testDownloadSourceReconciliation();
+    testDownloadPlanBatchAccounting();
+    testHlsSizeEstimates();
+    testHlsFailureClassification();
+    testStartupReconcileSkip();
     testReconcileShouldSkip();
     testReconcilerPreservesLiveState();
-    testTransferPreservesLiveState(); testDownloadPlanFullCardRejection();
+    testTransferPreservesLiveState();
+    testDownloadPlanFullCardRejection();
     testCatalogDbHierarchyPlanning();
-    testPredictedDownloadTotalBytes(); testSpeedStallGap();
-    testHlsSegmentCompletedIncremental(); testSegmentRecoveryMatchesIncremental();
-    testFreeSpaceCachePolicy(); testTlsCaBundleCache();
+    testPredictedDownloadTotalBytes();
+    testSpeedStallGap();
+    testHlsSegmentCompletedIncremental();
+    testSegmentRecoveryMatchesIncremental();
+    testFreeSpaceCachePolicy();
+    testTlsCaBundleCache();
     testDownloadPipelineIoGuards();
-    testTransferSourceIdentityGuard(); testTransferFinishDecision();
-    testWorkerPersistMatchesLiveState(); testStalePlaylistDiscoverySuppressed();
-    testAbandonedDeleteFlagConsumed(); testStaleSegmentRemovalUnderLock();
+    testTransferSourceIdentityGuard();
+    testTransferFinishDecision();
+    testWorkerPersistMatchesLiveState();
+    testStalePlaylistDiscoverySuppressed();
+    testAbandonedDeleteFlagConsumed();
+    testStaleSegmentRemovalUnderLock();
     testDequeuePersistIsPerItem();
-    testPersistTouchesOnlyAffectedItem(); testPersistPendingCrashDurabilityAndTmpSweep(); testIndexNeverNamesMissingManifest(); testPlaybackToggleTouchesOnlyAffectedItems();
+    testPersistTouchesOnlyAffectedItem();
+    testPersistPendingCrashDurabilityAndTmpSweep();
+    testIndexNeverNamesMissingManifest();
+    testPlaybackToggleTouchesOnlyAffectedItems();
     return miyoofin_test::finish("downloads");
 }

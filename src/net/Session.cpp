@@ -6,20 +6,20 @@
 
 namespace miyoofin {
 
-static const char *DEFAULT_PATH = "session.txt";
+static const char* DEFAULT_PATH = "session.txt";
 
 // -------------------------------------------------------------------
 // Simple key=value line-based serialisation.
 // -------------------------------------------------------------------
 
-static void writeLine(FILE *f, const char *key, const std::string &val)
+static void writeLine(FILE* f, const char* key, const std::string& val)
 {
     if (!val.empty()) {
         fprintf(f, "%s=%s\n", key, val.c_str());
     }
 }
 
-static std::string readValue(const std::string &line, const char *key)
+static std::string readValue(const std::string& line, const char* key)
 {
     size_t klen = std::strlen(key);
     if (line.size() > klen && line.compare(0, klen, key) == 0 && line[klen] == '=') {
@@ -31,20 +31,21 @@ static std::string readValue(const std::string &line, const char *key)
 // -------------------------------------------------------------------
 // Save to an explicit path (atomic: write-tmp, fsync, chmod, rename).
 // -------------------------------------------------------------------
-bool Session::saveTo(const std::string &path) const
+bool Session::saveTo(const std::string& path) const
 {
     std::string tmp = path + ".tmp";
-    FILE *f = std::fopen(tmp.c_str(), "w");
-    if (!f) return false;
+    FILE* f = std::fopen(tmp.c_str(), "w");
+    if (!f)
+        return false;
 
-    writeLine(f, "server_url",  serverUrl);
-    writeLine(f, "server_id",   serverId);
+    writeLine(f, "server_url", serverUrl);
+    writeLine(f, "server_id", serverId);
     writeLine(f, "local_server_url", localServerUrl);
     writeLine(f, "public_server_url", publicServerUrl);
     writeLine(f, "access_token", accessToken);
-    writeLine(f, "user_id",     userId);
-    writeLine(f, "user_name",   userName);
-    writeLine(f, "device_id",   deviceId);
+    writeLine(f, "user_id", userId);
+    writeLine(f, "user_name", userName);
+    writeLine(f, "device_id", deviceId);
     fprintf(f, "manual_offline_mode=%d\n", manualOfflineMode ? 1 : 0);
 
     // Flush buffered data, then sync to durable storage.
@@ -77,11 +78,12 @@ bool Session::saveTo(const std::string &path) const
 // -------------------------------------------------------------------
 // Load from an explicit path.
 // -------------------------------------------------------------------
-Session Session::loadFrom(const std::string &path)
+Session Session::loadFrom(const std::string& path)
 {
     Session s;
-    FILE *f = std::fopen(path.c_str(), "r");
-    if (!f) return s;
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f)
+        return s;
 
     char buf[1024];
     while (std::fgets(buf, sizeof(buf), f)) {
@@ -93,15 +95,24 @@ Session Session::loadFrom(const std::string &path)
         std::string line(buf);
 
         std::string v;
-        if (!(v = readValue(line, "server_url")).empty())    s.serverUrl   = v;
-        if (!(v = readValue(line, "server_id")).empty())     s.serverId    = v;
-        if (!(v = readValue(line, "local_server_url")).empty()) s.localServerUrl = v;
-        if (!(v = readValue(line, "public_server_url")).empty()) s.publicServerUrl = v;
-        if (!(v = readValue(line, "access_token")).empty())  s.accessToken = v;
-        if (!(v = readValue(line, "user_id")).empty())       s.userId      = v;
-        if (!(v = readValue(line, "user_name")).empty())     s.userName    = v;
-        if (!(v = readValue(line, "device_id")).empty())     s.deviceId    = v;
-        if (!(v = readValue(line, "manual_offline_mode")).empty()) s.manualOfflineMode = v == "1" || v == "true";
+        if (!(v = readValue(line, "server_url")).empty())
+            s.serverUrl = v;
+        if (!(v = readValue(line, "server_id")).empty())
+            s.serverId = v;
+        if (!(v = readValue(line, "local_server_url")).empty())
+            s.localServerUrl = v;
+        if (!(v = readValue(line, "public_server_url")).empty())
+            s.publicServerUrl = v;
+        if (!(v = readValue(line, "access_token")).empty())
+            s.accessToken = v;
+        if (!(v = readValue(line, "user_id")).empty())
+            s.userId = v;
+        if (!(v = readValue(line, "user_name")).empty())
+            s.userName = v;
+        if (!(v = readValue(line, "device_id")).empty())
+            s.deviceId = v;
+        if (!(v = readValue(line, "manual_offline_mode")).empty())
+            s.manualOfflineMode = v == "1" || v == "true";
     }
 
     std::fclose(f);

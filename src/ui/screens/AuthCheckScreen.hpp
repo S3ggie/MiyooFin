@@ -13,23 +13,36 @@ namespace miyoofin {
 /// Validates the saved access token against the server.
 /// On success: shows a brief welcome then finished(ok=true).
 /// On failure: sets finished(ok=false) so the App can route to login.
-class AuthCheckScreen : public Screen {
-public:
-    explicit AuthCheckScreen(const Session &session);
+class AuthCheckScreen : public Screen
+{
+  public:
+    explicit AuthCheckScreen(const Session& session);
     ~AuthCheckScreen() override;
 
     void enter() override;
     void leave() override;
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
-    void render(SDL_Surface *fb) override;
+    void render(SDL_Surface* fb) override;
 
-    bool ok() const { return m_ok; }
-    bool finished() const { return m_finished; }
-    const std::string &errorMessage() const { return m_error; }
-    const std::string &userName() const { return m_userName; }
+    bool ok() const
+    {
+        return m_ok;
+    }
+    bool finished() const
+    {
+        return m_finished;
+    }
+    const std::string& errorMessage() const
+    {
+        return m_error;
+    }
+    const std::string& userName() const
+    {
+        return m_userName;
+    }
 
-private:
+  private:
     Session m_session;
     std::string m_message;
     std::string m_error;

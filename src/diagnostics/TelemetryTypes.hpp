@@ -9,7 +9,8 @@ namespace miyoofin {
 
 #pragma pack(push, 1)
 
-struct SystemSample {
+struct SystemSample
+{
     uint64_t process_cpu_us_cumulative;
     uint64_t rss_kib;
     uint64_t peak_rss_kib;
@@ -23,7 +24,8 @@ struct SystemSample {
     uint32_t reserved;
 };
 
-struct FrameTimingSummary {
+struct FrameTimingSummary
+{
     uint8_t phase;
     uint8_t reserved0[3];
     uint32_t interval_us;
@@ -36,7 +38,8 @@ struct FrameTimingSummary {
     uint32_t reserved1;
 };
 
-struct StateTransition {
+struct StateTransition
+{
     uint8_t state_kind;
     uint8_t reserved0;
     uint16_t previous_id;
@@ -45,7 +48,8 @@ struct StateTransition {
     uint32_t transition_seq;
 };
 
-struct WorkerSample {
+struct WorkerSample
+{
     uint16_t worker_id;
     uint8_t active;
     uint8_t reserved0;
@@ -57,7 +61,8 @@ struct WorkerSample {
     uint32_t reserved1;
 };
 
-struct NetworkRequest {
+struct NetworkRequest
+{
     uint16_t request_kind;
     uint8_t route_kind;
     uint8_t method;
@@ -72,7 +77,8 @@ struct NetworkRequest {
     uint8_t fallback_attempt;
 };
 
-struct ArtworkSummary {
+struct ArtworkSummary
+{
     uint32_t cache_probe_hits;
     uint32_t cache_probe_misses;
     uint32_t cache_read_success;
@@ -88,7 +94,8 @@ struct ArtworkSummary {
     uint32_t reserved;
 };
 
-struct ArtworkDecode {
+struct ArtworkDecode
+{
     uint8_t context;
     uint8_t outcome;
     uint16_t reserved0;
@@ -98,7 +105,8 @@ struct ArtworkDecode {
     uint32_t reserved1;
 };
 
-struct LibrarySync {
+struct LibrarySync
+{
     uint64_t duration_us;
     uint8_t outcome;
     uint8_t cache_saved;
@@ -110,7 +118,8 @@ struct LibrarySync {
     uint32_t reserved1;
 };
 
-struct DownloadSample {
+struct DownloadSample
+{
     uint32_t active_downloads;
     uint32_t queued_downloads;
     uint64_t bytes_delta;
@@ -121,7 +130,8 @@ struct DownloadSample {
     uint32_t reserved;
 };
 
-struct DownloadSegmentAttempt {
+struct DownloadSegmentAttempt
+{
     uint32_t telemetry_job_seq;
     uint32_t segment_ordinal;
     uint16_t attempt_number;
@@ -137,7 +147,8 @@ struct DownloadSegmentAttempt {
     uint64_t reserved1;
 };
 
-struct PlaybackEvent {
+struct PlaybackEvent
+{
     uint8_t stage;
     uint8_t source;
     uint8_t child_exit_kind;
@@ -148,7 +159,8 @@ struct PlaybackEvent {
     uint32_t playback_seq;
 };
 
-struct UiStall {
+struct UiStall
+{
     uint8_t edge;
     uint8_t reserved0;
     uint16_t screen;
@@ -162,7 +174,8 @@ struct UiStall {
     uint64_t reserved2;
 };
 
-struct TelemetryHealth {
+struct TelemetryHealth
+{
     uint32_t queue_depth;
     uint32_t queue_highwater;
     uint32_t dropped_records_cumulative;
@@ -173,7 +186,8 @@ struct TelemetryHealth {
     uint32_t reserved;
 };
 
-struct SessionEvent {
+struct SessionEvent
+{
     uint8_t kind;
     uint8_t outcome;
     uint16_t reserved;
@@ -181,7 +195,8 @@ struct SessionEvent {
     uint64_t value1;
 };
 
-struct CatalogDbSummary {
+struct CatalogDbSummary
+{
     uint32_t query_count;
     uint64_t query_total_us;
     uint32_t query_max_us;
@@ -206,20 +221,23 @@ struct CatalogDbSummary {
     uint64_t reserved3;
 };
 
-struct CatalogDbSummaryRecord {
+struct CatalogDbSummaryRecord
+{
     uint32_t sequence;
     uint64_t monotonic_us;
     CatalogDbSummary payload;
 };
 
-struct TelemetryRecordHeader {
+struct TelemetryRecordHeader
+{
     RecordType record_type;
     uint16_t record_size;
     uint32_t sequence;
     uint64_t monotonic_us;
 };
 
-union TelemetryPayload {
+union TelemetryPayload
+{
     SystemSample system_sample;
     FrameTimingSummary frame_timing_summary;
     StateTransition state_transition;
@@ -236,7 +254,8 @@ union TelemetryPayload {
     SessionEvent session_event;
 };
 
-struct TelemetryRecord {
+struct TelemetryRecord
+{
     TelemetryRecordHeader header;
     TelemetryPayload payload;
 };
@@ -258,11 +277,10 @@ static_assert(sizeof(UiStall) == 32, "UiStall schema size");
 static_assert(sizeof(TelemetryHealth) == 32, "TelemetryHealth schema size");
 static_assert(sizeof(SessionEvent) == 16, "SessionEvent schema size");
 static_assert(sizeof(CatalogDbSummary) == 112, "CatalogDbSummary schema size");
-static_assert(sizeof(CatalogDbSummaryRecord) == 124,
-              "CatalogDbSummaryRecord schema size");
+static_assert(sizeof(CatalogDbSummaryRecord) == 124, "CatalogDbSummaryRecord schema size");
 static_assert(sizeof(TelemetryRecordHeader) == 16, "TelemetryRecordHeader schema size");
 
-#define MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(type) \
+#define MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(type)                                                    \
     static_assert(std::is_trivially_copyable<type>::value, #type " must be trivially copyable")
 
 MIYOOFIN_ASSERT_TELEMETRY_TRIVIAL(SystemSample);

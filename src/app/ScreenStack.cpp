@@ -12,19 +12,25 @@
 namespace miyoofin {
 
 namespace {
-const char *pushDiagnosticName(const Screen *screen)
+const char* pushDiagnosticName(const Screen* screen)
 {
-    if(!screen)return "ScreenStack::push -> null";
-    const char *name=screen->diagnosticName();
-    if(!std::strcmp(name,"MovieDetailsScreen"))return "ScreenStack::push -> MovieDetailsScreen";
-    if(!std::strcmp(name,"SeriesScreen"))return "ScreenStack::push -> SeriesScreen";
-    if(!std::strcmp(name,"EpisodeBrowserScreen"))return "ScreenStack::push -> EpisodeBrowserScreen";
-    if(!std::strcmp(name,"HomeScreen"))return "ScreenStack::push -> HomeScreen";
+    if (!screen)
+        return "ScreenStack::push -> null";
+    const char* name = screen->diagnosticName();
+    if (!std::strcmp(name, "MovieDetailsScreen"))
+        return "ScreenStack::push -> MovieDetailsScreen";
+    if (!std::strcmp(name, "SeriesScreen"))
+        return "ScreenStack::push -> SeriesScreen";
+    if (!std::strcmp(name, "EpisodeBrowserScreen"))
+        return "ScreenStack::push -> EpisodeBrowserScreen";
+    if (!std::strcmp(name, "HomeScreen"))
+        return "ScreenStack::push -> HomeScreen";
     return "ScreenStack::push -> Screen";
 }
 }
 
-struct ScreenStack::RetirementQueue {
+struct ScreenStack::RetirementQueue
+{
     RetirementQueue() : worker(&RetirementQueue::run, this) {}
     ~RetirementQueue()
     {
@@ -33,9 +39,10 @@ struct ScreenStack::RetirementQueue {
             stopping = true;
         }
         wake.notify_one();
-        if (worker.joinable()) worker.join();
+        if (worker.joinable())
+            worker.join();
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-        PerformanceTelemetry &telemetry = performanceTelemetry();
+        PerformanceTelemetry& telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::ScreenRetirement, false);
         telemetry.setWorkerQueueDepth(WorkerId::ScreenRetirement, 0);
 #endif
@@ -47,8 +54,8 @@ struct ScreenStack::RetirementQueue {
             std::lock_guard<std::mutex> lock(mutex);
             pending.push_back(std::move(screen));
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-            performanceTelemetry().setWorkerQueueDepth(
-                WorkerId::ScreenRetirement, static_cast<uint32_t>(pending.size()));
+            performanceTelemetry().setWorkerQueueDepth(WorkerId::ScreenRetirement,
+                                                       static_cast<uint32_t>(pending.size()));
 #endif
         }
         wake.notify_one();
@@ -62,21 +69,22 @@ struct ScreenStack::RetirementQueue {
                 std::unique_lock<std::mutex> lock(mutex);
                 wake.wait(lock, [&] { return stopping || !pending.empty(); });
                 if (pending.empty()) {
-                    if (stopping) return;
+                    if (stopping)
+                        return;
                     continue;
                 }
                 screen = std::move(pending.front());
                 pending.pop_front();
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-                performanceTelemetry().setWorkerQueueDepth(
-                    WorkerId::ScreenRetirement, static_cast<uint32_t>(pending.size()));
+                performanceTelemetry().setWorkerQueueDepth(WorkerId::ScreenRetirement,
+                                                           static_cast<uint32_t>(pending.size()));
 #endif
             }
             // Destruction joins the screen workers here, never on SDL's
             // event/update path.  The screen remains alive until all workers
             // that reference its state have stopped.
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-            PerformanceTelemetry &telemetry = performanceTelemetry();
+            PerformanceTelemetry& telemetry = performanceTelemetry();
             telemetry.setWorkerActive(WorkerId::ScreenRetirement, true);
 #endif
             screen.reset();
@@ -99,7 +107,8 @@ ScreenStack::~ScreenStack() = default;
 
 void ScreenStack::retire(std::unique_ptr<Screen> screen)
 {
-    if (!m_retirement) m_retirement.reset(new RetirementQueue());
+    if (!m_retirement)
+        m_retirement.reset(new RetirementQueue());
     m_retirement->push(std::move(screen));
 }
 
@@ -134,7 +143,7 @@ bool ScreenStack::pop()
     }
     {
         UiDiagnostics::Scope enterScope("ScreenStack::enterPrevious");
-        m_stack.back()->enter();  // re-activate the new top
+        m_stack.back()->enter(); // re-activate the new top
     }
     uiDiagnostics().event("screen popped");
     return true;
@@ -146,7 +155,7 @@ void ScreenStack::popToRoot()
         pop();
 }
 
-Screen *ScreenStack::top() const
+Screen* ScreenStack::top() const
 {
     if (m_stack.empty())
         return nullptr;

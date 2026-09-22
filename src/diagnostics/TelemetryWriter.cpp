@@ -9,9 +9,9 @@
 namespace miyoofin {
 namespace {
 
-constexpr const char *kTelemetryFileName = "telemetry.mft";
+constexpr const char* kTelemetryFileName = "telemetry.mft";
 
-bool ensureDirectory(const std::string &path) noexcept
+bool ensureDirectory(const std::string& path) noexcept
 {
     if (path.empty()) {
         errno = EINVAL;
@@ -26,7 +26,8 @@ bool ensureDirectory(const std::string &path) noexcept
             const std::string component = path.substr(0, end);
             if (::mkdir(component.c_str(), 0755) != 0 && errno != EEXIST)
                 return false;
-            struct stat status{};
+            struct stat status
+            {};
             if (::stat(component.c_str(), &status) != 0 || !S_ISDIR(status.st_mode)) {
                 errno = ENOTDIR;
                 return false;
@@ -57,7 +58,7 @@ void TelemetryWriter::setError(WriterErrorKind kind, int errorNumber) noexcept
     lastErrorNumber_ = errorNumber == 0 ? EIO : errorNumber;
 }
 
-bool TelemetryWriter::open(const TelemetryConfig &config, const MftFileHeader &header)
+bool TelemetryWriter::open(const TelemetryConfig& config, const MftFileHeader& header)
 {
     close();
     lastErrorKind_ = WriterErrorKind::Unknown;
@@ -79,7 +80,7 @@ bool TelemetryWriter::open(const TelemetryConfig &config, const MftFileHeader &h
 
     try {
         buffer_.resize(config.writerBufferBytes);
-    } catch (const std::bad_alloc &) {
+    } catch (const std::bad_alloc&) {
         setError(WriterErrorKind::Open, ENOMEM);
         return false;
     }
@@ -103,8 +104,8 @@ bool TelemetryWriter::open(const TelemetryConfig &config, const MftFileHeader &h
     }
 
     std::array<uint8_t, kMftFileHeaderSize> encodedHeader{};
-    if (!encodeFileHeader(header, encodedHeader.data(), encodedHeader.size())
-        || std::fwrite(encodedHeader.data(), 1, encodedHeader.size(), file_) != encodedHeader.size()) {
+    if (!encodeFileHeader(header, encodedHeader.data(), encodedHeader.size()) ||
+        std::fwrite(encodedHeader.data(), 1, encodedHeader.size(), file_) != encodedHeader.size()) {
         setError(WriterErrorKind::Write, currentErrorOr(EIO));
         std::fclose(file_);
         file_ = nullptr;
@@ -124,7 +125,7 @@ bool TelemetryWriter::open(const TelemetryConfig &config, const MftFileHeader &h
     return true;
 }
 
-bool TelemetryWriter::append(const TelemetryRecord &record)
+bool TelemetryWriter::append(const TelemetryRecord& record)
 {
     if (!isOpen()) {
         setError(WriterErrorKind::Write, EINVAL);
@@ -138,16 +139,15 @@ bool TelemetryWriter::append(const TelemetryRecord &record)
         return false;
     }
 
-    if (config_.rotateBytes != 0
-        && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
+    if (config_.rotateBytes != 0 && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
         const std::string previousPath = path_;
         const uint32_t previousIndex = header_.rotation_index;
         const uint32_t nextIndex = previousIndex + 1;
         if (!close())
             return false;
 
-        const std::string rotatedPath = config_.targetDirectory + "/telemetry-"
-            + std::to_string(previousIndex) + ".mft";
+        const std::string rotatedPath =
+            config_.targetDirectory + "/telemetry-" + std::to_string(previousIndex) + ".mft";
         std::remove(rotatedPath.c_str());
         if (std::rename(previousPath.c_str(), rotatedPath.c_str()) != 0) {
             setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
@@ -156,8 +156,8 @@ bool TelemetryWriter::append(const TelemetryRecord &record)
         const uint32_t retainFiles = config_.retainFiles == 0 ? 1 : config_.retainFiles;
         if (nextIndex >= retainFiles) {
             const uint32_t expiredIndex = nextIndex - retainFiles;
-            const std::string expiredPath = config_.targetDirectory + "/telemetry-"
-                + std::to_string(expiredIndex) + ".mft";
+            const std::string expiredPath =
+                config_.targetDirectory + "/telemetry-" + std::to_string(expiredIndex) + ".mft";
             std::remove(expiredPath.c_str());
         }
 
@@ -193,7 +193,7 @@ bool TelemetryWriter::append(const TelemetryRecord &record)
     return true;
 }
 
-bool TelemetryWriter::appendCatalogDbSummary(const CatalogDbSummaryRecord &record)
+bool TelemetryWriter::appendCatalogDbSummary(const CatalogDbSummaryRecord& record)
 {
     if (!isOpen() || header_.schema_version != 2) {
         setError(WriterErrorKind::Write, EINVAL);
@@ -206,16 +206,15 @@ bool TelemetryWriter::appendCatalogDbSummary(const CatalogDbSummaryRecord &recor
         setError(WriterErrorKind::Write, EINVAL);
         return false;
     }
-    if (config_.rotateBytes != 0
-        && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
+    if (config_.rotateBytes != 0 && logicalBytesWritten_ + encodedSize > config_.rotateBytes) {
         const std::string previousPath = path_;
         const uint32_t previousIndex = header_.rotation_index;
         const uint32_t nextIndex = previousIndex + 1;
         if (!close())
             return false;
 
-        const std::string rotatedPath = config_.targetDirectory + "/telemetry-"
-            + std::to_string(previousIndex) + ".mft";
+        const std::string rotatedPath =
+            config_.targetDirectory + "/telemetry-" + std::to_string(previousIndex) + ".mft";
         std::remove(rotatedPath.c_str());
         if (std::rename(previousPath.c_str(), rotatedPath.c_str()) != 0) {
             setError(WriterErrorKind::Rotate, currentErrorOr(EIO));
@@ -224,8 +223,8 @@ bool TelemetryWriter::appendCatalogDbSummary(const CatalogDbSummaryRecord &recor
         const uint32_t retainFiles = config_.retainFiles == 0 ? 1 : config_.retainFiles;
         if (nextIndex >= retainFiles) {
             const uint32_t expiredIndex = nextIndex - retainFiles;
-            const std::string expiredPath = config_.targetDirectory + "/telemetry-"
-                + std::to_string(expiredIndex) + ".mft";
+            const std::string expiredPath =
+                config_.targetDirectory + "/telemetry-" + std::to_string(expiredIndex) + ".mft";
             std::remove(expiredPath.c_str());
         }
 
@@ -264,8 +263,7 @@ bool TelemetryWriter::flushIfDue(uint64_t monotonicUs) noexcept
     if (!isOpen())
         return false;
     const uint64_t intervalUs = static_cast<uint64_t>(flushIntervalMs_) * 1000ull;
-    if (monotonicUs < lastFlushMonotonicUs_
-        || monotonicUs - lastFlushMonotonicUs_ < intervalUs)
+    if (monotonicUs < lastFlushMonotonicUs_ || monotonicUs - lastFlushMonotonicUs_ < intervalUs)
         return true;
     lastFlushMonotonicUs_ = monotonicUs;
     return flush();

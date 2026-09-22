@@ -1,6 +1,6 @@
 #include "test_support.hpp"
 
-static MediaItem titledMovie(const std::string &id, const std::string &title)
+static MediaItem titledMovie(const std::string& id, const std::string& title)
 {
     MediaItem item;
     item.id = id;
@@ -13,22 +13,37 @@ static MediaItem titledMovie(const std::string &id, const std::string &title)
 
 int main()
 {
-    testPlaybackRequestMovie(); testPlaybackRequestEpisode();
-    testPlaybackRequestEmptyId(); testPlaybackRequestEmptyType();
-    testPlaybackRequestRemove(); testPlaybackResultParsing();
-    testPlaybackResultDelay(); testOfflinePlaybackJournal();
-    testExternalPlaybackFlagInitial(); testExternalPlaybackFlagSetConsume();
-    testExternalPlaybackFlagMultipleSet(); testExternalPlaybackSourcePropagation();
-    testPlaybackRequestStillWorks(); testPlaybackRunnerInitializesOnionSdlDrivers();
+    testPlaybackRequestMovie();
+    testPlaybackRequestEpisode();
+    testPlaybackRequestEmptyId();
+    testPlaybackRequestEmptyType();
+    testPlaybackRequestRemove();
+    testPlaybackResultParsing();
+    testPlaybackResultDelay();
+    testOfflinePlaybackJournal();
+    testExternalPlaybackFlagInitial();
+    testExternalPlaybackFlagSetConsume();
+    testExternalPlaybackFlagMultipleSet();
+    testExternalPlaybackSourcePropagation();
+    testPlaybackRequestStillWorks();
+    testPlaybackRunnerInitializesOnionSdlDrivers();
     testExternalPlaybackFullyReleasesSdlBeforeExec();
     testScreenStackPreservedDuringExternalPlayback();
-    testScreenRetirementDoesNotBlockPop(); testMovieDetailsOpensBeforeArtworkPreparation();
-    testMovieDetailsUsesGridArtworkImmediately(); testDpadHoldRepeatTiming();
-    testDesktopKeyboardMapping(); testHomeTopTabHitTesting();
-    testPlaybackPercentFromTicks(); testPlaybackPercentFallbackToProgress();
-    testPlaybackPercentClamping(); testPlaybackPercentZeroRuntime();
-    testPlaybackPercentCompletedItem(); testFormatPlaybackTimeBasic();
-    testFormatPlaybackTimeHours(); testFormatPlaybackTimeZeroRuntime();
-    testFormatPlaybackTimeClampedPosition(); testFormatPlaybackTimeZeroPosition();
+    testScreenRetirementDoesNotBlockPop();
+    testMovieDetailsOpensBeforeArtworkPreparation();
+    testMovieDetailsUsesGridArtworkImmediately();
+    testDpadHoldRepeatTiming();
+    testDesktopKeyboardMapping();
+    testHomeTopTabHitTesting();
+    testPlaybackPercentFromTicks();
+    testPlaybackPercentFallbackToProgress();
+    testPlaybackPercentClamping();
+    testPlaybackPercentZeroRuntime();
+    testPlaybackPercentCompletedItem();
+    testFormatPlaybackTimeBasic();
+    testFormatPlaybackTimeHours();
+    testFormatPlaybackTimeZeroRuntime();
+    testFormatPlaybackTimeClampedPosition();
+    testFormatPlaybackTimeZeroPosition();
     return miyoofin_test::finish("playback");
 }

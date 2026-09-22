@@ -54,7 +54,7 @@
 
 namespace {
 
-typedef int (*PollEventFn)(SDL_Event *);
+typedef int (*PollEventFn)(SDL_Event*);
 
 PollEventFn realPollEvent()
 {
@@ -72,32 +72,42 @@ uint64_t nowMs()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000u
-        + static_cast<uint64_t>(ts.tv_nsec) / 1000000u;
+    return static_cast<uint64_t>(ts.tv_sec) * 1000u + static_cast<uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
-std::string trim(const std::string &s)
+std::string trim(const std::string& s)
 {
     size_t b = 0;
-    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b])))
+        ++b;
     size_t e = s.size();
-    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1])))
+        --e;
     return s.substr(b, e - b);
 }
 
-struct KeyMap {
-    const char *name;
+struct KeyMap
+{
+    const char* name;
     SDL_Scancode sc;
     SDL_Keycode sym;
 };
 
-struct Step {
-    enum Kind { WaitLog, Key, Screenshot, Quit, Settle } kind = Quit;
-    std::string arg;        // WaitLog substring / Screenshot name
-    std::string keyName;    // Key step (as written in the script)
-    KeyMap key = {};        // Key step (resolved scancode/sym)
-    uint64_t holdMs = 80;   // Key step
-    uint64_t settleMs = 400;// Key step
+struct Step
+{
+    enum Kind
+    {
+        WaitLog,
+        Key,
+        Screenshot,
+        Quit,
+        Settle
+    } kind = Quit;
+    std::string arg;            // WaitLog substring / Screenshot name
+    std::string keyName;        // Key step (as written in the script)
+    KeyMap key = {};            // Key step (resolved scancode/sym)
+    uint64_t holdMs = 80;       // Key step
+    uint64_t settleMs = 400;    // Key step
     uint64_t timeoutMs = 20000; // WaitLog step
     uint64_t settleTotalMs = 0; // Settle step
 };
@@ -127,25 +137,26 @@ const KeyMap kDeviceKeys[] = {
     {"PrevTab", static_cast<SDL_Scancode>(8), SDLK_UNKNOWN},
 };
 
-bool resolveKey(const std::string &name, bool deviceKeys, KeyMap &out)
+bool resolveKey(const std::string& name, bool deviceKeys, KeyMap& out)
 {
     // Raw device scancode escape: KEY Raw:79 injects that SDL scancode
     // directly (either mapping mode). Range-guarded; SDL scancodes fit.
     if (name.compare(0, 4, "Raw:") == 0) {
-        const char *num = name.c_str() + 4;
-        if (!*num) return false;
-        char *end = nullptr;
+        const char* num = name.c_str() + 4;
+        if (!*num)
+            return false;
+        char* end = nullptr;
         const long v = std::strtol(num, &end, 10);
-        if (end == num || *end != '\0' || v < 0 || v > 512) return false;
+        if (end == num || *end != '\0' || v < 0 || v > 512)
+            return false;
         out.name = "Raw";
         out.sc = static_cast<SDL_Scancode>(v);
         out.sym = SDLK_UNKNOWN;
         return true;
     }
-    const KeyMap *table = deviceKeys ? kDeviceKeys : kKeys;
-    const size_t n = deviceKeys
-        ? sizeof(kDeviceKeys) / sizeof(kDeviceKeys[0])
-        : sizeof(kKeys) / sizeof(kKeys[0]);
+    const KeyMap* table = deviceKeys ? kDeviceKeys : kKeys;
+    const size_t n = deviceKeys ? sizeof(kDeviceKeys) / sizeof(kDeviceKeys[0])
+                                : sizeof(kKeys) / sizeof(kKeys[0]);
     for (size_t i = 0; i < n; ++i) {
         if (name == table[i].name) {
             out = table[i];
@@ -155,7 +166,8 @@ bool resolveKey(const std::string &name, bool deviceKeys, KeyMap &out)
     return false;
 }
 
-struct Harness {
+struct Harness
+{
     bool loaded = false;
     bool loadFailed = false;
     std::string loadError;
@@ -177,24 +189,25 @@ struct Harness {
     // MIYOOFIN_UI_DEVICE_KEYS=1: KEY names resolve to Miyoo scancodes.
     bool deviceKeys = false;
 
-    void fail(const std::string &msg)
+    void fail(const std::string& msg)
     {
-        if (failed) return; // keep the first failure only
+        if (failed)
+            return; // keep the first failure only
         failed = true;
         std::fprintf(stderr, "[uishim] FAIL: %s\n", msg.c_str());
         if (!resultPath.empty()) {
-            if (FILE *f = std::fopen(resultPath.c_str(), "a")) {
+            if (FILE* f = std::fopen(resultPath.c_str(), "a")) {
                 std::fprintf(f, "FAIL %s\n", msg.c_str());
                 std::fclose(f);
             }
         }
     }
 
-    void pass(const std::string &msg)
+    void pass(const std::string& msg)
     {
         std::fprintf(stderr, "[uishim] %s\n", msg.c_str());
         if (!resultPath.empty()) {
-            if (FILE *f = std::fopen(resultPath.c_str(), "a")) {
+            if (FILE* f = std::fopen(resultPath.c_str(), "a")) {
                 std::fprintf(f, "PASS %s\n", msg.c_str());
                 std::fclose(f);
             }
@@ -203,36 +216,63 @@ struct Harness {
 
     void load()
     {
-        if (loaded || loadFailed) return;
+        if (loaded || loadFailed)
+            return;
         loaded = true;
-        const char *script = std::getenv("MIYOOFIN_UI_SCRIPT");
-        const char *log = std::getenv("MIYOOFIN_UI_LOG");
-        const char *shots = std::getenv("MIYOOFIN_UI_SHOT_DIR");
-        const char *result = std::getenv("MIYOOFIN_UI_RESULT");
-        if (!script || !*script) { loadFailed = true; loadError = "MIYOOFIN_UI_SCRIPT unset"; return; }
-        if (!log || !*log) { loadFailed = true; loadError = "MIYOOFIN_UI_LOG unset"; return; }
-        if (!shots || !*shots) { loadFailed = true; loadError = "MIYOOFIN_UI_SHOT_DIR unset"; return; }
-        if (!result || !*result) { loadFailed = true; loadError = "MIYOOFIN_UI_RESULT unset"; return; }
+        const char* script = std::getenv("MIYOOFIN_UI_SCRIPT");
+        const char* log = std::getenv("MIYOOFIN_UI_LOG");
+        const char* shots = std::getenv("MIYOOFIN_UI_SHOT_DIR");
+        const char* result = std::getenv("MIYOOFIN_UI_RESULT");
+        if (!script || !*script) {
+            loadFailed = true;
+            loadError = "MIYOOFIN_UI_SCRIPT unset";
+            return;
+        }
+        if (!log || !*log) {
+            loadFailed = true;
+            loadError = "MIYOOFIN_UI_LOG unset";
+            return;
+        }
+        if (!shots || !*shots) {
+            loadFailed = true;
+            loadError = "MIYOOFIN_UI_SHOT_DIR unset";
+            return;
+        }
+        if (!result || !*result) {
+            loadFailed = true;
+            loadError = "MIYOOFIN_UI_RESULT unset";
+            return;
+        }
         logPath = log;
         shotDir = shots;
         resultPath = result;
         // Same truthiness rule as MIYOOFIN_DESKTOP_INPUT: set and not '0'.
-        const char *dk = std::getenv("MIYOOFIN_UI_DEVICE_KEYS");
+        const char* dk = std::getenv("MIYOOFIN_UI_DEVICE_KEYS");
         deviceKeys = dk && dk[0] != '\0' && dk[0] != '0';
-        FILE *f = std::fopen(script, "r");
-        if (!f) { loadFailed = true; loadError = std::string("cannot open script: ") + script; return; }
+        FILE* f = std::fopen(script, "r");
+        if (!f) {
+            loadFailed = true;
+            loadError = std::string("cannot open script: ") + script;
+            return;
+        }
         char buf[1024];
         unsigned lineNo = 0;
         while (std::fgets(buf, sizeof(buf), f)) {
             ++lineNo;
             std::string line = trim(buf);
-            if (line.empty() || line[0] == '#') continue;
+            if (line.empty() || line[0] == '#')
+                continue;
             char cmd[32] = {0}, a1[256] = {0}, a2[64] = {0}, a3[64] = {0};
             int n = std::sscanf(line.c_str(), "%31s %255s %63s %63s", cmd, a1, a2, a3);
-            if (n < 1) continue;
+            if (n < 1)
+                continue;
             Step st;
             if (std::strcmp(cmd, "WAIT_LOG") == 0) {
-                if (n < 2) { loadFailed = true; loadError = "WAIT_LOG needs a substring"; break; }
+                if (n < 2) {
+                    loadFailed = true;
+                    loadError = "WAIT_LOG needs a substring";
+                    break;
+                }
                 // Substring is the rest of the line after the command so it
                 // may contain spaces (e.g. "[HomeScreen] Library loaded").
                 std::string rest = trim(line.substr(std::strlen(cmd)));
@@ -243,9 +283,11 @@ struct Harness {
                 if (sp != std::string::npos) {
                     const std::string tail = rest.substr(sp + 1);
                     bool digits = !tail.empty();
-                    for (char c : tail) digits = digits && std::isdigit(static_cast<unsigned char>(c));
+                    for (char c : tail)
+                        digits = digits && std::isdigit(static_cast<unsigned char>(c));
                     if (digits) {
-                        st.timeoutMs = static_cast<uint64_t>(std::strtoull(tail.c_str(), nullptr, 10));
+                        st.timeoutMs =
+                            static_cast<uint64_t>(std::strtoull(tail.c_str(), nullptr, 10));
                         rest = trim(rest.substr(0, sp));
                     }
                 }
@@ -263,10 +305,16 @@ struct Harness {
                     loadError = std::string("bad KEY step at line ") + std::to_string(lineNo);
                     break;
                 }
-                if (n >= 3) st.holdMs = static_cast<uint64_t>(std::strtoull(a2, nullptr, 10));
-                if (n >= 4) st.settleMs = static_cast<uint64_t>(std::strtoull(a3, nullptr, 10));
+                if (n >= 3)
+                    st.holdMs = static_cast<uint64_t>(std::strtoull(a2, nullptr, 10));
+                if (n >= 4)
+                    st.settleMs = static_cast<uint64_t>(std::strtoull(a3, nullptr, 10));
             } else if (std::strcmp(cmd, "SCREENSHOT") == 0) {
-                if (n < 2) { loadFailed = true; loadError = "SCREENSHOT needs a name"; break; }
+                if (n < 2) {
+                    loadFailed = true;
+                    loadError = "SCREENSHOT needs a name";
+                    break;
+                }
                 st.kind = Step::Screenshot;
                 st.arg = a1;
             } else if (std::strcmp(cmd, "QUIT") == 0) {
@@ -275,7 +323,11 @@ struct Harness {
                 // Bounded dumb wait for async worker completion that emits
                 // no pollable marker. Use only where WAIT_LOG cannot apply;
                 // the screenshot assertion after it is the real verdict.
-                if (n < 2) { loadFailed = true; loadError = "SETTLE needs ms"; break; }
+                if (n < 2) {
+                    loadFailed = true;
+                    loadError = "SETTLE needs ms";
+                    break;
+                }
                 st.kind = Step::Settle;
                 st.settleTotalMs = static_cast<uint64_t>(std::strtoull(a1, nullptr, 10));
             } else {
@@ -287,30 +339,31 @@ struct Harness {
         }
         std::fclose(f);
         if (!loadFailed) {
-            std::fprintf(stderr, "[uishim] loaded %zu steps from %s (%s keys)\n",
-                         steps.size(), script,
-                         deviceKeys ? "device" : "desktop");
+            std::fprintf(stderr, "[uishim] loaded %zu steps from %s (%s keys)\n", steps.size(),
+                         script, deviceKeys ? "device" : "desktop");
         }
     }
 
-    bool logContains(const std::string &needle)
+    bool logContains(const std::string& needle)
     {
-        FILE *f = std::fopen(logPath.c_str(), "r");
-        if (!f) return false;
+        FILE* f = std::fopen(logPath.c_str(), "r");
+        if (!f)
+            return false;
         char buf[4096];
         std::string tail;
         // Bounded scan: only the tail matters, keep memory flat.
         std::string window;
         while (std::fgets(buf, sizeof(buf), f)) {
             window += buf;
-            if (window.size() > 1u << 20) window.erase(0, window.size() - (1u << 20));
+            if (window.size() > 1u << 20)
+                window.erase(0, window.size() - (1u << 20));
         }
         std::fclose(f);
         tail = window;
         return tail.find(needle) != std::string::npos;
     }
 
-    void pushKey(const KeyMap &k, bool down)
+    void pushKey(const KeyMap& k, bool down)
     {
         SDL_Event ev;
         std::memset(&ev, 0, sizeof(ev));
@@ -331,8 +384,10 @@ struct Harness {
     void pump()
     {
         load();
-        if (loadFailed) return;
-        if (quitSent) return; // QUIT is one-shot: the app is on its way out.
+        if (loadFailed)
+            return;
+        if (quitSent)
+            return; // QUIT is one-shot: the app is on its way out.
         if (failed && !quitAppended) {
             // After a failure, fast-forward to QUIT so the app still exits
             // cleanly and the runner can report. One-shot: never append
@@ -353,9 +408,10 @@ struct Harness {
                 stepStarted = false;
             }
         }
-        if (stepIdx >= steps.size() || !pending.empty()) return;
+        if (stepIdx >= steps.size() || !pending.empty())
+            return;
         const uint64_t now = nowMs();
-        Step &st = steps[stepIdx];
+        Step& st = steps[stepIdx];
         if (!stepStarted) {
             stepStarted = true;
             stepStartMs = now;
@@ -369,14 +425,14 @@ struct Harness {
                 const std::string dest = shotDir + "/" + st.arg + ".bmp";
                 std::remove(dest.c_str());
                 const int se = setenv("MIYOOFIN_SCREENSHOT_PATH", dest.c_str(), 1);
-                const char *back = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
-                FILE *f = std::fopen("/tmp/miyoofin-screenshot-request", "w");
+                const char* back = std::getenv("MIYOOFIN_SCREENSHOT_PATH");
+                FILE* f = std::fopen("/tmp/miyoofin-screenshot-request", "w");
                 const bool flagged = (f != nullptr);
-                if (f) std::fclose(f);
-                std::fprintf(stderr,
-                    "[uishim] SCREENSHOT %s dest=%s setenv=%d readback=%s flag=%d\n",
-                    st.arg.c_str(), dest.c_str(), se, back ? back : "(null)",
-                    flagged ? 1 : 0);
+                if (f)
+                    std::fclose(f);
+                std::fprintf(
+                    stderr, "[uishim] SCREENSHOT %s dest=%s setenv=%d readback=%s flag=%d\n",
+                    st.arg.c_str(), dest.c_str(), se, back ? back : "(null)", flagged ? 1 : 0);
             } else if (st.kind == Step::Quit) {
                 SDL_Event ev;
                 std::memset(&ev, 0, sizeof(ev));
@@ -414,28 +470,29 @@ struct Harness {
                 ++stepIdx;
                 stepStarted = false;
             } else if (now - stepStartMs >= st.timeoutMs) {
-                fail("WAIT_LOG timeout (" + std::to_string(st.timeoutMs)
-                     + "ms): " + st.arg);
+                fail("WAIT_LOG timeout (" + std::to_string(st.timeoutMs) + "ms): " + st.arg);
             }
             break;
         }
         case Step::Screenshot: {
             const std::string dest = shotDir + "/" + st.arg + ".bmp";
-            FILE *f = std::fopen(dest.c_str(), "rb");
+            FILE* f = std::fopen(dest.c_str(), "rb");
             if (f) {
                 std::fclose(f);
                 pass(std::string("captured ") + dest);
                 ++stepIdx;
                 stepStarted = false;
             } else if (now - stepStartMs >= 5000) {
-                const char *devDefault = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
-                FILE *ad = std::fopen(dest.c_str(), "rb");
-                FILE *bd = std::fopen(devDefault, "rb");
+                const char* devDefault = "/mnt/SDCARD/App/MiyooFin/screenshot.bmp";
+                FILE* ad = std::fopen(dest.c_str(), "rb");
+                FILE* bd = std::fopen(devDefault, "rb");
                 std::fprintf(stderr,
-                    "[uishim] SCREENSHOT miss: dest_exists=%d dev_default_exists=%d\n",
-                    ad ? 1 : 0, bd ? 1 : 0);
-                if (ad) std::fclose(ad);
-                if (bd) std::fclose(bd);
+                             "[uishim] SCREENSHOT miss: dest_exists=%d dev_default_exists=%d\n",
+                             ad ? 1 : 0, bd ? 1 : 0);
+                if (ad)
+                    std::fclose(ad);
+                if (bd)
+                    std::fclose(bd);
                 fail("SCREENSHOT timeout: " + dest);
             }
             break;
@@ -453,7 +510,7 @@ struct Harness {
     }
 };
 
-Harness &harness()
+Harness& harness()
 {
     static Harness h;
     return h;
@@ -461,9 +518,9 @@ Harness &harness()
 
 } // namespace
 
-extern "C" int SDL_PollEvent(SDL_Event *event)
+extern "C" int SDL_PollEvent(SDL_Event* event)
 {
-    Harness &h = harness();
+    Harness& h = harness();
     h.pump();
     if (!h.pending.empty()) {
         *event = h.pending.front();
@@ -471,6 +528,7 @@ extern "C" int SDL_PollEvent(SDL_Event *event)
         return 1;
     }
     PollEventFn real = realPollEvent();
-    if (!real) return 0;
+    if (!real)
+        return 0;
     return real(event);
 }

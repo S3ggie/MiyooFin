@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <sys/stat.h>
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     (void)argc;
     (void)argv;
@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
     miyoofin::installRemoteExitSignalHandler();
 
     // --- Temporary: video-driver diagnostics ---
-    const char *sdl_video = getenv("SDL_VIDEODRIVER");
+    const char* sdl_video = getenv("SDL_VIDEODRIVER");
     printf("[main] SDL_VIDEODRIVER=%s\n", sdl_video ? sdl_video : "(null)");
 
     int ndrivers = SDL_GetNumVideoDrivers();
@@ -53,14 +53,12 @@ int main(int argc, char *argv[])
                 sqlite3_temp_directory = sqlite3_mprintf("%s", tempDir.c_str());
                 printf("[main] SQLite temp dir: %s\n", tempDir.c_str());
             } else {
-                printf("[main] SQLite temp dir fallback (mkdir failed): %s\n",
-                       tempDir.c_str());
+                printf("[main] SQLite temp dir fallback (mkdir failed): %s\n", tempDir.c_str());
             }
         }
     }
 
-    const miyoofin::TelemetryConfig telemetryConfig =
-        miyoofin::TelemetryConfig::fromEnvironment();
+    const miyoofin::TelemetryConfig telemetryConfig = miyoofin::TelemetryConfig::fromEnvironment();
     miyoofin::performanceTelemetry().start(telemetryConfig);
 
     int result = 0;

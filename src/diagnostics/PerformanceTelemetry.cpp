@@ -16,10 +16,11 @@
 #include "miyoofin/version.hpp"
 
 namespace miyoofin {
-// Static schema contracts retained across telemetry translation-unit splits: read_media_page_dequeued, read_media_page_ready.
+// Static schema contracts retained across telemetry translation-unit splits:
+// read_media_page_dequeued, read_media_page_ready.
 
 #if defined(MIYOOFIN_TELEMETRY_HOST_TEST)
-void PerformanceTelemetry::setTestHooks(const TestHooks &hooks) noexcept
+void PerformanceTelemetry::setTestHooks(const TestHooks& hooks) noexcept
 {
     telemetry_internal::g_testHooks = hooks;
 }
@@ -35,7 +36,7 @@ void PerformanceTelemetry::setSchemaVersionForTest(uint16_t version) noexcept
 }
 #endif
 
-ScreenId PerformanceTelemetry::screenIdFromDiagnosticName(const char *name) noexcept
+ScreenId PerformanceTelemetry::screenIdFromDiagnosticName(const char* name) noexcept
 {
     if (name == nullptr)
         return ScreenId::Other;
@@ -62,7 +63,7 @@ ScreenId PerformanceTelemetry::screenIdFromDiagnosticName(const char *name) noex
     return ScreenId::Other;
 }
 
-TabId PerformanceTelemetry::tabIdFromDiagnosticName(const char *name) noexcept
+TabId PerformanceTelemetry::tabIdFromDiagnosticName(const char* name) noexcept
 {
     if (name == nullptr || std::strcmp(name, "other") == 0)
         return TabId::Other;
@@ -84,28 +85,45 @@ TabId PerformanceTelemetry::tabIdFromDiagnosticName(const char *name) noexcept
 ActionId PerformanceTelemetry::actionIdFromAction(Action action) noexcept
 {
     switch (action) {
-        case Action::None: return ActionId::None;
-        case Action::Up: return ActionId::Up;
-        case Action::Down: return ActionId::Down;
-        case Action::Left: return ActionId::Left;
-        case Action::Right: return ActionId::Right;
-        case Action::Confirm: return ActionId::Confirm;
-        case Action::Back: return ActionId::Back;
-        case Action::Search: return ActionId::Search;
-        case Action::ActionsMenu: return ActionId::ActionsMenu;
-        case Action::PrevTab: return ActionId::PrevTab;
-        case Action::NextTab: return ActionId::NextTab;
-        case Action::PrevPage: return ActionId::PrevPage;
-        case Action::NextPage: return ActionId::NextPage;
-        case Action::Settings: return ActionId::Settings;
-        case Action::Menu: return ActionId::Menu;
-        case Action::Exit: return ActionId::Exit;
-        case Action::Raw: return ActionId::Raw;
+    case Action::None:
+        return ActionId::None;
+    case Action::Up:
+        return ActionId::Up;
+    case Action::Down:
+        return ActionId::Down;
+    case Action::Left:
+        return ActionId::Left;
+    case Action::Right:
+        return ActionId::Right;
+    case Action::Confirm:
+        return ActionId::Confirm;
+    case Action::Back:
+        return ActionId::Back;
+    case Action::Search:
+        return ActionId::Search;
+    case Action::ActionsMenu:
+        return ActionId::ActionsMenu;
+    case Action::PrevTab:
+        return ActionId::PrevTab;
+    case Action::NextTab:
+        return ActionId::NextTab;
+    case Action::PrevPage:
+        return ActionId::PrevPage;
+    case Action::NextPage:
+        return ActionId::NextPage;
+    case Action::Settings:
+        return ActionId::Settings;
+    case Action::Menu:
+        return ActionId::Menu;
+    case Action::Exit:
+        return ActionId::Exit;
+    case Action::Raw:
+        return ActionId::Raw;
     }
     return ActionId::Other;
 }
 
-PerformanceTelemetry &performanceTelemetry() noexcept
+PerformanceTelemetry& performanceTelemetry() noexcept
 {
     static PerformanceTelemetry instance;
     return instance;

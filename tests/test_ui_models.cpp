@@ -7,12 +7,19 @@
 
 int main()
 {
-    testPresentationArtworkAdapter(); testHomeSyncSchedule(); testShowsSyncProgress(); testHomeSyncStatusStrings();
-    testHomeSettingsModel(); testHomeTabsProjection(); testHomeTabRowUpdates();
+    testPresentationArtworkAdapter();
+    testHomeSyncSchedule();
+    testShowsSyncProgress();
+    testHomeSyncStatusStrings();
+    testHomeSettingsModel();
+    testHomeTabsProjection();
+    testHomeTabRowUpdates();
     testHomeRowIndexByLabel();
-    testTransitionTabIndex(); testHomeArtworkPlan();
+    testTransitionTabIndex();
+    testHomeArtworkPlan();
     testColdStartPopulationProducesNonEmptyTabs();
-    testPosterJobScheduling(); testHomeRailRefreshDebounce();
+    testPosterJobScheduling();
+    testHomeRailRefreshDebounce();
     testCollectBoundedSeriesIds();
     return miyoofin_test::finish("ui-models");
 }

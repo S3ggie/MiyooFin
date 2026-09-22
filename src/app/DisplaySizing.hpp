@@ -5,13 +5,13 @@
 
 namespace miyoofin {
 
-struct DisplayDimensions {
+struct DisplayDimensions
+{
     int width;
     int height;
 };
 
-constexpr DisplayDimensions displayDimensionsFor(int reportedWidth,
-                                                 int reportedHeight) noexcept
+constexpr DisplayDimensions displayDimensionsFor(int reportedWidth, int reportedHeight) noexcept
 {
     if (reportedWidth > 0 && reportedHeight > 0)
         return {reportedWidth, reportedHeight};

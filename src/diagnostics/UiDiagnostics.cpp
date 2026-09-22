@@ -13,7 +13,7 @@ namespace miyoofin {
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
 namespace {
 
-ActionId actionIdFromDiagnosticName(const char *action) noexcept
+ActionId actionIdFromDiagnosticName(const char* action) noexcept
 {
     if (action == nullptr)
         return ActionId::Other;
@@ -54,27 +54,25 @@ ActionId actionIdFromDiagnosticName(const char *action) noexcept
     return ActionId::Other;
 }
 
-void emitUiStall(StallEdge edge, const UiDiagnostics &diagnostics,
-                 uint64_t durationUs) noexcept
+void emitUiStall(StallEdge edge, const UiDiagnostics& diagnostics, uint64_t durationUs) noexcept
 {
-    PerformanceTelemetry &telemetry = performanceTelemetry();
+    PerformanceTelemetry& telemetry = performanceTelemetry();
     if (!telemetry.enabledFast())
         return;
     TelemetryRecord record{};
     record.header.record_type = RecordType::UiStall;
     record.payload.ui_stall.edge = static_cast<uint8_t>(edge);
     record.payload.ui_stall.screen = static_cast<uint16_t>(
-        PerformanceTelemetry::screenIdFromDiagnosticName(
-            diagnostics.screenName()));
-    record.payload.ui_stall.tab = static_cast<uint16_t>(
-        PerformanceTelemetry::tabIdFromDiagnosticName(diagnostics.tabName()));
-    record.payload.ui_stall.action = static_cast<uint16_t>(
-        actionIdFromDiagnosticName(diagnostics.actionName()));
-    record.payload.ui_stall.phase = static_cast<uint8_t>(
-        UiDiagnostics::phaseIdFromDiagnosticName(diagnostics.phaseName()));
+        PerformanceTelemetry::screenIdFromDiagnosticName(diagnostics.screenName()));
+    record.payload.ui_stall.tab =
+        static_cast<uint16_t>(PerformanceTelemetry::tabIdFromDiagnosticName(diagnostics.tabName()));
+    record.payload.ui_stall.action =
+        static_cast<uint16_t>(actionIdFromDiagnosticName(diagnostics.actionName()));
+    record.payload.ui_stall.phase =
+        static_cast<uint8_t>(UiDiagnostics::phaseIdFromDiagnosticName(diagnostics.phaseName()));
     record.payload.ui_stall.duration_us = durationUs;
-    record.payload.ui_stall.scope_id = static_cast<uint16_t>(
-        UiDiagnostics::scopeIdFromDiagnosticName(diagnostics.scopeName()));
+    record.payload.ui_stall.scope_id =
+        static_cast<uint16_t>(UiDiagnostics::scopeIdFromDiagnosticName(diagnostics.scopeName()));
     record.payload.ui_stall.worker_mask = diagnostics.activeWorkerMask();
     telemetry.emitRecord(record);
 }
@@ -83,14 +81,13 @@ void emitUiStall(StallEdge edge, const UiDiagnostics &diagnostics,
 #endif
 uint64_t UiDiagnostics::monotonicMs()
 {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
 }
 
-int UiDiagnostics::Watchdog::poll(uint64_t heartbeat, uint64_t now,
-                                  bool suspended, uint64_t &duration)
+int UiDiagnostics::Watchdog::poll(uint64_t heartbeat, uint64_t now, bool suspended,
+                                  uint64_t& duration)
 {
     duration = 0;
     if (suspended) {
@@ -122,7 +119,7 @@ UiDiagnostics::~UiDiagnostics()
     stop();
 }
 
-void UiDiagnostics::start(const std::string &path)
+void UiDiagnostics::start(const std::string& path)
 {
     if (m_thread.joinable())
         return;
@@ -145,14 +142,14 @@ void UiDiagnostics::stop()
         std::lock_guard<std::mutex> lock(m_pendingMutex);
         logs.swap(m_pendingLogs);
     }
-    for (const auto &line : logs)
+    for (const auto& line : logs)
         writeLine(line);
 }
 void UiDiagnostics::heartbeat()
 {
     m_heartbeat.store(monotonicMs(), std::memory_order_relaxed);
 }
-UiPhaseId UiDiagnostics::phaseIdFromDiagnosticName(const char *phase) noexcept
+UiPhaseId UiDiagnostics::phaseIdFromDiagnosticName(const char* phase) noexcept
 {
     if (phase == nullptr)
         return UiPhaseId::Unknown;
@@ -169,7 +166,7 @@ UiPhaseId UiDiagnostics::phaseIdFromDiagnosticName(const char *phase) noexcept
     return UiPhaseId::Unknown;
 }
 
-UiScopeId UiDiagnostics::scopeIdFromDiagnosticName(const char *scope) noexcept
+UiScopeId UiDiagnostics::scopeIdFromDiagnosticName(const char* scope) noexcept
 {
     if (scope == nullptr)
         return UiScopeId::Unknown;
@@ -239,7 +236,7 @@ UiScopeId UiDiagnostics::scopeIdFromDiagnosticName(const char *scope) noexcept
         return UiScopeId::DownloadManagerPlanSnapshotMutexWait;
     return UiScopeId::Unknown;
 }
-void UiDiagnostics::event(const char *message)
+void UiDiagnostics::event(const char* message)
 {
     std::lock_guard<std::mutex> lock(m_eventsMutex);
     if (m_events.size() == EVENT_CAPACITY)
@@ -247,7 +244,7 @@ void UiDiagnostics::event(const char *message)
     m_events.emplace_back(message);
 }
 
-void UiDiagnostics::log(const std::string &line)
+void UiDiagnostics::log(const std::string& line)
 {
     if (line.empty())
         return;
@@ -259,9 +256,9 @@ void UiDiagnostics::log(const std::string &line)
     m_pendingLogs.emplace_back(line);
 }
 
-void UiDiagnostics::setWorker(const char *worker, const char *state)
+void UiDiagnostics::setWorker(const char* worker, const char* state)
 {
-    std::atomic<const char *> *target = nullptr;
+    std::atomic<const char*>* target = nullptr;
     uint16_t mask = 0;
     if (!strcmp(worker, "library")) {
         target = &m_library;
@@ -280,15 +277,13 @@ void UiDiagnostics::setWorker(const char *worker, const char *state)
     if (!target)
         return;
     target->store(state, std::memory_order_relaxed);
-    const uint16_t active = state != nullptr && strcmp(state, "idle") != 0
-        ? mask : 0;
+    const uint16_t active = state != nullptr && strcmp(state, "idle") != 0 ? mask : 0;
     uint16_t observed = m_activeWorkerMask.load(std::memory_order_relaxed);
     // The worker mask is diagnostic-only, so the CAS can remain relaxed.
     for (;;) {
         const uint16_t desired = (observed & ~mask) | active;
-        if (m_activeWorkerMask.compare_exchange_weak(
-                observed, desired, std::memory_order_relaxed,
-                std::memory_order_relaxed))
+        if (m_activeWorkerMask.compare_exchange_weak(observed, desired, std::memory_order_relaxed,
+                                                     std::memory_order_relaxed))
             break;
     }
 }
@@ -299,33 +294,33 @@ std::vector<std::string> UiDiagnostics::recentEvents() const
     return m_events;
 }
 
-void UiDiagnostics::writeLine(const std::string &line)
+void UiDiagnostics::writeLine(const std::string& line)
 {
-    struct stat st{};
+    struct stat st
+    {};
     if (stat(m_path.c_str(), &st) == 0 && st.st_size > 65536) {
-        FILE *file = fopen(m_path.c_str(), "w");
+        FILE* file = fopen(m_path.c_str(), "w");
         if (file)
             fclose(file);
     }
 
-    FILE *file = fopen(m_path.c_str(), "a");
+    FILE* file = fopen(m_path.c_str(), "a");
     if (!file && m_path != "ui-stall.log") {
         m_path = "ui-stall.log";
         file = fopen(m_path.c_str(), "a");
     }
     if (file) {
-        fprintf(file, "[t=%llums] %s\n",
-                static_cast<unsigned long long>(monotonicMs()), line.c_str());
+        fprintf(file, "[t=%llums] %s\n", static_cast<unsigned long long>(monotonicMs()),
+                line.c_str());
         fclose(file);
     }
 }
-void UiDiagnostics::slow(const char *name, uint64_t elapsed)
+void UiDiagnostics::slow(const char* name, uint64_t elapsed)
 {
     if (elapsed < SLOW_MS)
         return;
     char b[256];
-    snprintf(b, sizeof b, "[UISLOW] %llums %s",
-             static_cast<unsigned long long>(elapsed), name);
+    snprintf(b, sizeof b, "[UISLOW] %llums %s", static_cast<unsigned long long>(elapsed), name);
     event(b);
     {
         std::lock_guard<std::mutex> lock(m_pendingMutex);
@@ -335,22 +330,17 @@ void UiDiagnostics::slow(const char *name, uint64_t elapsed)
     emitUiStall(StallEdge::SlowScope, *this, elapsed * 1000ull);
 #endif
 }
-UiDiagnostics::Scope::Scope(const char *name)
-    : Scope(name, true)
-{
-}
-UiDiagnostics::Scope::Scope(const char *name, bool trackUiScope)
-    : m_name(name)
-    , m_previous(nullptr)
-    , m_start(UiDiagnostics::monotonicMs())
-    , m_trackUiScope(trackUiScope)
+UiDiagnostics::Scope::Scope(const char* name) : Scope(name, true) {}
+UiDiagnostics::Scope::Scope(const char* name, bool trackUiScope)
+    : m_name(name), m_previous(nullptr), m_start(UiDiagnostics::monotonicMs()),
+      m_trackUiScope(trackUiScope)
 {
     if (m_trackUiScope)
         m_previous = uiDiagnostics().exchangeScope(name);
 }
 UiDiagnostics::Scope::~Scope()
 {
-    auto &diagnostics = uiDiagnostics();
+    auto& diagnostics = uiDiagnostics();
     // Worker scopes omit UI phase tracking, but still report slow work.
     if (m_trackUiScope)
         diagnostics.setScope(m_previous);
@@ -367,25 +357,22 @@ void UiDiagnostics::watchdogLoop()
                 std::lock_guard<std::mutex> lock(m_pendingMutex);
                 logs.swap(m_pendingLogs);
             }
-            for (const auto &line : logs)
+            for (const auto& line : logs)
                 writeLine(line);
         }
         const uint64_t now = monotonicMs();
         uint64_t duration = 0;
-        const int result = w.poll(
-            m_heartbeat.load(), now, m_suspended.load(), duration);
+        const int result = w.poll(m_heartbeat.load(), now, m_suspended.load(), duration);
         if (result) {
             char b[768];
             if (result == 1) {
-                snprintf(
-                    b, sizeof b,
-                    "[UISTALL] begin stalled=%llums phase=%s screen=%s "
-                    "tab=%s action=%s scope=%s library=%s hierarchy=%s "
-                    "artwork=%s download=%s",
-                    static_cast<unsigned long long>(now - w.seen),
-                    m_phase.load(), m_screen.load(), m_tab.load(),
-                    m_action.load(), m_scope.load(), m_library.load(),
-                    m_hierarchy.load(), m_artwork.load(), m_download.load());
+                snprintf(b, sizeof b,
+                         "[UISTALL] begin stalled=%llums phase=%s screen=%s "
+                         "tab=%s action=%s scope=%s library=%s hierarchy=%s "
+                         "artwork=%s download=%s",
+                         static_cast<unsigned long long>(now - w.seen), m_phase.load(),
+                         m_screen.load(), m_tab.load(), m_action.load(), m_scope.load(),
+                         m_library.load(), m_hierarchy.load(), m_artwork.load(), m_download.load());
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
                 emitUiStall(StallEdge::Begin, *this, 0);
 #endif
@@ -399,7 +386,7 @@ void UiDiagnostics::watchdogLoop()
             event(b);
             writeLine(b);
             if (result == 1) {
-                for (const auto &eventLine : recentEvents())
+                for (const auto& eventLine : recentEvents())
                     writeLine("[UISTALL] recent " + eventLine);
             }
         }
@@ -407,7 +394,7 @@ void UiDiagnostics::watchdogLoop()
         usleep(100000);
     }
 }
-UiDiagnostics &uiDiagnostics()
+UiDiagnostics& uiDiagnostics()
 {
     static UiDiagnostics d;
     return d;

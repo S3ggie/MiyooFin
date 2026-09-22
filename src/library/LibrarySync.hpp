@@ -17,7 +17,8 @@
 namespace miyoofin {
 namespace library {
 
-struct OfflineRebuildResult {
+struct OfflineRebuildResult
+{
     bool success = false;
     bool skipped = false;
     bool cancelled = false;
@@ -28,7 +29,8 @@ struct OfflineRebuildResult {
     std::size_t containersSynthesized = 0;
 };
 
-struct ChangedCatalogResult {
+struct ChangedCatalogResult
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -38,7 +40,8 @@ struct ChangedCatalogResult {
     std::int64_t checkpointMs = 0;
 };
 
-struct MembershipReconcileResult {
+struct MembershipReconcileResult
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -53,12 +56,17 @@ struct MembershipReconcileResult {
 // App-scoped owner for top-level Jellyfin -> CatalogDb generation work.  The
 // CatalogDb remains the sole SQLite executor; this class owns only the
 // synchronization boundary and its cancellation/status state.
-class LibrarySync {
-public:
-    struct Status { bool inFlight = false; std::uint64_t generation = 0; bool success = false; };
+class LibrarySync
+{
+  public:
+    struct Status
+    {
+        bool inFlight = false;
+        std::uint64_t generation = 0;
+        bool success = false;
+    };
 
-    LibrarySync(Session session, std::shared_ptr<CatalogDb> db,
-                std::uint64_t scopeEpoch);
+    LibrarySync(Session session, std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);
     ~LibrarySync();
     LibrarySync(const LibrarySync&) = delete;
     LibrarySync& operator=(const LibrarySync&) = delete;
@@ -69,42 +77,44 @@ public:
     /// Seed transaction identities after restoring persisted state.  This
     /// counter is never published as an authoritative catalog generation.
     void seedTransactionGeneration(std::uint64_t gen);
-    std::shared_ptr<std::atomic_bool> cancellation() const { return m_cancel; }
+    std::shared_ptr<std::atomic_bool> cancellation() const
+    {
+        return m_cancel;
+    }
     std::future<CatalogDbTopLevelSyncResult> begin(std::uint64_t generation);
-    std::future<CatalogDbMediaPageUpsertResult> stage(
-        const CatalogDbMediaPageWrite &page);
+    std::future<CatalogDbMediaPageUpsertResult> stage(const CatalogDbMediaPageWrite& page);
     std::future<CatalogDbTopLevelSyncResult> finalize(std::uint64_t generation);
     std::future<CatalogDbTopLevelSyncResult> abort(std::uint64_t generation);
-    std::future<ChangedCatalogResult> catchUpChangedCatalog(
-        std::int64_t sinceMs,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {},
-        std::uint64_t committedGeneration = 0);
-    std::future<MembershipReconcileResult> reconcileAuthoritativeMembership(
-        const std::shared_ptr<std::atomic_bool> &cancellation = {},
-        std::uint64_t transactionGeneration = 0,
-        std::uint64_t committedGeneration = 0);
-    std::future<LiveLibraryChangeResult> applyLibraryChanges(
-        const JellyfinLibraryChangeBatch &batch,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {},
-        std::uint64_t committedGeneration = 0);
+    std::future<ChangedCatalogResult>
+    catchUpChangedCatalog(std::int64_t sinceMs,
+                          const std::shared_ptr<std::atomic_bool>& cancellation = {},
+                          std::uint64_t committedGeneration = 0);
+    std::future<MembershipReconcileResult>
+    reconcileAuthoritativeMembership(const std::shared_ptr<std::atomic_bool>& cancellation = {},
+                                     std::uint64_t transactionGeneration = 0,
+                                     std::uint64_t committedGeneration = 0);
+    std::future<LiveLibraryChangeResult>
+    applyLibraryChanges(const JellyfinLibraryChangeBatch& batch,
+                        const std::shared_ptr<std::atomic_bool>& cancellation = {},
+                        std::uint64_t committedGeneration = 0);
     /// Start the long-lived Jellyfin event receiver. The receiver only owns
     /// its bounded queue; all catalog writes remain in LibrarySync methods.
     void startLiveEvents();
-    bool takeLiveChange(JellyfinLibraryChangeBatch &batch);
-    std::future<CatalogDbReconcileResult> reconcileSeries(
-        const std::vector<MediaItem> &series, bool authoritative,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<CatalogDbHierarchyWriteResult> stageSeriesHierarchy(
-        const MediaItem &series, const std::vector<MediaItem> &seasons,
-        const std::map<std::string, std::vector<MediaItem>> &episodesBySeason,
-        std::uint64_t generation, bool complete,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<CatalogDbSyncState> writeSyncState(
-        std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
-        std::uint64_t committedGeneration,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<OfflineRebuildResult> reconstructOfflineDownloads(
-        const std::string &downloadRoot = "downloads");
+    bool takeLiveChange(JellyfinLibraryChangeBatch& batch);
+    std::future<CatalogDbReconcileResult>
+    reconcileSeries(const std::vector<MediaItem>& series, bool authoritative,
+                    const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::future<CatalogDbHierarchyWriteResult>
+    stageSeriesHierarchy(const MediaItem& series, const std::vector<MediaItem>& seasons,
+                         const std::map<std::string, std::vector<MediaItem>>& episodesBySeason,
+                         std::uint64_t generation, bool complete,
+                         const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::future<CatalogDbSyncState>
+    writeSyncState(std::int64_t lastSuccessfulMs, std::int64_t lastReconcileMs,
+                   std::uint64_t committedGeneration,
+                   const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::future<OfflineRebuildResult>
+    reconstructOfflineDownloads(const std::string& downloadRoot = "downloads");
     Status status() const;
     /// Cancel service work and join the long-lived live-event receiver.
     /// Operation futures owned by consumers observe the same cancellation
@@ -112,7 +122,7 @@ public:
     void stop() noexcept;
     void cancel() noexcept;
 
-private:
+  private:
     Session m_session;
     std::shared_ptr<CatalogDb> m_db;
     CatalogDbJobMetadata m_metadata;

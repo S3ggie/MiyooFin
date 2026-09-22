@@ -22,23 +22,25 @@
 #define MAINUI_PATH "/mnt/SDCARD/miyoo/app/MainUI"
 #define QUEUE_MAX 4096
 
-static int fail(const char *message)
+static int fail(const char* message)
 {
     fprintf(stderr, "miyoofin-mainui-handoff: %s\n", message);
     return 1;
 }
 
-static int line_has_prefix(const char *line, const char *prefix)
+static int line_has_prefix(const char* line, const char* prefix)
 {
     return strncmp(line, prefix, strlen(prefix)) == 0;
 }
 
-static int decimal_suffix(const char *line, const char *prefix)
+static int decimal_suffix(const char* line, const char* prefix)
 {
-    const char *p = line + strlen(prefix);
-    if (*p == '\0') return 0;
+    const char* p = line + strlen(prefix);
+    if (*p == '\0')
+        return 0;
     while (*p != '\0') {
-        if (*p < '0' || *p > '9') return 0;
+        if (*p < '0' || *p > '9')
+            return 0;
         ++p;
     }
     return 1;
@@ -47,7 +49,8 @@ static int decimal_suffix(const char *line, const char *prefix)
 static int validate_queue(void)
 {
     int fd = open(QUEUE_PATH, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) return fail("staged launch file is unavailable");
+    if (fd < 0)
+        return fail("staged launch file is unavailable");
 
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -66,16 +69,18 @@ static int validate_queue(void)
         return fail("staged launch file could not be read");
     content[size] = '\0';
 
-    char *lines[16] = {0};
+    char* lines[16] = {0};
     size_t count = 0;
-    char *cursor = content;
+    char* cursor = content;
     while (count < 16) {
         lines[count++] = cursor;
-        char *newline = strchr(cursor, '\n');
-        if (!newline) break;
+        char* newline = strchr(cursor, '\n');
+        if (!newline)
+            break;
         *newline = '\0';
         cursor = newline + 1;
-        if (*cursor == '\0') break;
+        if (*cursor == '\0')
+            break;
     }
     if (count < 8 || (count == 16 && strchr(lines[15], '\n') != NULL))
         return fail("staged launch file has malformed line structure");
@@ -100,27 +105,32 @@ static int validate_queue(void)
     return 0;
 }
 
-static int process_is_mainui(const char *pid_name)
+static int process_is_mainui(const char* pid_name)
 {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "/proc/%s/comm", pid_name);
     int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char comm[32] = {0};
     ssize_t n = read(fd, comm, sizeof(comm) - 1);
     close(fd);
-    if (n <= 0) return 0;
+    if (n <= 0)
+        return 0;
     comm[strcspn(comm, "\n")] = '\0';
-    if (strcmp(comm, "MainUI") != 0) return 0;
+    if (strcmp(comm, "MainUI") != 0)
+        return 0;
 
     snprintf(path, sizeof(path), "/proc/%s/status", pid_name);
     fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char status[4096] = {0};
     n = read(fd, status, sizeof(status) - 1);
     close(fd);
-    if (n <= 0) return 0;
-    char *uid_line = strstr(status, "\nUid:");
+    if (n <= 0)
+        return 0;
+    char* uid_line = strstr(status, "\nUid:");
     if (uid_line) {
         ++uid_line;
     } else {
@@ -142,7 +152,8 @@ static int process_is_mainui(const char *pid_name)
      * /proc/<pid>/exe is hidden from the ordinary inspection shell. */
     snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_name);
     fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char cmdline[64] = {0};
     n = read(fd, cmdline, sizeof(cmdline) - 1);
     close(fd);
@@ -150,19 +161,23 @@ static int process_is_mainui(const char *pid_name)
            (n == 9 && memcmp(cmdline, "./MainUI\0", 9) == 0);
 }
 
-static int find_mainui(pid_t *result)
+static int find_mainui(pid_t* result)
 {
-    DIR *dir = opendir("/proc");
-    if (!dir) return fail("cannot inspect /proc");
+    DIR* dir = opendir("/proc");
+    if (!dir)
+        return fail("cannot inspect /proc");
     pid_t found = -1;
-    struct dirent *entry;
+    struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
-        const char *name = entry->d_name;
-        if (*name == '\0') continue;
+        const char* name = entry->d_name;
+        if (*name == '\0')
+            continue;
         int numeric = 1;
-        for (const char *p = name; *p; ++p)
-            if (*p < '0' || *p > '9') numeric = 0;
-        if (!numeric || !process_is_mainui(name)) continue;
+        for (const char* p = name; *p; ++p)
+            if (*p < '0' || *p > '9')
+                numeric = 0;
+        if (!numeric || !process_is_mainui(name))
+            continue;
         pid_t pid = (pid_t)strtol(name, NULL, 10);
         if (found != -1) {
             closedir(dir);
@@ -171,12 +186,13 @@ static int find_mainui(pid_t *result)
         found = pid;
     }
     closedir(dir);
-    if (found == -1) return fail("no validated MainUI process exists");
+    if (found == -1)
+        return fail("no validated MainUI process exists");
     *result = found;
     return 0;
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     (void)argv;
     if (argc != 1)
@@ -185,11 +201,15 @@ int main(int argc, char **argv)
         return fail("caller is not the onion account");
     if (geteuid() != 0)
         return fail("helper is not running setuid-root");
-    if (getenv("PATH") != NULL) unsetenv("PATH");
-    if (validate_queue() != 0) return 1;
+    if (getenv("PATH") != NULL)
+        unsetenv("PATH");
+    if (validate_queue() != 0)
+        return 1;
 
     pid_t mainui = -1;
-    if (find_mainui(&mainui) != 0) return 1;
-    if (kill(mainui, SIGTERM) != 0) return fail("validated MainUI SIGTERM failed");
+    if (find_mainui(&mainui) != 0)
+        return 1;
+    if (kill(mainui, SIGTERM) != 0)
+        return fail("validated MainUI SIGTERM failed");
     return 0;
 }

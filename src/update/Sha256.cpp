@@ -10,23 +10,14 @@ namespace miyoofin {
 // -------------------------------------------------------------------
 
 static const std::uint32_t K[64] = {
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-};
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 static inline std::uint32_t rotr(std::uint32_t x, unsigned n)
 {
@@ -67,8 +58,7 @@ static inline std::uint32_t ssig1(std::uint32_t x)
 // Sha256 implementation
 // -------------------------------------------------------------------
 
-Sha256::Sha256()
-    : m_bitLen(0), m_bufLen(0)
+Sha256::Sha256() : m_bitLen(0), m_bufLen(0)
 {
     m_state[0] = 0x6a09e667;
     m_state[1] = 0xbb67ae85;
@@ -84,10 +74,8 @@ void Sha256::processBlock(const unsigned char block[64])
 {
     std::uint32_t W[64];
     for (int i = 0; i < 16; i++) {
-        W[i] = (std::uint32_t(block[i * 4]) << 24)
-             | (std::uint32_t(block[i * 4 + 1]) << 16)
-             | (std::uint32_t(block[i * 4 + 2]) << 8)
-             | (std::uint32_t(block[i * 4 + 3]));
+        W[i] = (std::uint32_t(block[i * 4]) << 24) | (std::uint32_t(block[i * 4 + 1]) << 16) |
+               (std::uint32_t(block[i * 4 + 2]) << 8) | (std::uint32_t(block[i * 4 + 3]));
     }
     for (int i = 16; i < 64; i++) {
         W[i] = ssig1(W[i - 2]) + W[i - 7] + ssig0(W[i - 15]) + W[i - 16];
@@ -99,17 +87,29 @@ void Sha256::processBlock(const unsigned char block[64])
     for (int i = 0; i < 64; i++) {
         std::uint32_t T1 = h + bsig1(e) + ch(e, f, g) + K[i] + W[i];
         std::uint32_t T2 = bsig0(a) + maj(a, b, c);
-        h = g; g = f; f = e; e = d + T1;
-        d = c; c = b; b = a; a = T1 + T2;
+        h = g;
+        g = f;
+        f = e;
+        e = d + T1;
+        d = c;
+        c = b;
+        b = a;
+        a = T1 + T2;
     }
 
-    m_state[0] += a; m_state[1] += b; m_state[2] += c; m_state[3] += d;
-    m_state[4] += e; m_state[5] += f; m_state[6] += g; m_state[7] += h;
+    m_state[0] += a;
+    m_state[1] += b;
+    m_state[2] += c;
+    m_state[3] += d;
+    m_state[4] += e;
+    m_state[5] += f;
+    m_state[6] += g;
+    m_state[7] += h;
 }
 
-void Sha256::update(const void *data, std::size_t len)
+void Sha256::update(const void* data, std::size_t len)
 {
-    auto *in = static_cast<const unsigned char *>(data);
+    auto* in = static_cast<const unsigned char*>(data);
     std::size_t remaining = len;
 
     // Fill buffer if partial
@@ -148,11 +148,13 @@ void Sha256::final(unsigned char out[32])
     std::size_t idx = m_bufLen;
     m_buf[idx++] = 0x80;
     if (idx > 56) {
-        while (idx < 64) m_buf[idx++] = 0;
+        while (idx < 64)
+            m_buf[idx++] = 0;
         processBlock(m_buf);
         idx = 0;
     }
-    while (idx < 56) m_buf[idx++] = 0;
+    while (idx < 56)
+        m_buf[idx++] = 0;
 
     // Append length in bits (big-endian)
     for (int i = 7; i >= 0; i--)
@@ -161,7 +163,7 @@ void Sha256::final(unsigned char out[32])
 
     // Output state
     for (int i = 0; i < 8; i++) {
-        out[i * 4]     = static_cast<unsigned char>(m_state[i] >> 24);
+        out[i * 4] = static_cast<unsigned char>(m_state[i] >> 24);
         out[i * 4 + 1] = static_cast<unsigned char>(m_state[i] >> 16);
         out[i * 4 + 2] = static_cast<unsigned char>(m_state[i] >> 8);
         out[i * 4 + 3] = static_cast<unsigned char>(m_state[i]);
@@ -181,9 +183,8 @@ std::string Sha256::hex(const unsigned char raw[32])
 }
 
 // -------------------------------------------------------------------
-bool sha256File(const std::string &path, std::string &hexOut,
-                std::string &errorOut,
-                const std::atomic<bool> *cancellation)
+bool sha256File(const std::string& path, std::string& hexOut, std::string& errorOut,
+                const std::atomic<bool>* cancellation)
 {
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) {

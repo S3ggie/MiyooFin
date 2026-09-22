@@ -9,16 +9,13 @@ static std::int64_t wallClockMs()
 {
     return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
 }
-static void makeMediaTabsBounded(std::vector<TabData> &tabs);
+static void makeMediaTabsBounded(std::vector<TabData>& tabs);
 
 static std::vector<TabData> emptyHomeTabs()
 {
     return {
-        {"Home", { {"", {}} }},
-        {"Movies", { {"", {}} }},
-        {"Shows", { {"", {}} }},
-        {"Downloads", { {"", {}} }},
-        {"Settings", { {"", {}} }},
+        {"Home", {{"", {}}}},      {"Movies", {{"", {}}}},   {"Shows", {{"", {}}}},
+        {"Downloads", {{"", {}}}}, {"Settings", {{"", {}}}},
     };
 }
 
@@ -26,25 +23,24 @@ void HomeScreen::publishPendingPresentation(PendingPresentation presentation)
 {
     const bool complete = presentation.complete;
     const std::string diagnostic =
-        "[HomeScreen] pending_presentation_published request="
-        + std::to_string(presentation.diagnosticRequest)
-        + " generation=" + std::to_string(presentation.diagnosticGeneration)
-        + " stage=" + (presentation.diagnosticStage.empty()
-            ? "unspecified" : presentation.diagnosticStage)
-        + " complete=" + std::to_string(complete ? 1 : 0)
-        + " content=" + std::to_string(presentation.contentValid ? 1 : 0)
-        + " error=" + std::to_string(presentation.error.empty() ? 0 : 1);
+        "[HomeScreen] pending_presentation_published request=" +
+        std::to_string(presentation.diagnosticRequest) +
+        " generation=" + std::to_string(presentation.diagnosticGeneration) + " stage=" +
+        (presentation.diagnosticStage.empty() ? "unspecified" : presentation.diagnosticStage) +
+        " complete=" + std::to_string(complete ? 1 : 0) +
+        " content=" + std::to_string(presentation.contentValid ? 1 : 0) +
+        " error=" + std::to_string(presentation.error.empty() ? 0 : 1);
     {
         std::lock_guard<std::mutex> lock(m_fetchMutex);
-        m_pendingPresentation = std::make_shared<const PendingPresentation>(
-            std::move(presentation));
+        m_pendingPresentation =
+            std::make_shared<const PendingPresentation>(std::move(presentation));
         m_fetchComplete.store(complete);
         m_fetchReady.store(true);
     }
     uiDiagnostics().log(diagnostic);
 }
 
-bool HomeScreen::takePendingPresentation(PendingPresentation &presentation)
+bool HomeScreen::takePendingPresentation(PendingPresentation& presentation)
 {
     std::lock_guard<std::mutex> lock(m_fetchMutex);
     if (!m_pendingPresentation)
@@ -55,8 +51,7 @@ bool HomeScreen::takePendingPresentation(PendingPresentation &presentation)
     return true;
 }
 
-void HomeScreen::applyPendingPresentation(
-    const PendingPresentation &presentation)
+void HomeScreen::applyPendingPresentation(const PendingPresentation& presentation)
 {
     m_fetchResult = presentation.tabs;
     m_fetchError = presentation.error;
@@ -106,34 +101,32 @@ void HomeScreen::applyPresentationProjection()
     // legacy catalog is not a runtime authority; an empty catalog lets the
     // projection synthesize only the downloaded branches it needs.
     OfflineCatalogSnapshot catalog;
-    OfflineLibraryProjection projection(
-        m_cachedSnapshot, catalog,
-        m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
+    OfflineLibraryProjection projection(m_cachedSnapshot, catalog,
+                                        m_downloads ? m_downloads->snapshot() : DownloadSnapshot{});
     m_fetchOfflineMovies.clear();
-    m_fetchOfflineSnapshot=m_cachedSnapshot;
+    m_fetchOfflineSnapshot = m_cachedSnapshot;
     const std::vector<MediaItem> offlineMovies = projection.movies();
     std::set<std::string> offlineMovieIds;
-    for (const auto &item : offlineMovies)
+    for (const auto& item : offlineMovies)
         offlineMovieIds.insert(item.id);
-    for (auto &view : m_fetchOfflineSnapshot.movies) {
+    for (auto& view : m_fetchOfflineSnapshot.movies) {
         std::vector<MediaItem> filtered;
-        for (const auto &item : view.items) {
+        for (const auto& item : view.items) {
             if (offlineMovieIds.count(item.id))
                 filtered.push_back(item);
         }
         view.items = std::move(filtered);
     }
-    for (auto &view : m_fetchOfflineSnapshot.shows) {
+    for (auto& view : m_fetchOfflineSnapshot.shows) {
         std::vector<MediaItem> filtered;
-        for (const auto &item : view.items) {
-            if (projection.playable(item.id)
-                || !projection.seasons(item.id).empty())
+        for (const auto& item : view.items) {
+            if (projection.playable(item.id) || !projection.seasons(item.id).empty())
                 filtered.push_back(item);
         }
         view.items = std::move(filtered);
     }
     m_fetchOfflineTabs = offlineTabsFromSnapshot(m_fetchOfflineSnapshot);
-    for (auto &tab : m_fetchOfflineTabs) {
+    for (auto& tab : m_fetchOfflineTabs) {
         if (tab.name == "Movies")
             tab.rows = {{"Movies", {}}};
         if (tab.name == "Shows")
@@ -161,7 +154,7 @@ void HomeScreen::restoreOnlinePresentation()
 }
 void HomeScreen::resetMediaPaging()
 {
-    auto reset = [](MediaPageState &state, const std::string &type, int letter) {
+    auto reset = [](MediaPageState& state, const std::string& type, int letter) {
         if (state.cancellation)
             state.cancellation->store(true);
         state = MediaPageState{};
@@ -181,11 +174,10 @@ void HomeScreen::resetMediaPaging()
     if (const int shows = tabIndex("Shows"); shows >= 0)
         m_tabs[shows].rows = {{"Shows", {}}};
 }
-void HomeScreen::finishMediaPage(MediaPageState &state)
+void HomeScreen::finishMediaPage(MediaPageState& state)
 {
-    if (!state.inFlight || !state.future.valid()
-        || state.future.wait_for(std::chrono::milliseconds(0))
-               != std::future_status::ready)
+    if (!state.inFlight || !state.future.valid() ||
+        state.future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
         return;
     const library::MediaPage result = state.future.get();
     state.inFlight = false;
@@ -194,26 +186,24 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     queuePosterJobs(planMediaPagePosterJobs(result.items), true);
     if (!m_firstMediaPageReadCompletedLogged) {
         m_firstMediaPageReadCompletedLogged = true;
-        uiDiagnostics().log(
-            "[HomeScreen] startup stage=first_read_media_page_ready");
+        uiDiagnostics().log("[HomeScreen] startup stage=first_read_media_page_ready");
     }
     if (!m_firstUsefulHomeLogged) {
         m_firstUsefulHomeLogged = true;
-        uiDiagnostics().log(
-            "[HomeScreen] startup stage=first_useful_home_ready");
+        uiDiagnostics().log("[HomeScreen] startup stage=first_useful_home_ready");
     }
-    auto &window = state.type == "movie"
-        ? m_moviePage.items
-        : state.type == "anime" ? m_animePage.items : m_showPage.items;
+    auto& window = state.type == "movie"   ? m_moviePage.items
+                   : state.type == "anime" ? m_animePage.items
+                                           : m_showPage.items;
     if (state.replaceWindowOnNextPage) {
         window = result.items;
         state.replaceWindowOnNextPage = false;
         state.hasEarlier = false;
     } else {
         std::set<std::string> known;
-        for (const auto &item : window)
+        for (const auto& item : window)
             known.insert(item.id);
-        for (const auto &item : result.items)
+        for (const auto& item : result.items)
             if (known.insert(item.id).second)
                 window.push_back(item);
     }
@@ -223,13 +213,11 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         std::size_t removedGridItems = 0;
         if (state.type == "movie") {
             const int removedRows = static_cast<int>((remove + 7) / 8);
-            m_rowScroll = m_rowScroll > removedRows
-                ? m_rowScroll - removedRows : 0;
+            m_rowScroll = m_rowScroll > removedRows ? m_rowScroll - removedRows : 0;
         } else {
-            const auto &filtered = state.type == "anime"
-                ? m_animeWindow : m_showWindow;
+            const auto& filtered = state.type == "anime" ? m_animeWindow : m_showWindow;
             for (std::size_t i = 0; i < remove; ++i) {
-                for (const auto &item : filtered) {
+                for (const auto& item : filtered) {
                     if (item.id == window[i].id) {
                         ++removedGridItems;
                         break;
@@ -238,14 +226,11 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
             }
             const int removedRows = static_cast<int>((removedGridItems + 3) / 4);
             if (state.type == "anime")
-                m_animeScroll = m_animeScroll > removedRows
-                    ? m_animeScroll - removedRows : 0;
+                m_animeScroll = m_animeScroll > removedRows ? m_animeScroll - removedRows : 0;
             else
-                m_showScroll = m_showScroll > removedRows
-                    ? m_showScroll - removedRows : 0;
+                m_showScroll = m_showScroll > removedRows ? m_showScroll - removedRows : 0;
         }
-        window.erase(window.begin(),
-                     window.begin() + static_cast<std::ptrdiff_t>(remove));
+        window.erase(window.begin(), window.begin() + static_cast<std::ptrdiff_t>(remove));
         state.hasEarlier = true;
     }
     state.next = result.next;
@@ -257,11 +242,11 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
     } else {
         {
             std::lock_guard<std::mutex> lock(m_fetchMutex);
-            for (const auto &item : result.items) {
+            for (const auto& item : result.items) {
                 const auto found = result.membershipsByItem.find(item.id);
                 if (found == result.membershipsByItem.end())
                     continue;
-                for (const auto &membership : found->second) {
+                for (const auto& membership : found->second) {
                     if (isAnimeSeries(membership.viewName, item)) {
                         m_animeItemIds.insert(item.id);
                         break;
@@ -273,69 +258,59 @@ void HomeScreen::finishMediaPage(MediaPageState &state)
         applyPendingDown(state);
     }
 }
-bool HomeScreen::liveChangeAffectsHome(
-    const library::LiveLibraryChangeResult &result) const
+bool HomeScreen::liveChangeAffectsHome(const library::LiveLibraryChangeResult& result) const
 {
     bool catalogItemAffectsHome = false;
-    for (const auto &item : result.items)
+    for (const auto& item : result.items)
         if (item.type == "movie" || item.type == "show") {
             catalogItemAffectsHome = true;
             break;
         }
 
-    const auto contains = [](const std::vector<MediaItem> &items,
-                             const std::string &id) {
+    const auto contains = [](const std::vector<MediaItem>& items, const std::string& id) {
         return std::find_if(items.begin(), items.end(),
-                            [&](const MediaItem &item) {
-                                return item.id == id;
-                            }) != items.end();
+                            [&](const MediaItem& item) { return item.id == id; }) != items.end();
     };
-    const auto cachedHomeItem = [&](const std::string &id) {
-        return contains(m_cachedSnapshot.continueWatching, id)
-            || contains(m_cachedSnapshot.recentlyAdded, id)
-            || contains(m_movieWindow, id)
-            || contains(m_showWindow, id)
-            || contains(m_animeWindow, id);
+    const auto cachedHomeItem = [&](const std::string& id) {
+        return contains(m_cachedSnapshot.continueWatching, id) ||
+               contains(m_cachedSnapshot.recentlyAdded, id) || contains(m_movieWindow, id) ||
+               contains(m_showWindow, id) || contains(m_animeWindow, id);
     };
     bool cachedHomeItemRemoved = false;
-    for (const auto &id : result.removedIds)
+    for (const auto& id : result.removedIds)
         if (cachedHomeItem(id)) {
             cachedHomeItemRemoved = true;
             break;
         }
-    return homeChangeNeedsPublication(result.catchUpRequired,
-                                      catalogItemAffectsHome,
+    return homeChangeNeedsPublication(result.catchUpRequired, catalogItemAffectsHome,
                                       cachedHomeItemRemoved);
 }
-void HomeScreen::publishLiveCatalogItems(
-    const library::LiveLibraryChangeResult &result)
+void HomeScreen::publishLiveCatalogItems(const library::LiveLibraryChangeResult& result)
 {
-    if (livePublicationIsNoop(result.items.empty(), result.removedIds.empty())) return;
-    const auto replace = [&](std::vector<MediaItem> &items,
-                             const MediaItem &changed) {
-        for (auto &item : items) {
+    if (livePublicationIsNoop(result.items.empty(), result.removedIds.empty()))
+        return;
+    const auto replace = [&](std::vector<MediaItem>& items, const MediaItem& changed) {
+        for (auto& item : items) {
             if (item.id == changed.id) {
                 item = changed;
                 return;
             }
         }
     };
-    const auto remove = [](std::vector<MediaItem> &items,
-                           const std::string &id) {
+    const auto remove = [](std::vector<MediaItem>& items, const std::string& id) {
         items.erase(std::remove_if(items.begin(), items.end(),
-                                   [&](const MediaItem &item) {
-                                       return item.id == id;
-                                   }),
+                                   [&](const MediaItem& item) { return item.id == id; }),
                     items.end());
     };
-    for (const auto &item : result.items) {
-        if (item.type == "movie") replace(m_movieWindow, item);
+    for (const auto& item : result.items) {
+        if (item.type == "movie")
+            replace(m_movieWindow, item);
         if (item.type == "show") {
             replace(m_showWindow, item);
             replace(m_animeWindow, item);
         }
     }
-    for (const auto &id : result.removedIds) {
+    for (const auto& id : result.removedIds) {
         remove(m_movieWindow, id);
         remove(m_showWindow, id);
         remove(m_animeWindow, id);
@@ -359,8 +334,8 @@ void HomeScreen::finishHomeRailRefresh()
             m_cachedSnapshot.recentlyAdded = m_homeRailRecentlyAdded;
         }
         restoreHomeRowFocus(focusedLabel);
-        queuePosterJobs(planHomeRailPosterJobs(
-            m_homeRailContinueWatching, m_homeRailRecentlyAdded), true);
+        queuePosterJobs(planHomeRailPosterJobs(m_homeRailContinueWatching, m_homeRailRecentlyAdded),
+                        true);
     } else if (!m_homeRailRefreshError.empty()) {
         std::printf("[HomeScreen] live Home rail refresh failed: %s\n",
                     m_homeRailRefreshError.c_str());
@@ -384,13 +359,12 @@ void HomeScreen::finishSafetyReconcile()
     // consumes the completed result here.
     m_safetyReconcileInFlight = false;
     if (!result.success && !result.message.empty())
-        std::printf("[HomeScreen] safety reconciliation failed: %s\n",
-                    result.message.c_str());
+        std::printf("[HomeScreen] safety reconciliation failed: %s\n", result.message.c_str());
 }
 
-static void makeMediaTabsBounded(std::vector<TabData> &tabs)
+static void makeMediaTabsBounded(std::vector<TabData>& tabs)
 {
-    for (auto &tab : tabs) {
+    for (auto& tab : tabs) {
         if (tab.name == "Movies")
             tab.rows = {{"Movies", {}}};
         if (tab.name == "Shows")
@@ -403,22 +377,20 @@ void HomeScreen::finishFetch()
     if (!takePendingPresentation(presentation))
         return;
     uiDiagnostics().log(
-        "[HomeScreen] pending_presentation_taken request="
-        + std::to_string(presentation.diagnosticRequest)
-        + " generation=" + std::to_string(presentation.diagnosticGeneration)
-        + " stage=" + (presentation.diagnosticStage.empty()
-            ? "unspecified" : presentation.diagnosticStage)
-        + " complete=" + std::to_string(presentation.complete ? 1 : 0)
-        + " completed_pages="
-        + std::to_string(presentation.diagnosticCompletedPages));
+        "[HomeScreen] pending_presentation_taken request=" +
+        std::to_string(presentation.diagnosticRequest) +
+        " generation=" + std::to_string(presentation.diagnosticGeneration) + " stage=" +
+        (presentation.diagnosticStage.empty() ? "unspecified" : presentation.diagnosticStage) +
+        " complete=" + std::to_string(presentation.complete ? 1 : 0) +
+        " completed_pages=" + std::to_string(presentation.diagnosticCompletedPages));
     applyPendingPresentation(presentation);
     // A first page is published early so Home becomes useful quickly, but it
     // is not a replacement for the last committed catalog.  If a later page
     // fails or the population is cancelled, restore the presentation that was
     // valid when this fetch began, or discard the provisional frame entirely
     // when there was no authoritative Home content to restore.
-    if (presentation.complete && !m_fetchCatalogCommitted.load()
-        && !m_fetchError.empty() && !m_fetchFailureRestored) {
+    if (presentation.complete && !m_fetchCatalogCommitted.load() && !m_fetchError.empty() &&
+        !m_fetchFailureRestored) {
         const std::string focusedLabel = focusedHomeRowLabel();
         const std::vector<TabData> previous = m_tabs;
         const int selected = m_activeTab;
@@ -467,16 +439,14 @@ void HomeScreen::finishFetch()
             resetMediaPaging();
             m_activeTab = transitionTabIndex(previous, selected, m_tabs);
             restoreHomeRowFocus(focusedLabel);
-            m_loadState = m_offlineModeFetchPending
-                ? LoadState::Loading : LoadState::Error;
+            m_loadState = m_offlineModeFetchPending ? LoadState::Loading : LoadState::Error;
             clampNavigation();
         }
         m_fetchPublished = true;
         m_fetchFailureRestored = true;
-        uiDiagnostics().log(
-            "[HomeScreen] terminal_sdl_application status=failure request="
-            + std::to_string(presentation.diagnosticRequest)
-            + " generation=" + std::to_string(presentation.diagnosticGeneration));
+        uiDiagnostics().log("[HomeScreen] terminal_sdl_application status=failure request=" +
+                            std::to_string(presentation.diagnosticRequest) +
+                            " generation=" + std::to_string(presentation.diagnosticGeneration));
     }
     if (!m_fetchPublished) {
         if (!m_fetchError.empty()) {
@@ -513,8 +483,7 @@ void HomeScreen::finishFetch()
             m_loadState = LoadState::Ready;
             clampNavigation();
             printf("[HomeScreen] Library loaded: %zu tabs\n", m_tabs.size());
-            uiDiagnostics().log(
-                "[HomeScreen] startup stage=loading_state_cleared");
+            uiDiagnostics().log("[HomeScreen] startup stage=loading_state_cleared");
             m_fetchPublished = true;
             if (!warmWindows.movies.empty()) {
                 m_moviePage.items = warmWindows.movies;
@@ -566,10 +535,8 @@ void HomeScreen::finishFetch()
             rebuiltTabs = std::move(m_fetchResult);
         }
         const std::string focusedLabel = focusedHomeRowLabel();
-        if ((m_fetchError.empty() || m_fetchCatalogCommitted.load())
-            && !rebuiltTabs.empty()) {
-            const HomeMediaWindows warmWindows =
-                mediaWindowsFromTabs(rebuiltTabs);
+        if ((m_fetchError.empty() || m_fetchCatalogCommitted.load()) && !rebuiltTabs.empty()) {
+            const HomeMediaWindows warmWindows = mediaWindowsFromTabs(rebuiltTabs);
             const std::vector<TabData> previous = m_tabs;
             const int selected = m_activeTab;
             m_tabs = std::move(rebuiltTabs);
@@ -588,8 +555,8 @@ void HomeScreen::finishFetch()
             }
         }
         if (m_fetchCacheSaved) {
-            m_cachedSnapshot=m_remoteSnapshot;
-            m_haveCachedSnapshot=true;
+            m_cachedSnapshot = m_remoteSnapshot;
+            m_haveCachedSnapshot = true;
             // A user can enable manual offline mode while the first bounded
             // sync is still completing.  The earlier projection attempt has
             // no snapshot to consume, so apply it once the snapshot is ready.
@@ -606,11 +573,10 @@ void HomeScreen::finishFetch()
         // the live-change path from starting a competing top-level sync
         // prematurely.  The thread is joined later in joinAllWorkers().
         m_syncSchedule.complete(SDL_GetTicks(), m_fetchError.empty());
-        uiDiagnostics().log(
-            "[HomeScreen] terminal_sdl_application status="
-            + std::string(m_fetchError.empty() ? "library_loaded" : "failure")
-            + " request=" + std::to_string(presentation.diagnosticRequest)
-            + " generation=" + std::to_string(presentation.diagnosticGeneration));
+        uiDiagnostics().log("[HomeScreen] terminal_sdl_application status=" +
+                            std::string(m_fetchError.empty() ? "library_loaded" : "failure") +
+                            " request=" + std::to_string(presentation.diagnosticRequest) +
+                            " generation=" + std::to_string(presentation.diagnosticGeneration));
         // If the user toggled offline mode while this fetch was in-flight,
         // the fetched tabs may not match the current session mode.  Re-fetch
         // so the worker takes the correct path (offline snapshot or full

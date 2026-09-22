@@ -12,63 +12,79 @@
 
 static int g_failures = 0;
 
-#define CHECK(cond) \
-    do { \
-        if (!(cond)) { \
-            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            ++g_failures; \
-        } \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            std::printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                          \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
-#define CHECK_EQ(a, b) \
-    do { \
-        if ((a) != (b)) { \
-            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", \
-                        __FILE__, __LINE__, std::string(b).c_str(), std::string(a).c_str()); \
-            ++g_failures; \
-        } \
+#define CHECK_EQ(a, b)                                                                             \
+    do {                                                                                           \
+        if ((a) != (b)) {                                                                          \
+            std::printf("  FAIL %s:%d: expected \"%s\", got \"%s\"\n", __FILE__, __LINE__,         \
+                        std::string(b).c_str(), std::string(a).c_str());                           \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
-static void testPlaybackRoutes() {
-    PlaybackRoute publicOnly=playback_route("https://public", "");
-    CHECK_EQ(publicOnly.primary, std::string("https://public")); CHECK(publicOnly.fallback.empty()); CHECK(!publicOnly.usingLan);
-    PlaybackRoute lan=playback_route("https://public", "http://lan");
-    CHECK_EQ(lan.primary, std::string("http://lan")); CHECK_EQ(lan.fallback, std::string("https://public")); CHECK(lan.usingLan);
+static void testPlaybackRoutes()
+{
+    PlaybackRoute publicOnly = playback_route("https://public", "");
+    CHECK_EQ(publicOnly.primary, std::string("https://public"));
+    CHECK(publicOnly.fallback.empty());
+    CHECK(!publicOnly.usingLan);
+    PlaybackRoute lan = playback_route("https://public", "http://lan");
+    CHECK_EQ(lan.primary, std::string("http://lan"));
+    CHECK_EQ(lan.fallback, std::string("https://public"));
+    CHECK(lan.usingLan);
     CHECK(playback_should_fallback(true, 0));
-    CHECK(!playback_should_fallback(false, 401)); CHECK(!playback_should_fallback(false, 403));
+    CHECK(!playback_should_fallback(false, 401));
+    CHECK(!playback_should_fallback(false, 403));
     // One failed transport attempt is retried through the fallback once: this
     // preserves one logical Start/Stopped event rather than emitting duplicates.
-    int attempts=0; if (playback_should_fallback(true, 0)) ++attempts; ++attempts; CHECK(attempts==2);
+    int attempts = 0;
+    if (playback_should_fallback(true, 0))
+        ++attempts;
+    ++attempts;
+    CHECK(attempts == 2);
 }
 
 // A: seconds_to_ticks tests
-static void testTicksZero() {
+static void testTicksZero()
+{
     std::printf("[test] seconds_to_ticks: 0.0\n");
     CHECK(seconds_to_ticks(0.0) == 0);
     std::printf("[test] seconds_to_ticks: 0.0 OK\n");
 }
-static void testTicks525() {
+static void testTicks525()
+{
     std::printf("[test] seconds_to_ticks: 5.25\n");
     CHECK(seconds_to_ticks(5.25) == 52500000);
     std::printf("[test] seconds_to_ticks: 5.25 OK\n");
 }
-static void testTicks60() {
+static void testTicks60()
+{
     std::printf("[test] seconds_to_ticks: 60.0\n");
     CHECK(seconds_to_ticks(60.0) == 600000000);
     std::printf("[test] seconds_to_ticks: 60.0 OK\n");
 }
-static void testTicks138742() {
+static void testTicks138742()
+{
     std::printf("[test] seconds_to_ticks: 1387.42\n");
     CHECK(seconds_to_ticks(1387.42) == 13874200000LL);
     std::printf("[test] seconds_to_ticks: 1387.42 OK\n");
 }
-static void testTicksNegativeClamp() {
+static void testTicksNegativeClamp()
+{
     std::printf("[test] seconds_to_ticks: negative clamps to 0\n");
     CHECK(seconds_to_ticks(-1.0) == 0);
     CHECK(seconds_to_ticks(-100.5) == 0);
     std::printf("[test] seconds_to_ticks: negative clamps OK\n");
 }
-static void testTicksNaN() {
+static void testTicksNaN()
+{
     std::printf("[test] seconds_to_ticks: NaN/Inf clamps to 0\n");
     CHECK(seconds_to_ticks(std::nan("")) == 0);
     CHECK(seconds_to_ticks(std::numeric_limits<double>::infinity()) == 0);
@@ -76,7 +92,8 @@ static void testTicksNaN() {
 }
 
 // A2: resume parsing and absolute-position conversion
-static void testResumeTicksParsing() {
+static void testResumeTicksParsing()
+{
     std::printf("[test] resume_ticks parsing\n");
     CHECK(parse_resume_ticks("") == 0);
     CHECK(parse_resume_ticks("not-a-number") == 0);
@@ -87,56 +104,66 @@ static void testResumeTicksParsing() {
     std::printf("[test] resume_ticks parsing OK\n");
 }
 
-static void testAbsolutePositionTicks() {
+static void testAbsolutePositionTicks()
+{
     std::printf("[test] absolute resume positions\n");
     CHECK(absolute_position_ticks(0, 18.0) == 180000000LL);
     CHECK(absolute_position_ticks(6734640000LL, 18.0) == 6914640000LL);
     CHECK(absolute_position_ticks(6734640000LL, 1.48438) == 6749483800LL);
     CHECK(absolute_position_ticks(6734640000LL, 6.48938) == 6799533800LL);
     CHECK(absolute_position_ticks(-1, 18.0) == 180000000LL);
-    CHECK(add_resume_ticks(std::numeric_limits<int64_t>::max() - 5, 10)
-          == std::numeric_limits<int64_t>::max());
+    CHECK(add_resume_ticks(std::numeric_limits<int64_t>::max() - 5, 10) ==
+          std::numeric_limits<int64_t>::max());
     CHECK(add_resume_ticks(10, -1) == 10);
     std::printf("[test] absolute resume positions OK\n");
 }
 
 // B: Valid showinfo pts_time parsing
-static void testParsePts1() {
+static void testParsePts1()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:1.46673\n");
     double pts = -1.0;
-    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:   0 pts:  47107 pts_time:1.46673 ...", pts));
+    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:   0 pts:  47107 pts_time:1.46673 ...",
+                             pts));
     CHECK(std::fabs(pts - 1.46673) < 0.0001);
     std::printf("[test] parse_showinfo_pts: 1.46673 OK\n");
 }
-static void testParsePts2() {
+static void testParsePts2()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:6.47173\n");
     double pts = -1.0;
-    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:   1 pts: 208057 pts_time:6.47173 ...", pts));
+    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:   1 pts: 208057 pts_time:6.47173 ...",
+                             pts));
     CHECK(std::fabs(pts - 6.47173) < 0.0001);
     std::printf("[test] parse_showinfo_pts: 6.47173 OK\n");
 }
-static void testParsePts21() {
+static void testParsePts21()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:21.4867\n");
     double pts = -1.0;
-    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:  13 pts: 693784 pts_time:21.4867 ...", pts));
+    CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:  13 pts: 693784 pts_time:21.4867 ...",
+                             pts));
     CHECK(std::fabs(pts - 21.4867) < 0.0001);
     std::printf("[test] parse_showinfo_pts: 21.4867 OK\n");
 }
-static void testParsePtsInteger() {
+static void testParsePtsInteger()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:30\n");
     double pts = -1.0;
     CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] pts_time:30 foo", pts));
     CHECK(std::fabs(pts - 30.0) < 0.001);
     std::printf("[test] parse_showinfo_pts: 30 OK\n");
 }
-static void testParsePtsZero() {
+static void testParsePtsZero()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:0.0\n");
     double pts = -1.0;
     CHECK(parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] pts_time:0.0 n:0", pts));
     CHECK(std::fabs(pts - 0.0) < 0.001);
     std::printf("[test] parse_showinfo_pts: 0.0 OK\n");
 }
-static void testParsePtsLarge() {
+static void testParsePtsLarge()
+{
     std::printf("[test] parse_showinfo_pts: pts_time:1387.42\n");
     double pts = -1.0;
     CHECK(parse_showinfo_pts("...pts_time:1387.42 ...", pts));
@@ -145,61 +172,71 @@ static void testParsePtsLarge() {
 }
 
 // C: Invalid records / rejection tests
-static void testRejectVersionLine() {
+static void testRejectVersionLine()
+{
     std::printf("[test] parse_showinfo_pts: reject version line\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("ffmpeg version 4.2.1 ...", pts));
     std::printf("[test] parse_showinfo_pts: version line OK\n");
 }
-static void testRejectLibavcodec() {
+static void testRejectLibavcodec()
+{
     std::printf("[test] parse_showinfo_pts: reject libavcodec line\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("  built with gcc ...", pts));
     std::printf("[test] parse_showinfo_pts: libavcodec OK\n");
 }
-static void testRejectNegative() {
+static void testRejectNegative()
+{
     std::printf("[test] parse_showinfo_pts: reject negative pts_time\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("... pts_time:-1.5 ...", pts));
     std::printf("[test] parse_showinfo_pts: negative OK\n");
 }
-static void testRejectEmpty() {
+static void testRejectEmpty()
+{
     std::printf("[test] parse_showinfo_pts: reject empty string\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("", pts));
     std::printf("[test] parse_showinfo_pts: empty OK\n");
 }
-static void testRejectNoPtsTime() {
+static void testRejectNoPtsTime()
+{
     std::printf("[test] parse_showinfo_pts: reject line without pts_time\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("[Parsed_showinfo_3 @ 0x...] n:   0 pts:  47107", pts));
     std::printf("[test] parse_showinfo_pts: no pts_time OK\n");
 }
-static void testRejectPtsTimeOnly() {
+static void testRejectPtsTimeOnly()
+{
     std::printf("[test] parse_showinfo_pts: reject pts_time: without value\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("...pts_time: ...", pts));
     std::printf("[test] parse_showinfo_pts: pts_time only OK\n");
 }
-static void testRejectPtsTimeSign() {
+static void testRejectPtsTimeSign()
+{
     std::printf("[test] parse_showinfo_pts: reject pts_time:+5.0\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("... pts_time:+5.0 ...", pts));
     std::printf("[test] parse_showinfo_pts: explicit positive sign OK\n");
 }
-static void testRejectInf() {
+static void testRejectInf()
+{
     std::printf("[test] parse_showinfo_pts: reject pts_time:inf\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("...pts_time:inf ...", pts));
     std::printf("[test] parse_showinfo_pts: inf OK\n");
 }
-static void testRejectNan() {
+static void testRejectNan()
+{
     std::printf("[test] parse_showinfo_pts: reject pts_time:nan\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("...pts_time:nan ...", pts));
     std::printf("[test] parse_showinfo_pts: nan OK\n");
 }
-static void testRejectRandomLine() {
+static void testRejectRandomLine()
+{
     std::printf("[test] parse_showinfo_pts: reject random unrelated line\n");
     double pts = -1.0;
     CHECK(!parse_showinfo_pts("Stream mapping:", pts));
@@ -209,7 +246,8 @@ static void testRejectRandomLine() {
 }
 
 // D: Seek / backward PTS behavior
-static void testSeekForward() {
+static void testSeekForward()
+{
     std::printf("[test] parse_showinfo_pts: seek forward (PTS jumps ahead)\n");
     double pts1 = -1.0, pts2 = -1.0;
     CHECK(parse_showinfo_pts("...pts_time:5.0 ...", pts1));
@@ -217,7 +255,8 @@ static void testSeekForward() {
     CHECK(std::fabs(pts2 - 120.0) < 0.001);
     std::printf("[test] parse_showinfo_pts: seek forward OK\n");
 }
-static void testSeekBackward() {
+static void testSeekBackward()
+{
     std::printf("[test] parse_showinfo_pts: seek backward (PTS smaller than previous)\n");
     double pts1 = -1.0, pts2 = -1.0;
     CHECK(parse_showinfo_pts("...pts_time:200.0 ...", pts1));
@@ -225,7 +264,8 @@ static void testSeekBackward() {
     CHECK(std::fabs(pts2 - 30.0) < 0.001);
     std::printf("[test] parse_showinfo_pts: seek backward OK\n");
 }
-static void testNonMonotonic() {
+static void testNonMonotonic()
+{
     std::printf("[test] parse_showinfo_pts: non-monotonic sequence accepted\n");
     double pts;
     CHECK(parse_showinfo_pts("...pts_time:100.0 ...", pts));
@@ -236,7 +276,8 @@ static void testNonMonotonic() {
 }
 
 // E: Jellyfin ticks conversion from parsed PTS
-static void testTicksFromPts21() {
+static void testTicksFromPts21()
+{
     std::printf("[test] pts_time:21.4867 -> Jellyfin ticks\n");
     double pts = -1.0;
     CHECK(parse_showinfo_pts("...pts_time:21.4867 ...", pts));
@@ -244,7 +285,8 @@ static void testTicksFromPts21() {
     CHECK(ticks == 214867000);
     std::printf("[test] pts_time:21.4867 -> %lld ticks OK\n", (long long)ticks);
 }
-static void testTicksFromPts1() {
+static void testTicksFromPts1()
+{
     std::printf("[test] pts_time:1.46673 -> Jellyfin ticks\n");
     double pts = -1.0;
     CHECK(parse_showinfo_pts("...pts_time:1.46673 ...", pts));
@@ -254,64 +296,87 @@ static void testTicksFromPts1() {
 }
 
 // F: record extraction (CR/LF)
-static void testExtractLF() {
+static void testExtractLF()
+{
     std::printf("[test] extract_record: LF\n");
     std::string buf = "line1\nline2\n";
-    size_t pos = 0; std::string rec;
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line1"));
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line2"));
+    size_t pos = 0;
+    std::string rec;
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line1"));
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line2"));
     CHECK(!extract_record(buf, pos, rec));
     std::printf("[test] extract_record: LF OK\n");
 }
-static void testExtractCR() {
+static void testExtractCR()
+{
     std::printf("[test] extract_record: CR\n");
     std::string buf = "line1\rline2\r";
-    size_t pos = 0; std::string rec;
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line1"));
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line2"));
+    size_t pos = 0;
+    std::string rec;
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line1"));
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line2"));
     CHECK(!extract_record(buf, pos, rec));
     std::printf("[test] extract_record: CR OK\n");
 }
-static void testExtractCRLF() {
+static void testExtractCRLF()
+{
     std::printf("[test] extract_record: CRLF\n");
     std::string buf = "line1\r\nline2\r\n";
-    size_t pos = 0; std::string rec;
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line1"));
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("line2"));
+    size_t pos = 0;
+    std::string rec;
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line1"));
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("line2"));
     CHECK(!extract_record(buf, pos, rec));
     std::printf("[test] extract_record: CRLF OK\n");
 }
-static void testExtractMixed() {
+static void testExtractMixed()
+{
     std::printf("[test] extract_record: mixed CR/LF\n");
     std::string buf = "a\rb\nc\r\nd";
-    size_t pos = 0; std::string rec;
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("a"));
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("b"));
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("c"));
+    size_t pos = 0;
+    std::string rec;
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("a"));
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("b"));
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("c"));
     CHECK(!extract_record(buf, pos, rec));
     std::printf("[test] extract_record: mixed OK\n");
 }
-static void testExtractIncomplete() {
+static void testExtractIncomplete()
+{
     std::printf("[test] extract_record: incomplete\n");
     std::string buf = "partial record";
-    size_t pos = 0; std::string rec;
+    size_t pos = 0;
+    std::string rec;
     CHECK(!extract_record(buf, pos, rec));
     CHECK(pos == 0);
     std::printf("[test] extract_record: incomplete OK\n");
 }
-static void testExtractFromOffset() {
+static void testExtractFromOffset()
+{
     std::printf("[test] extract_record: from offset\n");
     std::string buf = "skip this\nkeep this\n";
-    size_t pos = 10; std::string rec;
-    CHECK(extract_record(buf, pos, rec)); CHECK_EQ(rec, std::string("keep this"));
+    size_t pos = 10;
+    std::string rec;
+    CHECK(extract_record(buf, pos, rec));
+    CHECK_EQ(rec, std::string("keep this"));
     std::printf("[test] extract_record: from offset OK\n");
 }
 
 // G: pts_event lifecycle (start-once bug fix)
-static void testPtsEventFirstReturnsStart() {
+static void testPtsEventFirstReturnsStart()
+{
     std::printf("[test] pts_event: first call returns false (Start)\n");
     bool attempted = false;
-    CHECK(!pts_event(attempted));  // false = caller should send Start
+    CHECK(!pts_event(attempted)); // false = caller should send Start
     CHECK(attempted);
     std::printf("[test] pts_event: first call OK\n");
 }
@@ -323,28 +388,29 @@ static void testPlayerVideoOutputDiagnostics()
     CHECK(player_video_output_initialized("Using video driver 'mmiyoo'"));
     CHECK(player_video_output_initialization_failed(
         "Could not initialize SDL - video output unavailable"));
-    CHECK(player_video_output_initialization_failed(
-        "SDL_CreateWindow failed: display busy"));
+    CHECK(player_video_output_initialization_failed("SDL_CreateWindow failed: display busy"));
     CHECK(!player_video_output_initialized("showinfo pts_time:1.0"));
     std::printf("[test] player video output diagnostics OK\n");
 }
 
-static void testPtsEventSecondReturnsProgress() {
+static void testPtsEventSecondReturnsProgress()
+{
     std::printf("[test] pts_event: second call returns true (Progress)\n");
     bool attempted = false;
-    pts_event(attempted);  // first → Start
-    CHECK(pts_event(attempted));  // second → Progress
+    pts_event(attempted);        // first → Start
+    CHECK(pts_event(attempted)); // second → Progress
     std::printf("[test] pts_event: second call OK\n");
 }
-static void testPtsEventAlwaysStartThenProgress() {
+static void testPtsEventAlwaysStartThenProgress()
+{
     std::printf("[test] pts_event: Start once, then Progress forever\n");
     bool attempted = false;
     // Simulate 5 sampled PTS events
-    CHECK(!pts_event(attempted));   // 1st → Start
-    CHECK(pts_event(attempted));    // 2nd → Progress
-    CHECK(pts_event(attempted));    // 3rd → Progress
-    CHECK(pts_event(attempted));    // 4th → Progress
-    CHECK(pts_event(attempted));    // 5th → Progress
+    CHECK(!pts_event(attempted)); // 1st → Start
+    CHECK(pts_event(attempted));  // 2nd → Progress
+    CHECK(pts_event(attempted));  // 3rd → Progress
+    CHECK(pts_event(attempted));  // 4th → Progress
+    CHECK(pts_event(attempted));  // 5th → Progress
     // Even after many calls, Start is never sent again
     for (int i = 0; i < 10; ++i)
         CHECK(pts_event(attempted));
@@ -355,15 +421,16 @@ static void testPtsEventAlwaysStartThenProgress() {
 // H: pos.cfg parsing tests
 // ================================================================
 
-static const char *MIYOOFIN_KEY = "http://127.0.0.1:18080/stream";
+static const char* MIYOOFIN_KEY = "http://127.0.0.1:18080/stream";
 
 // Helper: build a single 264-byte record
-static std::string make_record(const char *key, uint8_t posBytes[4])
+static std::string make_record(const char* key, uint8_t posBytes[4])
 {
     std::string rec(POS_CFG_RECORD_SIZE, '\0');
     if (key) {
         size_t klen = std::strlen(key);
-        if (klen > POS_CFG_KEY_SIZE) klen = POS_CFG_KEY_SIZE;
+        if (klen > POS_CFG_KEY_SIZE)
+            klen = POS_CFG_KEY_SIZE;
         std::memcpy(&rec[0], key, klen);
     }
     rec[POS_CFG_POS_OFFSET + 0] = (char)posBytes[0];
@@ -374,7 +441,8 @@ static std::string make_record(const char *key, uint8_t posBytes[4])
 }
 
 // H1: One complete 264-byte record, position = 32
-static void testPosCfgSingleRecord32() {
+static void testPosCfgSingleRecord32()
+{
     std::printf("[test] pos.cfg: single record position=32\n");
     uint8_t pos[4] = {0x20, 0x00, 0x00, 0x00};
     std::string data = make_record(MIYOOFIN_KEY, pos);
@@ -385,7 +453,8 @@ static void testPosCfgSingleRecord32() {
 }
 
 // H2: Little-endian decode: 0x52 = 82 seconds
-static void testPosCfgLE82() {
+static void testPosCfgLE82()
+{
     std::printf("[test] pos.cfg: little-endian decode 82\n");
     uint8_t pos[4] = {0x52, 0x00, 0x00, 0x00};
     std::string data = make_record(MIYOOFIN_KEY, pos);
@@ -396,13 +465,13 @@ static void testPosCfgLE82() {
 }
 
 // H3: Multiple records — unrelated record followed by MiyooFin record
-static void testPosCfgUnrelatedThenMiyooFin() {
+static void testPosCfgUnrelatedThenMiyooFin()
+{
     std::printf("[test] pos.cfg: unrelated record then MiyooFin\n");
     uint8_t posUnrel[4] = {0x0A, 0x00, 0x00, 0x00};
     uint8_t posMiyoo[4] = {0x16, 0x00, 0x00, 0x00};
-    std::string data =
-        make_record("http://192.168.1.100:8096/videos", posUnrel) +
-        make_record(MIYOOFIN_KEY, posMiyoo);
+    std::string data = make_record("http://192.168.1.100:8096/videos", posUnrel) +
+                       make_record(MIYOOFIN_KEY, posMiyoo);
     uint32_t result = 0;
     CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
     CHECK(result == 22);
@@ -410,13 +479,13 @@ static void testPosCfgUnrelatedThenMiyooFin() {
 }
 
 // H4: MiyooFin record NOT last — still finds it
-static void testPosCfgMiyooFinNotLast() {
+static void testPosCfgMiyooFinNotLast()
+{
     std::printf("[test] pos.cfg: MiyooFin record NOT last\n");
     uint8_t posMiyoo[4] = {0x15, 0x00, 0x00, 0x00};
     uint8_t posAfter[4] = {0xFF, 0x00, 0x00, 0x00};
     std::string data =
-        make_record(MIYOOFIN_KEY, posMiyoo) +
-        make_record("something.else", posAfter);
+        make_record(MIYOOFIN_KEY, posMiyoo) + make_record("something.else", posAfter);
     uint32_t result = 0;
     CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
     CHECK(result == 21);
@@ -424,15 +493,14 @@ static void testPosCfgMiyooFinNotLast() {
 }
 
 // H5: Multiple exact matching records — last one wins
-static void testPosCfgMultipleMatchesLastWins() {
+static void testPosCfgMultipleMatchesLastWins()
+{
     std::printf("[test] pos.cfg: multiple exact matches, last wins\n");
     uint8_t pos1[4] = {0x0A, 0x00, 0x00, 0x00};
     uint8_t pos2[4] = {0x20, 0x00, 0x00, 0x00};
     uint8_t pos3[4] = {0x37, 0x00, 0x00, 0x00};
-    std::string data =
-        make_record(MIYOOFIN_KEY, pos1) +
-        make_record("distractor", pos2) +
-        make_record(MIYOOFIN_KEY, pos3);
+    std::string data = make_record(MIYOOFIN_KEY, pos1) + make_record("distractor", pos2) +
+                       make_record(MIYOOFIN_KEY, pos3);
     uint32_t result = 0;
     CHECK(parse_pos_cfg_position(data, MIYOOFIN_KEY, result));
     CHECK(result == 55);
@@ -440,7 +508,8 @@ static void testPosCfgMultipleMatchesLastWins() {
 }
 
 // H6: Missing matching key — failure
-static void testPosCfgMissingKey() {
+static void testPosCfgMissingKey()
+{
     std::printf("[test] pos.cfg: missing matching key\n");
     uint8_t pos[4] = {0x0A, 0x00, 0x00, 0x00};
     std::string data = make_record("http://wrong-server:8096/stream", pos);
@@ -451,7 +520,8 @@ static void testPosCfgMissingKey() {
 }
 
 // H7: Incomplete trailing record — safely ignored
-static void testPosCfgIncompleteTrailing() {
+static void testPosCfgIncompleteTrailing()
+{
     std::printf("[test] pos.cfg: incomplete trailing record\n");
     uint8_t pos[4] = {0x16, 0x00, 0x00, 0x00};
     std::string data = make_record(MIYOOFIN_KEY, pos);
@@ -463,7 +533,8 @@ static void testPosCfgIncompleteTrailing() {
 }
 
 // H8: 256-byte key field without any NUL — rejected
-static void testPosCfgNoNulInKeyField() {
+static void testPosCfgNoNulInKeyField()
+{
     std::printf("[test] pos.cfg: no NUL in key field\n");
     std::string rec(POS_CFG_RECORD_SIZE, '\xFF');
     uint8_t pos[4] = {0x0A, 0x00, 0x00, 0x00};
@@ -477,7 +548,8 @@ static void testPosCfgNoNulInKeyField() {
 }
 
 // H9: Stale bytes AFTER the NUL — key before NUL still matches
-static void testPosCfgStaleBytesAfterNul() {
+static void testPosCfgStaleBytesAfterNul()
+{
     std::printf("[test] pos.cfg: stale bytes after NUL still matches\n");
     std::string rec(POS_CFG_RECORD_SIZE, '\0');
     size_t klen = std::strlen(MIYOOFIN_KEY);
@@ -497,7 +569,8 @@ static void testPosCfgStaleBytesAfterNul() {
 }
 
 // H10: Successful pos.cfg value overrides sampled PTS
-static void testPosCfgOverridesSampledPts() {
+static void testPosCfgOverridesSampledPts()
+{
     std::printf("[test] pos.cfg: value overrides sampled PTS\n");
     double lastPts = 31.4833;
     uint8_t posBytes[4] = {0x20, 0x00, 0x00, 0x00};
@@ -505,14 +578,16 @@ static void testPosCfgOverridesSampledPts() {
     uint32_t posSec = 0;
     bool found = parse_pos_cfg_position(data, MIYOOFIN_KEY, posSec);
     CHECK(found);
-    if (found) lastPts = static_cast<double>(posSec);
+    if (found)
+        lastPts = static_cast<double>(posSec);
     int64_t ticks = absolute_position_ticks(6734640000LL, lastPts);
     CHECK(ticks == 7054640000LL);
     std::printf("[test] pos.cfg: overrides sampled PTS OK\n");
 }
 
 // H11: Failed pos.cfg parse falls back to latest sampled showinfo PTS
-static void testPosCfgFallbackToSampledPts() {
+static void testPosCfgFallbackToSampledPts()
+{
     std::printf("[test] pos.cfg: fallback to sampled PTS\n");
     double lastPts = 27.2592;
     uint8_t posBytes[4] = {0x01, 0x00, 0x00, 0x00};
@@ -537,44 +612,71 @@ int main()
     testPlaybackRoutes();
 
     std::printf("--- A: seconds_to_ticks ---\n");
-    testTicksZero(); testTicks525(); testTicks60(); testTicks138742();
-    testTicksNegativeClamp(); testTicksNaN();
+    testTicksZero();
+    testTicks525();
+    testTicks60();
+    testTicks138742();
+    testTicksNegativeClamp();
+    testTicksNaN();
 
     std::printf("\n--- A2: resume ticks and absolute positions ---\n");
-    testResumeTicksParsing(); testAbsolutePositionTicks();
+    testResumeTicksParsing();
+    testAbsolutePositionTicks();
 
     std::printf("\n--- B: valid showinfo pts_time parsing ---\n");
-    testParsePts1(); testParsePts2(); testParsePts21();
-    testParsePtsInteger(); testParsePtsZero(); testParsePtsLarge();
+    testParsePts1();
+    testParsePts2();
+    testParsePts21();
+    testParsePtsInteger();
+    testParsePtsZero();
+    testParsePtsLarge();
 
     std::printf("\n--- C: invalid records / rejection ---\n");
-    testRejectVersionLine(); testRejectLibavcodec();
-    testRejectNegative(); testRejectEmpty();
-    testRejectNoPtsTime(); testRejectPtsTimeOnly();
-    testRejectPtsTimeSign(); testRejectInf(); testRejectNan();
+    testRejectVersionLine();
+    testRejectLibavcodec();
+    testRejectNegative();
+    testRejectEmpty();
+    testRejectNoPtsTime();
+    testRejectPtsTimeOnly();
+    testRejectPtsTimeSign();
+    testRejectInf();
+    testRejectNan();
     testRejectRandomLine();
 
     std::printf("\n--- D: seek behavior (backward PTS accepted) ---\n");
-    testSeekForward(); testSeekBackward(); testNonMonotonic();
+    testSeekForward();
+    testSeekBackward();
+    testNonMonotonic();
 
     std::printf("\n--- E: Jellyfin ticks from parsed PTS ---\n");
-    testTicksFromPts21(); testTicksFromPts1();
+    testTicksFromPts21();
+    testTicksFromPts1();
 
     std::printf("\n--- F: record extraction (CR/LF) ---\n");
-    testExtractLF(); testExtractCR(); testExtractCRLF(); testExtractMixed();
-    testExtractIncomplete(); testExtractFromOffset();
+    testExtractLF();
+    testExtractCR();
+    testExtractCRLF();
+    testExtractMixed();
+    testExtractIncomplete();
+    testExtractFromOffset();
 
     std::printf("\n--- G: pts_event lifecycle (start-once bug fix) ---\n");
-    testPtsEventFirstReturnsStart(); testPtsEventSecondReturnsProgress();
+    testPtsEventFirstReturnsStart();
+    testPtsEventSecondReturnsProgress();
     testPlayerVideoOutputDiagnostics();
     testPtsEventAlwaysStartThenProgress();
 
     std::printf("\n--- H: pos.cfg binary-record parsing ---\n");
-    testPosCfgSingleRecord32(); testPosCfgLE82();
-    testPosCfgUnrelatedThenMiyooFin(); testPosCfgMiyooFinNotLast();
-    testPosCfgMultipleMatchesLastWins(); testPosCfgMissingKey();
-    testPosCfgIncompleteTrailing(); testPosCfgNoNulInKeyField();
-    testPosCfgStaleBytesAfterNul(); testPosCfgOverridesSampledPts();
+    testPosCfgSingleRecord32();
+    testPosCfgLE82();
+    testPosCfgUnrelatedThenMiyooFin();
+    testPosCfgMiyooFinNotLast();
+    testPosCfgMultipleMatchesLastWins();
+    testPosCfgMissingKey();
+    testPosCfgIncompleteTrailing();
+    testPosCfgNoNulInKeyField();
+    testPosCfgStaleBytesAfterNul();
+    testPosCfgOverridesSampledPts();
     testPosCfgFallbackToSampledPts();
 
     std::printf("\n");

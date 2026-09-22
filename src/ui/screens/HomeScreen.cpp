@@ -6,21 +6,16 @@
 
 namespace miyoofin {
 
-HomeScreen::HomeScreen(const Session &session,
-                       std::shared_ptr<DownloadManager> downloads,
+HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> downloads,
                        std::shared_ptr<library::LibraryQuery> libraryQuery,
                        std::shared_ptr<library::LibraryCoordinator> libraryCoordinator)
-    : m_activeTab(0), m_activeRow(0), m_activeCard(0)
-    , m_rowScroll(0), m_cardScroll(0)
-    , m_session(session)
-    , m_downloads(std::move(downloads))
-    , m_libraryQuery(std::move(libraryQuery))
-    , m_libraryCoordinator(std::move(libraryCoordinator))
-    , m_userName(session.userName)
+    : m_activeTab(0), m_activeRow(0), m_activeCard(0), m_rowScroll(0), m_cardScroll(0),
+      m_session(session), m_downloads(std::move(downloads)),
+      m_libraryQuery(std::move(libraryQuery)), m_libraryCoordinator(std::move(libraryCoordinator)),
+      m_userName(session.userName)
 {
     if (m_libraryCoordinator)
-        m_libraryCoordinator->setManualOfflineMode(
-            session.manualOfflineMode);
+        m_libraryCoordinator->setManualOfflineMode(session.manualOfflineMode);
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
@@ -46,8 +41,7 @@ std::uint64_t HomeScreen::catalogScopeEpoch() const
 
 std::uint64_t HomeScreen::committedCatalogGeneration() const
 {
-    return m_libraryCoordinator
-        ? m_libraryCoordinator->status().committedGeneration : 0;
+    return m_libraryCoordinator ? m_libraryCoordinator->status().committedGeneration : 0;
 }
 
 bool HomeScreen::catalogScopeReady() const
@@ -112,7 +106,7 @@ void HomeScreen::joinAllWorkers()
         m_fetchThread.join();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
-    for (auto &thread : m_posterThreads) {
+    for (auto& thread : m_posterThreads) {
         if (thread.joinable())
             thread.join();
     }
@@ -128,27 +122,25 @@ void HomeScreen::cancelAsyncWork() noexcept
     requestStopAllWorkers();
 }
 
-void HomeScreen::updateContinueWatchingRow(
-    std::vector<TabData> &tabs, const std::vector<MediaItem> &items)
+void HomeScreen::updateContinueWatchingRow(std::vector<TabData>& tabs,
+                                           const std::vector<MediaItem>& items)
 {
     miyoofin::updateContinueWatchingRow(tabs, items);
 }
 
-std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot &s)
+std::vector<TabData> HomeScreen::tabsFromSnapshot(const LibrarySnapshot& s)
 {
     return miyoofin::tabsFromSnapshot(s);
 }
 
-std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(
-    const LibrarySnapshot &s)
+std::vector<TabData> HomeScreen::offlineTabsFromSnapshot(const LibrarySnapshot& s)
 {
     return miyoofin::offlineTabsFromSnapshot(s);
 }
-library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
-                                                 const std::string &type,
-                                                 int alphabetLetter,
-                                                 std::size_t limit,
-                                                 const library::LibraryPageCursor &after)
+library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot& snapshot,
+                                                const std::string& type, int alphabetLetter,
+                                                std::size_t limit,
+                                                const library::LibraryPageCursor& after)
 {
     std::vector<MediaItem> items;
     if (type == "movie") {
@@ -158,7 +150,7 @@ library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
         items = type == "anime" ? presentation.anime : presentation.shows;
     }
     items.erase(std::remove_if(items.begin(), items.end(),
-                               [alphabetLetter](const MediaItem &item) {
+                               [alphabetLetter](const MediaItem& item) {
                                    return !matchesAlphabetFilter(item.title, alphabetLetter);
                                }),
                 items.end());
@@ -179,7 +171,7 @@ library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
     page.items.assign(items.begin() + static_cast<std::ptrdiff_t>(start),
                       items.begin() + static_cast<std::ptrdiff_t>(end));
     if (!page.items.empty()) {
-        const MediaItem &last = page.items.back();
+        const MediaItem& last = page.items.back();
         page.next.valid = page.hasMore;
         page.next.sortKey = organizationalSortKey(last.title);
         page.next.title = last.title;
@@ -187,24 +179,23 @@ library::MediaPage HomeScreen::offlineMediaPage(const LibrarySnapshot &snapshot,
     }
     return page;
 }
-std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData> &tabs)
+std::vector<std::string> HomeScreen::tabNames(const std::vector<TabData>& tabs)
 {
     return miyoofin::tabNames(tabs);
 }
 
-int HomeScreen::transitionTabIndex(const std::vector<TabData> &from,
-                                   int selected,
-                                   const std::vector<TabData> &to)
+int HomeScreen::transitionTabIndex(const std::vector<TabData>& from, int selected,
+                                   const std::vector<TabData>& to)
 {
     return miyoofin::transitionTabIndex(from, selected, to);
 }
 
-const char *HomeScreen::lastApiRouteValue()
+const char* HomeScreen::lastApiRouteValue()
 {
     return RouteStatus::label(RouteStatus::latest());
 }
 
-std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView> &views)
+std::vector<MediaItem> HomeScreen::combineMovieViews(const std::vector<CachedLibraryView>& views)
 {
     return miyoofin::combineMovieViews(views);
 }
@@ -213,13 +204,14 @@ void HomeScreen::rebuildShowsPresentation()
 {
     std::vector<MediaItem> rawWindow = m_showPage.items;
     std::set<std::string> rawIds;
-    for (const auto &item : rawWindow) rawIds.insert(item.id);
-    for (const auto &item : m_animePage.items)
-        if (rawIds.insert(item.id).second) rawWindow.push_back(item);
+    for (const auto& item : rawWindow)
+        rawIds.insert(item.id);
+    for (const auto& item : m_animePage.items)
+        if (rawIds.insert(item.id).second)
+            rawWindow.push_back(item);
     m_showWindow.clear();
     m_animeWindow.clear();
-    const auto &views = (presentationOffline() ? m_offlineSnapshot
-                                                : m_cachedSnapshot).shows;
+    const auto& views = (presentationOffline() ? m_offlineSnapshot : m_cachedSnapshot).shows;
     std::set<std::string> animeItemIds;
     {
         std::lock_guard<std::mutex> lock(m_fetchMutex);
@@ -227,14 +219,14 @@ void HomeScreen::rebuildShowsPresentation()
     }
     std::set<std::string> seenShows;
     std::set<std::string> seenAnime;
-    for (const auto &item : rawWindow) {
+    for (const auto& item : rawWindow) {
         bool anime = animeItemIds.count(item.id) != 0;
-        for (const auto &view : views) {
-            if (anime) break;
-            auto found = std::find_if(view.items.begin(), view.items.end(),
-                                      [&](const MediaItem &candidate) {
-                                          return candidate.id == item.id;
-                                      });
+        for (const auto& view : views) {
+            if (anime)
+                break;
+            auto found =
+                std::find_if(view.items.begin(), view.items.end(),
+                             [&](const MediaItem& candidate) { return candidate.id == item.id; });
             if (found != view.items.end() && isAnimeSeries(view.name, *found)) {
                 anime = true;
                 break;
@@ -254,8 +246,7 @@ void HomeScreen::rebuildShowsPresentation()
 
 void HomeScreen::enter()
 {
-    printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab,
-           m_userName.c_str());
+    printf("[HomeScreen] enter (tab=%d) user=%s\n", m_activeTab, m_userName.c_str());
     uiDiagnostics().log("[HomeScreen] startup stage=home_entered");
     if (m_loadState == LoadState::Loading) {
         if (!m_fetchDone) {
@@ -264,8 +255,7 @@ void HomeScreen::enter()
             // minimum Home data; remaining population stays in the worker.
             requestFetch(SDL_GetTicks());
         }
-    }
-    else if (m_loadState == LoadState::Ready) {
+    } else if (m_loadState == LoadState::Ready) {
         startHomeRailRefresh();
     }
 }
@@ -298,9 +288,8 @@ void HomeScreen::update(Uint32 dt)
         updateLiveLibraryChanges();
         if (m_homeRailRefreshInFlight && m_libraryCoordinator) {
             library::HomeRailResult railResult;
-            if (m_libraryCoordinator->takeHomeRailResult(
-                    m_homeRailRefreshRequest, railResult)
-                && railResult.request == m_homeRailRefreshRequest) {
+            if (m_libraryCoordinator->takeHomeRailResult(m_homeRailRefreshRequest, railResult) &&
+                railResult.request == m_homeRailRefreshRequest) {
                 m_homeRailContinueValid = railResult.continueValid;
                 m_homeRailRecentValid = railResult.recentlyAddedValid;
                 if (m_homeRailContinueValid)
@@ -312,10 +301,10 @@ void HomeScreen::update(Uint32 dt)
                 m_homeRailRefreshDone.store(true);
             }
         }
-        if (m_homeRailRefreshDone.load()) finishHomeRailRefresh();
+        if (m_homeRailRefreshDone.load())
+            finishHomeRailRefresh();
         finishSafetyReconcile();
-        if (m_libraryCoordinator
-            && m_libraryCoordinator->requestMaintenance())
+        if (m_libraryCoordinator && m_libraryCoordinator->requestMaintenance())
             m_safetyReconcileInFlight = true;
     }
     if (m_loadState == LoadState::Ready)
@@ -325,8 +314,8 @@ void HomeScreen::update(Uint32 dt)
     } else {
         m_downloadRefreshTimer = 0;
     }
-    if (m_loadState == LoadState::Ready
-        && (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
+    if (m_loadState == LoadState::Ready &&
+        (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
         refreshDownloads();
     }
     // Reconcile before draining: an in-flight decode can complete between a
@@ -356,7 +345,5 @@ void HomeScreen::update(Uint32 dt)
     m_updateManager.pollDone();
     m_updateSnapshot = m_updateManager.snapshot();
 }
-
-
 
 } // namespace miyoofin

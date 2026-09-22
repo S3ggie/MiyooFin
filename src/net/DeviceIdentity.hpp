@@ -9,10 +9,11 @@ namespace miyoofin {
 /// Manages a persistent device identifier (UUID v4).
 /// On first launch, generates a UUID and saves it to "device.txt".
 /// On subsequent launches, loads the saved UUID.
-struct DeviceIdentity {
+struct DeviceIdentity
+{
     /// Load or create the persistent device ID.
     /// @param filePath  Path to the device ID file (default "device.txt").
-    static std::string loadOrCreate(const std::string &filePath = "device.txt");
+    static std::string loadOrCreate(const std::string& filePath = "device.txt");
 
     /// Generate a UUID v4 string (without external libraries).
     /// Never throws due to unavailable OS entropy: when std::random_device

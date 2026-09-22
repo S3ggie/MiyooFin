@@ -8,13 +8,15 @@
 namespace miyoofin {
 
 /// A horizontal row of media items (one section on the home screen).
-struct MediaRow {
+struct MediaRow
+{
     std::string label;
     std::vector<MediaItem> items;
 };
 
 /// A top-level tab with its rows.
-struct TabData {
+struct TabData
+{
     std::string name;
     std::vector<MediaRow> rows;
 };

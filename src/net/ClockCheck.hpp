@@ -27,7 +27,7 @@ inline bool shouldShowClockError(bool peerVerificationFailed, std::time_t epoch)
 
 /// Friendly one-line message shown when an HTTPS certificate
 /// verification failure is likely caused by an incorrect system clock.
-inline const char *kClockErrorMessage =
+inline const char* kClockErrorMessage =
     "Clock wrong. OnionOS: Apps > Tweaks > System > Date/time > auto time.";
 
 } // namespace miyoofin

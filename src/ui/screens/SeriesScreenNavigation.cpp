@@ -39,19 +39,34 @@ bool SeriesScreen::handleAction(Action action)
 
     // Ready — 2-column grid navigation
     int total = (int)m_seasons.size();
-    int col   = m_selectedSeason % GRID_COLS;
+    int col = m_selectedSeason % GRID_COLS;
 
     if (m_confirmDownload) {
-        if(action==Action::Back){m_confirmDownload=false;return true;}
-        if(action==Action::Confirm && m_downloads && m_planId){auto p=m_downloads->planSnapshot(m_planId);if(p.state==DownloadPlanState::Ready&&p.plan.canFit)m_downloads->enqueue(p.plan.items);m_confirmDownload=false;}
+        if (action == Action::Back) {
+            m_confirmDownload = false;
+            return true;
+        }
+        if (action == Action::Confirm && m_downloads && m_planId) {
+            auto p = m_downloads->planSnapshot(m_planId);
+            if (p.state == DownloadPlanState::Ready && p.plan.canFit)
+                m_downloads->enqueue(p.plan.items);
+            m_confirmDownload = false;
+        }
         return true;
     }
     // Y downloads the highlighted season; X expands and downloads the series.
     // Both requests are fully expanded and preflighted by DownloadManager.
-    if ((action==Action::ActionsMenu || action==Action::Search) && m_downloads && total>0) {
-        bool whole=action==Action::Search;
-        if(m_planId && m_planWholeSeries==whole && m_downloads->planSnapshot(m_planId).state==DownloadPlanState::Ready) m_confirmDownload=true;
-        else {m_planWholeSeries=whole;m_planId=whole?m_downloads->requestSeriesPlan(m_series):m_downloads->requestSeasonPlan(m_series,m_seasons[m_selectedSeason]);}
+    if ((action == Action::ActionsMenu || action == Action::Search) && m_downloads && total > 0) {
+        bool whole = action == Action::Search;
+        if (m_planId && m_planWholeSeries == whole &&
+            m_downloads->planSnapshot(m_planId).state == DownloadPlanState::Ready)
+            m_confirmDownload = true;
+        else {
+            m_planWholeSeries = whole;
+            m_planId = whole
+                           ? m_downloads->requestSeriesPlan(m_series)
+                           : m_downloads->requestSeasonPlan(m_series, m_seasons[m_selectedSeason]);
+        }
         return true;
     }
 
@@ -95,12 +110,12 @@ bool SeriesScreen::handleAction(Action action)
     }
 
     case Action::Confirm: {
-        const MediaItem &season = m_seasons[m_selectedSeason];
-        printf("[SeriesScreen] Select season: %s index=%d\n",
-               season.title.c_str(), season.indexNumber);
+        const MediaItem& season = m_seasons[m_selectedSeason];
+        printf("[SeriesScreen] Select season: %s index=%d\n", season.title.c_str(),
+               season.indexNumber);
         m_stack->push(std::make_unique<EpisodeBrowserScreen>(
-            m_session, m_series, season, "", m_downloads, m_networkOffline,
-            m_downloadedOnly, m_libraryCoordinator, m_libraryQuery));
+            m_session, m_series, season, "", m_downloads, m_networkOffline, m_downloadedOnly,
+            m_libraryCoordinator, m_libraryQuery));
         return true;
     }
 
@@ -110,7 +125,8 @@ bool SeriesScreen::handleAction(Action action)
 
     case Action::PrevTab: {
         m_overviewScroll -= 3;
-        if (m_overviewScroll < 0) m_overviewScroll = 0;
+        if (m_overviewScroll < 0)
+            m_overviewScroll = 0;
         return true;
     }
 
@@ -120,11 +136,14 @@ bool SeriesScreen::handleAction(Action action)
         if (m_series.year > 0 || !m_series.genre.empty())
             overviewStartY += BitmapFont::GLYPH_H + 2;
         int vis = ((FB_H - BOTTOM_H) - overviewStartY) / BitmapFont::GLYPH_H;
-        if (vis < 1) vis = 1;
+        if (vis < 1)
+            vis = 1;
         int maxS = (int)lines.size() - vis;
-        if (maxS < 0) maxS = 0;
+        if (maxS < 0)
+            maxS = 0;
         m_overviewScroll += 3;
-        if (m_overviewScroll > maxS) m_overviewScroll = maxS;
+        if (m_overviewScroll > maxS)
+            m_overviewScroll = maxS;
         return true;
     }
 

@@ -9,9 +9,11 @@ namespace miyoofin {
 
 /// Manages a stack of screens.
 /// Only the topmost screen receives events, updates, and renders.
-class ScreenStack {
-public:
-    enum class ExternalPlaybackSource {
+class ScreenStack
+{
+  public:
+    enum class ExternalPlaybackSource
+    {
         Unknown,
         Jellyfin,
         Local
@@ -30,26 +32,34 @@ public:
     void popToRoot();
 
     /// Access the active (top) screen.
-    Screen *top() const;
+    Screen* top() const;
 
     /// Number of screens on the stack.
-    int size() const { return static_cast<int>(m_stack.size()); }
+    int size() const
+    {
+        return static_cast<int>(m_stack.size());
+    }
 
     /// True if the stack is empty.
-    bool empty() const { return m_stack.empty(); }
+    bool empty() const
+    {
+        return m_stack.empty();
+    }
 
     /// Request in-process external playback.
     /// Called by screens when a playback-request.txt has been written.
     /// Sets a flag consumed by App's main loop, which then suspends
     /// SDL, spawns the playback runner, waits, and resumes — without
     /// destroying the ScreenStack.
-    void requestExternalPlayback(ExternalPlaybackSource source = ExternalPlaybackSource::Unknown) {
+    void requestExternalPlayback(ExternalPlaybackSource source = ExternalPlaybackSource::Unknown)
+    {
         m_externalPlayback = true;
         m_externalPlaybackSource = source;
     }
 
     /// Check (and consume) the external playback flag.
-    bool pollExternalPlayback() {
+    bool pollExternalPlayback()
+    {
         bool v = m_externalPlayback;
         m_externalPlayback = false;
         m_externalPlaybackSource = ExternalPlaybackSource::Unknown;
@@ -57,7 +67,8 @@ public:
     }
 
     /// Check (and consume) the external playback flag and selected source.
-    bool pollExternalPlayback(ExternalPlaybackSource &source) {
+    bool pollExternalPlayback(ExternalPlaybackSource& source)
+    {
         bool v = m_externalPlayback;
         source = m_externalPlaybackSource;
         m_externalPlayback = false;
@@ -65,7 +76,7 @@ public:
         return v;
     }
 
-private:
+  private:
     struct RetirementQueue;
     void retire(std::unique_ptr<Screen> screen);
 

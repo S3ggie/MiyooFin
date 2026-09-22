@@ -10,12 +10,15 @@ namespace tls_detail {
 // -1 unknown, 0 missing, 1 present.  Relaxed atomics are sufficient: every
 // racing thread computes the same access() result, so a duplicate probe is
 // benign and no thread ever blocks on this check.
-inline std::atomic<int> &caBundleCache()
+inline std::atomic<int>& caBundleCache()
 {
     static std::atomic<int> cached{-1};
     return cached;
 }
-inline void resetCaBundleCacheForTest() { caBundleCache().store(-1, std::memory_order_relaxed); }
+inline void resetCaBundleCacheForTest()
+{
+    caBundleCache().store(-1, std::memory_order_relaxed);
+}
 } // namespace tls_detail
 
 // The packaged bundle path never changes at runtime, so probe the filesystem
@@ -32,13 +35,14 @@ inline bool tlsCaBundleReady()
 
 // launch.sh changes into the installed application directory, where the
 // packaged curl/Mozilla bundle is staged as cacert.pem.
-inline bool configureTls(CURL *curl, const std::string &url, std::string *error = nullptr)
+inline bool configureTls(CURL* curl, const std::string& url, std::string* error = nullptr)
 {
     if (url.compare(0, 8, "https://") != 0)
         return true; // Plain LAN HTTP neither needs nor consults CA data.
     static const char kCaBundle[] = "cacert.pem";
     if (!tlsCaBundleReady()) {
-        if (error) *error = "HTTPS requires packaged cacert.pem";
+        if (error)
+            *error = "HTTPS requires packaged cacert.pem";
         return false;
     }
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);

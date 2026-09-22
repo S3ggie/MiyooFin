@@ -7,7 +7,7 @@ namespace {
 
 int failures = 0;
 
-void check(bool condition, const char *description)
+void check(bool condition, const char* description)
 {
     if (!condition) {
         std::printf("FAIL: %s\n", description);
@@ -15,7 +15,7 @@ void check(bool condition, const char *description)
     }
 }
 
-void checkCompileOption(const char *option)
+void checkCompileOption(const char* option)
 {
     char description[128];
     std::snprintf(description, sizeof(description), "compile option %s", option);

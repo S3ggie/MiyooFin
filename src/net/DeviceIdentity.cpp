@@ -31,11 +31,9 @@ std::string DeviceIdentity::uuidFromSeed(uint64_t seed)
 
     char buf[40];
     std::snprintf(buf, sizeof(buf),
-        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11],
-        bytes[12], bytes[13], bytes[14], bytes[15]);
+                  "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", bytes[0],
+                  bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
+                  bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
     return std::string(buf);
 }
 
@@ -48,18 +46,16 @@ uint64_t DeviceIdentity::fallbackSeed() noexcept
 
     uint64_t seed = callCount * 0x9E3779B97F4A7C15ULL;
 
-    const uint64_t steady =
-        (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
-    const uint64_t system =
-        (uint64_t)std::chrono::system_clock::now().time_since_epoch().count();
+    const uint64_t steady = (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
+    const uint64_t system = (uint64_t)std::chrono::system_clock::now().time_since_epoch().count();
     seed ^= steady + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
     seed ^= system + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
 
     // Stack/heap address material (values only, never logged).
     int stackMarker = 0;
     static int anchor = 0;
-    const uint64_t addrMix = (uint64_t)(uintptr_t)&stackMarker
-        ^ ((uint64_t)(uintptr_t)&anchor << 33);
+    const uint64_t addrMix =
+        (uint64_t)(uintptr_t)&stackMarker ^ ((uint64_t)(uintptr_t)&anchor << 33);
     seed ^= addrMix + 0x9E3779B97F4A7C15ULL + (seed << 6) + (seed >> 2);
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -84,7 +80,7 @@ std::string DeviceIdentity::generateUuidV4()
         // Mix in time in case the entropy source is weak.
         seed ^= (uint64_t)std::time(nullptr);
         return uuidFromSeed(seed);
-    } catch (const std::exception &) {
+    } catch (const std::exception&) {
         // e.g. libstdc++ throws std::runtime_error when /dev/urandom
         // cannot be opened (non-root OnionOS ships it 0660 root:root).
         return uuidFromSeed(fallbackSeed());
@@ -99,10 +95,10 @@ std::string DeviceIdentity::generateUuidV4()
 // -------------------------------------------------------------------
 // Load or create the persistent device ID.
 // -------------------------------------------------------------------
-std::string DeviceIdentity::loadOrCreate(const std::string &filePath)
+std::string DeviceIdentity::loadOrCreate(const std::string& filePath)
 {
     // Try to load an existing ID
-    FILE *f = std::fopen(filePath.c_str(), "r");
+    FILE* f = std::fopen(filePath.c_str(), "r");
     if (f) {
         char buf[64];
         if (std::fgets(buf, sizeof(buf), f)) {

@@ -25,8 +25,9 @@ namespace miyoofin {
 /// B5f3a: supports in-process external playback handoff — the app
 /// suspends SDL/video/input, spawns a child FFplay process, waits for
 /// it, then reinitializes SDL and resumes the same screen state.
-class App {
-public:
+class App
+{
+  public:
     App();
     ~App();
 
@@ -51,50 +52,50 @@ public:
     /// @return true on success.
     bool resumePlatform();
 
-private:
-    SDL_Window     *m_window;
-    SDL_Renderer   *m_renderer;
-    SDL_Surface    *m_fb;         // 640x480 software framebuffer
-    SDL_Texture    *m_fbTex;      // streaming texture uploaded from m_fb
+  private:
+    SDL_Window* m_window;
+    SDL_Renderer* m_renderer;
+    SDL_Surface* m_fb;    // 640x480 software framebuffer
+    SDL_Texture* m_fbTex; // streaming texture uploaded from m_fb
 
-    ScreenStack     m_stack;
-    InputManager    m_input;
+    ScreenStack m_stack;
+    InputManager m_input;
     std::shared_ptr<CatalogDb> m_catalogDb;
     std::shared_ptr<library::LibraryCoordinator> m_libraryCoordinator;
     std::uint64_t m_catalogScopeEpoch = 0;
 
-    bool            m_running;
-    Uint32          m_lastTick;
+    bool m_running;
+    Uint32 m_lastTick;
 
     // Short visual acknowledgement shown before the external player takes
     // ownership of the framebuffer.
-    bool            m_playbackStarting;
-    Uint32          m_playbackStartingTick;
+    bool m_playbackStarting;
+    Uint32 m_playbackStartingTick;
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
-    uint32_t        m_playbackSequence = 0;
-    uint64_t        m_playbackRequestUs = 0;
-    uint64_t        m_playbackResumeUs = 0;
-    bool            m_playbackReturnPending = false;
+    uint32_t m_playbackSequence = 0;
+    uint64_t m_playbackRequestUs = 0;
+    uint64_t m_playbackResumeUs = 0;
+    bool m_playbackReturnPending = false;
     ScreenStack::ExternalPlaybackSource m_playbackSource =
         ScreenStack::ExternalPlaybackSource::Unknown;
 #endif
 
     // Startup flow state
-    std::string     m_serverUrl;   // saved server URL
-    ServerInfo      m_serverInfo;  // connected server info
-    std::string     m_deviceId;    // persistent device identifier
-    Session         m_session;     // saved session (token + user)
+    std::string m_serverUrl; // saved server URL
+    ServerInfo m_serverInfo; // connected server info
+    std::string m_deviceId;  // persistent device identifier
+    Session m_session;       // saved session (token + user)
     std::shared_ptr<DownloadManager> m_downloadManager;
-    std::thread     m_savedValidationThread;
+    std::thread m_savedValidationThread;
     std::atomic<int> m_savedValidation{0}; // 0 pending, 1 unavailable, 2 unauthorized, 3 valid
-    std::string     m_savedSessionServerId;
-    bool            m_savedFastPath = false;
-    std::thread     m_journalSyncThread;
-    std::mutex      m_journalMutex;
+    std::string m_savedSessionServerId;
+    bool m_savedFastPath = false;
+    std::thread m_journalSyncThread;
+    std::mutex m_journalMutex;
     std::condition_variable m_journalCv;
-    bool            m_journalStop = false;
-    bool            m_journalWake = false;
-    unsigned        m_journalFailures = 0;
+    bool m_journalStop = false;
+    bool m_journalWake = false;
+    unsigned m_journalFailures = 0;
 
     /// Load saved server URL from server.txt.
     void loadSavedUrl();
@@ -106,7 +107,7 @@ private:
     void goToHome();
 
     /// Transition to the login screen (pop stack to root first).
-    void goToLogin(const std::string &initialMessage = {});
+    void goToLogin(const std::string& initialMessage = {});
 
     /// Request the current authenticated scope without waiting for CatalogDb.
     void configureCatalogScopeForSession();

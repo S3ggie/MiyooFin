@@ -19,7 +19,8 @@ namespace library {
 
 class LibraryCoordinator;
 
-enum class LibraryQueryErrorCategory : unsigned char {
+enum class LibraryQueryErrorCategory : unsigned char
+{
     None,
     InvalidIdentity,
     ScopeNotReady,
@@ -32,20 +33,23 @@ enum class LibraryQueryErrorCategory : unsigned char {
     Superseded,
 };
 
-struct LibraryPageCursor {
+struct LibraryPageCursor
+{
     std::string sortKey;
     std::string title;
     std::string id;
     bool valid = false;
 };
 
-struct LibraryMembership {
+struct LibraryMembership
+{
     std::string viewId;
     std::string viewName;
     std::string collectionType;
 };
 
-struct MediaPage {
+struct MediaPage
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -57,7 +61,8 @@ struct MediaPage {
     LibraryPageCursor next;
 };
 
-struct HierarchyPage {
+struct HierarchyPage
+{
     bool success = false;
     bool cancelled = false;
     bool superseded = false;
@@ -66,29 +71,31 @@ struct HierarchyPage {
     std::vector<MediaItem> items;
 };
 
-class LibraryQuery {
-public:
+class LibraryQuery
+{
+  public:
     std::future<MediaPage> movies(int alphabetLetter, std::size_t limit,
-                                   const LibraryPageCursor &after = {},
-                                   const std::shared_ptr<std::atomic_bool> &cancellation = {});
+                                  const LibraryPageCursor& after = {},
+                                  const std::shared_ptr<std::atomic_bool>& cancellation = {});
     std::future<MediaPage> shows(int alphabetLetter, std::size_t limit,
-                                 const LibraryPageCursor &after = {},
-                                 const std::shared_ptr<std::atomic_bool> &cancellation = {});
+                                 const LibraryPageCursor& after = {},
+                                 const std::shared_ptr<std::atomic_bool>& cancellation = {});
     std::future<MediaPage> anime(int alphabetLetter, std::size_t limit,
-                                 const LibraryPageCursor &after = {});
-    std::future<HierarchyPage> seasons(
-        const std::string &seriesId,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<HierarchyPage> episodes(
-        const std::string &seasonId,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::future<HierarchyPage> itemsByIds(
-        const std::vector<std::string> &itemIds,
-        const std::shared_ptr<std::atomic_bool> &cancellation = {});
-    std::uint64_t scopeEpoch() const { return m_scopeEpoch; }
+                                 const LibraryPageCursor& after = {});
+    std::future<HierarchyPage> seasons(const std::string& seriesId,
+                                       const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::future<HierarchyPage> episodes(const std::string& seasonId,
+                                        const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::future<HierarchyPage>
+    itemsByIds(const std::vector<std::string>& itemIds,
+               const std::shared_ptr<std::atomic_bool>& cancellation = {});
+    std::uint64_t scopeEpoch() const
+    {
+        return m_scopeEpoch;
+    }
     bool scopeReady() const;
 
-private:
+  private:
     friend class LibraryCoordinator;
 
     LibraryQuery(std::shared_ptr<CatalogDb> db, std::uint64_t scopeEpoch);

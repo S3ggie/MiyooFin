@@ -17,13 +17,13 @@
 #define EXPECTED_MIYOOFIN_UID 0
 #define MIYOOFIN_PATH "/mnt/SDCARD/App/MiyooFin/miyoofin"
 
-static int fail(const char *message)
+static int fail(const char* message)
 {
     fprintf(stderr, "miyoofin-graceful-exit: %s\n", message);
     return 1;
 }
 
-static int is_miyoofin(const char *name)
+static int is_miyoofin(const char* name)
 {
     char path[PATH_MAX];
     int fd;
@@ -31,24 +31,31 @@ static int is_miyoofin(const char *name)
 
     snprintf(path, sizeof(path), "/proc/%s/comm", name);
     fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char comm[32] = {0};
     n = read(fd, comm, sizeof(comm) - 1);
     close(fd);
-    if (n <= 0) return 0;
+    if (n <= 0)
+        return 0;
     comm[strcspn(comm, "\n")] = '\0';
-    if (strcmp(comm, "miyoofin") != 0) return 0;
+    if (strcmp(comm, "miyoofin") != 0)
+        return 0;
 
     snprintf(path, sizeof(path), "/proc/%s/status", name);
     fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char status[4096] = {0};
     n = read(fd, status, sizeof(status) - 1);
     close(fd);
-    if (n <= 0) return 0;
-    char *uid_line = strstr(status, "\nUid:");
-    if (uid_line) ++uid_line;
-    else uid_line = strstr(status, "Uid:");
+    if (n <= 0)
+        return 0;
+    char* uid_line = strstr(status, "\nUid:");
+    if (uid_line)
+        ++uid_line;
+    else
+        uid_line = strstr(status, "Uid:");
     unsigned long uid = 1;
     if (!uid_line || sscanf(uid_line, "Uid:\t%lu", &uid) != 1 || uid != EXPECTED_MIYOOFIN_UID)
         return 0;
@@ -63,7 +70,8 @@ static int is_miyoofin(const char *name)
 
     snprintf(path, sizeof(path), "/proc/%s/cmdline", name);
     fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     char cmdline[64] = {0};
     n = read(fd, cmdline, sizeof(cmdline) - 1);
     close(fd);
@@ -71,25 +79,32 @@ static int is_miyoofin(const char *name)
            (n == 8 && memcmp(cmdline, "./miyoofin", 8) == 0);
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     (void)argv;
-    if (argc != 1) return fail("arguments are not accepted");
-    if (getuid() != EXPECTED_ONION_UID) return fail("classification=caller_uid_mismatch");
-    if (geteuid() != 0) return fail("classification=helper_effective_uid_mismatch");
+    if (argc != 1)
+        return fail("arguments are not accepted");
+    if (getuid() != EXPECTED_ONION_UID)
+        return fail("classification=caller_uid_mismatch");
+    if (geteuid() != 0)
+        return fail("classification=helper_effective_uid_mismatch");
     unsetenv("PATH");
 
-    DIR *dir = opendir("/proc");
-    if (!dir) return fail("cannot inspect /proc");
+    DIR* dir = opendir("/proc");
+    if (!dir)
+        return fail("cannot inspect /proc");
     pid_t found = -1;
-    struct dirent *entry;
+    struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
-        const char *name = entry->d_name;
-        if (!*name) continue;
+        const char* name = entry->d_name;
+        if (!*name)
+            continue;
         int numeric = 1;
-        for (const char *p = name; *p; ++p)
-            if (*p < '0' || *p > '9') numeric = 0;
-        if (!numeric || !is_miyoofin(name)) continue;
+        for (const char* p = name; *p; ++p)
+            if (*p < '0' || *p > '9')
+                numeric = 0;
+        if (!numeric || !is_miyoofin(name))
+            continue;
         if (found != -1) {
             closedir(dir);
             return fail("classification=multiple_valid_targets");
@@ -97,9 +112,11 @@ int main(int argc, char **argv)
         found = (pid_t)strtol(name, NULL, 10);
     }
     closedir(dir);
-    if (found == -1) return fail("classification=target_validation_failed");
+    if (found == -1)
+        return fail("classification=target_validation_failed");
     if (kill(found, SIGUSR1) != 0) {
-        if (errno == EPERM) return fail("classification=validated_target_signal_eperm");
+        if (errno == EPERM)
+            return fail("classification=validated_target_signal_eperm");
         return fail("classification=validated_target_signal_failed");
     }
     return 0;

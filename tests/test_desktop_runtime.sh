@@ -9,6 +9,7 @@ DESKTOP_MAKEFILE="$ROOT/Makefile.desktop"
 INPUT_MANAGER="$ROOT/src/input/InputManager.cpp"
 SCREEN="$ROOT/src/app/Screen.hpp"
 APP="$ROOT/src/app/App.cpp"
+UI_RUNNER="$ROOT/tools/ui-script/run.sh"
 HOME_SCREEN="$ROOT/src/ui/screens/HomeScreen.hpp"
 HOME_NAV="$ROOT/src/ui/screens/HomeScreenNavigation.cpp"
 
@@ -29,6 +30,11 @@ grep -q 'SDLK_BACKSPACE' "$INPUT_MANAGER" || fail 'desktop input has no Backspac
 grep -q 'SDL_MOUSEBUTTONDOWN' "$INPUT_MANAGER" || fail 'input manager does not capture desktop clicks'
 grep -q 'MIYOOFIN_DESKTOP_INPUT=1' "$LAUNCHER" || fail 'launcher does not enable desktop input'
 grep -q 'MIYOOFIN_DESKTOP_WINDOW' "$APP" || fail 'desktop runtime has no native-size window mode'
+grep -q 'MIYOOFIN_UI_DIAGNOSTICS' "$APP" || fail 'desktop runtime has no UI diagnostics override'
+grep -Fq 'MIYOOFIN_UI_DIAGNOSTICS="$OUT/ui-stall.log"' "$UI_RUNNER" \
+    || fail 'UI script runner does not route diagnostics per scenario'
+grep -q 'MIYOOFIN_DESKTOP_INPUT' "$APP" \
+    || fail 'UI diagnostics override is not gated on desktop input'
 grep -q 'MIYOOFIN_DESKTOP_WINDOW=1' "$LAUNCHER" || fail 'launcher does not enable native-size window mode'
 grep -q 'handlePointerClick' "$SCREEN" || fail 'screen stack has no pointer-click hook'
 grep -q 'pointerClicks' "$APP" || fail 'app does not dispatch pointer clicks'

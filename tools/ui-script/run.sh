@@ -117,6 +117,7 @@ fi
         LD_PRELOAD="$SHIM_SO" \
         MIYOOFIN_UI_SCRIPT="$SCRIPT" \
         MIYOOFIN_UI_LOG="$APPLOG" \
+        MIYOOFIN_UI_DIAGNOSTICS="$OUT/ui-stall.log" \
         MIYOOFIN_UI_SHOT_DIR="$OUT/shots" \
         MIYOOFIN_UI_RESULT="$OUT/result.txt" \
         $XVFB_RUN "$BIN" >"$APPLOG" 2>&1

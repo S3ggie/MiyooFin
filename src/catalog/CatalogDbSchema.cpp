@@ -300,7 +300,8 @@ bool CatalogDb::openConnection(const ScopeCommand& command)
     }
     catalogFinalDiagnostic(true, CatalogDbScopeStatus::Ready, CatalogDbErrorCategory::None,
                            openState);
-    scopeStage("scope_ready");
+    catalogDiagnostic("scope_stage=scope_ready epoch=" + std::to_string(command.epoch) +
+                      " scope_hash=" + command.scopeKey);
     return true;
 }
 

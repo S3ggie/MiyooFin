@@ -71,6 +71,7 @@ library::LibrarySync::catchUpChangedCatalog(std::int64_t sinceMs,
         if (!changed.empty()) {
             CatalogDbMediaPageWrite page;
             page.items = std::move(changed);
+            page.diagnosticSource = "delta_catch_up";
             // An empty view ID deliberately updates only media metadata;
             // membership remains authoritative to the full sync path.
             const auto written = db->upsertMediaPage(page, writeMetadata).get();
@@ -260,6 +261,7 @@ library::LibrarySync::reconcileAuthoritativeMembership(
                     write.ordinalStart = static_cast<std::size_t>(start);
                     write.viewOrdinal = static_cast<int>(viewOrdinal);
                     write.syncGeneration = generation;
+                    write.diagnosticSource = "membership_reconcile";
                     write.finalPage = !page.hasMore;
                     CatalogDbJobMetadata writeMetadata = metadata;
                     writeMetadata.cancellation = effectiveCancellation;
@@ -389,6 +391,7 @@ library::LibrarySync::applyLibraryChanges(const JellyfinLibraryChangeBatch& batc
         if (!items.empty()) {
             CatalogDbMediaPageWrite page;
             page.items = std::move(items);
+            page.diagnosticSource = "live_change";
             const auto written = db->upsertMediaPage(page, writeMetadata).get();
             if (!written.success) {
                 result.cancelled = written.cancelled;

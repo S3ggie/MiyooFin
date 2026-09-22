@@ -1329,6 +1329,11 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
 
 int main()
 {
+    const std::string diagnosticsPath = "/tmp/miyoofin-library-coordinator-diagnostics-" +
+                                        std::to_string(static_cast<long long>(::getpid())) + ".log";
+    std::remove(diagnosticsPath.c_str());
+    uiDiagnostics().start(diagnosticsPath);
+
     testLibraryCoordinatorIsTheSingleStartupDriver();
     testStopRacingStartupIsSafe();
     testLiveChangeQueueFullDrainFallsBackToCatchUp();
@@ -1357,5 +1362,53 @@ int main()
     testFullPopulationFailureAbortsWithoutCheckpoint();
     testFullPopulationRejectsStaleRequest();
     testCoordinatorSerializesStartupFullSafetyAndLive();
+
+    uiDiagnostics().stop();
+    const auto diagnostics = miyoofin_test::readTestBytes(diagnosticsPath);
+    CHECK(diagnostics.find("[LibraryCoordinator] full_population_rejected phase=admission") !=
+          std::string::npos);
+    CHECK(diagnostics.find("reasons=startup_in_flight") != std::string::npos);
+    CHECK(diagnostics.find("reasons=safety_reconcile_in_flight") != std::string::npos);
+    const auto diagnosticLine = [&](const std::string& marker,
+                                    const std::vector<std::string>& fields = {}) {
+        std::size_t search = 0;
+        while (search < diagnostics.size()) {
+            const auto begin = diagnostics.find(marker, search);
+            if (begin == std::string::npos)
+                return std::string();
+            const auto end = diagnostics.find('\n', begin);
+            const auto line = diagnostics.substr(begin, end == std::string::npos ? std::string::npos
+                                                                                 : end - begin);
+            bool matches = true;
+            for (const auto& field : fields)
+                matches = matches && line.find(field) != std::string::npos;
+            if (matches)
+                return line;
+            if (end == std::string::npos)
+                return std::string();
+            search = end + 1;
+        }
+        return std::string();
+    };
+    const auto scopeReady = diagnosticLine("scope_stage=scope_ready epoch=", {"scope_hash="});
+    CHECK(scopeReady.find("scope_hash=") != std::string::npos);
+    const auto catalogPage =
+        diagnosticLine("page_complete request=",
+                       {"success=1", "scope_epoch=", "scope_hash=", "source=full_population"});
+    CHECK(catalogPage.find("success=1") != std::string::npos);
+    CHECK(catalogPage.find("scope_epoch=") != std::string::npos);
+    CHECK(catalogPage.find("scope_hash=") != std::string::npos);
+    CHECK(catalogPage.find("source=full_population") != std::string::npos);
+    const auto coordinatorStage = diagnosticLine("full_population_stage_complete request=");
+    CHECK(coordinatorStage.find("generation=") != std::string::npos);
+    CHECK(coordinatorStage.find("scope_epoch=") != std::string::npos);
+    CHECK(coordinatorStage.find("scope_hash=") != std::string::npos);
+    CHECK(coordinatorStage.find("source=full_population") != std::string::npos);
+    const auto coordinatorPublish = diagnosticLine("full_population_publish request=");
+    CHECK(coordinatorPublish.find("generation=") != std::string::npos);
+    CHECK(coordinatorPublish.find("scope_epoch=") != std::string::npos);
+    CHECK(coordinatorPublish.find("scope_hash=") != std::string::npos);
+    CHECK(coordinatorPublish.find("source=full_population") != std::string::npos);
+    std::remove(diagnosticsPath.c_str());
     return miyoofin_test::finish("library_coordinator");
 }

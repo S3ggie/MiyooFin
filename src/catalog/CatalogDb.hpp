@@ -310,6 +310,8 @@ struct CatalogDbMediaPageWrite
     // Diagnostic-only identity supplied by the coordinator.  It is not
     // persisted and does not participate in page validation or ordering.
     std::uint64_t request = 0;
+    // Diagnostic-only source identity for request-zero page writes.
+    std::string diagnosticSource;
     std::size_t ordinalStart = 0;
     int viewOrdinal = 0;
     std::uint64_t syncGeneration = 0;

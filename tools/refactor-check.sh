@@ -5,6 +5,98 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 repo_root=$(CDPATH= cd "$script_dir/.." && pwd)
 cd "$repo_root"
 
+# No first-party production worker may be detached: detached threads can
+# outlive the owner that their callbacks capture.  Scan tracked C/C++ sources
+# only, mask comments and literals to avoid prose/data false positives, and
+# exclude imported/generated trees consistently with format-check.
+git ls-files -z -- 'src/**' | python3 -c '
+import os
+import re
+import sys
+
+extensions = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+excluded_directories = {
+    "external", "generated", "imported", "third-party", "third_party", "vendor",
+}
+
+def mask_non_code(text):
+    masked = list(text)
+    i = 0
+    size = len(text)
+    while i < size:
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = size if end < 0 else end
+            for position in range(i, end):
+                masked[position] = " "
+            i = end
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = size if end < 0 else end + 2
+            for position in range(i, end):
+                if text[position] != "\n":
+                    masked[position] = " "
+            i = end
+        elif text.startswith("R\"", i):
+            delimiter_end = text.find("(", i + 2)
+            if delimiter_end < 0:
+                i += 2
+                continue
+            delimiter = text[i + 2:delimiter_end]
+            terminator = ")" + delimiter + "\""
+            end = text.find(terminator, delimiter_end + 1)
+            end = size if end < 0 else end + len(terminator)
+            for position in range(i, end):
+                if text[position] != "\n":
+                    masked[position] = " "
+            i = end
+        elif text[i] in (chr(34), chr(39)):
+            quote = text[i]
+            i += 1
+            while i < size:
+                if text[i] == "\\":
+                    masked[i] = " "
+                    if i + 1 < size and text[i + 1] != "\n":
+                        masked[i + 1] = " "
+                    i += 2
+                else:
+                    escaped = text[i] == quote
+                    masked[i] = " "
+                    i += 1
+                    if escaped:
+                        break
+        else:
+            i += 1
+    return "".join(masked)
+
+patterns = (
+    re.compile(r"\.\s*detach\s*\("),
+    re.compile(r"\bpthread_detach\s*\("),
+)
+failed = False
+for raw_path in sys.stdin.buffer.read().split(b"\0"):
+    if not raw_path:
+        continue
+    path = os.fsdecode(raw_path)
+    parts = path.split("/")
+    if not any(path.endswith(extension) for extension in extensions):
+        continue
+    if any(part.casefold() in excluded_directories for part in parts[1:]):
+        continue
+    try:
+        with open(path, encoding="utf-8") as source_file:
+            masked = mask_non_code(source_file.read())
+    except UnicodeDecodeError:
+        continue
+    for pattern in patterns:
+        for match in pattern.finditer(masked):
+            line = masked.count("\n", 0, match.start()) + 1
+            print(f"thread detachment is forbidden in {path}:{line}")
+            failed = True
+if failed:
+    sys.exit(1)
+'
+
 sh "$repo_root/tools/check-library-sync-construction.sh" "$repo_root"
 sh "$repo_root/tools/check-library-sync-ui-boundary.sh" "$repo_root"
 

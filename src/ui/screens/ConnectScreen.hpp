@@ -5,6 +5,8 @@
 #include "../../net/JellyfinApi.hpp"
 #include <string>
 #include <atomic>
+#include <functional>
+#include <memory>
 #include <thread>
 
 namespace miyoofin {
@@ -18,10 +20,19 @@ class ConnectScreen : public Screen
 {
   public:
     explicit ConnectScreen(const std::string& savedUrl);
+#ifdef MIYOOFIN_TEST_BUILD
+    using ConnectionAttempt = std::function<bool(const std::string&, ServerInfo&, std::string&,
+                                                  const std::atomic<bool>*)>;
+    ConnectScreen(const std::string& savedUrl, ConnectionAttempt attempt);
+#endif
     ~ConnectScreen() override;
 
     void enter() override;
     void leave() override;
+    bool deferDestruction() const override
+    {
+        return true;
+    }
     bool handleAction(Action action) override;
     void update(Uint32 dt) override;
     void render(SDL_Surface* fb) override;
@@ -65,13 +76,18 @@ class ConnectScreen : public Screen
 
     // Connection thread
     std::thread m_connectThread;
+    std::shared_ptr<std::atomic<bool>> m_connectCancellation;
     std::atomic<bool> m_connectDone{false};
     std::atomic<bool> m_connectSuccess{false};
     std::string m_connectError;
     ServerInfo m_connectResult;
+#ifdef MIYOOFIN_TEST_BUILD
+    ConnectionAttempt m_connectionAttempt;
+#endif
 
     void startConnection();
     void finishConnection();
+    void stopConnection();
 };
 
 } // namespace miyoofin

@@ -350,7 +350,6 @@ bool HomeScreen::startFetch()
         library::HomeRailResult railResult;
         if (railStarted) {
             ++requestCount;
-            ++requestCount;
             for (;;) {
                 if (cancellation->load())
                     m_libraryCoordinator->cancelHomeRailRefresh();

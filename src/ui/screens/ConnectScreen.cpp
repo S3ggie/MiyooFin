@@ -4,13 +4,28 @@
 #include "../../net/JellyfinApi.hpp"
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 namespace miyoofin {
 
 ConnectScreen::ConnectScreen(const std::string& savedUrl) : m_savedUrl(savedUrl) {}
 
+#ifdef MIYOOFIN_TEST_BUILD
+ConnectScreen::ConnectScreen(const std::string& savedUrl, ConnectionAttempt attempt)
+    : m_savedUrl(savedUrl), m_connectionAttempt(std::move(attempt))
+{
+}
+#endif
+
 ConnectScreen::~ConnectScreen()
 {
+    stopConnection();
+}
+
+void ConnectScreen::stopConnection()
+{
+    if (m_connectCancellation)
+        m_connectCancellation->store(true, std::memory_order_release);
     if (m_connectThread.joinable()) {
         m_connectThread.join();
     }
@@ -26,9 +41,10 @@ void ConnectScreen::enter()
 void ConnectScreen::leave()
 {
     printf("[ConnectScreen] leave\n");
-    if (m_connectThread.joinable()) {
-        m_connectThread.join();
-    }
+    // ScreenStack retires this screen on its bounded cleanup worker. Signal
+    // cancellation here, but do not make the SDL thread wait for curl.
+    if (m_connectCancellation)
+        m_connectCancellation->store(true, std::memory_order_release);
 }
 
 bool ConnectScreen::handleAction(Action action)
@@ -69,16 +85,40 @@ void ConnectScreen::update(Uint32 dt)
 
 void ConnectScreen::startConnection()
 {
+    if (m_connectThread.joinable()) {
+        // Reclaim a completed attempt before a retry. A live attempt is
+        // refused so retries can never create competing workers.
+        if (m_connectDone.load(std::memory_order_acquire))
+            m_connectThread.join();
+        else
+            return;
+    }
+
     m_connectDone = false;
     m_connectSuccess = false;
     m_connectError.clear();
     m_message = "Connecting...";
 
     std::string url = m_savedUrl;
-    m_connectThread = std::thread([this, url]() {
+    m_connectCancellation = std::make_shared<std::atomic<bool>>(false);
+    const auto cancellation = m_connectCancellation;
+#ifdef MIYOOFIN_TEST_BUILD
+    const auto connectionAttempt = m_connectionAttempt;
+#endif
+    m_connectThread = std::thread([this, url, cancellation
+#ifdef MIYOOFIN_TEST_BUILD
+                                    , connectionAttempt
+#endif
+                                   ]() {
         ServerInfo info;
         std::string err;
-        bool ok = JellyfinApi::getSystemInfo(url, info, err);
+        bool ok = false;
+#ifdef MIYOOFIN_TEST_BUILD
+        if (connectionAttempt)
+            ok = connectionAttempt(url, info, err, cancellation.get());
+        else
+#endif
+            ok = JellyfinApi::getSystemInfo(url, info, err, cancellation.get());
         if (ok) {
             m_connectResult = info;
             m_connectSuccess = true;
@@ -88,11 +128,16 @@ void ConnectScreen::startConnection()
         }
         m_connectDone = true;
     });
-    m_connectThread.detach();
 }
 
 void ConnectScreen::finishConnection()
 {
+    // The completion flag is published before the worker returns. Join only
+    // after that publication, so this is a deterministic worker retirement,
+    // not an ordinary UI-thread network wait; retries then own no stale
+    // joinable worker.
+    if (m_connectThread.joinable())
+        m_connectThread.join();
     m_connectDone = false;
 
     if (m_connectSuccess) {

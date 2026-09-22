@@ -18,16 +18,13 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
         m_libraryCoordinator->setManualOfflineMode(session.manualOfflineMode);
     m_libraryFetch = std::make_unique<HomeLibraryController>(
         m_session, m_libraryQuery.get(), m_libraryCoordinator.get(), m_downloads.get());
+    m_artworkController = std::make_unique<HomeArtworkController>(m_session);
     // Placeholder tabs until fetch completes
     m_tabs.push_back({"Home", {{"", {}}}});
     m_tabs.push_back({"Movies", {{"", {}}}});
     m_tabs.push_back({"Shows", {{"", {}}}});
     m_tabs.push_back({"Downloads", {{"", {}}}});
     m_tabs.push_back({"Settings", {{"", {}}}});
-    for (int i = 0; i < kPosterThreads; ++i)
-        m_posterThreads.emplace_back(&HomeScreen::posterWorker, this);
-    m_decodeThread = std::thread(&HomeScreen::decodeWorker, this);
-
     // Enable OTA updates if app directory can be resolved.
     {
         std::string dir;
@@ -60,6 +57,10 @@ HomeScreen::~HomeScreen()
 
 void HomeScreen::requestStopAllWorkers() noexcept
 {
+    // Artwork workers own their queues and only publish value results, but
+    // close them before the library services and Home state begin teardown.
+    if (m_artworkController)
+        m_artworkController->requestStopAllWorkers();
     if (m_moviePage.cancellation)
         m_moviePage.cancellation->store(true);
     if (m_showPage.cancellation)
@@ -82,16 +83,6 @@ void HomeScreen::requestStopAllWorkers() noexcept
     if (m_libraryCoordinator)
         m_libraryCoordinator->cancelSafetyReconcile();
     m_updateManager.cancel();
-    {
-        std::lock_guard<std::mutex> lock(m_posterMutex);
-        m_stopPosterWorker = true;
-    }
-    m_posterWake.notify_all();
-    {
-        std::lock_guard<std::mutex> lock(m_decodeMutex);
-        m_stopDecodeWorker = true;
-    }
-    m_decodeWake.notify_one();
 }
 
 void HomeScreen::joinAllWorkers()
@@ -100,12 +91,8 @@ void HomeScreen::joinAllWorkers()
         m_libraryFetch->joinAllWorkers();
     if (m_downloadRefreshThread.joinable())
         m_downloadRefreshThread.join();
-    for (auto& thread : m_posterThreads) {
-        if (thread.joinable())
-            thread.join();
-    }
-    if (m_decodeThread.joinable())
-        m_decodeThread.join();
+    if (m_artworkController)
+        m_artworkController->joinAllWorkers();
 }
 
 // EXIT-ONLY: permanently requests all background workers stop (flags are
@@ -272,6 +259,9 @@ void HomeScreen::update(Uint32 dt)
         }
     }
     consumeHierarchyResults();
+    if (m_artworkController)
+        m_artworkController->setLowPriorityDeferred(m_libraryFetch &&
+                                                    m_libraryFetch->initialPopulationInProgress());
     if (m_libraryFetch && m_libraryFetch->ready()) {
         UiDiagnostics::Scope scope("HomeScreen::publishLibraryResult");
         finishFetch();

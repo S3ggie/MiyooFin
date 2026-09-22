@@ -21,11 +21,11 @@
 #include "../HomeTabs.hpp"
 #include "../HomeArtworkPlan.hpp"
 #include "HomeLibraryController.hpp"
+#include "HomeArtworkController.hpp"
 #include "../../diagnostics/TelemetryIds.hpp"
 #include "../../update/UpdateManager.hpp"
 #include <atomic>
 #include <algorithm>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <future>
@@ -79,12 +79,12 @@ class HomeScreen : public Screen
     }
     const char* diagnosticTabName() const;
 
-    static constexpr int kPosterThreads = 3;
+    static constexpr int kPosterThreads = HomeArtworkController::kPosterThreads;
     /// Maximum decode attempts for a cached JPEG before it receives a
     /// permanent RowArtworkStatus::Failed tombstone.  The per-key counter
     /// is reset on success and is naturally fresh when the key changes
     /// (new imageTag).  Defined here so tests can reference the bound.
-    static constexpr int kMaxDecodeAttempts = 3;
+    static constexpr int kMaxDecodeAttempts = HomeArtworkController::kMaxDecodeAttempts;
     static constexpr int settingsRowCount()
     {
         return homeSettingsBaseRowCount();
@@ -147,6 +147,10 @@ class HomeScreen : public Screen
     /// Build the row-artwork identity key for a media item.
     /// Format: "itemId:Primary:imageTag:WxH"
     static std::string rowArtworkKey(const MediaItem& item);
+    static bool acceptsShowsArtworkResult(const HomeArtworkController::DecodeResult& result,
+                                          std::uint64_t currentGeneration,
+                                          const std::set<std::string>& activeKeys,
+                                          const std::set<std::string>& protectedKeys);
     static std::vector<PosterJob> collectPosterJobs(const LibrarySnapshot& snapshot);
     /// Pure online Home projection; exposed to keep its cached row semantics testable.
     static std::vector<TabData> tabsFromSnapshot(const LibrarySnapshot& snapshot);
@@ -322,28 +326,18 @@ class HomeScreen : public Screen
     LibrarySnapshot m_offlineSnapshotCache;
     bool m_haveOfflineSnapshotCache = false;
     LibrarySyncSchedule m_syncSchedule;
-    std::atomic<size_t> m_artworkCompleted{0}, m_artworkTotal{0};
-    std::atomic<bool> m_artworkActive{false};
     bool m_libraryOffline = false;
     bool m_catalogScopeReadyLogged = false;
     bool m_firstMediaPageReadLogged = false;
     bool m_firstMediaPageReadCompletedLogged = false;
     bool m_firstUsefulHomeLogged = false;
     bool m_firstInteractiveFrameLogged = false;
-    std::vector<std::thread> m_posterThreads;
-    std::mutex m_posterMutex;
-    std::condition_variable m_posterWake;
-    std::deque<PosterJob> m_highPriorityPosterJobs;
-    std::deque<PosterJob> m_lowPriorityPosterJobs;
-    std::set<std::string> m_artworkProgressKeys;
-    /// Per-key decode-failure attempt counter (see kMaxDecodeAttempts).
-    std::map<std::string, int> m_rowArtworkAttempts;
+    std::unique_ptr<HomeArtworkController> m_artworkController;
     // Session-level guard for bounded season-poster prefetch: each series is
     // prefetched at most once per process lifetime so repeat home fetches are
     // free.
     std::mutex m_hierarchyStateMutex;
     std::set<std::string> m_seasonPrefetchedIds;
-    bool m_stopPosterWorker = false;
     // The coordinator owns hierarchy work, cancellation, and generation.
     // Home retains only the request identity and UI-local progress state.
     std::atomic<std::uint64_t> m_hierarchyRequest{0};
@@ -352,30 +346,11 @@ class HomeScreen : public Screen
     std::atomic<bool> m_hierarchyActive{false};
     std::atomic<bool> m_hierarchyOffline{false};
     bool m_hierarchySubmissionClosed = false;
-    std::thread m_decodeThread;
-    std::mutex m_decodeMutex;
-    std::condition_variable m_decodeWake;
-    struct DecodeJob
-    {
-        std::string key;
-        PosterJob artwork;
-        bool shows = false;
-        ArtworkContext context = ArtworkContext::Unknown;
-    };
-    struct DecodeResult
-    {
-        std::string key;
-        DecodedImage image;
-        bool shows = false;
-        bool cachePresent = false;
-    };
-    std::deque<DecodeJob> m_decodeJobs;
-    std::deque<DecodeResult> m_decodeResults;
-    std::set<std::string> m_decodeOutstanding;
-    // Keys wanted by the current Shows viewport.  This is main-thread state;
-    // queued jobs are reconciled with it under m_decodeMutex.
+    // Keys wanted by the current Shows viewport.  This is UI-thread state;
+    // the controller uses it only to discard queued work from old working
+    // sets; Home remains the authority for result freshness.
     std::set<std::string> m_activeShowsDecodeKeys;
-    bool m_stopDecodeWorker = false;
+    std::uint64_t m_showsArtworkGeneration = 0;
 
     /// Start a background library fetch.  Returns true if a new fetch was
     /// actually started; false if a previous fetch is still in-flight.
@@ -389,13 +364,10 @@ class HomeScreen : public Screen
     void restoreOnlinePresentation();
     void applyOfflineProjection();
     void prepareOfflineProjection();
-    void queuePosterJobs(std::vector<PosterJob> jobs, bool highPriority = false);
-    void posterWorker();
     bool requestHierarchy(const std::vector<MediaItem>& shows, std::uint64_t generation,
                           bool forceReconcile);
     void consumeHierarchyResults();
     std::string syncStatusText() const;
-    void decodeWorker();
     void drainDecodedArtwork();
     void submitDecode(const MediaItem& item, bool highPriority = false, bool shows = false);
 

@@ -10,6 +10,7 @@ test_api_core
 test_api_events
 test_ui_foundation
 test_ui_models
+test_home_artwork_controller
 test_cache_offline
 test_artwork_episode
 test_downloads

@@ -139,7 +139,7 @@ if matches=$(grep -rnE "$stale_paths" src/ tests/ Makefile Makefile.cross); then
     exit 1
 fi
 
-required_sources="CatalogDbSchema.cpp CatalogDbSchemaOps.cpp CatalogDbWrite.cpp CatalogDbQuery.cpp CatalogDbSyncState.cpp CatalogDbHierarchy.cpp LibrarySyncIncremental.cpp LibrarySyncEvents.cpp AppSession.cpp AppPlayback.cpp PerformanceTelemetryRecord.cpp PerformanceTelemetryService.cpp PerformanceTelemetrySnapshot.cpp SeriesScreenWorker.cpp SeriesScreenNavigation.cpp SeriesScreenRender.cpp MovieDetailsWorker.cpp MovieDetailsRender.cpp EpisodeBrowserData.cpp HomeScreenOffline.cpp HomeScreenSyncApply.cpp JellyfinLibraryEventParse.cpp JellyfinLibraryEventQueue.cpp JellyfinLibraryEventSocket.cpp"
+required_sources="CatalogDbSchema.cpp CatalogDbSchemaOps.cpp CatalogDbWrite.cpp CatalogDbQuery.cpp CatalogDbSyncState.cpp CatalogDbHierarchy.cpp LibrarySyncIncremental.cpp LibrarySyncEvents.cpp AppSession.cpp AppPlayback.cpp PerformanceTelemetryRecord.cpp PerformanceTelemetryService.cpp PerformanceTelemetrySnapshot.cpp SeriesScreenWorker.cpp SeriesScreenNavigation.cpp SeriesScreenRender.cpp MovieDetailsWorker.cpp MovieDetailsRender.cpp EpisodeBrowserData.cpp HomeScreenOffline.cpp HomeScreenSyncApply.cpp HomeArtworkController.cpp JellyfinLibraryEventParse.cpp JellyfinLibraryEventQueue.cpp JellyfinLibraryEventSocket.cpp"
 for source in $required_sources; do
     grep -q "$source" sources.mk || { echo "missing host/test registration: $source"; exit 1; }
 done

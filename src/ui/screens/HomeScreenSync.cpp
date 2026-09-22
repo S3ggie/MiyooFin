@@ -119,6 +119,8 @@ bool HomeScreen::startFetch()
         m_tabs, m_cachedSnapshot, m_remoteSnapshot, m_haveCachedSnapshot, m_libraryOffline,
         m_loadState == LoadState::Ready && !m_tabs.empty(), m_animeItemIds);
     if (started) {
+        if (m_artworkController)
+            m_artworkController->setLowPriorityDeferred(true);
         m_animeItemIds.clear();
         m_fetchPublished = false;
         m_fetchPostFinalizeApplied = false;

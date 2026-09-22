@@ -344,23 +344,29 @@ static void testInitialHomeArtworkScheduling()
     CHECK(sourceContains(source, "update.firstPage"));
     const std::string coordinator=readTestBytes("src/ui/screens/HomeScreen.cpp");
     CHECK(!coordinator.empty());
-    CHECK(sourceContains(coordinator, "m_posterThreads.emplace_back"));
+    CHECK(sourceContains(coordinator, "std::make_unique<HomeArtworkController>"));
     const std::string apply = readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     CHECK(!apply.empty());
-    CHECK(sourceContains(apply, "queuePosterJobs(planMediaPagePosterJobs(result.items), true)"));
+    CHECK(sourceContains(apply, "m_artworkController->queuePosterJobs"));
     const std::string controller = source;
     CHECK(sourceContains(controller, "m_artworkPlanningComplete.store(false)"));
     CHECK(sourceContains(controller, "m_artworkPlanningComplete.store(artworkPlanningComplete)"));
-    const std::string hierarchy=readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
-    CHECK(!hierarchy.empty());
-    // Structural: the poster worker owns its client/loop in this
-    // translation unit; scoped to posterWorker so the hierarchy worker's
-    // own loop cannot satisfy the check.
-    const std::string posterWorker = sourceFunction(hierarchy, "void HomeScreen::posterWorker(");
+    const std::string artworkController=readTestBytes(
+        "src/ui/screens/HomeArtworkController.cpp");
+    CHECK(!artworkController.empty());
+    // Structural: the extracted controller owns its client/loop; scope the
+    // scan to the worker so unrelated HTTP code cannot satisfy the check.
+    const std::string posterWorker = sourceFunction(
+        artworkController, "void HomeArtworkController::posterWorker(");
     CHECK(!posterWorker.empty());
     CHECK(sourceContains(posterWorker, "HttpClient client;"));
     CHECK(sourceContains(posterWorker, "for (;;)"));
-    CHECK(sourceContains(posterWorker, "PosterJob job;"));
+    CHECK(sourceContains(posterWorker, "HomePosterJob job;"));
+    const std::string decodeWorker = sourceFunction(
+        artworkController, "void HomeArtworkController::decodeWorker(");
+    CHECK(!decodeWorker.empty());
+    CHECK(sourceContains(decodeWorker, "ImageCache::readCached"));
+    CHECK(sourceContains(decodeWorker, "ImageDecoder::decodeJpeg"));
     const std::string http=readTestBytes("src/net/HttpClient.hpp");
     CHECK(!http.empty());
     CHECK(sourceContains(http, "CURL *m_curl"));

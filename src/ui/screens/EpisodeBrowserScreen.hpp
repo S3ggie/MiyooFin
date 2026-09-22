@@ -184,6 +184,9 @@ class EpisodeBrowserScreen : public Screen
     std::atomic<bool> m_fetchCancelled{false};
     std::shared_ptr<std::atomic_bool> m_catalogCancellation =
         std::make_shared<std::atomic_bool>(false);
+    // Published before waiting so leave() can cancel the coordinator request
+    // and wake a worker blocked on its result condition variable.
+    std::atomic<std::uint64_t> m_hierarchyRequest{0};
 
     // ----- Navigation state -----
     int m_selectedEpisode = 0;

@@ -226,6 +226,8 @@ void DownloadManager::planner()
             job = std::move(m_planJobs.front());
             m_planJobs.pop_front();
             m_activePlanCancellation = job.cancellation;
+            m_activePlanCoordinator = job.libraryCoordinator;
+            m_activePlanHierarchyRequest.store(0, std::memory_order_release);
             performanceTelemetry().setWorkerQueueDepth(
                 WorkerId::DownloadPlanner, static_cast<std::uint32_t>(m_planJobs.size()));
             publishDownloadGauges(m_items, m_planJobs.size());
@@ -291,6 +293,9 @@ void DownloadManager::planner()
                     return false;
                 }
                 if (job.libraryCoordinator->requestSeasonEpisodes(series, season, request)) {
+                    m_activePlanHierarchyRequest.store(request, std::memory_order_release);
+                    if (cancellation->load(std::memory_order_acquire))
+                        job.libraryCoordinator->cancelHierarchyRequest(request);
                     break;
                 }
                 if (job.libraryCoordinator->stopped()) {
@@ -307,9 +312,12 @@ void DownloadManager::planner()
                     return false;
                 }
                 library::HierarchyResult result;
-                if (!job.libraryCoordinator->takeHierarchyResult(request, result)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                    continue;
+                const auto waitStatus = job.libraryCoordinator->waitHierarchyResult(
+                    request, result, cancellation.get());
+                if (waitStatus != library::WaitStatus::Ready) {
+                    job.libraryCoordinator->cancelHierarchyRequest(request);
+                    hierarchySuperseded = true;
+                    return false;
                 }
                 if (!result.terminal)
                     continue;
@@ -340,6 +348,9 @@ void DownloadManager::planner()
                     return false;
                 }
                 if (job.libraryCoordinator->requestSeriesSeasons(series, request)) {
+                    m_activePlanHierarchyRequest.store(request, std::memory_order_release);
+                    if (cancellation->load(std::memory_order_acquire))
+                        job.libraryCoordinator->cancelHierarchyRequest(request);
                     break;
                 }
                 if (job.libraryCoordinator->stopped()) {
@@ -355,9 +366,12 @@ void DownloadManager::planner()
                     return false;
                 }
                 library::HierarchyResult result;
-                if (!job.libraryCoordinator->takeHierarchyResult(request, result)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                    continue;
+                const auto waitStatus = job.libraryCoordinator->waitHierarchyResult(
+                    request, result, cancellation.get());
+                if (waitStatus != library::WaitStatus::Ready) {
+                    job.libraryCoordinator->cancelHierarchyRequest(request);
+                    hierarchySuperseded = true;
+                    return false;
                 }
                 if (!result.terminal)
                     continue;
@@ -474,8 +488,11 @@ void DownloadManager::planner()
         std::lock_guard<std::mutex> lock(m_mutex);
         const auto plan = m_plans.find(job.id);
         if (plan == m_plans.end() || job.generation != m_generation) {
-            if (m_activePlanCancellation == job.cancellation)
+            if (m_activePlanCancellation == job.cancellation) {
                 m_activePlanCancellation.reset();
+                m_activePlanCoordinator.reset();
+                m_activePlanHierarchyRequest.store(0, std::memory_order_release);
+            }
             performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner, false);
             continue;
         }
@@ -488,8 +505,11 @@ void DownloadManager::planner()
             plan->second.state =
                 calculated.error.empty() ? DownloadPlanState::Ready : DownloadPlanState::Error;
         }
-        if (m_activePlanCancellation == job.cancellation)
+        if (m_activePlanCancellation == job.cancellation) {
             m_activePlanCancellation.reset();
+            m_activePlanCoordinator.reset();
+            m_activePlanHierarchyRequest.store(0, std::memory_order_release);
+        }
         performanceTelemetry().setWorkerActive(WorkerId::DownloadPlanner, false);
     }
 }

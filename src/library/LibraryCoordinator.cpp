@@ -278,17 +278,106 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
 
 bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult& result)
 {
+    bool took = false;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        if (!m_startupResultReady || m_startupInFlight)
-            return false;
-        result = std::move(m_startupResult);
-        m_startupResultReady = false;
+        took = takeStartupSyncResultLocked(result);
     }
-    // Leave the completed thread joinable for stop() or the next startup
-    // request to claim under the mutex. This keeps concurrent result-taking
-    // and stopping from racing on std::thread itself.
+    if (took)
+        m_startupWake.notify_all();
+    return took;
+}
+
+bool LibraryCoordinator::takeStartupSyncResultLocked(StartupSyncResult& result)
+{
+    if (!m_startupResultReady || m_startupInFlight)
+        return false;
+    result = std::move(m_startupResult);
+    m_startupResultReady = false;
     return true;
+}
+
+WaitStatus LibraryCoordinator::waitStartupSyncResult(StartupSyncResult& result,
+                                                     const std::atomic_bool* consumerCancellation)
+{
+    std::unique_lock<std::mutex> lock(m_startupMutex);
+    for (;;) {
+        // Publication wins over cancellation or stop, including when the
+        // notification and teardown race with this consumer.
+        if (takeStartupSyncResultLocked(result))
+            return WaitStatus::Ready;
+        if (m_stopped)
+            return WaitStatus::Stopped;
+        const bool cancelled = (consumerCancellation && consumerCancellation->load()) ||
+                               (m_startupCancellation && m_startupCancellation->load());
+        if (cancelled) {
+            // Cancellation requests the worker's terminal publication.  Keep
+            // consuming through that handoff so startup does not leave a
+            // ready result blocking the next serialized operation.
+            if (m_startupInFlight) {
+                m_startupWake.wait(lock);
+                continue;
+            }
+            return WaitStatus::Cancelled;
+        }
+        if (!m_startupInFlight)
+            return WaitStatus::InvalidRequest;
+        m_startupWake.wait(lock);
+    }
+}
+
+bool LibraryCoordinator::takeFullPopulationUpdateLocked(std::uint64_t request,
+                                                        FullPopulationUpdate& update)
+{
+    if (request == 0 || request != m_fullPopulationRequest || m_fullPopulationUpdates.empty())
+        return false;
+    update = std::move(m_fullPopulationUpdates.front());
+    m_fullPopulationUpdates.pop_front();
+    return true;
+}
+
+WaitStatus
+LibraryCoordinator::waitFullPopulationUpdate(std::uint64_t request, FullPopulationUpdate& update,
+                                             const std::atomic_bool* consumerCancellation)
+{
+    std::unique_lock<std::mutex> lock(m_startupMutex);
+    for (;;) {
+        if (takeFullPopulationUpdateLocked(request, update))
+            return WaitStatus::Ready;
+        if (request == 0 || request != m_fullPopulationRequest)
+            return WaitStatus::InvalidRequest;
+        if (m_stopped)
+            return WaitStatus::Stopped;
+        const bool cancelled =
+            (consumerCancellation && consumerCancellation->load()) ||
+            (m_fullPopulationCancellation && m_fullPopulationCancellation->load());
+        if (cancelled) {
+            // Intermediate pages remain observable.  The terminal publication
+            // clears the serialized gate and is consumed before cancellation
+            // is reported to a caller with no remaining result.
+            if (m_fullSyncInFlight) {
+                m_startupWake.wait(lock);
+                continue;
+            }
+            return WaitStatus::Cancelled;
+        }
+        if (!m_fullSyncInFlight)
+            return WaitStatus::Superseded;
+        m_startupWake.wait(lock);
+    }
+}
+
+bool LibraryCoordinator::takeFullPopulationUpdate(std::uint64_t request,
+                                                  FullPopulationUpdate& update)
+{
+    bool took = false;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        took = takeFullPopulationUpdateLocked(request, update);
+    }
+    if (took)
+        m_startupWake.notify_all();
+    return took;
 }
 
 bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
@@ -406,6 +495,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                     const auto publish = [this, requestId, scopeEpoch,
                                           scopeHash](FullPopulationUpdate value) {
                         std::string diagnostic;
+                        bool publicationMade = false;
                         {
                             std::lock_guard<std::mutex> guard(m_startupMutex);
                             // A request cannot normally be superseded while this worker is
@@ -428,6 +518,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                                 if (value.terminal)
                                     m_fullSyncInFlight = false;
                                 m_fullPopulationUpdates.push_back(std::move(value));
+                                publicationMade = true;
                                 const auto& published = m_fullPopulationUpdates.back();
                                 std::string kind =
                                     published.terminal
@@ -449,6 +540,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                                     std::to_string(TelemetryClock::monotonicUs());
                             }
                         }
+                        if (publicationMade)
+                            m_startupWake.notify_all();
                         uiDiagnostics().log(diagnostic);
                     };
                     const auto publishTerminal = [&](FullPopulationUpdate value) {
@@ -777,22 +870,18 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
     return true;
 }
 
-bool LibraryCoordinator::takeFullPopulationUpdate(std::uint64_t request,
-                                                  FullPopulationUpdate& update)
-{
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (request == 0 || request != m_fullPopulationRequest || m_fullPopulationUpdates.empty())
-        return false;
-    update = std::move(m_fullPopulationUpdates.front());
-    m_fullPopulationUpdates.pop_front();
-    return true;
-}
-
 void LibraryCoordinator::cancelFullPopulation() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_fullPopulationCancellation)
-        m_fullPopulationCancellation->store(true);
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_fullPopulationCancellation) {
+            cancelled = true;
+            m_fullPopulationCancellation->store(true);
+        }
+    }
+    if (cancelled)
+        m_startupWake.notify_all();
 }
 
 std::future<CatalogDbSyncState> LibraryCoordinator::checkpointLiveCatalog(
@@ -1085,6 +1174,7 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t& request)
             else if (!recentOk)
                 result.error = recentError;
 
+            bool publicationMade = false;
             {
                 std::lock_guard<std::mutex> lock(m_startupMutex);
                 // A Home startup worker may be waiting on this publication
@@ -1094,9 +1184,12 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t& request)
                 if (requestId == m_homeRailRequest) {
                     m_homeRailResult = std::move(result);
                     m_homeRailResultReady = true;
+                    publicationMade = true;
                 }
                 m_homeRailInFlight = false;
             }
+            if (publicationMade)
+                m_startupWake.notify_all();
         });
     }
     return true;
@@ -1104,7 +1197,18 @@ bool LibraryCoordinator::requestHomeRailRefresh(std::uint64_t& request)
 
 bool LibraryCoordinator::takeHomeRailResult(std::uint64_t request, HomeRailResult& result)
 {
-    std::lock_guard<std::mutex> lock(m_startupMutex);
+    bool took = false;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        took = takeHomeRailResultLocked(request, result);
+    }
+    if (took)
+        m_startupWake.notify_all();
+    return took;
+}
+
+bool LibraryCoordinator::takeHomeRailResultLocked(std::uint64_t request, HomeRailResult& result)
+{
     if (!m_homeRailResultReady || m_homeRailInFlight || request == 0 ||
         m_homeRailResult.request != request)
         return false;
@@ -1113,11 +1217,46 @@ bool LibraryCoordinator::takeHomeRailResult(std::uint64_t request, HomeRailResul
     return true;
 }
 
+WaitStatus LibraryCoordinator::waitHomeRailResult(std::uint64_t request, HomeRailResult& result,
+                                                  const std::atomic_bool* consumerCancellation)
+{
+    std::unique_lock<std::mutex> lock(m_startupMutex);
+    for (;;) {
+        if (takeHomeRailResultLocked(request, result))
+            return WaitStatus::Ready;
+        if (request == 0 || request != m_homeRailRequest)
+            return WaitStatus::InvalidRequest;
+        if (m_stopped)
+            return WaitStatus::Stopped;
+        const bool cancelled = (consumerCancellation && consumerCancellation->load()) ||
+                               (m_homeRailCancellation && m_homeRailCancellation->load());
+        if (cancelled) {
+            // Do not abandon the terminal publication: Home rail completion
+            // owns the in-flight slot and must be consumed before reuse.
+            if (m_homeRailInFlight) {
+                m_startupWake.wait(lock);
+                continue;
+            }
+            return WaitStatus::Cancelled;
+        }
+        if (!m_homeRailInFlight)
+            return WaitStatus::Superseded;
+        m_startupWake.wait(lock);
+    }
+}
+
 void LibraryCoordinator::cancelHomeRailRefresh() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_homeRailCancellation)
-        m_homeRailCancellation->store(true);
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_homeRailCancellation) {
+            cancelled = true;
+            m_homeRailCancellation->store(true);
+        }
+    }
+    if (cancelled)
+        m_startupWake.notify_all();
 }
 
 bool LibraryCoordinator::requestHierarchy(const std::vector<MediaItem>& shows,
@@ -1221,7 +1360,18 @@ bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem& series, const Me
 
 bool LibraryCoordinator::takeHierarchyResult(std::uint64_t request, HierarchyResult& result)
 {
-    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+    bool took = false;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        took = takeHierarchyResultLocked(request, result);
+    }
+    if (took)
+        m_hierarchyWake.notify_all();
+    return took;
+}
+
+bool LibraryCoordinator::takeHierarchyResultLocked(std::uint64_t request, HierarchyResult& result)
+{
     if (request == 0 || m_hierarchyResults.empty())
         return false;
     const auto found =
@@ -1233,6 +1383,7 @@ bool LibraryCoordinator::takeHierarchyResult(std::uint64_t request, HierarchyRes
     m_hierarchyResults.erase(found);
     if (result.terminal) {
         m_hierarchyAccepted.erase(request);
+        m_hierarchySupersededRequests.insert(request);
         if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest &&
             m_hierarchyResults.empty()) {
             m_hierarchyMutationInFlight = false;
@@ -1241,68 +1392,109 @@ bool LibraryCoordinator::takeHierarchyResult(std::uint64_t request, HierarchyRes
     return true;
 }
 
+WaitStatus LibraryCoordinator::waitHierarchyResult(std::uint64_t request, HierarchyResult& result,
+                                                   const std::atomic_bool* consumerCancellation)
+{
+    std::unique_lock<std::mutex> lock(m_hierarchyMutex);
+    for (;;) {
+        if (takeHierarchyResultLocked(request, result))
+            return WaitStatus::Ready;
+        if (request == 0)
+            return WaitStatus::InvalidRequest;
+        if (m_hierarchyStop)
+            return WaitStatus::Stopped;
+        if (consumerCancellation && consumerCancellation->load())
+            return WaitStatus::Cancelled;
+        const auto accepted = m_hierarchyAccepted.find(request);
+        if (accepted == m_hierarchyAccepted.end())
+            return m_hierarchySupersededRequests.count(request) ? WaitStatus::Superseded
+                                                                : WaitStatus::InvalidRequest;
+        if (accepted->second.cancellation && accepted->second.cancellation->load())
+            return WaitStatus::Cancelled;
+        m_hierarchyWake.wait(lock);
+    }
+}
+
 void LibraryCoordinator::cancelHierarchyRequest(std::uint64_t request) noexcept
 {
-    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-    const auto accepted = m_hierarchyAccepted.find(request);
-    if (accepted == m_hierarchyAccepted.end())
-        return;
-    accepted->second.cancellation->store(true);
-    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(), m_hierarchyRequests.end(),
-                                             [request](const HierarchyRequest& value) {
-                                                 return value.request == request;
-                                             }),
-                              m_hierarchyRequests.end());
-    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
-                                            [request](const HierarchyResult& value) {
-                                                return value.request == request;
-                                            }),
-                             m_hierarchyResults.end());
-    // The cancellation API is fire-and-forget.  Removing an active request
-    // also suppresses its terminal publication once the network future
-    // unwinds, so a caller that is leaving cannot strand scheduler state.
-    m_hierarchyAccepted.erase(accepted);
-    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
-        m_hierarchyMutationInFlight = false;
-    m_hierarchyWake.notify_one();
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        const auto accepted = m_hierarchyAccepted.find(request);
+        if (accepted == m_hierarchyAccepted.end())
+            return;
+        accepted->second.cancellation->store(true);
+        m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(),
+                                                 m_hierarchyRequests.end(),
+                                                 [request](const HierarchyRequest& value) {
+                                                     return value.request == request;
+                                                 }),
+                                  m_hierarchyRequests.end());
+        m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(),
+                                                m_hierarchyResults.end(),
+                                                [request](const HierarchyResult& value) {
+                                                    return value.request == request;
+                                                }),
+                                 m_hierarchyResults.end());
+        // The cancellation API is fire-and-forget.  Removing an active request
+        // also suppresses its terminal publication once the network future
+        // unwinds, so a caller that is leaving cannot strand scheduler state.
+        m_hierarchySupersededRequests.insert(request);
+        m_hierarchyAccepted.erase(accepted);
+        if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
+            m_hierarchyMutationInFlight = false;
+        cancelled = true;
+    }
+    if (cancelled)
+        m_hierarchyWake.notify_all();
 }
 
 void LibraryCoordinator::cancelHierarchy() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-    std::vector<std::uint64_t> homeRequests;
-    for (const auto& entry : m_hierarchyAccepted) {
-        if (entry.second.kind == HierarchyTaskKind::HomePrefetch)
-            homeRequests.push_back(entry.first);
-    }
-    for (const auto request : homeRequests) {
-        const auto accepted = m_hierarchyAccepted.find(request);
-        if (accepted != m_hierarchyAccepted.end()) {
-            accepted->second.cancellation->store(true);
-            m_hierarchyAccepted.erase(accepted);
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+        std::vector<std::uint64_t> homeRequests;
+        for (const auto& entry : m_hierarchyAccepted) {
+            if (entry.second.kind == HierarchyTaskKind::HomePrefetch)
+                homeRequests.push_back(entry.first);
         }
+        for (const auto request : homeRequests) {
+            const auto accepted = m_hierarchyAccepted.find(request);
+            if (accepted != m_hierarchyAccepted.end()) {
+                accepted->second.cancellation->store(true);
+                m_hierarchySupersededRequests.insert(request);
+                m_hierarchyAccepted.erase(accepted);
+                cancelled = true;
+            }
+        }
+        // Cancellation belongs to the Home lifetime, not to the next Home
+        // request.  Invalidate every publication from this lifetime and discard
+        // anything Home did not consume before teardown.  A cancelled worker may
+        // still be unwinding a network future; allowing the next request into the
+        // queue keeps that worker serialized without letting its results reserve
+        // the request slot forever.
+        const auto oldRequestCount = m_hierarchyRequests.size();
+        const auto oldResultCount = m_hierarchyResults.size();
+        m_hierarchyRequests.erase(
+            std::remove_if(m_hierarchyRequests.begin(), m_hierarchyRequests.end(),
+                           [](const HierarchyRequest& value) {
+                               return value.kind == HierarchyTaskKind::HomePrefetch;
+                           }),
+            m_hierarchyRequests.end());
+        m_hierarchyResults.erase(
+            std::remove_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
+                           [](const HierarchyResult& value) {
+                               return value.kind == HierarchyTaskKind::HomePrefetch;
+                           }),
+            m_hierarchyResults.end());
+        cancelled = cancelled || oldRequestCount != m_hierarchyRequests.size() ||
+                    oldResultCount != m_hierarchyResults.size();
+        if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
+            m_hierarchyMutationInFlight = false;
     }
-    // Cancellation belongs to the Home lifetime, not to the next Home
-    // request.  Invalidate every publication from this lifetime and discard
-    // anything Home did not consume before teardown.  A cancelled worker may
-    // still be unwinding a network future; allowing the next request into the
-    // queue keeps that worker serialized without letting its results reserve
-    // the request slot forever.
-    m_hierarchyRequests.erase(std::remove_if(m_hierarchyRequests.begin(), m_hierarchyRequests.end(),
-                                             [](const HierarchyRequest& value) {
-                                                 return value.kind ==
-                                                        HierarchyTaskKind::HomePrefetch;
-                                             }),
-                              m_hierarchyRequests.end());
-    m_hierarchyResults.erase(std::remove_if(m_hierarchyResults.begin(), m_hierarchyResults.end(),
-                                            [](const HierarchyResult& value) {
-                                                return value.kind ==
-                                                       HierarchyTaskKind::HomePrefetch;
-                                            }),
-                             m_hierarchyResults.end());
-    if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
-        m_hierarchyMutationInFlight = false;
-    m_hierarchyWake.notify_one();
+    if (cancelled)
+        m_hierarchyWake.notify_all();
 }
 
 void LibraryCoordinator::hierarchyWorker()
@@ -1450,17 +1642,22 @@ void LibraryCoordinator::hierarchyWorker()
         terminal.terminal = true;
 
         const auto publish = [&](HierarchyResult result) {
-            std::lock_guard<std::mutex> lock(m_hierarchyMutex);
-            // A Home lifetime may discard its active request while the
-            // network future unwinds.  A direct caller keeps its request
-            // accepted until it consumes the terminal publication.
-            if (m_hierarchyAccepted.find(request.request) == m_hierarchyAccepted.end()) {
-                return;
+            bool publicationMade = false;
+            {
+                std::lock_guard<std::mutex> lock(m_hierarchyMutex);
+                // A Home lifetime may discard its active request while the
+                // network future unwinds.  A direct caller keeps its request
+                // accepted until it consumes the terminal publication.
+                if (m_hierarchyAccepted.find(request.request) == m_hierarchyAccepted.end())
+                    return;
+                result.request = request.request;
+                result.generation = request.generation;
+                result.kind = request.kind;
+                m_hierarchyResults.push_back(std::move(result));
+                publicationMade = true;
             }
-            result.request = request.request;
-            result.generation = request.generation;
-            result.kind = request.kind;
-            m_hierarchyResults.push_back(std::move(result));
+            if (publicationMade)
+                m_hierarchyWake.notify_all();
         };
 
         try {
@@ -1898,9 +2095,16 @@ void LibraryCoordinator::liveChangeWorker()
 
 void LibraryCoordinator::cancelStartupSync() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_startupCancellation)
-        m_startupCancellation->store(true);
+    bool cancelled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        if (m_startupCancellation) {
+            cancelled = true;
+            m_startupCancellation->store(true);
+        }
+    }
+    if (cancelled)
+        m_startupWake.notify_all();
 }
 
 void LibraryCoordinator::cancelSafetyReconcile() noexcept
@@ -1952,6 +2156,7 @@ void LibraryCoordinator::stop() noexcept
         if (m_liveChangeThread.joinable())
             liveChangeThread = std::move(m_liveChangeThread);
     }
+    m_startupWake.notify_all();
     m_liveChangeWake.notify_all();
     {
         std::lock_guard<std::mutex> lock(m_hierarchyMutex);

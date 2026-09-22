@@ -701,9 +701,14 @@ static void testHomeRailTelemetryCountsOneOperation()
     const std::string startup =
         sourceFunction(source, "void HomeLibraryController::fetchWorker(");
     CHECK(!startup.empty());
-    const std::string rail = sourceBetween(startup, "if (railStarted) {", "for (;;)");
+    const std::string rail = sourceBetween(startup, "if (railStarted) {", "publishPending();");
     CHECK(!rail.empty());
     CHECK(threadTokenCount(sourceTokenString(rail), "++requestCount") == 1u);
+    CHECK(threadTokenCount(
+              sourceTokenString(rail),
+              sourceTokenString("waitHomeRailResult(railRequest, railResult, cancellation.get())")) ==
+          1u);
+    CHECK(threadTokenCount(sourceTokenString(rail), "sleep_for") == 0u);
     CHECK(threadTokenCount(sourceTokenString(startup),
                           "requestHomeRailRefresh(railRequest)") == 1u);
     std::printf("[test] Home rail telemetry counts one coordinator operation OK\n");

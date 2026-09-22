@@ -192,18 +192,92 @@ MediaItem hierarchySeason(const std::string& id, const std::string& seriesId)
 bool takeHierarchyUntilTerminal(library::LibraryCoordinator& coordinator, std::uint64_t request,
                                 std::vector<library::HierarchyResult>& results)
 {
-    for (int i = 0; i < 1500; ++i) {
+    for (;;) {
         library::HierarchyResult result;
-        if (coordinator.takeHierarchyResult(request, result)) {
-            const bool terminal = result.terminal;
-            results.push_back(std::move(result));
-            if (terminal)
-                return true;
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
+        if (coordinator.waitHierarchyResult(request, result) != library::WaitStatus::Ready)
+            return false;
+        const bool terminal = result.terminal;
+        results.push_back(std::move(result));
+        if (terminal)
+            return true;
     }
-    return false;
+}
+
+void testHierarchyConsumerCancellationWakesWaiter()
+{
+    std::printf("[test] hierarchy consumer cancellation wakes waiter\n");
+    const auto scope = hierarchyScope("consumer-cancel");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    HierarchyServer server(
+        {
+            {200, R"({"Items":[]})"},
+        },
+        0);
+    Session session;
+    session.serverUrl = server.url();
+    session.userId = scope.user;
+    auto coordinator = std::make_shared<library::LibraryCoordinator>(session, db, epoch);
+    coordinator->start();
+
+    std::uint64_t request = 0;
+    CHECK(coordinator->requestHierarchy({hierarchySeries("consumer-cancel-series")}, 31, false,
+                                        request));
+    CHECK(server.waitUntilBlocked(std::chrono::seconds(2)));
+
+    std::atomic_bool consumerCancellation{false};
+    std::mutex barrierMutex;
+    std::condition_variable barrierWake;
+    bool entered = false;
+    library::HierarchyResult result;
+    library::WaitStatus waitStatus = library::WaitStatus::InvalidRequest;
+    std::thread waiter([&] {
+        {
+            std::lock_guard<std::mutex> lock(barrierMutex);
+            entered = true;
+            barrierWake.notify_all();
+        }
+        waitStatus = coordinator->waitHierarchyResult(request, result, &consumerCancellation);
+    });
+    {
+        std::unique_lock<std::mutex> lock(barrierMutex);
+        barrierWake.wait(lock, [&] { return entered; });
+    }
+
+    consumerCancellation.store(true, std::memory_order_release);
+    coordinator->cancelHierarchyRequest(request);
+    waiter.join();
+    CHECK(waitStatus == library::WaitStatus::Cancelled);
+    CHECK(coordinator->running() && !coordinator->stopped());
+
+    const auto seriesSource = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
+    const auto episodeSource =
+        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserData.cpp");
+    const auto seriesScreenSource = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreen.cpp");
+    const auto episodeScreenSource =
+        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserScreen.cpp");
+    CHECK(miyoofin_test::sourceContains(seriesSource, "waitHierarchyResult"));
+    CHECK(miyoofin_test::sourceContains(episodeSource, "waitHierarchyResult"));
+    CHECK(miyoofin_test::sourceContains(seriesSource, "cancelHierarchyRequest(request)"));
+    CHECK(miyoofin_test::sourceContains(episodeSource, "cancelHierarchyRequest(request)"));
+    CHECK(miyoofin_test::sourceContains(seriesScreenSource,
+                                        "cancelHierarchyRequest(hierarchyRequest)"));
+    CHECK(miyoofin_test::sourceContains(episodeScreenSource,
+                                        "cancelHierarchyRequest(hierarchyRequest)"));
+    CHECK(miyoofin_test::sourcePos(seriesScreenSource, "leave();") <
+          miyoofin_test::sourcePos(seriesScreenSource, "m_fetchThread.join()"));
+    CHECK(miyoofin_test::sourcePos(episodeScreenSource, "leave();") <
+          miyoofin_test::sourcePos(episodeScreenSource, "m_fetchThread.join()"));
+
+    server.release();
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeHierarchyScope(scope);
+    std::printf("[test] hierarchy consumer cancellation wakes waiter OK\n");
 }
 
 void testHierarchyCachedFirstAndPartialFailure()
@@ -584,6 +658,7 @@ void testHomeHierarchyLateRequestRace()
 
 int main()
 {
+    testHierarchyConsumerCancellationWakesWaiter();
     testHierarchyCachedFirstAndPartialFailure();
     testHierarchyCheckpointRequiresCompleteSuccessAndRejectsStaleGeneration();
     testHierarchyStopJoinsActiveWork();

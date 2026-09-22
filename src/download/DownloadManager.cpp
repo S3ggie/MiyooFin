@@ -1,5 +1,6 @@
 #include "DownloadManager.hpp"
 #include "DownloadSupport.hpp"
+#include "../library/LibraryCoordinator.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryClock.hpp"
 #include <sys/statvfs.h>
@@ -39,6 +40,9 @@ DownloadManager::~DownloadManager()
         m_stop = true;
         if (m_activePlanCancellation)
             m_activePlanCancellation->store(true);
+        const auto hierarchyRequest = m_activePlanHierarchyRequest.load(std::memory_order_acquire);
+        if (hierarchyRequest != 0 && m_activePlanCoordinator)
+            m_activePlanCoordinator->cancelHierarchyRequest(hierarchyRequest);
         for (auto& job : m_planJobs) {
             if (job.cancellation)
                 job.cancellation->store(true);
@@ -67,6 +71,9 @@ void DownloadManager::configure(const Session& s)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_activePlanCancellation)
         m_activePlanCancellation->store(true);
+    const auto hierarchyRequest = m_activePlanHierarchyRequest.load(std::memory_order_acquire);
+    if (hierarchyRequest != 0 && m_activePlanCoordinator)
+        m_activePlanCoordinator->cancelHierarchyRequest(hierarchyRequest);
     for (auto& job : m_planJobs) {
         if (job.cancellation)
             job.cancellation->store(true);

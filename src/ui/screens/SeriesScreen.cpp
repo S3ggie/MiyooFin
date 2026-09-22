@@ -116,6 +116,9 @@ void SeriesScreen::leave()
     printf("[SeriesScreen] leave series=%s\n", m_series.title.c_str());
     m_fetchCancelled.store(true, std::memory_order_release);
     m_catalogCancellation->store(true, std::memory_order_release);
+    const auto hierarchyRequest = m_hierarchyRequest.load(std::memory_order_acquire);
+    if (hierarchyRequest != 0 && m_libraryCoordinator)
+        m_libraryCoordinator->cancelHierarchyRequest(hierarchyRequest);
     m_artworkCancelled.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> g(m_artworkMutex);

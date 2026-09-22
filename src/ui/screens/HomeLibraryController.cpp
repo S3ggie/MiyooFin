@@ -7,7 +7,6 @@
 #include "../../playback/OfflineLibraryProjection.hpp"
 #include "../ShowsBrowser.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 
 namespace miyoofin {
@@ -395,12 +394,16 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
     library::HomeRailResult railResult;
     if (railStarted) {
         ++requestCount;
-        for (;;) {
-            if (cancellation->load())
-                m_libraryCoordinator->cancelHomeRailRefresh();
-            if (m_libraryCoordinator->takeHomeRailResult(railRequest, railResult))
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (cancellation->load())
+            m_libraryCoordinator->cancelHomeRailRefresh();
+        const auto railWait =
+            m_libraryCoordinator->waitHomeRailResult(railRequest, railResult, cancellation.get());
+        if (railWait != library::WaitStatus::Ready) {
+            railResult.cancelled = railWait == library::WaitStatus::Cancelled ||
+                                   railWait == library::WaitStatus::Stopped ||
+                                   railWait == library::WaitStatus::Superseded;
+            railResult.error = railResult.cancelled ? "Home rail refresh cancelled"
+                                                    : "Home rail refresh unavailable";
         }
         if (railResult.continueValid) {
             cwOk = true;
@@ -444,12 +447,19 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
     addArtwork(pending, planHomeRailPosterJobs(cw, ra), true);
     publishPending();
     if (coordinatorStartupStarted) {
-        for (;;) {
-            if (cancellation->load())
-                m_libraryCoordinator->cancelStartupSync();
-            if (m_libraryCoordinator->takeStartupSyncResult(startupSyncResult))
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (cancellation->load())
+            m_libraryCoordinator->cancelStartupSync();
+        const auto startupWait =
+            m_libraryCoordinator->waitStartupSyncResult(startupSyncResult, cancellation.get());
+        if (startupWait != library::WaitStatus::Ready) {
+            startupSyncResult.cancelled = startupWait == library::WaitStatus::Cancelled ||
+                                          startupWait == library::WaitStatus::Stopped ||
+                                          startupWait == library::WaitStatus::Superseded;
+            startupSyncResult.error = startupSyncResult.cancelled
+                                          ? CatalogDbErrorCategory::Superseded
+                                          : CatalogDbErrorCategory::None;
+            startupSyncResult.message =
+                startupSyncResult.cancelled ? "startup sync cancelled" : "startup sync unavailable";
         }
     } else {
         startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
@@ -510,8 +520,9 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
                         if (cancellation->load())
                             m_libraryCoordinator->cancelFullPopulation();
                         library::FullPopulationUpdate update;
-                        if (!m_libraryCoordinator->takeFullPopulationUpdate(populationRequest,
-                                                                            update)) {
+                        const auto populationWait = m_libraryCoordinator->waitFullPopulationUpdate(
+                            populationRequest, update, cancellation.get());
+                        if (populationWait != library::WaitStatus::Ready) {
                             if (populationMissCount < 1000000)
                                 ++populationMissCount;
                             const auto status = m_libraryCoordinator->status();
@@ -534,7 +545,13 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
                                 populationIdentityMismatchLogged =
                                     populationIdentityMismatchLogged || identityMismatch;
                             }
-                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                            populationComplete = true;
+                            catalogRefreshFailed = true;
+                            pending.cancelled = populationWait == library::WaitStatus::Cancelled ||
+                                                populationWait == library::WaitStatus::Stopped ||
+                                                populationWait == library::WaitStatus::Superseded;
+                            pending.error = pending.cancelled ? "Library refresh cancelled"
+                                                              : "Library refresh unavailable";
                             continue;
                         }
                         const std::string consumerStage =

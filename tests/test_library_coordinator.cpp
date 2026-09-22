@@ -101,13 +101,16 @@ void seedMaintenanceCheckpoint(const std::shared_ptr<CatalogDb>& db, std::uint64
 library::StartupSyncResult takeStartupResult(library::LibraryCoordinator& coordinator)
 {
     library::StartupSyncResult result;
-    bool took = false;
-    for (int i = 0; i < 500 && !took; ++i) {
-        took = coordinator.takeStartupSyncResult(result);
-        if (!took)
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    const auto status = coordinator.waitStartupSyncResult(result);
+    if (status != library::WaitStatus::Ready) {
+        bool took = false;
+        for (int i = 0; i < 500 && !took; ++i) {
+            took = coordinator.takeStartupSyncResult(result);
+            if (!took)
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(took);
     }
-    CHECK(took);
     return result;
 }
 
@@ -172,19 +175,23 @@ void coordinatorSendJson(int client, const std::string& body, int status = 200)
 bool takeFullUpdate(library::LibraryCoordinator& coordinator, std::uint64_t request,
                     library::FullPopulationUpdate& terminal, bool& sawPage)
 {
-    for (int i = 0; i < 1000; ++i) {
+    for (;;) {
         library::FullPopulationUpdate update;
-        if (coordinator.takeFullPopulationUpdate(request, update)) {
-            sawPage = sawPage || update.pageValid;
-            if (update.terminal) {
-                terminal = std::move(update);
-                return true;
+        if (coordinator.waitFullPopulationUpdate(request, update) != library::WaitStatus::Ready) {
+            for (int i = 0; i < 500; ++i) {
+                if (coordinator.takeFullPopulationUpdate(request, update))
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            if (!update.terminal && !update.pageValid)
+                return false;
+        }
+        sawPage = sawPage || update.pageValid;
+        if (update.terminal) {
+            terminal = std::move(update);
+            return true;
         }
     }
-    return false;
 }
 
 struct HomeRailResponse
@@ -196,12 +203,7 @@ struct HomeRailResponse
 bool takeHomeRailResult(library::LibraryCoordinator& coordinator, std::uint64_t request,
                         library::HomeRailResult& result)
 {
-    for (int i = 0; i < 1000; ++i) {
-        if (coordinator.takeHomeRailResult(request, result))
-            return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-    return false;
+    return coordinator.waitHomeRailResult(request, result) == library::WaitStatus::Ready;
 }
 
 void serveHomeRailResponses(int listener, const std::vector<HomeRailResponse>& responses)
@@ -264,9 +266,28 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     const auto homeFetchLifecycle =
         miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(miyoofin_test::sourceContains(homeSync, "startStartupSync(initialPagePublished)"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "takeStartupSyncResult"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "waitStartupSyncResult"));
     CHECK(miyoofin_test::sourceContains(homeSync, "requestFullPopulation(populationRequest)"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "takeFullPopulationUpdate"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "waitFullPopulationUpdate"));
+    CHECK(miyoofin_test::sourceContains(homeSync, "waitHomeRailResult"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "takeStartupSyncResult"));
+    CHECK(!miyoofin_test::sourceContains(homeSync, "takeFullPopulationUpdate"));
+    const auto seriesWorker = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
+    const auto episodeWorker =
+        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserData.cpp");
+    const auto downloadPlanner =
+        miyoofin_test::readTestBytes("src/download/DownloadManagerPlanning.cpp");
+    const std::string fiveMsSleep = "std::this_thread::sleep_for(std::chrono::milliseconds(5))";
+    CHECK(miyoofin_test::sourceContains(seriesWorker, "waitHierarchyResult"));
+    CHECK(miyoofin_test::sourceContains(episodeWorker, "waitHierarchyResult"));
+    CHECK(miyoofin_test::sourceContains(downloadPlanner, "waitHierarchyResult"));
+    CHECK(!miyoofin_test::sourceContains(seriesWorker, "takeHierarchyResult"));
+    CHECK(!miyoofin_test::sourceContains(episodeWorker, "takeHierarchyResult"));
+    CHECK(!miyoofin_test::sourceContains(downloadPlanner, "takeHierarchyResult"));
+    CHECK(miyoofin_test::sourceCount(homeSync, fiveMsSleep) == 0);
+    CHECK(miyoofin_test::sourceCount(seriesWorker, fiveMsSleep) == 1);
+    CHECK(miyoofin_test::sourceCount(episodeWorker, fiveMsSleep) == 1);
+    CHECK(miyoofin_test::sourceCount(downloadPlanner, fiveMsSleep) == 2);
     CHECK(miyoofin_test::sourceContains(homeSync, "cancelFullPopulation"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "decideHomeStartupSync("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "JellyfinApi::getViews"));
@@ -302,6 +323,177 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     CHECK(stopRequest < controllerJoin);
     CHECK(!miyoofin_test::sourceContains(homeUpdate, "m_libraryCoordinator->stop"));
     std::printf("[test] LibraryCoordinator single startup driver OK\n");
+}
+
+void testCoordinatorBlockingWaits()
+{
+    std::printf("[test] LibraryCoordinator blocking waits\n");
+
+    // A publication that races request completion must still be consumable by
+    // a waiter which starts after the worker has published it.
+    {
+        auto coordinator = makeCoordinator();
+        coordinator.start();
+        CHECK(coordinator.startStartupSync(false));
+        library::StartupSyncResult result;
+        CHECK(coordinator.waitStartupSyncResult(result) == library::WaitStatus::Ready);
+        CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
+        coordinator.stop();
+    }
+
+    // Two waiters observe one publication without either polling or losing the
+    // wakeup.  Only one consumer may take the value.
+    {
+        CoordinatorTestScope scope;
+        std::shared_ptr<CatalogDb> db;
+        auto coordinator = makeMaintenanceCoordinator("waiters", db, scope);
+        coordinator->start();
+        db->setWorkerPausedForTest(true);
+        CHECK(coordinator->startStartupSync(false));
+        std::mutex barrierMutex;
+        std::condition_variable barrierWake;
+        int entered = 0;
+        auto markEntered = [&] {
+            std::lock_guard<std::mutex> lock(barrierMutex);
+            ++entered;
+            barrierWake.notify_all();
+        };
+        library::StartupSyncResult first;
+        library::StartupSyncResult second;
+        library::WaitStatus firstStatus = library::WaitStatus::InvalidRequest;
+        library::WaitStatus secondStatus = library::WaitStatus::InvalidRequest;
+        std::thread firstWaiter([&] {
+            markEntered();
+            firstStatus = coordinator->waitStartupSyncResult(first);
+        });
+        std::thread secondWaiter([&] {
+            markEntered();
+            secondStatus = coordinator->waitStartupSyncResult(second);
+        });
+        {
+            std::unique_lock<std::mutex> lock(barrierMutex);
+            barrierWake.wait(lock, [&] { return entered == 2; });
+        }
+        db->setWorkerPausedForTest(false);
+        firstWaiter.join();
+        secondWaiter.join();
+        CHECK((firstStatus == library::WaitStatus::Ready) !=
+              (secondStatus == library::WaitStatus::Ready));
+        CHECK(firstStatus == library::WaitStatus::Ready ||
+              secondStatus == library::WaitStatus::Ready);
+        CHECK(firstStatus == library::WaitStatus::InvalidRequest ||
+              secondStatus == library::WaitStatus::InvalidRequest);
+        coordinator->stop();
+        coordinator.reset();
+        db.reset();
+        removeCoordinatorTestScope(scope);
+    }
+
+    // Consumer cancellation wakes its waiter without stopping the session.
+    {
+        CoordinatorTestScope scope;
+        std::shared_ptr<CatalogDb> db;
+        auto coordinator = makeMaintenanceCoordinator("wait-cancel", db, scope);
+        coordinator->start();
+        db->setWorkerPausedForTest(true);
+        CHECK(coordinator->startStartupSync(false));
+        std::atomic_bool consumerCancellation{false};
+        std::mutex barrierMutex;
+        std::condition_variable barrierWake;
+        bool entered = false;
+        library::StartupSyncResult result;
+        library::WaitStatus waitStatus = library::WaitStatus::InvalidRequest;
+        std::thread waiter([&] {
+            {
+                std::lock_guard<std::mutex> lock(barrierMutex);
+                entered = true;
+                barrierWake.notify_all();
+            }
+            waitStatus = coordinator->waitStartupSyncResult(result, &consumerCancellation);
+        });
+        {
+            std::unique_lock<std::mutex> lock(barrierMutex);
+            barrierWake.wait(lock, [&] { return entered; });
+        }
+        consumerCancellation.store(true);
+        coordinator->cancelStartupSync();
+        db->setWorkerPausedForTest(false);
+        waiter.join();
+        CHECK(waitStatus == library::WaitStatus::Ready);
+        CHECK(result.cancelled || result.error == CatalogDbErrorCategory::ScopeNotReady);
+        CHECK(coordinator->running() && !coordinator->stopped());
+        coordinator->stop();
+        coordinator.reset();
+        db.reset();
+        removeCoordinatorTestScope(scope);
+    }
+
+    // Coordinator stop wakes a waiter before joining the worker.  Releasing
+    // the paused CatalogDb worker afterwards proves no lock is held by wait().
+    {
+        CoordinatorTestScope scope;
+        std::shared_ptr<CatalogDb> db;
+        auto coordinator = makeMaintenanceCoordinator("wait-stop", db, scope);
+        coordinator->start();
+        db->setWorkerPausedForTest(true);
+        CHECK(coordinator->startStartupSync(false));
+        std::mutex barrierMutex;
+        std::condition_variable barrierWake;
+        bool entered = false;
+        library::StartupSyncResult result;
+        library::WaitStatus waitStatus = library::WaitStatus::InvalidRequest;
+        std::thread waiter([&] {
+            {
+                std::lock_guard<std::mutex> lock(barrierMutex);
+                entered = true;
+                barrierWake.notify_all();
+            }
+            waitStatus = coordinator->waitStartupSyncResult(result);
+        });
+        {
+            std::unique_lock<std::mutex> lock(barrierMutex);
+            barrierWake.wait(lock, [&] { return entered; });
+        }
+        std::thread stopper([&] { coordinator->stop(); });
+        waiter.join();
+        CHECK(waitStatus == library::WaitStatus::Stopped);
+        db->setWorkerPausedForTest(false);
+        stopper.join();
+        CHECK(coordinator->stopped());
+        coordinator.reset();
+        db.reset();
+        removeCoordinatorTestScope(scope);
+    }
+
+    std::printf("[test] LibraryCoordinator blocking waits OK\n");
+}
+
+void testCoordinatorWaitIdentityAndDomains()
+{
+    std::printf("[test] LibraryCoordinator wait identity and domains\n");
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    auto coordinator =
+        std::make_unique<library::LibraryCoordinator>(session, std::make_shared<CatalogDb>(), 0);
+    coordinator->start();
+
+    std::uint64_t railRequest = 0;
+    CHECK(coordinator->requestHomeRailRefresh(railRequest));
+    library::HomeRailResult rail;
+    CHECK(coordinator->waitHomeRailResult(railRequest + 1, rail) ==
+          library::WaitStatus::InvalidRequest);
+
+    MediaItem series;
+    series.id = "superseded-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(coordinator->requestSeriesSeasons(series, hierarchyRequest));
+    coordinator->cancelHierarchyRequest(hierarchyRequest);
+    library::HierarchyResult hierarchy;
+    CHECK(coordinator->waitHierarchyResult(hierarchyRequest, hierarchy) ==
+          library::WaitStatus::Superseded);
+
+    coordinator->stop();
+    std::printf("[test] LibraryCoordinator wait identity and domains OK\n");
 }
 
 void testStopRacingStartupIsSafe()
@@ -837,6 +1029,8 @@ void testMaintenanceRejectsActiveStartup()
     coordinator->cancelStartupSync();
     db->setWorkerPausedForTest(false);
     (void)takeStartupResult(*coordinator);
+    CHECK(coordinator->startStartupSync(false));
+    (void)takeStartupResult(*coordinator);
     coordinator->stop();
     coordinator.reset();
     db.reset();
@@ -911,7 +1105,7 @@ void testHomeRailStopPublishesCompletion()
     // stop() may race the transport worker.  Either way, the worker must
     // publish a terminal (possibly cancelled) result for Home's wait loop.
     library::HomeRailResult result;
-    CHECK(coordinator.takeHomeRailResult(request, result));
+    CHECK(coordinator.waitHomeRailResult(request, result) == library::WaitStatus::Ready);
     CHECK(result.request == request);
 
     const auto source = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
@@ -919,6 +1113,33 @@ void testHomeRailStopPublishesCompletion()
     CHECK(publish != std::string::npos);
     CHECK(miyoofin_test::sourceContains(source, "m_homeRailResultReady = true;"));
     std::printf("[test] LibraryCoordinator Home rail lifecycle OK\n");
+}
+
+void testHomeRailCancellationReleasesSlot()
+{
+    std::printf("[test] LibraryCoordinator Home rail cancellation reuse\n");
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    auto coordinator = library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
+    coordinator.start();
+
+    std::uint64_t firstRequest = 0;
+    CHECK(coordinator.requestHomeRailRefresh(firstRequest));
+    coordinator.cancelHomeRailRefresh();
+    library::HomeRailResult firstResult;
+    CHECK(coordinator.waitHomeRailResult(firstRequest, firstResult) == library::WaitStatus::Ready);
+    CHECK(firstResult.request == firstRequest && firstResult.cancelled);
+    CHECK(coordinator.running() && !coordinator.stopped());
+
+    std::uint64_t secondRequest = 0;
+    CHECK(coordinator.requestHomeRailRefresh(secondRequest));
+    coordinator.cancelHomeRailRefresh();
+    library::HomeRailResult secondResult;
+    CHECK(coordinator.waitHomeRailResult(secondRequest, secondResult) ==
+          library::WaitStatus::Ready);
+    CHECK(secondResult.request == secondRequest && secondResult.cancelled);
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator Home rail cancellation reuse OK\n");
 }
 
 void testHomeRailSuccessPublishesBothRails()
@@ -1233,6 +1454,17 @@ void testFullPopulationCancellationAbortsStagedGeneration()
     CHECK(terminal.error == CatalogDbErrorCategory::Superseded && !terminal.success &&
           !terminal.committed);
     CHECK(!terminal.checkpointCommitted);
+
+    // Consuming the cancellation terminal must release the serialized slot;
+    // the next request can be admitted even though the first worker was
+    // cancelled while its HTTP page was blocked.
+    std::uint64_t retryRequest = 0;
+    CHECK(coordinator->requestFullPopulation(retryRequest));
+    coordinator->cancelFullPopulation();
+    library::FullPopulationUpdate retryTerminal;
+    bool retrySawPage = false;
+    CHECK(takeFullUpdate(*coordinator, retryRequest, retryTerminal, retrySawPage));
+    CHECK(retryTerminal.terminal && retryTerminal.cancelled);
     coordinator->stop();
     coordinator.reset();
     db.reset();
@@ -1360,6 +1592,8 @@ int main()
     uiDiagnostics().start(diagnosticsPath);
 
     testLibraryCoordinatorIsTheSingleStartupDriver();
+    testCoordinatorBlockingWaits();
+    testCoordinatorWaitIdentityAndDomains();
     testStopRacingStartupIsSafe();
     testLiveChangeQueueFullDrainFallsBackToCatchUp();
     testLiveChangeCatchUpFailureIsRetriedByCoordinator();
@@ -1378,18 +1612,32 @@ int main()
     testMaintenanceRejectsIncompatibleHierarchyMutation();
     testMaintenanceDefersUntilCoordinatorStarts();
     testHomeRailStopPublishesCompletion();
+    testHomeRailCancellationReleasesSlot();
     testHomeRailSuccessPublishesBothRails();
     testHomeRailCachedFailureRetainsInvalidRail();
     testHomeRailCoalescesAndRerunsAfterConsumption();
+
+    // Keep the diagnostics capture bounded to the full-population and gate
+    // tests below.  The logger has a finite file retention limit; resetting
+    // it here avoids unrelated earlier test diagnostics evicting the lines
+    // under test, especially when sanitizer tests run in parallel.
+    uiDiagnostics().stop();
+    std::remove(diagnosticsPath.c_str());
+    uiDiagnostics().start(diagnosticsPath);
+
     testFullPopulationSuccessCommitsCheckpoint();
     testFullPopulationAfterLiveChangeAdvancesGeneration();
     testFullPopulationCancellationAbortsStagedGeneration();
     testFullPopulationFailureAbortsWithoutCheckpoint();
+
     testFullPopulationRejectsStaleRequest();
     testCoordinatorSerializesStartupFullSafetyAndLive();
 
+    // All producers above have joined.  stop() is the existing logger
+    // drain/join barrier, not a timing delay.
     uiDiagnostics().stop();
     const auto diagnostics = miyoofin_test::readTestBytes(diagnosticsPath);
+
     CHECK(diagnostics.find("[LibraryCoordinator] full_population_rejected phase=admission") !=
           std::string::npos);
     CHECK(diagnostics.find("reasons=startup_in_flight") != std::string::npos);

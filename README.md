@@ -137,6 +137,25 @@ For a public binary release, use `sh tools/build-release.sh` instead. That
 wrapper adds the project license and third-party notices before creating the
 redistributable ZIP. See [RELEASING.md](RELEASING.md).
 
+### Quality loop
+
+The normal host-side quality loop is:
+
+```shell
+make format-check
+make -j2
+make test -j2
+make refactor-check
+git diff --check
+```
+
+Production C/C++ and first-party C/C++ tools are checked with the repository's
+`.clang-format` configuration. The host and ARM Makefiles compile first-party
+C++ with `-Wall -Wextra -Wpedantic`; vendored `stb_image` is the only narrow
+translation-unit warning exception. CI runs the authoritative clang-format
+check. An optional host-only `make clang-tidy` target is documented in
+[docs/code-quality.md](docs/code-quality.md).
+
 ### Verify ARM binary
 
 ```shell

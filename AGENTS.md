@@ -170,6 +170,10 @@ make -j2
 git diff --check
 ```
 
+For first-party C/C++ changes, also run `make format-check`; CI runs the
+authoritative clang-format path. The opt-in host-only `make clang-tidy` target
+requires Bear and is documented in `docs/code-quality.md`.
+
 For OnionOS/runtime changes, also run:
 
 ```sh

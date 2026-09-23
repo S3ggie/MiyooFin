@@ -137,6 +137,38 @@ class HomeScreen : public Screen
         return m_libraryOffline || m_session.manualOfflineMode;
     }
 
+#ifdef MIYOOFIN_TEST_BUILD
+    // Test-only deterministic seam: apply one immutable controller publication
+    // exactly as the SDL lifecycle would, so the cold-provisional discard,
+    // rail-only loading, and terminal publication rules can be verified
+    // without a live fetch or SDL.  Not compiled into production builds.
+    void applyFetchedPresentationForTest(const HomeLibraryController::Presentation& presentation);
+    bool testLoadStateLoading() const
+    {
+        return m_loadState == LoadState::Loading;
+    }
+    bool testLoadStateReady() const
+    {
+        return m_loadState == LoadState::Ready;
+    }
+    bool testLoadStateError() const
+    {
+        return m_loadState == LoadState::Error;
+    }
+    bool testHaveCachedSnapshot() const
+    {
+        return m_haveCachedSnapshot;
+    }
+    const std::vector<TabData>& testTabs() const
+    {
+        return m_tabs;
+    }
+    const std::vector<MediaItem>& testMovieWindow() const
+    {
+        return m_movieWindow;
+    }
+#endif
+
     /// Replace, insert, or remove Home's Continue Watching row.
     /// Public so the row behaviour can be tested without a network request.
     static void updateContinueWatchingRow(std::vector<TabData>& tabs,
@@ -358,6 +390,10 @@ class HomeScreen : public Screen
     bool startFetch();
     void requestFetch(Uint32 now);
     void finishFetch();
+    /// SDL-side application of one taken immutable publication.  Split out of
+    /// finishFetch() so it can be exercised deterministically under
+    /// MIYOOFIN_TEST_BUILD.
+    void applyFetchedPresentation(const PendingPresentation& presentation);
     bool takePendingPresentation(PendingPresentation& presentation);
     void applyPendingPresentation(const PendingPresentation& presentation);
     void applyPresentationProjection();

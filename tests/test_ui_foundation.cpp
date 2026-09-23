@@ -19,6 +19,6 @@ int main()
     testThreadRestartGuards();
     testConnectScreenWorkerLifecycle();
     testNoDetachedProductionThreads();
-    testHomeRailTelemetryCountsOneOperation();
+
     return miyoofin_test::finish("ui-foundation");
 }

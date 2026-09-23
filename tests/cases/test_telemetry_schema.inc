@@ -17,6 +17,7 @@
 #include "../../src/diagnostics/TelemetryConfig.hpp"
 #include "../../src/diagnostics/TelemetryIds.hpp"
 #include "../../src/diagnostics/TelemetryTypes.hpp"
+#include "../../src/data/CatalogPrimitives.hpp"
 #include "../../src/diagnostics/TelemetryClock.hpp"
 #include "../../src/diagnostics/MftFormat.hpp"
 #include "../../src/diagnostics/TelemetryWriter.hpp"

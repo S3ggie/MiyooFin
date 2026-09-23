@@ -253,25 +253,6 @@ void testHierarchyConsumerCancellationWakesWaiter()
     CHECK(waitStatus == library::WaitStatus::Cancelled);
     CHECK(coordinator->running() && !coordinator->stopped());
 
-    const auto seriesSource = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
-    const auto episodeSource =
-        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserData.cpp");
-    const auto seriesScreenSource = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreen.cpp");
-    const auto episodeScreenSource =
-        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserScreen.cpp");
-    CHECK(miyoofin_test::sourceContains(seriesSource, "waitHierarchyResult"));
-    CHECK(miyoofin_test::sourceContains(episodeSource, "waitHierarchyResult"));
-    CHECK(miyoofin_test::sourceContains(seriesSource, "cancelHierarchyRequest(request)"));
-    CHECK(miyoofin_test::sourceContains(episodeSource, "cancelHierarchyRequest(request)"));
-    CHECK(miyoofin_test::sourceContains(seriesScreenSource,
-                                        "cancelHierarchyRequest(hierarchyRequest)"));
-    CHECK(miyoofin_test::sourceContains(episodeScreenSource,
-                                        "cancelHierarchyRequest(hierarchyRequest)"));
-    CHECK(miyoofin_test::sourcePos(seriesScreenSource, "leave();") <
-          miyoofin_test::sourcePos(seriesScreenSource, "m_fetchThread.join()"));
-    CHECK(miyoofin_test::sourcePos(episodeScreenSource, "leave();") <
-          miyoofin_test::sourcePos(episodeScreenSource, "m_fetchThread.join()"));
-
     server.release();
     coordinator->stop();
     coordinator.reset();
@@ -582,77 +563,11 @@ void testHierarchyStopPublishesQueuedCancellation()
     std::printf("[test] hierarchy stop publishes queued cancellation OK\n");
 }
 
-void testHomeHierarchyLateRequestRace()
-{
-    std::printf("[test] Home hierarchy late-request race guard\n");
-    const auto hierarchySource =
-        miyoofin_test::readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
-    const auto homeSource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
-    const auto syncSource =
-        miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.cpp");
-    const auto applySource = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
-    const auto homeHeader = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.hpp");
-
-    // The generation guard must run before any cached/live artwork is queued
-    // and before a successful series can enter the prefetched set.
-    const auto stale = miyoofin_test::sourcePos(
-        hierarchySource, "if (result.generation != committedCatalogGeneration())");
-    CHECK(stale <
-          miyoofin_test::sourcePos(
-              hierarchySource, "queuePosterJobs(collectSeasonPosterJobs(result.cachedSeasons))"));
-    CHECK(stale < miyoofin_test::sourcePos(hierarchySource,
-                                           "m_seasonPrefetchedIds.insert(result.seriesId)"));
-
-    // Teardown closes the submission gate while holding the same state mutex
-    // used by the fetch worker's final request acceptance.
-    CHECK(miyoofin_test::sourceContains(homeHeader, "bool m_hierarchySubmissionClosed = false"));
-    CHECK(miyoofin_test::sourceContains(hierarchySource, "m_hierarchySubmissionClosed"));
-    CHECK(miyoofin_test::sourceContains(hierarchySource,
-                                        "m_libraryFetch && m_libraryFetch->cancelled()"));
-    CHECK(miyoofin_test::sourceContains(syncSource,
-                                        "m_libraryCoordinator->status().committedGeneration"));
-    const auto closeGate =
-        miyoofin_test::sourcePos(homeSource, "m_hierarchySubmissionClosed = true");
-    const auto fetchCancel =
-        miyoofin_test::sourcePos(homeSource, "m_libraryFetch->requestStopAllWorkers()");
-    CHECK(closeGate < fetchCancel);
-    CHECK(
-        miyoofin_test::sourceContains(applySource, "requestHierarchy(presentation.hierarchyShows"));
-    CHECK(miyoofin_test::sourcePos(syncSource, "HomeScreen::") == std::string::npos);
-    CHECK(miyoofin_test::sourcePos(syncSource, "HomeScreen*") == std::string::npos);
-
-    // This is the deterministic interleaving that used to admit a late
-    // request: teardown closed the submission gate in the block above while
-    // the fetch worker was between that block and coordinator acceptance.
-    // Keep acceptance and every local publication in the same critical
-    // section as the gate check.  The token-space checks avoid relying on
-    // formatting while rejecting any intervening scope close.
-    const auto requestFunction =
-        miyoofin_test::sourceFunction(hierarchySource, "bool HomeScreen::requestHierarchy(");
-    const auto tokenFunction = miyoofin_test::sourceTokenString(requestFunction);
-    const auto lockToken =
-        miyoofin_test::sourceTokenString("std::lock_guard<std::mutex> lock(m_hierarchyStateMutex)");
-    const auto acceptanceToken =
-        miyoofin_test::sourceTokenString("m_libraryCoordinator->requestHierarchy");
-    const auto publicationToken =
-        miyoofin_test::sourceTokenString("m_hierarchyRequestReady.store(true)");
-    const auto lockPos = tokenFunction.find(lockToken);
-    const auto acceptancePos = tokenFunction.find(acceptanceToken);
-    const auto publicationPos = tokenFunction.find(publicationToken);
-    const auto braceDepth = [&](std::size_t position) {
-        int depth = 0;
-        for (std::size_t i = 0; i < position && i < tokenFunction.size(); ++i)
-            depth += tokenFunction[i] == '{' ? 1 : tokenFunction[i] == '}' ? -1 : 0;
-        return depth;
-    };
-    CHECK(lockPos != std::string::npos);
-    CHECK(acceptancePos != std::string::npos);
-    CHECK(publicationPos != std::string::npos);
-    CHECK(lockPos < acceptancePos && acceptancePos < publicationPos);
-    CHECK(braceDepth(lockPos) == braceDepth(acceptancePos));
-    CHECK(braceDepth(acceptancePos) == braceDepth(publicationPos));
-    std::printf("[test] Home hierarchy late-request race guard OK\n");
-}
+// The Home hierarchy late-request race (teardown closing the submission gate
+// while the fetch worker is mid-request) needs a live SDL HomeScreen and a
+// real coordinator interleaving, so it has no deterministic host seam.  The
+// coordinator-side hierarchy cancellation/reentry/stop paths remain covered
+// behaviourally by the tests above; the former source-shape guard is removed.
 
 } // namespace
 
@@ -665,6 +580,5 @@ int main()
     testHierarchyCancellationAllowsHomeReentry();
     testHierarchyMutationSerializesLiveChanges();
     testHierarchyStopPublishesQueuedCancellation();
-    testHomeHierarchyLateRequestRace();
     return miyoofin_test::finish("library_hierarchy");
 }

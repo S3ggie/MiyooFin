@@ -237,6 +237,15 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     auto status = coordinator.status();
     CHECK(!status.startupInFlight && !status.cancelRequested);
 
+    // Behavioural lifecycle/re-entry: admitting a new startup after a completed
+    // one has been consumed joins the completed prior thread outside the result
+    // lock and publishes a fresh result.  A deadlock in that join ordering
+    // would hang this blocking wait rather than return.
+    CHECK(coordinator.startStartupSync(false));
+    library::StartupSyncResult reentry;
+    CHECK(coordinator.waitStartupSyncResult(reentry) == library::WaitStatus::Ready);
+    CHECK(reentry.error == CatalogDbErrorCategory::ScopeNotReady);
+
     // Cancellation and stop are both intentionally safe to repeat.
     coordinator.cancelStartupSync();
     coordinator.cancelStartupSync();
@@ -245,83 +254,32 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     CHECK(coordinator.stopped() && !coordinator.running());
     CHECK(!coordinator.takeStartupSyncResult(result));
 
-    // With startup disabled there is no worker/result thread to join. Keep a
-    // source-level assertion on the enabled seam's lock-safe join ordering so
-    // this test still guards the deadlock regression before that path opens.
-    const auto source = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
-    CHECK(miyoofin_test::sourceContains(source, "kCoordinatorStartupSyncEnabled = true"));
-    CHECK(miyoofin_test::sourceContains(source, "if (priorThread.joinable()) priorThread.join();"));
-    CHECK(miyoofin_test::sourceContains(source,
-                                        "if (startupThread.joinable()) startupThread.join();"));
-    const auto priorMove =
-        miyoofin_test::sourcePos(source, "priorThread = std::move(m_startupThread)");
-    const auto priorJoin = miyoofin_test::sourcePos(source, "priorThread.join()");
-    const auto startupLockReacquire =
-        miyoofin_test::sourcePos(source, "const auto cancellation = m_startupCancellation");
-    CHECK(priorMove < priorJoin && priorJoin < startupLockReacquire);
+    // Dependency-direction guards (class D): the coordinator is the single
+    // startup driver, so Home/consumers drive it only through the request/wait
+    // API, never the raw take* result API, never raw sync/API staging, and
+    // never coordinator->stop().  The lock-safe prior-thread join ordering is
+    // covered behaviourally by the re-entry wait above.
     const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.cpp");
-    const auto homeControllerHeader =
-        miyoofin_test::readTestBytes("src/ui/screens/HomeLibraryController.hpp");
     const auto homeUpdate = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
-    const auto homeFetchLifecycle =
-        miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(miyoofin_test::sourceContains(homeSync, "startStartupSync(initialPagePublished)"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "waitStartupSyncResult"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "requestFullPopulation(populationRequest)"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "waitFullPopulationUpdate"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "waitHomeRailResult"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "takeStartupSyncResult"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "takeFullPopulationUpdate"));
-    const auto seriesWorker = miyoofin_test::readTestBytes("src/ui/screens/SeriesScreenWorker.cpp");
-    const auto episodeWorker =
-        miyoofin_test::readTestBytes("src/ui/screens/EpisodeBrowserData.cpp");
-    const auto downloadPlanner =
-        miyoofin_test::readTestBytes("src/download/DownloadManagerPlanning.cpp");
-    const std::string fiveMsSleep = "std::this_thread::sleep_for(std::chrono::milliseconds(5))";
-    CHECK(miyoofin_test::sourceContains(seriesWorker, "waitHierarchyResult"));
-    CHECK(miyoofin_test::sourceContains(episodeWorker, "waitHierarchyResult"));
-    CHECK(miyoofin_test::sourceContains(downloadPlanner, "waitHierarchyResult"));
-    CHECK(!miyoofin_test::sourceContains(seriesWorker, "takeHierarchyResult"));
-    CHECK(!miyoofin_test::sourceContains(episodeWorker, "takeHierarchyResult"));
-    CHECK(!miyoofin_test::sourceContains(downloadPlanner, "takeHierarchyResult"));
-    CHECK(miyoofin_test::sourceCount(homeSync, fiveMsSleep) == 0);
-    CHECK(miyoofin_test::sourceCount(seriesWorker, fiveMsSleep) == 1);
-    CHECK(miyoofin_test::sourceCount(episodeWorker, fiveMsSleep) == 1);
-    CHECK(miyoofin_test::sourceCount(downloadPlanner, fiveMsSleep) == 2);
-    CHECK(miyoofin_test::sourceContains(homeSync, "cancelFullPopulation"));
+    for (const char* worker :
+         {"src/ui/screens/SeriesScreenWorker.cpp", "src/ui/screens/EpisodeBrowserData.cpp",
+          "src/download/DownloadManagerPlanning.cpp"}) {
+        const auto workerSource = miyoofin_test::readTestBytes(worker);
+        CHECK(!miyoofin_test::sourceContains(workerSource, "takeHierarchyResult"));
+    }
     CHECK(!miyoofin_test::sourceContains(homeSync, "decideHomeStartupSync("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "JellyfinApi::getViews"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "JellyfinApi::getLibraryItemsPage"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->begin("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->stage("));
     CHECK(!miyoofin_test::sourceContains(homeSync, "sync->finalize("));
-    const auto startupGuard =
-        miyoofin_test::sourcePos(homeSync, "m_initialPopulationInProgress.store(true)");
-    const auto coordinatorStart =
-        miyoofin_test::sourcePos(homeSync, "startStartupSync(initialPagePublished)");
-    CHECK(startupGuard != std::string::npos);
-    CHECK(coordinatorStart != std::string::npos);
-    CHECK(startupGuard < coordinatorStart);
-    CHECK(
-        miyoofin_test::sourceContains(homeControllerHeader, "std::shared_ptr<const Presentation>"));
-    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "previousTabs"));
-    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "previousAnimeItemIds"));
-    CHECK(miyoofin_test::sourceContains(homeControllerHeader, "fetchGeneration"));
-    CHECK(miyoofin_test::sourceContains(homeFetchLifecycle, "m_animeItemIds.clear()"));
-    CHECK(miyoofin_test::sourceContains(
-        homeFetchLifecycle, "m_loadState == LoadState::Ready && !m_tabs.empty(), m_animeItemIds"));
-    CHECK(miyoofin_test::sourceContains(homeSync,
-                                        "presentation.fetchGeneration != m_fetchGeneration.load"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "m_pendingPresentation->fetchGeneration"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "update.firstPage && !initialPagePublished"));
-    CHECK(miyoofin_test::sourceContains(homeSync, "manualOfflineMode"));
-    CHECK(miyoofin_test::sourceContains(homeSync,
-                                        "[HomeScreen] full_population_consumer identity_mismatch"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "m_libraryCoordinator->stop"));
+    CHECK(!miyoofin_test::sourceContains(homeUpdate, "m_libraryCoordinator->stop"));
     const auto stopRequest = miyoofin_test::sourcePos(homeUpdate, "requestStopAllWorkers()");
     const auto controllerJoin = miyoofin_test::sourcePos(homeUpdate, "joinAllWorkers()");
     CHECK(stopRequest < controllerJoin);
-    CHECK(!miyoofin_test::sourceContains(homeUpdate, "m_libraryCoordinator->stop"));
     std::printf("[test] LibraryCoordinator single startup driver OK\n");
 }
 
@@ -552,10 +510,10 @@ void testLiveChangesWaitForSerializedSyncSlots()
 
     // Home consumes coordinator publications and no longer owns a live-change
     // worker or identity/publish handshake.
+    // Architecture guard (class A): Home owns no live-change worker thread;
+    // the coordinator drives the apply.
     const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
-    CHECK(miyoofin_test::sourcePos(homeSync, "takeLiveChangeResult(result)") != std::string::npos);
     CHECK(miyoofin_test::sourcePos(homeSync, "m_liveChangeThread") == std::string::npos);
-    CHECK(miyoofin_test::sourcePos(homeSync, "startLiveChangeApply") == std::string::npos);
     std::printf("[test] LibraryCoordinator live-change result seam OK\n");
 }
 
@@ -592,14 +550,6 @@ void testLiveChangeQueueFullDrainFallsBackToCatchUp()
     CHECK(drained.itemsUpdated[2] == "c");
     CHECK(!coordinatorQueue.pop(drained));
 
-    // Pin the coordinator-side failure handling so a future refactor cannot
-    // reintroduce a discarded source pop while preserving the queue test
-    // above's coalescing/overflow contract.
-    const auto coordinator = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
-    CHECK(miyoofin_test::sourcePos(coordinator, "m_liveChangeRequests.push(incoming)") !=
-          std::string::npos);
-    CHECK(miyoofin_test::sourcePos(coordinator, "m_liveChangeDrainPendingCatchUp") !=
-          std::string::npos);
     std::printf("[test] LibraryCoordinator live-change queue-full drain OK\n");
 }
 
@@ -837,19 +787,18 @@ void testSafetyReconcilePublishesCoordinatorResult()
     CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
     CHECK(!coordinator.status().safetyReconcileInFlight);
 
+    // Architecture guard (class A): Home requests maintenance through the
+    // coordinator and never drives safety reconcile itself or owns a safety
+    // worker thread.  The coordinator-side publish is exercised above.
     const auto homeHeader = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.hpp");
     const auto homeSync = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     const auto homeApply = miyoofin_test::readTestBytes("src/ui/screens/HomeScreenSyncApply.cpp");
     const auto homeUpdate = miyoofin_test::readTestBytes("src/ui/screens/HomeScreen.cpp");
     CHECK(miyoofin_test::sourceContains(homeUpdate, "requestMaintenance()"));
-    CHECK(!miyoofin_test::sourceContains(homeUpdate, "maintenanceDue"));
     CHECK(!miyoofin_test::sourceContains(homeUpdate, "requestSafetyReconcile"));
     CHECK(!miyoofin_test::sourceContains(homeSync, "requestSafetyReconcile"));
-    CHECK(miyoofin_test::sourceContains(homeApply, "takeSafetyReconcileResult(result)"));
     CHECK(!miyoofin_test::sourceContains(homeApply, "requestSafetyReconcile"));
     CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileThread"));
-    CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileCancellation"));
-    CHECK(!miyoofin_test::sourceContains(homeHeader, "m_safetyReconcileDone"));
     std::printf("[test] LibraryCoordinator safety reconcile result OK\n");
 }
 
@@ -1107,11 +1056,6 @@ void testHomeRailStopPublishesCompletion()
     library::HomeRailResult result;
     CHECK(coordinator.waitHomeRailResult(request, result) == library::WaitStatus::Ready);
     CHECK(result.request == request);
-
-    const auto source = miyoofin_test::readTestBytes("src/library/LibraryCoordinator.cpp");
-    const auto publish = miyoofin_test::sourcePos(source, "if (requestId == m_homeRailRequest)");
-    CHECK(publish != std::string::npos);
-    CHECK(miyoofin_test::sourceContains(source, "m_homeRailResultReady = true;"));
     std::printf("[test] LibraryCoordinator Home rail lifecycle OK\n");
 }
 

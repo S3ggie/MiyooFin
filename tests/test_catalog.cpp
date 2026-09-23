@@ -45,17 +45,17 @@ int main()
     testCatalogDbMediaPagePreservesViewMembership();
     testCatalogDbMediaPageUpsertAndPopulation();
     testCatalogDbMediaPageTopLevelStaging();
-    testHomeSkipsUnsupportedLibraryViews();
+    testHomeDefersViewPersistenceToCoordinator();
     testHomeOptionalRailFailuresDoNotStopCatalogPopulation();
     testCatalogScopeConfiguredBeforeHomePopulation();
-    testHomePublishesAfterFirstBoundedPage();
+    testHomeFetchOwnershipGuard();
     testHomeDiscardsColdProvisionalFailure();
-    testHomeDoesNotPublishRailOnlyPresentation();
-    testHomePreservesAnimeMembershipDuringBoundedReads();
+    testHomeKeepsRailOnlyColdStartLoading();
+    testHomePendingCompletionPublicationOrdering();
+    testHomeTabNavigation();
     testHomeUsesCatalogBeforeNetworkRefresh();
     testLibraryCacheHomeParityHarness();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
-    testLegacyWholeFilePersistenceRetired();
     return miyoofin_test::finish("catalog");
 }

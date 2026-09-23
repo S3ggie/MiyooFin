@@ -39,14 +39,10 @@ int main()
     testSegmentRecoveryMatchesIncremental();
     testFreeSpaceCachePolicy();
     testTlsCaBundleCache();
-    testDownloadPipelineIoGuards();
     testTransferSourceIdentityGuard();
     testTransferFinishDecision();
     testWorkerPersistMatchesLiveState();
     testStalePlaylistDiscoverySuppressed();
-    testAbandonedDeleteFlagConsumed();
-    testStaleSegmentRemovalUnderLock();
-    testDequeuePersistIsPerItem();
     testPersistTouchesOnlyAffectedItem();
     testPersistPendingCrashDurabilityAndTmpSweep();
     testIndexNeverNamesMissingManifest();

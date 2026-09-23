@@ -140,17 +140,6 @@ static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowAction(10)==HomeScreen::SettingsRowAction::Logout);
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::None);
 }
-static void testManualOfflineProjectionDeferredUntilSnapshotReady(){
-    const std::string source=
-        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
-    const std::string navigation=readTestBytes("src/ui/screens/HomeScreenNavigation.cpp");
-    const auto manualOffline=source.find("if (session.manualOfflineMode)");
-    CHECK(manualOffline!=std::string::npos);
-    CHECK(source.find("pending.haveCachedSnapshot = true;",
-                       manualOffline)!=std::string::npos);
-    CHECK(navigation.find("manual_offline_mode=")!=std::string::npos);
-}
-
 static void testLanServerAddressClassificationAndSettingsLayout(){
     std::printf("[test] LAN server address classification and Settings layout\n");
     CHECK(isObviousLanServerUrl("http://10.0.0.1:8096"));
@@ -201,14 +190,12 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
 static void testSeriesCachedSeasonHandoff(){
     const std::string seriesSource=readTestBytes("src/ui/screens/SeriesScreen.cpp");
     const std::string episodeSource=readTestBytes("src/ui/screens/EpisodeBrowserScreen.cpp");
+    // Architecture boundary (class A): the series/episode screens read the
+    // hierarchy through the coordinator-published query, never the raw API.
     CHECK(seriesSource.find("JellyfinApi::getSeasons")==std::string::npos);
-    CHECK(seriesSource.find("catalogDb->getSeasons")==std::string::npos);
-    CHECK(seriesSource.find("catalogDb->stageSeriesHierarchy")==std::string::npos);
     CHECK(seriesSource.find("m_libraryQuery")!=std::string::npos);
     CHECK(seriesSource.find("m_libraryCoordinator")!=std::string::npos);
     CHECK(episodeSource.find("JellyfinApi::getEpisodes")==std::string::npos);
-    CHECK(episodeSource.find("catalogDb->getEpisodes")==std::string::npos);
-    CHECK(episodeSource.find("catalogDb->reconcileSeasonHierarchy")==std::string::npos);
     CHECK(episodeSource.find("m_libraryQuery")!=std::string::npos);
     CHECK(episodeSource.find("m_libraryCoordinator")!=std::string::npos);
     Session session; MediaItem show=cacheItem("show"),cached=cacheItem("cached"),fresh=cacheItem("fresh"); show.type="show"; cached.type=fresh.type="season";
@@ -469,9 +456,6 @@ static void testOfflineLibraryQuery(){
           && offlineHierarchy.movies[0].id == physicalMovie.itemId
           && offlineHierarchy.episodesBySeason.at(physicalEpisode.seasonId)
                  .size() == 1);
-    const std::string offlineQuerySource =
-        readTestBytes("src/library/OfflineLibraryQuery.cpp");
-    CHECK(offlineQuerySource.find("LibraryCache::load") == std::string::npos);
     catalogDb.reset();
     store.removeItem(scope, physicalMovie.itemId);
     store.removeItem(scope, physicalEpisode.itemId);

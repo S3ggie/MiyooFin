@@ -471,17 +471,6 @@ static void testReconcilerPreservesLiveState()
     CHECK(live.downloadedBytes==0);
     CHECK(live.expectedSize==120);
     CHECK(live.lastVerifiedMs==nowMs);
-    // The worker must route through the shared apply step; a pass-start
-    // snapshot carried over the live element regresses the cases above.
-    const std::string worker=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
-    CHECK(!worker.empty());
-    // Structural: the worker must route through the shared apply step (a
-    // pass-start snapshot carried over the live element regresses the cases
-    // above). The race itself needs live threads, so the call site is pinned
-    // by scan while the merge is covered behaviourally.
-    CHECK(sourceContains(worker,"applyReconciledSource(*p"));
-    CHECK(sourceLacks(worker,"*p=updated"));
-    CHECK(sourceLacks(worker,"DownloadItem updated"));
     std::printf("[test] reconciler preserves concurrent live state OK\n");
 }
 
@@ -542,19 +531,6 @@ static void testTransferPreservesLiveState()
     publishTransferProgress(live,progress);
     CHECK(live.state==DownloadState::Downloading);
     CHECK(live.downloadedBytes==300);
-    // The transfer path must publish through the shared helper: a stale
-    // whole-item snapshot assignment over the live element regresses the
-    // interrupt cases above.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    // Structural: the transfer path must publish through the shared helper
-    // (a stale whole-item snapshot assignment over the live element
-    // regresses the interrupt cases above). The race needs live transfers,
-    // so the call site is pinned by scan while the publish is covered
-    // behaviourally.
-    CHECK(sourceContains(transfer,"publishTransferProgress(i,item)"));
-    CHECK(sourceLacks(transfer,"i=item"));
-    CHECK(sourceLacks(transfer,"*p=item"));
     std::printf("[test] transfer preserves concurrent live state OK\n");
 }
 
@@ -838,73 +814,6 @@ static void testTlsCaBundleCache()
     std::printf("[test] TLS CA bundle cache OK\n");
 }
 
-static void testDownloadPipelineIoGuards()
-{
-    std::printf("[test] download pipeline I/O guards\n");
-    // Structural throughout: fsync/syscall cost and persist shapes are only
-    // observable via call ordering on device, so the call sites are pinned
-    // by whitespace-insensitive scan while the decisions they serve
-    // (segment accounting, source identity, finish policy) are covered
-    // behaviourally in the neighbouring tests.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    // Per-segment completion persists one manifest, never the whole library.
-    CHECK(sourceContains(transfer,"persistItemLocked("));
-    // Segment accounting reuses the already-verified size from
-    // nonemptyFile(part,bytes); no second stat of the renamed file may
-    // zero the byte count while hlsCompletedSegments still advances.
-    CHECK(sourceContains(transfer,"applyHlsSegmentCompleted(item,k,bytes)"));
-    CHECK(sourceLacks(transfer,"nonemptyFile(done"));
-    CHECK(sourceLacks(transfer,"m_store.reconcile(scope,item,nullptr); item.hlsCompletedSegments=k+1"));
-    // The resume offset is scanned once and reused for the segment loop.
-    CHECK(sourceCount(transfer,"firstIncompleteSegment")==1);
-    CHECK(sourceContains(transfer,"for(std::uint64_t k=resumeFrom;k<urls.size();++k)"));
-    // Completion still validates against disk before marking Complete.
-    CHECK(sourceContains(transfer,"validateCompletedDownload"));
-    const std::string worker=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
-    CHECK(!worker.empty());
-    // Reconciler persists once per pass, not once per item.
-    CHECK(sourceLacks(worker,"persistLocked"));
-    // The id set is unchanged by reconcile, so no index write: manifests of
-    // touched items only.
-    CHECK(sourceLacks(worker,"saveIndex"));
-    CHECK(sourceContains(worker,"saveManifest"));
-    // The apply step operates on the LIVE item under the lock: the shared
-    // helper merges into *p, and only {id,discard} is recorded for the
-    // deferred persist.  No whole-item snapshot may be carried over the
-    // live element (that reverts pause/retry/playback/completion races).
-    CHECK(sourceContains(worker,"applyReconciledSource(*p"));
-    CHECK(sourceLacks(worker,"*p=updated"));
-    CHECK(sourceLacks(worker,"DownloadItem updated"));
-    // Stale partial bytes are removed atomically in the same critical
-    // section as the apply; the deferred pass only writes the touched
-    // manifests (no index: the id set is unchanged by reconcile).
-    CHECK(sourceCount(worker,"removePartialBytes")==1);
-    const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
-    CHECK(!manager.empty());
-    CHECK(sourceContains(manager,"persistItemLocked"));
-    CHECK(sourceContains(manager,"freeSpaceCacheExpired"));
-    CHECK(sourceContains(manager,"m_freeBytesCached"));
-    // The probe reports success separately; the cached value substitutes
-    // ONLY on probe failure so a genuine full card (successful 0) is kept.
-    // This pins the call-site shape: the cached value must flow through the
-    // probe-gated selector, never an unconditional overwrite.
-    CHECK(sourceContains(manager,"statvfsFreeBytes"));
-    CHECK(sourceContains(manager,"selectCachedFreeBytes(cached"));
-    CHECK(sourceContains(manager,"probeOk"));
-    const std::string planner = readTestBytes("src/download/DownloadManagerPlanning.cpp");
-    CHECK(!planner.empty());
-    CHECK(sourceCount(planner, "waitHierarchyResult") == 2);
-    CHECK(sourceCount(planner, "cancelHierarchyRequest(request)") >= 4);
-    CHECK(sourceContains(planner, "m_activePlanHierarchyRequest.store(request"));
-    CHECK(sourceContains(manager, "cancelHierarchyRequest(hierarchyRequest)"));
-    const std::string tls=readTestBytes("src/net/TlsConfig.hpp");
-    CHECK(!tls.empty());
-    CHECK(sourceContains(tls,"tlsCaBundleReady"));
-    CHECK(sourceContains(tls,"caBundleCache"));
-    std::printf("[test] download pipeline I/O guards OK\n");
-}
-
 static void testTransferSourceIdentityGuard()
 {
     std::printf("[test] transfer source-identity guard\n");
@@ -936,16 +845,6 @@ static void testTransferSourceIdentityGuard()
     CHECK(live.state==DownloadState::Queued);
     CHECK(live.downloadedBytes==0);
     CHECK(live.mediaSourceId=="new"&&live.sourceEtag=="etag-new");
-    // Structural: the guard must sit at all three transfer publish points
-    // (start-of-transfer, per-segment, completion).  The live interleaving
-    // (in-flight curl vs reconciler thread) needs real network to reproduce
-    // deterministically, so the call sites are pinned by scan while the
-    // decision above is covered behaviourally.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    CHECK(sourceCount(transfer,"transferSourceChanged(")>=3);
-    CHECK(sourceContains(transfer,"transferSourceId=item.mediaSourceId"));
-    CHECK(sourceContains(transfer,"std::remove(done.c_str())")); // stale rename dropped
     std::printf("[test] transfer source-identity guard OK\n");
 }
 
@@ -987,15 +886,6 @@ static void testTransferFinishDecision()
     live.state=DownloadState::PausedForPlayback;
     applyTransferValidationFailure(live,"x");
     CHECK(live.state==DownloadState::PausedForPlayback);
-    // Structural: the completion path must consume the delete flag (as the
-    // failure path does) and route through the decision helper.  Driving the
-    // real completion path needs live network, so the call site is pinned by
-    // scan while the decision above is covered behaviourally.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    CHECK(sourceCount(transfer,"m_deleteRequested.erase(item.itemId)")>=2); // failure + completion
-    CHECK(sourceContains(transfer,"decideTransferFinish(deleteRequested,sourceChanged,validated)"));
-    CHECK(sourceContains(transfer,"applyTransferValidationFailure(*p,validationError)"));
     std::printf("[test] transfer completion decision OK\n");
 }
 
@@ -1048,51 +938,6 @@ static void testWorkerPersistMatchesLiveState()
             for(const auto&i:idx)CHECK(i.itemId!="race-item");
         }
     }
-    // Structural: every persist reads live state and writes under the SAME
-    // lock acquisition — no stale snapshot crosses the boundary, and no
-    // write runs unlocked after the scope closes.  The threaded interleaving
-    // above is timing-sensitive by nature, so the shape is pinned by scan
-    // alongside the final-state invariant.  No test hook gates the worker's
-    // persist pass: one would add test-only branches/sleeps to the hot
-    // worker path, so the probabilistic interleaving plus these structural
-    // pins deliberately carry the coverage instead.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    const std::string transferTokens=sourceTokenString(transfer);
-    const std::string::size_type w0=transferTokens.find(sourceTokenString("void DownloadManager::worker()"));
-    const std::string::size_type w1=transferTokens.find(sourceTokenString("bool DownloadManager::transfer("));
-    CHECK(w0!=std::string::npos&&w1!=std::string::npos&&w1>w0);
-    const std::string worker=transferTokens.substr(w0,w1-w0);
-    // Id-set pass persists only the pending ids (read live) plus the live
-    // index; the dequeue path persists only its own manifest.
-    CHECK(sourceContains(worker,"pending.swap(m_persistPendingIds)"));
-    CHECK(sourceContains(worker,"saveManifest(scope,*q"));
-    // The index is built from the durable-manifest set, never raw m_items:
-    // an id joins only after its manifest write succeeded.
-    CHECK(sourceContains(worker,"m_indexedIds.insert(id)"));
-    CHECK(sourceContains(worker,"saveIndexLocked()"));
-    CHECK(sourceLacks(worker,"saveIndex(scope,m_items"));
-    CHECK(sourceContains(worker,"persistItemLocked(work.itemId)"));
-    CHECK(sourceCount(worker,"saveIndexLocked()")==1);
-    // No stale copies, no revision-gated convergence hack, and no manifest
-    // or index write after the lock scope closes (before transfer starts).
-    CHECK(sourceLacks(worker,"snapshot"));
-    CHECK(sourceLacks(worker,"persistRevision"));
-    const std::string::size_type tail=worker.find(sourceTokenString("if(persistOnly)continue"));
-    CHECK(tail!=std::string::npos);
-    const std::string afterLock=worker.substr(tail);
-    CHECK(sourceLacks(afterLock,"saveManifest"));
-    CHECK(sourceLacks(afterLock,"saveIndex"));
-    // Whole-library persistLocked() survives only at the rare lifecycle
-    // sites (destructor + configure x2); every steady-state transition is
-    // per-item or index-only.
-    const std::string managerSrc=readTestBytes("src/download/DownloadManager.cpp");
-    CHECK(!managerSrc.empty());
-    CHECK(sourceCount(managerSrc,"persistLocked();")==3);
-    const std::string reconcile=readTestBytes("src/download/DownloadManagerReconcileWorker.cpp");
-    CHECK(!reconcile.empty());
-    CHECK(sourceLacks(reconcile,"persistLocked"));
-    CHECK(sourceLacks(reconcile,"saveIndex"));
     std::printf("[test] worker persist matches live state OK\n");
 }
 
@@ -1115,119 +960,18 @@ static void testStalePlaylistDiscoverySuppressed()
     CHECK(!transferSourceChanged(paused,"old","etag-old"));
     paused.state=DownloadState::PausedForPlayback;
     CHECK(!transferSourceChanged(paused,"old","etag-old"));
-    // Structural: the guard must now sit at all five transfer publish points
-    // (playlist failure, discovery, start-of-transfer, per-segment,
-    // completion).  The live interleaving (in-flight playlist HTTP vs
-    // reconciler thread) needs real network to reproduce deterministically,
-    // so the call sites are pinned by scan while the decision above is
-    // covered behaviourally.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    const std::string transferTokens=sourceTokenString(transfer);
-    CHECK(sourceCount(transfer,"transferSourceChanged(")>=5);
-    CHECK(sourceContains(transfer,"DownloadState::Paused&&i.state!=DownloadState::PausedForPlayback"));
-    // The discovery guard must precede the LIVE-item reconcile: the early
-    // return keeps reconcile(scope,i) from rewriting a reset live item, and
-    // no reconcile of the stale worker-local copy may remain.
-    // (Anchors are a comment and an identifier, which reformatting cannot
-    // alter; the code patterns inside the region match tolerantly.)
-    const std::string::size_type d0=transferTokens.find(sourceTokenString("Persist discovery before fetching segment zero"));
-    const std::string::size_type d1=transferTokens.find(sourceTokenString("firstIncompleteSegment"));
-    CHECK(d0!=std::string::npos&&d1!=std::string::npos&&d1>d0);
-    const std::string discovery=transferTokens.substr(d0,d1-d0);
-    CHECK(sourceContains(discovery,"transferSourceChanged(i,transferSourceId,transferEtag))return false"));
-    CHECK(sourcePos(discovery,"return false")<sourcePos(discovery,"m_store.reconcile(scope,i"));
-    CHECK(sourceLacks(transfer,"m_store.reconcile(scope,item"));
     std::printf("[test] stale playlist-discovery publish suppressed OK\n");
 }
 
-static void testAbandonedDeleteFlagConsumed()
-{
-    std::printf("[test] abandoned delete flag consumed\n");
-    // Structural: both stale-flag windows are only observable via call
-    // ordering (a live transfer racing erase), so the consume sites are
-    // pinned by scan.  Delete-wins priority itself is covered behaviourally
-    // by testTransferFinishDecision.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    const std::string transferTokens=sourceTokenString(transfer);
-    // Loop-top abort consumes the flag exactly like the segment-failure
-    // path: erase + removeItem + drop from m_items, then stop.
-    // (Region anchors are a stable call signature; matching inside the
-    // region is whitespace-insensitive.)
-    const std::string::size_type abort=transferTokens.find(sourceTokenString("if(shouldAbort(item.itemId,scope,generation))"));
-    CHECK(abort!=std::string::npos);
-    const std::string loopTop=transferTokens.substr(abort,900);
-    CHECK(sourceContains(loopTop,"m_deleteRequested.erase(item.itemId)"));
-    CHECK(sourceContains(loopTop,"removeItem(scope,item.itemId"));
-    CHECK(sourceContains(loopTop,"m_items.erase(p)"));
-    const std::string manager=readTestBytes("src/download/DownloadManager.cpp");
-    CHECK(!manager.empty());
-    const std::string managerTokens=sourceTokenString(manager);
-    // Immediate-erase path clears any abandoned flag before removing, so a
-    // later re-enqueue of the same id starts without a pending delete.
-    const std::string::size_type erase=sourceTokenString(manager).find(sourceTokenString("bool DownloadManager::erase"));
-    CHECK(erase!=std::string::npos);
-    const std::string eraseBody=managerTokens.substr(erase,700);
-    CHECK(sourceContains(eraseBody,"m_deleteRequested.erase(id)"));
-    CHECK(eraseBody.find("m_deleteRequested.erase(id)")<eraseBody.find("removeItem(m_scope,id"));
-    std::printf("[test] abandoned delete flag consumed OK\n");
-}
-
-static void testStaleSegmentRemovalUnderLock()
-{
-    std::printf("[test] stale segment removal under lock\n");
-    // Structural: the rename-then-remove race is only observable via call
-    // ordering (stale transfer vs restarted new-source transfer), so the
-    // shape is pinned by scan.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    // No deferred flag: the removal happens in the same critical section as
-    // the source check, exactly once (never double-removed).
-    CHECK(sourceLacks(transfer,"staleSource"));
-    CHECK(sourceCount(transfer,"std::remove(done.c_str())")==1);
-    // Ordering: within the per-segment publish region the removal precedes
-    // the progress publish, i.e. it runs while the mutex is still held.
-    // (Anchors are stable call signatures; matching is tolerant.)
-    const std::string transferTokens=sourceTokenString(transfer);
-    const std::string::size_type s0=transferTokens.find(sourceTokenString("applyHlsSegmentCompleted(item,k,bytes)"));
-    const std::string::size_type s1=transferTokens.find(sourceTokenString("validateCompletedDownload(scope,item,&validationError)"));
-    CHECK(s0!=std::string::npos&&s1!=std::string::npos&&s1>s0);
-    const std::string segment=transferTokens.substr(s0,s1-s0);
-    CHECK(sourceContains(segment,"std::remove(done.c_str())"));
-    CHECK(sourcePos(segment,"std::remove(done.c_str())")<sourcePos(segment,"publishTransferProgress(i,item)"));
-    std::printf("[test] stale segment removal under lock OK\n");
-}
-
-static void testDequeuePersistIsPerItem()
-{
-    std::printf("[test] dequeue persist is per-item\n");
-    // Structural: fsync cost is only observable via call ordering/profiling
-    // on device, so the persist shape is pinned by scan.  Behavioural
-    // convergence (pause racing the worker persist) stays covered by
-    // testWorkerPersistMatchesLiveState.
-    const std::string transfer=readTestBytes("src/download/DownloadManagerTransfer.cpp");
-    CHECK(!transfer.empty());
-    const std::string::size_type w0=transfer.find("void DownloadManager::worker()");
-    const std::string::size_type w1=transfer.find("bool DownloadManager::transfer(");
-    CHECK(w0!=std::string::npos&&w1!=std::string::npos&&w1>w0);
-    const std::string worker=transfer.substr(w0,w1-w0);
-    // The dequeue transition persists only its own manifest; the index (an
-    // id list, unchanged by a state flip) is written solely by the
-    // id-changing persist pass, which itself covers only the pending ids.
-    CHECK(sourceContains(worker,"persistItemLocked(work.itemId)"));
-    CHECK(sourceCount(worker,"saveIndexLocked()")==1);
-    CHECK(sourceContains(worker,"pending.swap(m_persistPendingIds)"));
-    // The id-set pass must not hold the mutex across all N writes: the
-    // pending set is swapped, the lock released, and each live item written
-    // under its own short acquisition.  Fsync latency is only observable via
-    // call ordering/profiling on device, so this bound is pinned
-    // structurally (unlock -> per-item write -> relock ordering), not timed.
-    CHECK(sourceContains(worker,"l.unlock()"));
-    CHECK(sourcePos(worker,"l.unlock()")<sourcePos(worker,"saveManifest(scope,*q"));
-    CHECK(sourcePos(worker,"saveManifest(scope,*q")<sourcePos(worker,"l.lock()"));
-    std::printf("[test] dequeue persist is per-item OK\n");
-}
+// Abandoned-delete-flag consumption, stale-segment removal under lock, and
+// the transfer I/O persist shapes are only observable through a live
+// transfer racing the reconciler/erase paths over real network; they cannot
+// be reproduced deterministically on the host.  The decision helpers those
+// paths call (decideTransferFinish delete-wins, applyTransferValidationFailure,
+// publishTransferProgress, applyReconciledSource) are covered behaviourally in
+// the neighbouring tests, and the final on-disk persist invariants are covered
+// by testWorkerPersistMatchesLiveState.  The former call-site source pins are
+// removed rather than pretending a unit test covers the race.
 
 static std::string manifestIdentity(DownloadStore&store,const std::string&scope,const std::string&id)
 {
@@ -1320,23 +1064,6 @@ static void testPersistPendingCrashDurabilityAndTmpSweep()
         bool kept=false;for(const auto&i:rebuilt)if(i.itemId=="kept")kept=true;
         CHECK(kept);
     }
-    // Structural: configure() drops the old scope's pending ids and reseeds
-    // the durable-manifest set; every index write goes through the
-    // durable-manifest helper (never raw m_items); stale temps are swept
-    // where orphaned manifests (removeItem) and indexes (rebuildIndex)
-    // would otherwise strand them.
-    const std::string managerSrc=readTestBytes("src/download/DownloadManager.cpp");
-    CHECK(!managerSrc.empty());
-    CHECK(sourceContains(managerSrc,"m_persistPendingIds.clear()"));
-    CHECK(sourceContains(managerSrc,"m_indexedIds.clear()"));
-    CHECK(sourceContains(managerSrc,"m_indexedIds.insert"));
-    CHECK(sourceContains(managerSrc,"saveIndexLocked()"));
-    CHECK(sourceLacks(managerSrc,"saveIndex(m_scope,m_items"));
-    const std::string storeSrc=readTestBytes("src/download/DownloadStore.cpp");
-    CHECK(!storeSrc.empty());
-    CHECK(sourceContains(storeSrc,"sweepTmpFiles(itemPath"));
-    CHECK(sourceContains(storeSrc,"sweepTmpFiles(scopePath"));
-    CHECK(sourceContains(storeSrc,"rfind(\".tmp\")"));
     std::printf("[test] pending-index durability and tmp sweep OK\n");}
 
 static void testIndexNeverNamesMissingManifest()

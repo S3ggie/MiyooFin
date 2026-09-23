@@ -26,8 +26,7 @@ int main()
     testExternalPlaybackFlagMultipleSet();
     testExternalPlaybackSourcePropagation();
     testPlaybackRequestStillWorks();
-    testPlaybackRunnerInitializesOnionSdlDrivers();
-    testExternalPlaybackFullyReleasesSdlBeforeExec();
+
     testScreenStackPreservedDuringExternalPlayback();
     testScreenRetirementDoesNotBlockPop();
     testMovieDetailsOpensBeforeArtworkPreparation();

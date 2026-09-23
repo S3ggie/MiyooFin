@@ -1608,6 +1608,167 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     std::printf("[test] LibraryCoordinator serialization gates OK\n");
 }
 
+void testLegacyFullSyncReservationGatesAndReleases()
+{
+    std::printf("[test] LibraryCoordinator legacy reservation\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("legacy-reservation", db, scope);
+    coordinator->start();
+
+    // The legacy reservation owns the serialized slot without a worker; every
+    // other top-level operation must observe it as occupied.
+    CHECK(coordinator->beginFullSync());
+    CHECK(!coordinator->beginFullSync());
+    CHECK(!coordinator->startStartupSync(false));
+    std::uint64_t populationRequest = 0;
+    CHECK(!coordinator->requestFullPopulation(populationRequest));
+    CHECK(!coordinator->requestMaintenance());
+    MediaItem series;
+    series.id = "legacy-gated-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(!coordinator->requestSeriesSeasons(series, hierarchyRequest));
+
+    // Discarding live results must not release the slot held by a different
+    // operation; the model only releases the matching kind.
+    coordinator->discardLiveChangeResults();
+    CHECK(!coordinator->startStartupSync(false));
+
+    // Releasing the reservation admits the next serialized operation.
+    coordinator->finishFullSync();
+    CHECK(coordinator->startStartupSync(false));
+    const auto startup = takeStartupResult(*coordinator);
+    CHECK(startup.success || startup.cancelled ||
+          startup.error == CatalogDbErrorCategory::ScopeNotReady);
+
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator legacy reservation OK\n");
+}
+
+void testConcurrentLegacyReservationReservesExactlyOnce()
+{
+    std::printf("[test] LibraryCoordinator concurrent reservation\n");
+    auto coordinator = makeCoordinator();
+    coordinator.start();
+
+    std::mutex startMutex;
+    std::condition_variable startCondition;
+    int ready = 0;
+    bool release = false;
+    bool firstAccepted = false;
+    bool secondAccepted = false;
+    const auto reserve = [&](bool& accepted) {
+        {
+            std::unique_lock<std::mutex> lock(startMutex);
+            ++ready;
+            startCondition.notify_all();
+            startCondition.wait(lock, [&] { return release; });
+        }
+        accepted = coordinator.beginFullSync();
+    };
+
+    std::thread first(reserve, std::ref(firstAccepted));
+    std::thread second(reserve, std::ref(secondAccepted));
+    {
+        std::unique_lock<std::mutex> lock(startMutex);
+        CHECK(startCondition.wait_for(lock, std::chrono::seconds(2), [&] { return ready == 2; }));
+        release = true;
+        startCondition.notify_all();
+    }
+    first.join();
+    second.join();
+
+    // The single serialized-slot authority admits exactly one reservation.
+    CHECK(firstAccepted != secondAccepted);
+    coordinator.finishFullSync();
+    CHECK(coordinator.beginFullSync());
+    coordinator.finishFullSync();
+
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator concurrent reservation OK\n");
+}
+
+void testUnconsumedStartupResultRetainsSerializedSlot()
+{
+    std::printf("[test] LibraryCoordinator result retains serialized slot\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("result-slot", db, scope);
+    coordinator->start();
+
+    db->setWorkerPausedForTest(true);
+    CHECK(coordinator->startStartupSync(false));
+    db->setWorkerPausedForTest(false);
+
+    bool published = false;
+    for (int i = 0; i < 200000 && !published; ++i) {
+        published = coordinator->status().startupResultReady;
+        if (!published)
+            std::this_thread::yield();
+    }
+    CHECK(published);
+
+    // An unconsumed startup publication retains the slot for every other
+    // operation, not merely for a second startup.
+    CHECK(!coordinator->beginFullSync());
+    MediaItem series;
+    series.id = "result-slot-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(!coordinator->requestSeriesSeasons(series, hierarchyRequest));
+
+    // Consuming the result releases the slot for a different operation.
+    library::StartupSyncResult result;
+    CHECK(coordinator->takeStartupSyncResult(result));
+    CHECK(coordinator->beginFullSync());
+    coordinator->finishFullSync();
+
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator result retains serialized slot OK\n");
+}
+
+void testAdmissionDiagnosticSnapshotSurvivesConcurrentRelease()
+{
+    std::printf("[test] LibraryCoordinator admission diagnostic snapshot race\n");
+    auto coordinator = makeCoordinator();
+    coordinator.start();
+
+    // Hierarchy owns the serialized slot.  The unconsumed terminal result keeps
+    // it held, so no live network peer or sleep is needed.
+    MediaItem series;
+    series.id = "admission-snapshot-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(coordinator.requestSeriesSeasons(series, hierarchyRequest));
+
+    // Arm the seam so the next admission parks between taking its operation
+    // snapshot and deriving the diagnostic reason.
+    coordinator.setAdmissionSnapshotPauseForTest(true);
+
+    bool admitted = true;
+    std::thread admitter([&] { admitted = coordinator.startStartupSync(false); });
+
+    // Spin (no sleep) until the admission has snapshotted the occupied slot.
+    for (int i = 0; i < 1000000 && !coordinator.admissionSnapshotPausedForTest(); ++i)
+        std::this_thread::yield();
+    CHECK(coordinator.admissionSnapshotPausedForTest());
+
+    // Release the hierarchy slot while the admission is parked.  The old
+    // implementation re-read the slot here and appended a null reason.
+    coordinator.releaseCurrentOperationForTest();
+    coordinator.setAdmissionSnapshotPauseForTest(false);
+
+    admitter.join();
+    CHECK(!admitted);
+
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator admission diagnostic snapshot race OK\n");
+}
+
 } // namespace
 
 int main()
@@ -1644,6 +1805,12 @@ int main()
     testHomeRailCachedFailureRetainsInvalidRail();
     testHomeRailCoalescesAndRerunsAfterConsumption();
 
+    // Serialized-operation model coverage: legacy reservation, concurrent
+    // reservation accounting, and slot retention across operation kinds.
+    testLegacyFullSyncReservationGatesAndReleases();
+    testConcurrentLegacyReservationReservesExactlyOnce();
+    testUnconsumedStartupResultRetainsSerializedSlot();
+
     // Keep the diagnostics capture bounded to the full-population and gate
     // tests below.  The logger has a finite file retention limit; resetting
     // it here avoids unrelated earlier test diagnostics evicting the lines
@@ -1659,6 +1826,7 @@ int main()
 
     testFullPopulationRejectsStaleRequest();
     testCoordinatorSerializesStartupFullSafetyAndLive();
+    testAdmissionDiagnosticSnapshotSurvivesConcurrentRelease();
 
     // All producers above have joined.  stop() is the existing logger
     // drain/join barrier, not a timing delay.
@@ -1669,6 +1837,9 @@ int main()
           std::string::npos);
     CHECK(diagnostics.find("reasons=startup_in_flight") != std::string::npos);
     CHECK(diagnostics.find("reasons=safety_reconcile_in_flight") != std::string::npos);
+    // The admission diagnostic must still name the snapshotted hierarchy slot
+    // even though it was released before the reason was derived.
+    CHECK(diagnostics.find("reasons=hierarchy_mutation_in_flight") != std::string::npos);
     const auto diagnosticLine = [&](const std::string& marker,
                                     const std::vector<std::string>& fields = {}) {
         std::size_t search = 0;

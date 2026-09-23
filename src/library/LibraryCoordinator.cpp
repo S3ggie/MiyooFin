@@ -58,6 +58,127 @@ bool coordinatorHierarchyIdentityMatches(const miyoofin::library::HierarchyReque
 namespace miyoofin {
 namespace library {
 
+LibraryCoordinator::OperationKind LibraryCoordinator::currentOperationKind() const noexcept
+{
+    return operationKindOf(m_operationState.load(std::memory_order_acquire));
+}
+
+LibraryCoordinator::OperationPhase LibraryCoordinator::currentOperationPhase() const noexcept
+{
+    return operationPhaseOf(m_operationState.load(std::memory_order_acquire));
+}
+
+void LibraryCoordinator::beginOperation(OperationKind kind) noexcept
+{
+    std::uint32_t expected = m_operationState.load(std::memory_order_acquire);
+    for (;;) {
+        const OperationKind current = operationKindOf(expected);
+        if (current == kind)
+            return;
+        if (current != OperationKind::None)
+            return;
+        const std::uint32_t desired = encodeOperation(kind, OperationPhase::Executing);
+        if (m_operationState.compare_exchange_weak(expected, desired, std::memory_order_acq_rel,
+                                                   std::memory_order_acquire))
+            return;
+    }
+}
+
+void LibraryCoordinator::markOperationPublicationPending(OperationKind kind) noexcept
+{
+    std::uint32_t expected = m_operationState.load(std::memory_order_acquire);
+    if (operationKindOf(expected) != kind)
+        return;
+    const std::uint32_t desired = encodeOperation(kind, OperationPhase::PublicationPending);
+    m_operationState.compare_exchange_strong(expected, desired, std::memory_order_acq_rel,
+                                             std::memory_order_acquire);
+}
+
+void LibraryCoordinator::releaseOperation(OperationKind kind) noexcept
+{
+    std::uint32_t expected = m_operationState.load(std::memory_order_acquire);
+    if (operationKindOf(expected) != kind)
+        return;
+    const std::uint32_t desired = encodeOperation(OperationKind::None, OperationPhase::Idle);
+    m_operationState.compare_exchange_strong(expected, desired, std::memory_order_acq_rel,
+                                             std::memory_order_acquire);
+}
+
+const char* LibraryCoordinator::operationBlockReasonLocked(OperationKind kind,
+                                                           OperationPhase phase) const noexcept
+{
+    // Derived from the caller's operation snapshot, not a fresh state read, so
+    // a concurrent release cannot turn an occupied slot into a null reason.
+    switch (kind) {
+    case OperationKind::Startup:
+        return phase == OperationPhase::PublicationPending ? "startup_result_ready"
+                                                           : "startup_in_flight";
+    case OperationKind::FullPopulation:
+        return phase == OperationPhase::PublicationPending ? "pending_population_updates"
+                                                           : "full_sync_in_flight";
+    case OperationKind::SafetyReconcile:
+        return phase == OperationPhase::PublicationPending ? "safety_reconcile_result_ready"
+                                                           : "safety_reconcile_in_flight";
+    case OperationKind::LiveChange:
+        return "live_change_active";
+    case OperationKind::Hierarchy:
+        return "hierarchy_mutation_in_flight";
+    case OperationKind::None:
+    default:
+        return nullptr;
+    }
+}
+
+bool LibraryCoordinator::serializedOperationAdmittedLocked(const AdmissionRequest& request,
+                                                           std::string* reasons) const noexcept
+{
+    const bool stopped = m_stopped;
+    const bool notRunning = !m_running;
+    const bool missingSync = !m_sync;
+    const bool missingDb = request.requireDb && !m_db;
+    const bool scopeNotReady = request.requireScope && m_scopeEpoch == 0;
+    const bool missingQuery = request.requireQuery && !m_query;
+    const bool offlineSuppressed = request.requireOnline && m_manualOfflineMode;
+    // Snapshot kind and phase from a single load so the diagnostic reason is
+    // always derived from the state that produced this rejection, even if the
+    // slot is released concurrently.
+    const std::uint32_t operationSnapshot = m_operationState.load(std::memory_order_acquire);
+    const OperationKind current = operationKindOf(operationSnapshot);
+    const OperationPhase currentPhase = operationPhaseOf(operationSnapshot);
+    // Hierarchy is the one operation that may admit more requests while it
+    // already owns the slot; every other requester must see it idle.
+    const bool selfHierarchy =
+        request.requester == OperationKind::Hierarchy && current == OperationKind::Hierarchy;
+    const bool occupied = current != OperationKind::None && !selfHierarchy;
+    const bool blocked = stopped || notRunning || missingSync || missingDb || scopeNotReady ||
+                         missingQuery || offlineSuppressed || occupied;
+    if (!blocked)
+        return true;
+    if (reasons) {
+#ifdef MIYOOFIN_TEST_BUILD
+        // Deterministic race seam: hold the admission between its snapshot and
+        // its diagnostic derivation so a test can release the occupied slot in
+        // that window.
+        if (occupied && m_admissionSnapshotPauseForTest.load(std::memory_order_acquire)) {
+            m_admissionSnapshotPausedForTest.store(true, std::memory_order_release);
+            while (m_admissionSnapshotPauseForTest.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        }
+#endif
+        appendCoordinatorGateReason(*reasons, "stopped", stopped);
+        appendCoordinatorGateReason(*reasons, "not_running", notRunning);
+        appendCoordinatorGateReason(*reasons, "missing_sync", missingSync);
+        appendCoordinatorGateReason(*reasons, "missing_db", missingDb);
+        appendCoordinatorGateReason(*reasons, "scope_not_ready", scopeNotReady);
+        appendCoordinatorGateReason(*reasons, "missing_query", missingQuery);
+        appendCoordinatorGateReason(*reasons, "manual_offline", offlineSuppressed);
+        if (occupied)
+            appendCoordinatorGateReason(*reasons, operationBlockReasonLocked(current, currentPhase),
+                                        true);
+    }
+    return false;
+}
+
 LibraryCoordinator::LibraryCoordinator(Session session, std::shared_ptr<CatalogDb> db,
                                        std::uint64_t scopeEpoch)
     : m_session(session), m_sync(std::make_shared<LibrarySync>(std::move(session), db, scopeEpoch)),
@@ -103,36 +224,10 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     std::string admissionDiagnostic;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        const bool stopped = m_stopped;
-        const bool notRunning = !m_running;
-        const bool missingSync = !m_sync;
-        const bool startupInFlight = m_startupInFlight;
-        const bool startupResultReady = m_startupResultReady;
-        const bool fullSyncInFlight = m_fullSyncInFlight;
-        const bool pendingPopulationUpdates = !m_fullPopulationUpdates.empty();
-        const bool safetyReconcileInFlight = m_safetyReconcileInFlight;
-        const bool safetyReconcileResultReady = m_safetyReconcileResultReady;
-        const bool liveChangeActive = m_liveChangeActive.has_value();
-        const bool hierarchyMutationInFlight = m_hierarchyMutationInFlight;
-        if (stopped || notRunning || missingSync || startupInFlight || startupResultReady ||
-            fullSyncInFlight || pendingPopulationUpdates || safetyReconcileInFlight ||
-            safetyReconcileResultReady || liveChangeActive || hierarchyMutationInFlight) {
-            std::string reasons;
-            appendCoordinatorGateReason(reasons, "stopped", stopped);
-            appendCoordinatorGateReason(reasons, "not_running", notRunning);
-            appendCoordinatorGateReason(reasons, "missing_sync", missingSync);
-            appendCoordinatorGateReason(reasons, "startup_in_flight", startupInFlight);
-            appendCoordinatorGateReason(reasons, "startup_result_ready", startupResultReady);
-            appendCoordinatorGateReason(reasons, "full_sync_in_flight", fullSyncInFlight);
-            appendCoordinatorGateReason(reasons, "pending_population_updates",
-                                        pendingPopulationUpdates);
-            appendCoordinatorGateReason(reasons, "safety_reconcile_in_flight",
-                                        safetyReconcileInFlight);
-            appendCoordinatorGateReason(reasons, "safety_reconcile_result_ready",
-                                        safetyReconcileResultReady);
-            appendCoordinatorGateReason(reasons, "live_change_active", liveChangeActive);
-            appendCoordinatorGateReason(reasons, "hierarchy_mutation_in_flight",
-                                        hierarchyMutationInFlight);
+        AdmissionRequest request;
+        request.requester = OperationKind::Startup;
+        std::string reasons;
+        if (!serializedOperationAdmittedLocked(request, &reasons)) {
             admissionDiagnostic = "[LibraryCoordinator] startup_sync_rejected phase=admission"
                                   " catalog_has_rows=" +
                                   std::to_string(catalogHasRows ? 1 : 0) + " reasons=" + reasons;
@@ -142,7 +237,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
 
             // Reserve the startup slot while the prior thread is being joined so
             // another caller cannot start a second operation in the gap.
-            m_startupInFlight = true;
+            beginOperation(OperationKind::Startup);
             m_startupCancellation = std::make_shared<std::atomic_bool>(false);
         }
     }
@@ -164,14 +259,13 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
             postJoinDiagnostic = "[LibraryCoordinator] startup_sync_rejected phase=post_join"
                                  " catalog_has_rows=" +
                                  std::to_string(catalogHasRows ? 1 : 0) + " reasons=" + reasons;
-            m_startupInFlight = false;
+            releaseOperation(OperationKind::Startup);
         } else {
             const auto cancellation = m_startupCancellation;
             const auto sync = m_sync;
             const auto db = m_db;
             const auto scopeEpoch = m_scopeEpoch;
             m_startupResult = {};
-            m_startupResultReady = false;
             m_startupThread =
                 std::thread([this, catalogHasRows, cancellation, sync, db, scopeEpoch] {
                     StartupSyncResult result;
@@ -264,8 +358,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                     {
                         std::lock_guard<std::mutex> lock(m_startupMutex);
                         m_startupResult = std::move(result);
-                        m_startupResultReady = true;
-                        m_startupInFlight = false;
+                        markOperationPublicationPending(OperationKind::Startup);
                     }
                     m_startupWake.notify_all();
                 });
@@ -292,10 +385,11 @@ bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult& result)
 
 bool LibraryCoordinator::takeStartupSyncResultLocked(StartupSyncResult& result)
 {
-    if (!m_startupResultReady || m_startupInFlight)
+    if (currentOperationKind() != OperationKind::Startup ||
+        currentOperationPhase() != OperationPhase::PublicationPending)
         return false;
     result = std::move(m_startupResult);
-    m_startupResultReady = false;
+    releaseOperation(OperationKind::Startup);
     return true;
 }
 
@@ -310,19 +404,21 @@ WaitStatus LibraryCoordinator::waitStartupSyncResult(StartupSyncResult& result,
             return WaitStatus::Ready;
         if (m_stopped)
             return WaitStatus::Stopped;
+        const bool startupExecuting = currentOperationKind() == OperationKind::Startup &&
+                                      currentOperationPhase() == OperationPhase::Executing;
         const bool cancelled = (consumerCancellation && consumerCancellation->load()) ||
                                (m_startupCancellation && m_startupCancellation->load());
         if (cancelled) {
             // Cancellation requests the worker's terminal publication.  Keep
             // consuming through that handoff so startup does not leave a
             // ready result blocking the next serialized operation.
-            if (m_startupInFlight) {
+            if (startupExecuting) {
                 m_startupWake.wait(lock);
                 continue;
             }
             return WaitStatus::Cancelled;
         }
-        if (!m_startupInFlight)
+        if (!startupExecuting)
             return WaitStatus::InvalidRequest;
         m_startupWake.wait(lock);
     }
@@ -335,6 +431,14 @@ bool LibraryCoordinator::takeFullPopulationUpdateLocked(std::uint64_t request,
         return false;
     update = std::move(m_fullPopulationUpdates.front());
     m_fullPopulationUpdates.pop_front();
+    // The terminal publication retains the slot until Home consumes the whole
+    // queue; draining it releases the serialized operation.  An intermediate
+    // page that momentarily empties the queue does not, because the worker is
+    // still executing.
+    if (m_fullPopulationUpdates.empty() &&
+        currentOperationKind() == OperationKind::FullPopulation &&
+        currentOperationPhase() == OperationPhase::PublicationPending)
+        releaseOperation(OperationKind::FullPopulation);
     return true;
 }
 
@@ -350,6 +454,8 @@ LibraryCoordinator::waitFullPopulationUpdate(std::uint64_t request, FullPopulati
             return WaitStatus::InvalidRequest;
         if (m_stopped)
             return WaitStatus::Stopped;
+        const bool populationExecuting = currentOperationKind() == OperationKind::FullPopulation &&
+                                         currentOperationPhase() == OperationPhase::Executing;
         const bool cancelled =
             (consumerCancellation && consumerCancellation->load()) ||
             (m_fullPopulationCancellation && m_fullPopulationCancellation->load());
@@ -357,13 +463,13 @@ LibraryCoordinator::waitFullPopulationUpdate(std::uint64_t request, FullPopulati
             // Intermediate pages remain observable.  The terminal publication
             // clears the serialized gate and is consumed before cancellation
             // is reported to a caller with no remaining result.
-            if (m_fullSyncInFlight) {
+            if (populationExecuting) {
                 m_startupWake.wait(lock);
                 continue;
             }
             return WaitStatus::Cancelled;
         }
-        if (!m_fullSyncInFlight)
+        if (!populationExecuting)
             return WaitStatus::Superseded;
         m_startupWake.wait(lock);
     }
@@ -388,41 +494,12 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
     std::string admissionDiagnostic;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        const bool stopped = m_stopped;
-        const bool notRunning = !m_running;
-        const bool missingSync = !m_sync;
-        const bool missingDb = !m_db;
-        const bool scopeNotReady = m_scopeEpoch == 0;
-        const bool startupInFlight = m_startupInFlight;
-        const bool startupResultReady = m_startupResultReady;
-        const bool fullSyncInFlight = m_fullSyncInFlight;
-        const bool pendingPopulationUpdates = !m_fullPopulationUpdates.empty();
-        const bool safetyReconcileInFlight = m_safetyReconcileInFlight;
-        const bool safetyReconcileResultReady = m_safetyReconcileResultReady;
-        const bool liveChangeActive = m_liveChangeActive.has_value();
-        const bool hierarchyMutationInFlight = m_hierarchyMutationInFlight;
-        if (stopped || notRunning || missingSync || missingDb || scopeNotReady || startupInFlight ||
-            startupResultReady || fullSyncInFlight || pendingPopulationUpdates ||
-            safetyReconcileInFlight || safetyReconcileResultReady || liveChangeActive ||
-            hierarchyMutationInFlight) {
-            std::string reasons;
-            appendCoordinatorGateReason(reasons, "stopped", stopped);
-            appendCoordinatorGateReason(reasons, "not_running", notRunning);
-            appendCoordinatorGateReason(reasons, "missing_sync", missingSync);
-            appendCoordinatorGateReason(reasons, "missing_db", missingDb);
-            appendCoordinatorGateReason(reasons, "scope_not_ready", scopeNotReady);
-            appendCoordinatorGateReason(reasons, "startup_in_flight", startupInFlight);
-            appendCoordinatorGateReason(reasons, "startup_result_ready", startupResultReady);
-            appendCoordinatorGateReason(reasons, "full_sync_in_flight", fullSyncInFlight);
-            appendCoordinatorGateReason(reasons, "pending_population_updates",
-                                        pendingPopulationUpdates);
-            appendCoordinatorGateReason(reasons, "safety_reconcile_in_flight",
-                                        safetyReconcileInFlight);
-            appendCoordinatorGateReason(reasons, "safety_reconcile_result_ready",
-                                        safetyReconcileResultReady);
-            appendCoordinatorGateReason(reasons, "live_change_active", liveChangeActive);
-            appendCoordinatorGateReason(reasons, "hierarchy_mutation_in_flight",
-                                        hierarchyMutationInFlight);
+        AdmissionRequest admission;
+        admission.requester = OperationKind::FullPopulation;
+        admission.requireDb = true;
+        admission.requireScope = true;
+        std::string reasons;
+        if (!serializedOperationAdmittedLocked(admission, &reasons)) {
             admissionDiagnostic =
                 "[LibraryCoordinator] full_population_rejected phase=admission request=" +
                 std::to_string(request) +
@@ -432,7 +509,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
         } else {
             if (m_fullPopulationThread.joinable())
                 priorThread = std::move(m_fullPopulationThread);
-            m_fullSyncInFlight = true;
+            beginOperation(OperationKind::FullPopulation);
             m_fullPopulationCancellation = std::make_shared<std::atomic_bool>(false);
             m_fullPopulationUpdates.clear();
             request = ++m_fullPopulationRequest;
@@ -462,7 +539,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                     " current_request=" + std::to_string(m_fullPopulationRequest) +
                     " generation=" + std::to_string(m_fullPopulationGeneration) +
                     " scope_epoch=" + std::to_string(m_scopeEpoch) + " reasons=" + reasons;
-                m_fullSyncInFlight = false;
+                releaseOperation(OperationKind::FullPopulation);
             } else {
                 const auto sync = m_sync;
                 const auto db = m_db;
@@ -518,7 +595,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                             } else {
                                 value.request = requestId;
                                 if (value.terminal)
-                                    m_fullSyncInFlight = false;
+                                    markOperationPublicationPending(OperationKind::FullPopulation);
                                 m_fullPopulationUpdates.push_back(std::move(value));
                                 publicationMade = true;
                                 const auto& published = m_fullPopulationUpdates.back();
@@ -872,7 +949,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
         }
     } catch (...) {
         std::lock_guard<std::mutex> lock(m_startupMutex);
-        m_fullSyncInFlight = false;
+        releaseOperation(OperationKind::FullPopulation);
         throw;
     }
     if (!postJoinDiagnostic.empty()) {
@@ -905,18 +982,20 @@ std::future<CatalogDbSyncState> LibraryCoordinator::checkpointLiveCatalog(
 bool LibraryCoordinator::beginFullSync()
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (m_stopped || !m_running || m_startupInFlight || m_startupResultReady ||
-        m_fullSyncInFlight || !m_fullPopulationUpdates.empty() || m_safetyReconcileInFlight ||
-        m_safetyReconcileResultReady || m_liveChangeActive || m_hierarchyMutationInFlight)
+    AdmissionRequest request;
+    request.requester = OperationKind::FullPopulation;
+    if (!serializedOperationAdmittedLocked(request, nullptr))
         return false;
-    m_fullSyncInFlight = true;
+    // Reserve the slot without a worker: callers use finishFullSync() to
+    // release it.  No terminal publication is produced.
+    beginOperation(OperationKind::FullPopulation);
     return true;
 }
 
 void LibraryCoordinator::finishFullSync() noexcept
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    m_fullSyncInFlight = false;
+    releaseOperation(OperationKind::FullPopulation);
 }
 
 bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
@@ -931,24 +1010,23 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
             if (!due)
                 return false;
         }
-        if (m_stopped || !m_running || !m_sync || m_manualOfflineMode || m_startupInFlight ||
-            m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
-            m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive ||
-            m_hierarchyMutationInFlight)
+        AdmissionRequest admission;
+        admission.requester = OperationKind::SafetyReconcile;
+        admission.requireOnline = true;
+        if (!serializedOperationAdmittedLocked(admission, nullptr))
             return false;
         if (m_safetyReconcileThread.joinable())
             priorThread = std::move(m_safetyReconcileThread);
-        m_safetyReconcileInFlight = true;
+        beginOperation(OperationKind::SafetyReconcile);
         m_safetyReconcileCancellation = std::make_shared<std::atomic_bool>(false);
         m_safetyReconcileResult = {};
-        m_safetyReconcileResultReady = false;
     }
     if (priorThread.joinable())
         priorThread.join();
 
     std::lock_guard<std::mutex> lock(m_startupMutex);
     if (m_stopped || !m_running || !m_sync) {
-        m_safetyReconcileInFlight = false;
+        releaseOperation(OperationKind::SafetyReconcile);
         return false;
     }
 
@@ -975,8 +1053,7 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
             const auto publish = [this](SafetyReconcileResult value) {
                 std::lock_guard<std::mutex> guard(m_startupMutex);
                 m_safetyReconcileResult = std::move(value);
-                m_safetyReconcileResultReady = true;
-                m_safetyReconcileInFlight = false;
+                markOperationPublicationPending(OperationKind::SafetyReconcile);
             };
             try {
                 if (!db || scopeEpoch == 0) {
@@ -1101,7 +1178,7 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
             publish(std::move(result));
         });
     } catch (...) {
-        m_safetyReconcileInFlight = false;
+        releaseOperation(OperationKind::SafetyReconcile);
         throw;
     }
     return true;
@@ -1122,10 +1199,11 @@ bool LibraryCoordinator::requestSafetyReconcileForTest()
 bool LibraryCoordinator::takeSafetyReconcileResult(SafetyReconcileResult& result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (!m_safetyReconcileResultReady || m_safetyReconcileInFlight)
+    if (currentOperationKind() != OperationKind::SafetyReconcile ||
+        currentOperationPhase() != OperationPhase::PublicationPending)
         return false;
     result = std::move(m_safetyReconcileResult);
-    m_safetyReconcileResultReady = false;
+    releaseOperation(OperationKind::SafetyReconcile);
     return true;
 }
 
@@ -1278,9 +1356,10 @@ bool LibraryCoordinator::requestHierarchy(const std::vector<MediaItem>& shows,
     if (shows.empty() || generation == 0)
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
-        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
-        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
+    AdmissionRequest admission;
+    admission.requester = OperationKind::Hierarchy;
+    admission.requireQuery = true;
+    if (!serializedOperationAdmittedLocked(admission, nullptr))
         return false;
 
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
@@ -1302,7 +1381,7 @@ bool LibraryCoordinator::requestHierarchy(const std::vector<MediaItem>& shows,
     m_hierarchyForceReconcile = forceReconcile;
     m_hierarchyLastSuccessfulMs = 0;
     m_hierarchyLastReconcileMs = 0;
-    m_hierarchyMutationInFlight = true;
+    beginOperation(OperationKind::Hierarchy);
     m_hierarchyRequests.push_back(std::move(task));
     m_hierarchyWake.notify_one();
     return true;
@@ -1313,9 +1392,10 @@ bool LibraryCoordinator::requestSeriesSeasons(const MediaItem& series, std::uint
     if (series.id.empty())
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
-        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
-        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
+    AdmissionRequest admission;
+    admission.requester = OperationKind::Hierarchy;
+    admission.requireQuery = true;
+    if (!serializedOperationAdmittedLocked(admission, nullptr))
         return false;
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     if (m_hierarchyRequests.size() >= 8)
@@ -1332,7 +1412,7 @@ bool LibraryCoordinator::requestSeriesSeasons(const MediaItem& series, std::uint
     }
     request = task.request;
     m_hierarchyAccepted.emplace(request, task);
-    m_hierarchyMutationInFlight = true;
+    beginOperation(OperationKind::Hierarchy);
     m_hierarchyRequests.push_back(std::move(task));
     m_hierarchyWake.notify_one();
     return true;
@@ -1344,9 +1424,10 @@ bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem& series, const Me
     if (series.id.empty() || season.id.empty())
         return false;
     std::lock_guard<std::mutex> startupLock(m_startupMutex);
-    if (m_stopped || !m_running || !m_sync || !m_query || m_startupInFlight ||
-        m_startupResultReady || m_fullSyncInFlight || !m_fullPopulationUpdates.empty() ||
-        m_safetyReconcileInFlight || m_safetyReconcileResultReady || m_liveChangeActive)
+    AdmissionRequest admission;
+    admission.requester = OperationKind::Hierarchy;
+    admission.requireQuery = true;
+    if (!serializedOperationAdmittedLocked(admission, nullptr))
         return false;
     std::lock_guard<std::mutex> lock(m_hierarchyMutex);
     if (m_hierarchyRequests.size() >= 8)
@@ -1364,7 +1445,7 @@ bool LibraryCoordinator::requestSeasonEpisodes(const MediaItem& series, const Me
     }
     request = task.request;
     m_hierarchyAccepted.emplace(request, task);
-    m_hierarchyMutationInFlight = true;
+    beginOperation(OperationKind::Hierarchy);
     m_hierarchyRequests.push_back(std::move(task));
     m_hierarchyWake.notify_one();
     return true;
@@ -1398,7 +1479,7 @@ bool LibraryCoordinator::takeHierarchyResultLocked(std::uint64_t request, Hierar
         m_hierarchySupersededRequests.insert(request);
         if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest &&
             m_hierarchyResults.empty()) {
-            m_hierarchyMutationInFlight = false;
+            releaseOperation(OperationKind::Hierarchy);
         }
     }
     return true;
@@ -1454,7 +1535,7 @@ void LibraryCoordinator::cancelHierarchyRequest(std::uint64_t request) noexcept
         m_hierarchySupersededRequests.insert(request);
         m_hierarchyAccepted.erase(accepted);
         if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
-            m_hierarchyMutationInFlight = false;
+            releaseOperation(OperationKind::Hierarchy);
         cancelled = true;
     }
     if (cancelled)
@@ -1503,7 +1584,7 @@ void LibraryCoordinator::cancelHierarchy() noexcept
         cancelled = cancelled || oldRequestCount != m_hierarchyRequests.size() ||
                     oldResultCount != m_hierarchyResults.size();
         if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest && m_hierarchyResults.empty())
-            m_hierarchyMutationInFlight = false;
+            releaseOperation(OperationKind::Hierarchy);
     }
     if (cancelled)
         m_hierarchyWake.notify_all();
@@ -1829,7 +1910,7 @@ void LibraryCoordinator::hierarchyWorker()
             }
             if (m_hierarchyRequests.empty() && !m_hierarchyActiveRequest &&
                 m_hierarchyResults.empty()) {
-                m_hierarchyMutationInFlight = false;
+                releaseOperation(OperationKind::Hierarchy);
             }
         }
     }
@@ -1853,6 +1934,7 @@ bool LibraryCoordinator::takeLiveChangeResult(LiveLibraryChangeResult& result)
     result = std::move(*m_liveChangeResult);
     m_liveChangeResult.reset();
     m_liveChangeActive.reset();
+    releaseOperation(OperationKind::LiveChange);
     m_liveChangeWake.notify_one();
     return true;
 }
@@ -1869,6 +1951,7 @@ void LibraryCoordinator::discardLiveChangeResults() noexcept
     std::lock_guard<std::mutex> lock(m_startupMutex);
     m_liveChangeResult.reset();
     m_liveChangeActive.reset();
+    releaseOperation(OperationKind::LiveChange);
     m_liveChangeWake.notify_one();
 }
 
@@ -1898,11 +1981,9 @@ void LibraryCoordinator::liveChangeWorker()
             }
             if (m_liveChangeStop)
                 return;
-            const bool serializedSlotOpen =
-                !m_startupInFlight && !m_startupResultReady && !m_fullSyncInFlight &&
-                m_fullPopulationUpdates.empty() && !m_safetyReconcileInFlight &&
-                !m_safetyReconcileResultReady && !m_liveChangeActive && !m_liveChangeResult &&
-                !m_hierarchyMutationInFlight;
+            AdmissionRequest admission;
+            admission.requester = OperationKind::LiveChange;
+            const bool serializedSlotOpen = serializedOperationAdmittedLocked(admission, nullptr);
             if (!serializedSlotOpen || !m_liveChangeRequests.pop(batch)) {
                 m_liveChangeWake.wait_for(lock, std::chrono::milliseconds(5));
                 continue;
@@ -1916,6 +1997,7 @@ void LibraryCoordinator::liveChangeWorker()
             identity.generation = m_catalogGeneration;
             identity.request = ++m_liveChangeRequest;
             m_liveChangeActive = identity;
+            beginOperation(OperationKind::LiveChange);
             m_liveChangeCancellation = std::make_shared<std::atomic_bool>(false);
             cancellation = m_liveChangeCancellation;
         }
@@ -1946,11 +2028,18 @@ void LibraryCoordinator::liveChangeWorker()
             std::lock_guard<std::mutex> lock(m_startupMutex);
             // Discarding a result or accepting a newer worker identity makes
             // this publication stale. It must never be consumed by the next
-            // live batch.
-            if (!m_liveChangeActive || !(*m_liveChangeActive == identity) || m_liveChangeResult)
+            // live batch.  Releasing the slot lets the worker drain the next
+            // queued batch after a consumer discarded this operation.
+            if (!m_liveChangeActive || !(*m_liveChangeActive == identity)) {
+                releaseOperation(OperationKind::LiveChange);
+                m_liveChangeWake.notify_one();
+                return;
+            }
+            if (m_liveChangeResult)
                 return;
             value.generation = std::max(value.generation, committedGeneration);
             m_liveChangeResult = std::move(value);
+            markOperationPublicationPending(OperationKind::LiveChange);
             m_liveChangeWake.notify_one();
         };
 
@@ -2220,13 +2309,19 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
         status.generation = syncStatus.generation;
     }
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    status.startupInFlight = m_startupInFlight;
-    status.startupResultReady = m_startupResultReady;
-    status.fullSyncInFlight = m_fullSyncInFlight;
+    const OperationKind operation = currentOperationKind();
+    const OperationPhase phase = currentOperationPhase();
+    status.startupInFlight =
+        operation == OperationKind::Startup && phase == OperationPhase::Executing;
+    status.startupResultReady =
+        operation == OperationKind::Startup && phase == OperationPhase::PublicationPending;
+    status.fullSyncInFlight =
+        operation == OperationKind::FullPopulation && phase == OperationPhase::Executing;
     status.fullPopulationRequest = m_fullPopulationRequest;
     status.fullPopulationGeneration = m_fullPopulationGeneration;
     status.fullPopulationQueueDepth = m_fullPopulationUpdates.size();
-    status.safetyReconcileInFlight = m_safetyReconcileInFlight;
+    status.safetyReconcileInFlight =
+        operation == OperationKind::SafetyReconcile && phase == OperationPhase::Executing;
     status.committedGeneration = m_catalogGeneration;
     status.lastSuccessfulMs = m_lastSuccessfulMs;
     status.lastReconcileMs = m_lastReconcileMs;

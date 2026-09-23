@@ -320,6 +320,8 @@ class LibraryCoordinator
     {
         bool inFlight = false;
         bool startupInFlight = false;
+        // True while a published startup result is awaiting consumption.
+        bool startupResultReady = false;
         bool fullSyncInFlight = false;
         // Diagnostic-only publication identity/depth for bounded Home
         // consumer transition logging.

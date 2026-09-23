@@ -226,12 +226,12 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     CHECK(coordinator.running());
 
     // The first caller reserves the only startup slot; a second Home startup
-    // request cannot create a competing operation.
+    // request cannot create a competing operation.  Waiting on the publication
+    // condition is deterministic and never polls with a sleep.
     CHECK(coordinator.startStartupSync(false));
     CHECK(!coordinator.startStartupSync(true));
     library::StartupSyncResult result;
-    for (int i = 0; i < 200 && !coordinator.takeStartupSyncResult(result); ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(coordinator.waitStartupSyncResult(result) == library::WaitStatus::Ready);
     CHECK(result.error == CatalogDbErrorCategory::ScopeNotReady);
 
     auto status = coordinator.status();
@@ -281,6 +281,66 @@ void testLibraryCoordinatorIsTheSingleStartupDriver()
     const auto controllerJoin = miyoofin_test::sourcePos(homeUpdate, "joinAllWorkers()");
     CHECK(stopRequest < controllerJoin);
     std::printf("[test] LibraryCoordinator single startup driver OK\n");
+}
+
+void testStartupAdmissionRejectsUnconsumedResult()
+{
+    std::printf("[test] LibraryCoordinator startup result-ready admission\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("startup-result-ready", db, scope);
+    coordinator->start();
+
+    // Hold the startup worker so the serialized slot is observably in flight.
+    db->setWorkerPausedForTest(true);
+    CHECK(coordinator->startStartupSync(false));
+    CHECK(!coordinator->startStartupSync(true));
+
+    // Release the worker and wait, without consuming, for the result to
+    // publish.  Publication is the only way m_startupResultReady becomes true.
+    db->setWorkerPausedForTest(false);
+    bool published = false;
+    for (int i = 0; i < 200000 && !published; ++i) {
+        published = coordinator->status().startupResultReady;
+        if (!published)
+            std::this_thread::yield();
+    }
+    CHECK(published);
+
+    // The worker has finished (not in flight) but the result is still
+    // unconsumed: the next startup must be rejected by the result-ready gate,
+    // not merely by the in-flight gate.
+    auto status = coordinator->status();
+    CHECK(!status.startupInFlight);
+    CHECK(status.startupResultReady);
+    CHECK(!coordinator->startStartupSync(false));
+    CHECK(coordinator->status().startupResultReady);
+
+    // A rejected admission must not overwrite or discard the unconsumed
+    // publication, so it is immediately available to the consumer.
+    library::StartupSyncResult result;
+    CHECK(coordinator->takeStartupSyncResult(result));
+    CHECK(result.success || result.cancelled ||
+          result.error == CatalogDbErrorCategory::ScopeNotReady);
+    CHECK(!coordinator->status().startupResultReady);
+
+    // Consuming the result releases the slot and admits the next startup.
+    CHECK(coordinator->startStartupSync(false));
+    library::StartupSyncResult reentry;
+    CHECK(coordinator->waitStartupSyncResult(reentry) == library::WaitStatus::Ready);
+
+    // Cancellation and stop remain correct and repeatable.
+    coordinator->cancelStartupSync();
+    coordinator->cancelStartupSync();
+    coordinator->stop();
+    coordinator->stop();
+    CHECK(coordinator->stopped() && !coordinator->running());
+    CHECK(!coordinator->takeStartupSyncResult(result));
+
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator startup result-ready admission OK\n");
 }
 
 void testCoordinatorBlockingWaits()
@@ -1558,6 +1618,7 @@ int main()
     uiDiagnostics().start(diagnosticsPath);
 
     testLibraryCoordinatorIsTheSingleStartupDriver();
+    testStartupAdmissionRejectsUnconsumedResult();
     testCoordinatorBlockingWaits();
     testCoordinatorWaitIdentityAndDomains();
     testStopRacingStartupIsSafe();

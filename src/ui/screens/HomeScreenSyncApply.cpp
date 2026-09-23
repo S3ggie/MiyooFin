@@ -330,6 +330,19 @@ void HomeScreen::finishFetch()
         (presentation.diagnosticStage.empty() ? "unspecified" : presentation.diagnosticStage) +
         " complete=" + std::to_string(presentation.complete ? 1 : 0) +
         " completed_pages=" + std::to_string(presentation.diagnosticCompletedPages));
+    applyFetchedPresentation(presentation);
+}
+
+#ifdef MIYOOFIN_TEST_BUILD
+void HomeScreen::applyFetchedPresentationForTest(
+    const HomeLibraryController::Presentation& presentation)
+{
+    applyFetchedPresentation(presentation);
+}
+#endif
+
+void HomeScreen::applyFetchedPresentation(const PendingPresentation& presentation)
+{
     if (presentation.cancelled && !m_offlineModeFetchPending) {
         m_syncSchedule.complete(SDL_GetTicks(), false);
         m_fetchPublished = true;

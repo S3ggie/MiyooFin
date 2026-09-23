@@ -31,6 +31,42 @@ intentional warning exception is `-Wno-unused-parameter` for the vendored
 `src/image/stb_image_impl.cpp` translation unit. First-party warnings should
 be fixed rather than suppressed globally.
 
+## ThreadSanitizer (host concurrency)
+
+`make test-tsan` runs the concurrency-heavy host suites under
+ThreadSanitizer:
+
+```shell
+make test-tsan
+```
+
+It builds into its own `output/tsan/` tree (separate objects and binaries) with
+`-fsanitize=thread -fno-omit-frame-pointer -O1 -g`, so it never reuses stale
+non-TSan objects from `make test` or `make test-sanitize`. Both first-party
+translation units and the vendored `vendor/sqlite/sqlite3.c` host object are
+instrumented; SDL2, libcurl, and other system libraries are external and
+uninstrumented, so a race whose both sides live entirely inside them cannot be
+reported. `SANITIZE=1` and `TSAN=1` are mutually exclusive: ASan and TSan cannot
+instrument the same binary, and the Makefile rejects the combination.
+
+The runner is serial and focused on `test_library_coordinator`,
+`test_library_hierarchy`, `test_catalog`, `test_home_library_controller`,
+`test_home_artwork_controller`, and `test_downloads`. It fails on any non-zero
+exit (TSan exits 66 on a report) and on any `ThreadSanitizer` marker in a log,
+and keeps per-binary logs under `output/tsan/test/logs/` on failure. There are
+no suppressions: a first-party race must be fixed, not silenced. An
+external-only report, if one is ever unavoidable, must be classified and
+documented narrowly rather than globally suppressed.
+
+This target is host-only and intentionally separate from `make ci-local` and
+`make ci-local-full`; it needs a TSan-capable compiler and an instrumented
+rebuild. CI runs it in a dedicated job (`.github/workflows/ci.yml`). On hosts
+where TSan reports "unexpected memory mapping", lower `vm.mmap_rnd_bits` (for
+example `sudo sysctl -w vm.mmap_rnd_bits=28`) or run under `setarch -R`.
+
+When changing thread ownership, worker lifetime, cancellation, or publication
+ordering, run `make test-tsan` in addition to `make ci-local`.
+
 ## Optional clang-tidy
 
 `make clang-tidy` is an opt-in, host-only analysis. It requires `clang-tidy`

@@ -177,6 +177,19 @@ For first-party C/C++ changes, also run `make format-check`; CI runs the
 authoritative clang-format path. The opt-in host-only `make clang-tidy` target
 requires Bear and is documented in `docs/code-quality.md`.
 
+For concurrency-sensitive changes (thread ownership, worker lifetime,
+cancellation, or publication ordering), also run the focused host
+ThreadSanitizer suites:
+
+```sh
+make test-tsan
+```
+
+This rebuilds into the isolated `output/tsan/` tree and is host-only, separate
+from `ci-local`/`ci-local-full`. It instruments first-party code and the
+vendored SQLite host object; SDL/libcurl/system libraries are external. Fix
+first-party races rather than suppressing them. See `docs/code-quality.md`.
+
 For OnionOS/runtime changes, also run:
 
 ```sh

@@ -94,9 +94,9 @@ jobs:
 
   sanitizers:
     # Runs the host test suite under AddressSanitizer + UndefinedBehaviorSanitizer
-    # to catch memory errors, UB, and leaks in first-party code. A ThreadSanitizer
-    # job is intentionally out of scope (the codebase uses SDL threads in ways
-    # TSan would flag noisily and it needs a separate instrumented build).
+    # to catch memory errors, UB, and leaks in first-party code. ThreadSanitizer
+    # is a separate, focused job below because it needs its own instrumented
+    # build tree and only the concurrency-heavy suites.
     name: Host tests under ASan+UBSan
     runs-on: ubuntu-latest
     env:
@@ -115,6 +115,46 @@ jobs:
       - name: Tests under ASan+UBSan
         # xvfb provides a display for the SDL-backed host tests on the runner.
         run: xvfb-run -a make test-sanitize -j2
+
+  tsan:
+    # Focused ThreadSanitizer job (docs/code-quality.md): rebuilds the
+    # concurrency-heavy host suites in the isolated output/tsan tree and runs
+    # them serially. First-party and vendored-SQLite objects are instrumented;
+    # SDL/libcurl/system libraries are not. No suppressions are used, so any
+    # first-party race fails the job and its logs are uploaded below.
+    name: Focused concurrency tests under ThreadSanitizer
+    runs-on: ubuntu-latest
+    env:
+      # Fail on the first report but still return TSan's non-zero status.
+      TSAN_OPTIONS: halt_on_error=1:abort_on_error=0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libsdl2-dev libsdl2-ttf-dev \
+            libcurl4-openssl-dev libjson-c-dev python3
+
+      - name: Focused concurrency suites under TSan
+        # Newer Ubuntu kernels expose ASLR entropy that TSan's fixed shadow
+        # mapping cannot accommodate. Lower it when the sysctl exists and
+        # additionally disable ASLR for the run (documented TSan workaround).
+        run: |
+          if sysctl vm.mmap_rnd_bits >/dev/null 2>&1; then
+            sudo sysctl -w vm.mmap_rnd_bits=28
+          fi
+          setarch "$(uname -m)" -R make test-tsan -j2
+
+      - name: Upload TSan logs
+        if: ${{ failure() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/tsan/**
+          if-no-files-found: warn
 
   arm-verify:
     # Real ARM cross-build verification using the prebuilt toolchain image.

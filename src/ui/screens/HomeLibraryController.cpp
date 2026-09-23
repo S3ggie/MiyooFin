@@ -8,8 +8,392 @@
 #include "../ShowsBrowser.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 
 namespace miyoofin {
+
+namespace {
+
+// Mutable per-fetch telemetry accumulation, emitted once when the fetch
+// reaches a terminal state.  `cacheSaved` mirrors the original worker-local:
+// only the online schedule path reads it and it stays false there.
+struct FetchTelemetry
+{
+    TelemetryTimer timer;
+    bool emitted = false;
+    bool cacheSaved = false;
+    std::uint32_t requestCount = 0;
+    std::uint32_t changedHierarchyCount = 0;
+    std::uint32_t mediaCount = 0;
+    std::vector<LibraryView> views;
+};
+
+// Result of the best-effort optional Home rail phase.  Rail failure is
+// isolated from the catalog: cached rail content is retained and population
+// continues regardless.
+struct HomeRailPhase
+{
+    bool optionalRailFailed = false;
+    bool cwOk = false;
+    bool raOk = false;
+    std::vector<MediaItem> cw;
+    std::vector<MediaItem> ra;
+};
+
+// Non-owning view of one fetch attempt.  Carries the per-fetch state and the
+// owner's publication callbacks so the phase helpers stay small and free of
+// long parameter lists.
+struct FetchContext
+{
+    HomeLibraryController* owner = nullptr;
+    const Session* session = nullptr;
+    std::uint64_t fetchGeneration = 0;
+    std::shared_ptr<std::atomic<bool>> cancellation;
+    HomeLibraryController::Presentation* pending = nullptr;
+
+    library::LibraryQuery* query = nullptr;
+    library::LibraryCoordinator* coordinator = nullptr;
+    DownloadManager* downloads = nullptr;
+
+    std::atomic<bool>* metadataActive = nullptr;
+    std::atomic<std::size_t>* metadataCompleted = nullptr;
+    std::atomic<std::size_t>* metadataTotal = nullptr;
+    std::atomic<bool>* artworkPlanningComplete = nullptr;
+    std::atomic<bool>* initialPopulationInProgress = nullptr;
+    std::atomic<bool>* fetchCatalogCommitted = nullptr;
+    std::atomic<bool>* fetchDone = nullptr;
+
+    FetchTelemetry* telemetry = nullptr;
+
+    std::function<void(const HomeLibraryController::Presentation&)> publish;
+    std::function<void(HomeLibraryController::Presentation&, std::vector<HomePosterJob>, bool)>
+        addArtwork;
+};
+
+void completeFetchTelemetry(FetchContext& ctx, Outcome outcome) noexcept
+{
+    FetchTelemetry& state = *ctx.telemetry;
+    if (state.emitted)
+        return;
+    state.emitted = true;
+    PerformanceTelemetry& telemetry = performanceTelemetry();
+    if (state.timer.active() && telemetry.enabledFast()) {
+        TelemetryRecord record{};
+        record.header.record_type = RecordType::LibrarySync;
+        record.payload.library_sync.duration_us = state.timer.elapsedUs();
+        record.payload.library_sync.outcome = static_cast<uint8_t>(outcome);
+        record.payload.library_sync.cache_saved = state.cacheSaved ? 1 : 0;
+        record.payload.library_sync.views_count = static_cast<uint32_t>(state.views.size());
+        record.payload.library_sync.media_count = state.mediaCount;
+        record.payload.library_sync.changed_hierarchy_count = state.changedHierarchyCount;
+        record.payload.library_sync.request_count = state.requestCount;
+        telemetry.emitRecord(record);
+    }
+    telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, false);
+    telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
+}
+
+// Manual-offline mode is terminal and self-contained: it builds the downloaded
+// presentation and returns true so the caller stops.  Cancellation at any
+// point publishes a cancelled offline terminal result and also returns true.
+bool runOfflinePhase(FetchContext& ctx)
+{
+    HomeLibraryController::Presentation& pending = *ctx.pending;
+    if (!ctx.session->manualOfflineMode)
+        return false;
+
+    auto finishCancelledOfflineFetch = [&]() {
+        pending.error = "Library refresh cancelled";
+        pending.complete = true;
+        pending.cancelled = true;
+        pending.diagnosticStage = "offline_terminal";
+        ctx.publish(pending);
+        ctx.metadataActive->store(false);
+        completeFetchTelemetry(ctx, Outcome::Cancelled);
+        ctx.fetchDone->store(true);
+    };
+    const DownloadSnapshot downloads =
+        ctx.downloads ? ctx.downloads->snapshot() : DownloadSnapshot{};
+    std::vector<MediaItem> metadataItems;
+    if (ctx.query) {
+        for (const auto& batch : OfflineLibraryQuery::metadataBatches(downloads)) {
+            if (ctx.cancellation->load()) {
+                finishCancelledOfflineFetch();
+                return true;
+            }
+            const auto metadataPage = ctx.query->itemsByIds(batch, ctx.cancellation).get();
+            if (metadataPage.cancelled || metadataPage.superseded || ctx.cancellation->load()) {
+                finishCancelledOfflineFetch();
+                return true;
+            }
+            if (metadataPage.success)
+                metadataItems.insert(metadataItems.end(), metadataPage.items.begin(),
+                                     metadataPage.items.end());
+        }
+    }
+    if (ctx.cancellation->load()) {
+        finishCancelledOfflineFetch();
+        return true;
+    }
+    pending.cachedSnapshot = OfflineLibraryQuery::build(downloads, metadataItems);
+    pending.haveCachedSnapshot = true;
+    pending.libraryOffline = true;
+    pending.offlineCacheValid = true;
+    pending.offlineSignature = HomeLibraryController::computeOfflineSignature(
+        downloads, ctx.owner->committedCatalogGeneration());
+    OfflineCatalogSnapshot catalog;
+    OfflineLibraryProjection projection(pending.cachedSnapshot, catalog, downloads);
+    pending.preparedOfflineSnapshot = pending.cachedSnapshot;
+    const std::set<std::string> movieIds = [&] {
+        std::set<std::string> ids;
+        for (const auto& item : projection.movies())
+            ids.insert(item.id);
+        return ids;
+    }();
+    for (auto& view : pending.preparedOfflineSnapshot.movies) {
+        view.items.erase(
+            std::remove_if(view.items.begin(), view.items.end(),
+                           [&](const MediaItem& item) { return !movieIds.count(item.id); }),
+            view.items.end());
+    }
+    for (auto& view : pending.preparedOfflineSnapshot.shows) {
+        view.items.erase(std::remove_if(view.items.begin(), view.items.end(),
+                                        [&](const MediaItem& item) {
+                                            return !projection.playable(item.id) &&
+                                                   projection.seasons(item.id).empty();
+                                        }),
+                         view.items.end());
+    }
+    pending.offlineTabs = offlineTabsFromSnapshot(pending.preparedOfflineSnapshot);
+    for (auto& tab : pending.offlineTabs) {
+        if (tab.name == "Movies")
+            tab.rows = {{"Movies", {}}};
+        if (tab.name == "Shows")
+            tab.rows = {{"Shows", {}}};
+    }
+    pending.offlinePrepared = true;
+    pending.offlineSnapshotCache = pending.preparedOfflineSnapshot;
+    pending.tabs = pending.offlineTabs;
+    pending.remoteSnapshot = pending.cachedSnapshot;
+    pending.cacheSaved = true;
+    pending.contentValid = true;
+    pending.continueValid = true;
+    pending.recentlyAddedValid = true;
+    pending.continueWatching = pending.cachedSnapshot.continueWatching;
+    pending.recentlyAdded = pending.cachedSnapshot.recentlyAdded;
+    pending.complete = true;
+    pending.diagnosticStage = "offline_terminal";
+    ctx.publish(pending);
+    ctx.metadataActive->store(false);
+    completeFetchTelemetry(ctx, Outcome::Success);
+    ctx.fetchDone->store(true);
+    return true;
+}
+
+// Best-effort warm publication from the persisted SQLite catalog.  Returns
+// true when a stale-but-valid page was published before the network work
+// starts.
+bool publishWarmCatalog(FetchContext& ctx)
+{
+    if (!ctx.query || ctx.owner->catalogScopeEpoch() == 0)
+        return false;
+    auto warmMovies = ctx.query->movies(-1, 24, {}, ctx.cancellation);
+    auto warmShows = ctx.query->shows(-1, 24, {}, ctx.cancellation);
+    const auto movies = warmMovies.get();
+    const auto shows = warmShows.get();
+    if (ctx.cancellation->load() || movies.cancelled || shows.cancelled || movies.superseded ||
+        shows.superseded || (movies.items.empty() && shows.items.empty()))
+        return false;
+    HomeLibraryController::Presentation& pending = *ctx.pending;
+    std::vector<TabData> warmTabs;
+    warmTabs.push_back({"Home", {{"", {}}}});
+    warmTabs.push_back({"Movies", {{"Movies", movies.items}}});
+    warmTabs.push_back({"Shows", {{"Shows", shows.items}}});
+    warmTabs.push_back({"Downloads", {{"", {}}}});
+    warmTabs.push_back({"Settings", {{"", {}}}});
+    for (const auto& item : shows.items) {
+        const auto found = shows.membershipsByItem.find(item.id);
+        if (found == shows.membershipsByItem.end())
+            continue;
+        for (const auto& membership : found->second)
+            if (isAnimeSeries(membership.viewName, item)) {
+                pending.animeItemIds.insert(item.id);
+                break;
+            }
+    }
+    pending.tabs = std::move(warmTabs);
+    pending.contentValid = true;
+    pending.stale = true;
+    ctx.publish(pending);
+    uiDiagnostics().log("[HomeScreen] startup stage=warm_sqlite_catalog_ready");
+    return true;
+}
+
+// Optional Home rail fetch.  Rail failure is isolated: cached rail content is
+// retained and the catalog population continues uninterrupted.
+void fetchHomeRails(FetchContext& ctx, HomeRailPhase& rail)
+{
+    HomeLibraryController::Presentation& pending = *ctx.pending;
+    std::vector<MediaItem> cw;
+    std::string cwErr;
+    std::vector<MediaItem> ra;
+    std::string raErr;
+    bool cwOk = pending.haveCachedSnapshot;
+    bool raOk = pending.haveCachedSnapshot;
+    if (pending.haveCachedSnapshot) {
+        cw = pending.cachedSnapshot.continueWatching;
+        ra = pending.cachedSnapshot.recentlyAdded;
+        pending.remoteSnapshot = pending.cachedSnapshot;
+    }
+    uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
+    std::uint64_t railRequest = 0;
+    const bool railStarted =
+        ctx.coordinator && ctx.coordinator->requestHomeRailRefresh(railRequest);
+    library::HomeRailResult railResult;
+    if (railStarted) {
+        ++ctx.telemetry->requestCount;
+        if (ctx.cancellation->load())
+            ctx.coordinator->cancelHomeRailRefresh();
+        const auto railWait =
+            ctx.coordinator->waitHomeRailResult(railRequest, railResult, ctx.cancellation.get());
+        if (railWait != library::WaitStatus::Ready) {
+            railResult.cancelled = railWait == library::WaitStatus::Cancelled ||
+                                   railWait == library::WaitStatus::Stopped ||
+                                   railWait == library::WaitStatus::Superseded;
+            railResult.error = railResult.cancelled ? "Home rail refresh cancelled"
+                                                    : "Home rail refresh unavailable";
+        }
+        if (railResult.continueValid) {
+            cwOk = true;
+            cw = railResult.continueWatching;
+        } else {
+            rail.optionalRailFailed = true;
+            cwErr = railResult.error;
+        }
+        if (railResult.recentlyAddedValid) {
+            raOk = true;
+            ra = railResult.recentlyAdded;
+        } else {
+            rail.optionalRailFailed = true;
+            raErr = railResult.error;
+        }
+    }
+    if (!railStarted || !cwOk) {
+        rail.optionalRailFailed = true;
+        printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
+    }
+    uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
+    uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
+    if (!railStarted || !raOk) {
+        rail.optionalRailFailed = true;
+        printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
+    }
+    uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
+    pending.railsReady = true;
+    pending.continueWatching = cw;
+    pending.recentlyAdded = ra;
+    pending.continueValid = cwOk;
+    pending.recentlyAddedValid = raOk;
+    pending.remoteSnapshot.continueWatching = cw;
+    pending.remoteSnapshot.recentlyAdded = ra;
+    ctx.addArtwork(pending, planHomeRailPosterJobs(cw, ra), true);
+    ctx.publish(pending);
+    rail.cwOk = cwOk;
+    rail.raOk = raOk;
+    rail.cw = std::move(cw);
+    rail.ra = std::move(ra);
+}
+
+// Resolve the coordinator's startup policy into a startup-sync result,
+// mapping a non-ready wait into the same cancelled/unavailable shapes the
+// coordinator would report.
+library::StartupSyncResult waitForStartupSync(FetchContext& ctx, bool coordinatorStartupStarted)
+{
+    library::StartupSyncResult startupSyncResult;
+    if (coordinatorStartupStarted) {
+        if (ctx.cancellation->load())
+            ctx.coordinator->cancelStartupSync();
+        const auto startupWait =
+            ctx.coordinator->waitStartupSyncResult(startupSyncResult, ctx.cancellation.get());
+        if (startupWait != library::WaitStatus::Ready) {
+            startupSyncResult.cancelled = startupWait == library::WaitStatus::Cancelled ||
+                                          startupWait == library::WaitStatus::Stopped ||
+                                          startupWait == library::WaitStatus::Superseded;
+            startupSyncResult.error = startupSyncResult.cancelled
+                                          ? CatalogDbErrorCategory::Superseded
+                                          : CatalogDbErrorCategory::None;
+            startupSyncResult.message =
+                startupSyncResult.cancelled ? "startup sync cancelled" : "startup sync unavailable";
+        }
+    } else {
+        startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
+    }
+    return startupSyncResult;
+}
+
+// Publish the terminal follow-ups (error default, artwork/metadata state,
+// optional hierarchy resolution and janitor) and the terminal Presentation,
+// then signal worker completion.
+void finalizeFetch(FetchContext& ctx, const HomeRailPhase& rail, bool catalogRefreshFailed,
+                   bool forceHierarchyReconcile)
+{
+    HomeLibraryController::Presentation& pending = *ctx.pending;
+    if (catalogRefreshFailed && pending.error.empty())
+        pending.error = "Library refresh failed";
+    const bool artworkPlanningComplete = !catalogRefreshFailed && !ctx.cancellation->load();
+    ctx.artworkPlanningComplete->store(artworkPlanningComplete);
+    ctx.metadataActive->store(false);
+    if (rail.cwOk)
+        pending.remoteSnapshot.continueWatching = rail.cw;
+    if (rail.raOk)
+        pending.remoteSnapshot.recentlyAdded = rail.ra;
+    if (rail.optionalRailFailed)
+        std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
+    completeFetchTelemetry(ctx, catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
+    if (!catalogRefreshFailed) {
+        try {
+            const auto seriesIds = collectBoundedSeriesIds(rail.cw, rail.ra);
+            std::vector<MediaItem> resolvedItems;
+            std::size_t resolvedCount = 0;
+            if (!seriesIds.empty() && ctx.query) {
+                auto resolved = ctx.query->itemsByIds(seriesIds, ctx.cancellation).get();
+                if (resolved.success && !resolved.cancelled && !resolved.superseded)
+                    resolvedItems = std::move(resolved.items);
+                for (const auto& item : resolvedItems)
+                    if (!item.id.empty() && item.type == "show")
+                        ++resolvedCount;
+            }
+            std::printf("[HomeScreen] season prefetch: %zu candidates, %zu resolved\n",
+                        seriesIds.size(), resolvedCount);
+            if (!ctx.cancellation->load() && !resolvedItems.empty()) {
+                pending.hierarchyReady = true;
+                pending.hierarchyShows = std::move(resolvedItems);
+                pending.hierarchyGeneration = ctx.owner->committedCatalogGeneration();
+                pending.forceHierarchyReconcile = forceHierarchyReconcile;
+            }
+        } catch (...) {
+            std::printf("[HomeScreen] season prefetch skipped: exception\n");
+        }
+    }
+    try {
+        ImageCache::runJanitor();
+    } catch (...) {
+        std::printf("[HomeScreen] janitor skipped: exception\n");
+    }
+    pending.cacheSaved = ctx.telemetry->cacheSaved;
+    pending.complete = true;
+    pending.catalogCommitted = ctx.fetchCatalogCommitted->load();
+    pending.contentValid = !catalogRefreshFailed || pending.catalogCommitted;
+    pending.libraryOffline = false;
+    if (pending.diagnosticStage.empty())
+        pending.diagnosticStage = catalogRefreshFailed ? "terminal_failure" : "terminal_success";
+    if (pending.diagnosticGeneration == 0)
+        pending.diagnosticGeneration = ctx.owner->committedCatalogGeneration();
+    ctx.publish(pending);
+    ctx.fetchDone->store(true);
+}
+
+} // namespace
 
 HomeLibraryController::HomeLibraryController(const Session& session, library::LibraryQuery* query,
                                              library::LibraryCoordinator* coordinator,
@@ -214,246 +598,54 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
     pending.previousContentValid = m_previousContentValid;
     pending.previousAnimeItemIds = m_previousAnimeItemIds;
     auto publishPending = [&]() { publish(pending); };
-    TelemetryTimer syncTimer;
-    uint32_t requestCount = 0;
-    uint32_t changedHierarchyCount = 0;
-    uint32_t mediaCount = 0;
-    bool cacheSaved = false;
-    bool completed = false;
-    std::vector<LibraryView> views;
-    auto completeTelemetry = [&](Outcome outcome) noexcept {
-        if (completed)
-            return;
-        completed = true;
-        if (syncTimer.active() && telemetry.enabledFast()) {
-            TelemetryRecord record{};
-            record.header.record_type = RecordType::LibrarySync;
-            record.payload.library_sync.duration_us = syncTimer.elapsedUs();
-            record.payload.library_sync.outcome = static_cast<uint8_t>(outcome);
-            record.payload.library_sync.cache_saved = cacheSaved ? 1 : 0;
-            record.payload.library_sync.views_count = static_cast<uint32_t>(views.size());
-            record.payload.library_sync.media_count = mediaCount;
-            record.payload.library_sync.changed_hierarchy_count = changedHierarchyCount;
-            record.payload.library_sync.request_count = requestCount;
-            telemetry.emitRecord(record);
-        }
-        telemetry.setWorkerActive(WorkerId::HomeLibraryFetch, false);
-        telemetry.setWorkerQueueDepth(WorkerId::HomeLibraryFetch, 0);
+
+    FetchTelemetry fetchTelemetry;
+    FetchContext ctx;
+    ctx.owner = this;
+    ctx.session = &session;
+    ctx.fetchGeneration = fetchGeneration;
+    ctx.cancellation = cancellation;
+    ctx.pending = &pending;
+    ctx.query = m_libraryQuery;
+    ctx.coordinator = m_libraryCoordinator;
+    ctx.downloads = m_downloads;
+    ctx.metadataActive = &m_metadataActive;
+    ctx.metadataCompleted = &m_metadataCompleted;
+    ctx.metadataTotal = &m_metadataTotal;
+    ctx.artworkPlanningComplete = &m_artworkPlanningComplete;
+    ctx.initialPopulationInProgress = &m_initialPopulationInProgress;
+    ctx.fetchCatalogCommitted = &m_fetchCatalogCommitted;
+    ctx.fetchDone = &m_fetchDone;
+    ctx.telemetry = &fetchTelemetry;
+    ctx.publish = [this](const Presentation& presentation) { publish(presentation); };
+    ctx.addArtwork = [](Presentation& target, std::vector<HomePosterJob> jobs, bool highPriority) {
+        addArtwork(target, std::move(jobs), highPriority);
     };
+    auto& views = ctx.telemetry->views;
+    auto& requestCount = ctx.telemetry->requestCount;
+    auto& mediaCount = ctx.telemetry->mediaCount;
 
-    if (session.manualOfflineMode) {
-        auto finishCancelledOfflineFetch = [&]() {
-            pending.error = "Library refresh cancelled";
-            pending.complete = true;
-            pending.cancelled = true;
-            pending.diagnosticStage = "offline_terminal";
-            publishPending();
-            m_metadataActive.store(false);
-            completeTelemetry(Outcome::Cancelled);
-            m_fetchDone.store(true);
-        };
-        const DownloadSnapshot downloads =
-            m_downloads ? m_downloads->snapshot() : DownloadSnapshot{};
-        std::vector<MediaItem> metadataItems;
-        if (m_libraryQuery) {
-            for (const auto& batch : OfflineLibraryQuery::metadataBatches(downloads)) {
-                if (cancellation->load()) {
-                    finishCancelledOfflineFetch();
-                    return;
-                }
-                const auto metadataPage = m_libraryQuery->itemsByIds(batch, cancellation).get();
-                if (metadataPage.cancelled || metadataPage.superseded || cancellation->load()) {
-                    finishCancelledOfflineFetch();
-                    return;
-                }
-                if (metadataPage.success)
-                    metadataItems.insert(metadataItems.end(), metadataPage.items.begin(),
-                                         metadataPage.items.end());
-            }
-        }
-        if (cancellation->load()) {
-            finishCancelledOfflineFetch();
-            return;
-        }
-        pending.cachedSnapshot = OfflineLibraryQuery::build(downloads, metadataItems);
-        pending.haveCachedSnapshot = true;
-        pending.libraryOffline = true;
-        pending.offlineCacheValid = true;
-        pending.offlineSignature = computeOfflineSignature(downloads, committedCatalogGeneration());
-        OfflineCatalogSnapshot catalog;
-        OfflineLibraryProjection projection(pending.cachedSnapshot, catalog, downloads);
-        pending.preparedOfflineSnapshot = pending.cachedSnapshot;
-        const std::set<std::string> movieIds = [&] {
-            std::set<std::string> ids;
-            for (const auto& item : projection.movies())
-                ids.insert(item.id);
-            return ids;
-        }();
-        for (auto& view : pending.preparedOfflineSnapshot.movies) {
-            view.items.erase(
-                std::remove_if(view.items.begin(), view.items.end(),
-                               [&](const MediaItem& item) { return !movieIds.count(item.id); }),
-                view.items.end());
-        }
-        for (auto& view : pending.preparedOfflineSnapshot.shows) {
-            view.items.erase(std::remove_if(view.items.begin(), view.items.end(),
-                                            [&](const MediaItem& item) {
-                                                return !projection.playable(item.id) &&
-                                                       projection.seasons(item.id).empty();
-                                            }),
-                             view.items.end());
-        }
-        pending.offlineTabs = offlineTabsFromSnapshot(pending.preparedOfflineSnapshot);
-        for (auto& tab : pending.offlineTabs) {
-            if (tab.name == "Movies")
-                tab.rows = {{"Movies", {}}};
-            if (tab.name == "Shows")
-                tab.rows = {{"Shows", {}}};
-        }
-        pending.offlinePrepared = true;
-        pending.offlineSnapshotCache = pending.preparedOfflineSnapshot;
-        pending.tabs = pending.offlineTabs;
-        pending.remoteSnapshot = pending.cachedSnapshot;
-        pending.cacheSaved = true;
-        pending.contentValid = true;
-        pending.continueValid = true;
-        pending.recentlyAddedValid = true;
-        pending.continueWatching = pending.cachedSnapshot.continueWatching;
-        pending.recentlyAdded = pending.cachedSnapshot.recentlyAdded;
-        pending.complete = true;
-        pending.diagnosticStage = "offline_terminal";
-        publishPending();
-        m_metadataActive.store(false);
-        completeTelemetry(Outcome::Success);
-        m_fetchDone.store(true);
+    if (runOfflinePhase(ctx))
         return;
-    }
 
-    bool optionalRailFailed = false;
+    uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
+    bool initialPagePublished = publishWarmCatalog(ctx);
     bool catalogRefreshFailed = false;
-    bool initialPagePublished = false;
     bool firstBoundedRequestLogged = false;
     bool firstPagePersistedLogged = false;
-    bool coordinatorStartupStarted = false;
-    library::StartupSyncResult startupSyncResult;
-    uiDiagnostics().log("[HomeScreen] startup stage=home_fetch_started");
-    if (m_libraryQuery && catalogScopeEpoch() != 0) {
-        auto warmMovies = m_libraryQuery->movies(-1, 24, {}, cancellation);
-        auto warmShows = m_libraryQuery->shows(-1, 24, {}, cancellation);
-        const auto movies = warmMovies.get();
-        const auto shows = warmShows.get();
-        if (!cancellation->load() && !movies.cancelled && !shows.cancelled && !movies.superseded &&
-            !shows.superseded && (!movies.items.empty() || !shows.items.empty())) {
-            std::vector<TabData> warmTabs;
-            warmTabs.push_back({"Home", {{"", {}}}});
-            warmTabs.push_back({"Movies", {{"Movies", movies.items}}});
-            warmTabs.push_back({"Shows", {{"Shows", shows.items}}});
-            warmTabs.push_back({"Downloads", {{"", {}}}});
-            warmTabs.push_back({"Settings", {{"", {}}}});
-            for (const auto& item : shows.items) {
-                const auto found = shows.membershipsByItem.find(item.id);
-                if (found == shows.membershipsByItem.end())
-                    continue;
-                for (const auto& membership : found->second)
-                    if (isAnimeSeries(membership.viewName, item)) {
-                        pending.animeItemIds.insert(item.id);
-                        break;
-                    }
-            }
-            pending.tabs = std::move(warmTabs);
-            pending.contentValid = true;
-            pending.stale = true;
-            publishPending();
-            uiDiagnostics().log("[HomeScreen] startup stage=warm_sqlite_catalog_ready");
-            initialPagePublished = true;
-        }
-    }
     m_initialPopulationInProgress.store(true);
+    bool coordinatorStartupStarted = false;
     if (m_libraryCoordinator)
         coordinatorStartupStarted = m_libraryCoordinator->startStartupSync(initialPagePublished);
 
-    std::vector<MediaItem> cw;
-    std::string cwErr;
-    std::vector<MediaItem> ra;
-    std::string raErr;
-    bool cwOk = pending.haveCachedSnapshot;
-    bool raOk = pending.haveCachedSnapshot;
-    if (pending.haveCachedSnapshot) {
-        cw = pending.cachedSnapshot.continueWatching;
-        ra = pending.cachedSnapshot.recentlyAdded;
-        pending.remoteSnapshot = pending.cachedSnapshot;
-    }
-    uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_started");
-    std::uint64_t railRequest = 0;
-    const bool railStarted =
-        m_libraryCoordinator && m_libraryCoordinator->requestHomeRailRefresh(railRequest);
-    library::HomeRailResult railResult;
-    if (railStarted) {
-        ++requestCount;
-        if (cancellation->load())
-            m_libraryCoordinator->cancelHomeRailRefresh();
-        const auto railWait =
-            m_libraryCoordinator->waitHomeRailResult(railRequest, railResult, cancellation.get());
-        if (railWait != library::WaitStatus::Ready) {
-            railResult.cancelled = railWait == library::WaitStatus::Cancelled ||
-                                   railWait == library::WaitStatus::Stopped ||
-                                   railWait == library::WaitStatus::Superseded;
-            railResult.error = railResult.cancelled ? "Home rail refresh cancelled"
-                                                    : "Home rail refresh unavailable";
-        }
-        if (railResult.continueValid) {
-            cwOk = true;
-            cw = railResult.continueWatching;
-        } else {
-            optionalRailFailed = true;
-            cwErr = railResult.error;
-        }
-        if (railResult.recentlyAddedValid) {
-            raOk = true;
-            ra = railResult.recentlyAdded;
-        } else {
-            optionalRailFailed = true;
-            raErr = railResult.error;
-        }
-    }
-    if (!railStarted || !cwOk) {
-        optionalRailFailed = true;
-        printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
-    }
-    uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
-    uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
-    if (!railStarted || !raOk) {
-        optionalRailFailed = true;
-        printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
-    }
-    uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");
-    pending.railsReady = true;
-    pending.continueWatching = cw;
-    pending.recentlyAdded = ra;
-    pending.continueValid = cwOk;
-    pending.recentlyAddedValid = raOk;
-    pending.remoteSnapshot.continueWatching = cw;
-    pending.remoteSnapshot.recentlyAdded = ra;
-    addArtwork(pending, planHomeRailPosterJobs(cw, ra), true);
-    publishPending();
-    if (coordinatorStartupStarted) {
-        if (cancellation->load())
-            m_libraryCoordinator->cancelStartupSync();
-        const auto startupWait =
-            m_libraryCoordinator->waitStartupSyncResult(startupSyncResult, cancellation.get());
-        if (startupWait != library::WaitStatus::Ready) {
-            startupSyncResult.cancelled = startupWait == library::WaitStatus::Cancelled ||
-                                          startupWait == library::WaitStatus::Stopped ||
-                                          startupWait == library::WaitStatus::Superseded;
-            startupSyncResult.error = startupSyncResult.cancelled
-                                          ? CatalogDbErrorCategory::Superseded
-                                          : CatalogDbErrorCategory::None;
-            startupSyncResult.message =
-                startupSyncResult.cancelled ? "startup sync cancelled" : "startup sync unavailable";
-        }
-    } else {
-        startupSyncResult.mode = library::StartupSyncMode::FullReconcile;
-    }
+    HomeRailPhase rail;
+    fetchHomeRails(ctx, rail);
+    const bool cwOk = rail.cwOk;
+    const bool raOk = rail.raOk;
+    const std::vector<MediaItem>& cw = rail.cw;
+    const std::vector<MediaItem>& ra = rail.ra;
+    const library::StartupSyncResult startupSyncResult =
+        waitForStartupSync(ctx, coordinatorStartupStarted);
 
     std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
     std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
@@ -665,59 +857,7 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
         throw;
     }
     m_initialPopulationInProgress.store(false);
-    if (catalogRefreshFailed && pending.error.empty())
-        pending.error = "Library refresh failed";
-    const bool artworkPlanningComplete = !catalogRefreshFailed && !cancellation->load();
-    m_artworkPlanningComplete.store(artworkPlanningComplete);
-    m_metadataActive.store(false);
-    if (cwOk)
-        pending.remoteSnapshot.continueWatching = cw;
-    if (raOk)
-        pending.remoteSnapshot.recentlyAdded = ra;
-    if (optionalRailFailed)
-        std::printf("[HomeScreen] optional_home_rail_failed catalog_population_continues\n");
-    completeTelemetry(catalogRefreshFailed ? Outcome::Failure : Outcome::Success);
-    if (!catalogRefreshFailed) {
-        try {
-            const auto seriesIds = collectBoundedSeriesIds(cw, ra);
-            std::vector<MediaItem> resolvedItems;
-            std::size_t resolvedCount = 0;
-            if (!seriesIds.empty() && m_libraryQuery) {
-                auto resolved = m_libraryQuery->itemsByIds(seriesIds, cancellation).get();
-                if (resolved.success && !resolved.cancelled && !resolved.superseded)
-                    resolvedItems = std::move(resolved.items);
-                for (const auto& item : resolvedItems)
-                    if (!item.id.empty() && item.type == "show")
-                        ++resolvedCount;
-            }
-            std::printf("[HomeScreen] season prefetch: %zu candidates, %zu resolved\n",
-                        seriesIds.size(), resolvedCount);
-            if (!cancellation->load() && !resolvedItems.empty()) {
-                pending.hierarchyReady = true;
-                pending.hierarchyShows = std::move(resolvedItems);
-                pending.hierarchyGeneration = committedCatalogGeneration();
-                pending.forceHierarchyReconcile = forceHierarchyReconcile;
-            }
-        } catch (...) {
-            std::printf("[HomeScreen] season prefetch skipped: exception\n");
-        }
-    }
-    try {
-        ImageCache::runJanitor();
-    } catch (...) {
-        std::printf("[HomeScreen] janitor skipped: exception\n");
-    }
-    pending.cacheSaved = cacheSaved;
-    pending.complete = true;
-    pending.catalogCommitted = m_fetchCatalogCommitted.load();
-    pending.contentValid = !catalogRefreshFailed || pending.catalogCommitted;
-    pending.libraryOffline = false;
-    if (pending.diagnosticStage.empty())
-        pending.diagnosticStage = catalogRefreshFailed ? "terminal_failure" : "terminal_success";
-    if (pending.diagnosticGeneration == 0)
-        pending.diagnosticGeneration = committedCatalogGeneration();
-    publishPending();
-    m_fetchDone.store(true);
+    finalizeFetch(ctx, rail, catalogRefreshFailed, forceHierarchyReconcile);
 }
 
 } // namespace miyoofin

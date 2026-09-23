@@ -161,7 +161,7 @@ LIBRARY_SYNC_GUARD_TEST := tests/test_library_sync_guard.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy home_library_controller
+               imagecache update library_coordinator library_hierarchy library_query home_library_controller
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -194,7 +194,7 @@ test-sanitize:
 # serial and keeps per-binary logs under output/tsan/test/logs so a report
 # survives for triage.  It is intentionally separate from ci-local/ci-local-full
 # because it needs an instrumented rebuild and a TSan-capable host toolchain.
-TSAN_GROUPS := library_coordinator library_hierarchy catalog \
+TSAN_GROUPS := library_coordinator library_hierarchy library_query catalog \
                home_library_controller home_artwork_controller downloads
 TSAN_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TSAN_GROUPS))
 TSAN_RUNNER := tests/test_tsan_runner.sh
@@ -263,6 +263,7 @@ $(TEST_DIR)/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_su
 $(TEST_DIR)/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
 $(TEST_DIR)/test_library_coordinator: src/library/LibraryCoordinator.hpp
 $(TEST_DIR)/test_library_hierarchy: src/library/LibraryCoordinator.hpp
+$(TEST_DIR)/test_library_query: src/library/LibraryQuery.hpp src/library/LibraryCoordinator.hpp
 $(TEST_DIR)/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
 
 $(TEST_DIR)/objects/%.o: src/%.cpp | $(TEST_DIR)

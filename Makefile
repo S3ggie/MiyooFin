@@ -18,12 +18,28 @@ RELEASE     ?= 0
 #   SANITIZE=1 make test   — or the `test-sanitize` convenience target below.
 # Default (SANITIZE=0) leaves CXXFLAGS/LDFLAGS exactly as before.
 SANITIZE    ?= 0
+# Opt-in ThreadSanitizer switch for host builds only (never forwarded to
+# Makefile.cross, so the ARM build is unaffected).
+#   make test-tsan   — focused host concurrency suites under TSan.
+# TSan builds use their own output tree (output/tsan/...) so switching TSAN
+# always forces a full rebuild and can never reuse stale non-TSan objects or
+# binaries.  SANITIZE and TSAN are mutually exclusive: ASan and TSan cannot
+# instrument the same binary.
+TSAN        ?= 0
+ifeq ($(SANITIZE),1)
+ifeq ($(TSAN),1)
+$(error SANITIZE=1 and TSAN=1 are mutually exclusive; run them separately)
+endif
+endif
 # Sanitizer builds use their own output tree (output/sanitize/...) so that
 # switching SANITIZE always forces a full rebuild: sharing output/build and
 # output/test let `make test-sanitize` silently re-run stale non-sanitized
 # binaries left over from a plain `make test`.  SANITIZE=0 paths expand to
 # exactly the historical locations, so default behaviour is byte-identical.
-ifeq ($(SANITIZE),1)
+ifeq ($(TSAN),1)
+BUILD_DIR   := output/tsan/build
+TEST_DIR    := output/tsan/test
+else ifeq ($(SANITIZE),1)
 BUILD_DIR   := output/sanitize/build
 TEST_DIR    := output/sanitize/test
 else
@@ -41,13 +57,22 @@ LDFLAGS     += -fsanitize=address,undefined
 # appending here would be silently overwritten.
 SQLITE_SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
 endif
+ifeq ($(TSAN),1)
+# ThreadSanitizer is most accurate at -O1; the appended -O1 deliberately
+# overrides the default -O0.  The vendored SQLite host object must also be
+# instrumented so its internal synchronization is visible to TSan.
+TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 -g
+CXXFLAGS    += $(TSAN_FLAGS)
+LDFLAGS     += -fsanitize=thread
+SQLITE_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 -g
+endif
 INCLUDES    := -I. -Iinclude
 SQLITE_DIR  := vendor/sqlite
 SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
 SQLITE_DEFINES := -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 \
                  -DSQLITE_DQS=0 -DSQLITE_TRUSTED_SCHEMA=0 \
                  -DSQLITE_OMIT_LOAD_EXTENSION
-SQLITE_CFLAGS := -Os $(SQLITE_DEFINES) $(SQLITE_SANITIZE_FLAGS)
+SQLITE_CFLAGS := -Os $(SQLITE_DEFINES) $(SQLITE_SANITIZE_FLAGS) $(SQLITE_TSAN_FLAGS)
 SQLITE_HOST_OBJ := $(BUILD_DIR)/sqlite/sqlite3.o
 
 # SDL2 flags from pkg-config
@@ -162,6 +187,30 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 # objects or binaries from a plain `make test`.
 test-sanitize:
 	@$(MAKE) SANITIZE=1 test
+
+# Focused ThreadSanitizer run.  Only the concurrency-heavy host suites are
+# built and run: the full suite links SDL/curl and exercises timing-sensitive
+# fixtures that add noise without covering new synchronization.  The runner is
+# serial and keeps per-binary logs under output/tsan/test/logs so a report
+# survives for triage.  It is intentionally separate from ci-local/ci-local-full
+# because it needs an instrumented rebuild and a TSan-capable host toolchain.
+TSAN_GROUPS := library_coordinator library_hierarchy catalog \
+               home_library_controller home_artwork_controller downloads
+TSAN_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TSAN_GROUPS))
+TSAN_RUNNER := tests/test_tsan_runner.sh
+TSAN_RUNNER_TARGET := $(TEST_DIR)/test_tsan_runner
+
+.PHONY: test-tsan test-tsan-run
+test-tsan:
+	@$(MAKE) TSAN=1 test-tsan-run
+
+test-tsan-run: $(TSAN_RUNNER_TARGET)
+	@MIYOOFIN_TSAN_GROUPS="$(TSAN_GROUPS)" $(TSAN_RUNNER_TARGET)
+
+$(TSAN_RUNNER_TARGET): $(TSAN_RUNNER) $(TSAN_GROUP_TARGETS) | $(TEST_DIR)
+	cp $(TSAN_RUNNER) $@
+	chmod +x $@
+	@echo "  [TSAN] $@"
 
 .PHONY: refactor-check format-check clang-tidy ci-local ci-local-full
 refactor-check:
@@ -460,6 +509,7 @@ help:
 	@echo "  make         — Host build"
 	@echo "  make test    — Run unit tests"
 	@echo "  make test-sanitize — Run unit tests under ASan+UBSan (SANITIZE=1, separate output/sanitize tree)"
+	@echo "  make test-tsan — Run focused concurrency suites under ThreadSanitizer (separate output/tsan tree)"
 	@echo "  make format-check — Check first-party C/C++ formatting"
 	@echo "  make ci-local — Run required local CI checks"
 	@echo "  make ci-local-full — Run local CI checks plus ARM verification"

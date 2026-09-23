@@ -693,23 +693,7 @@ static void testNoDetachedProductionThreads()
     std::printf("[test] no detached production threads OK\n");
 }
 
-static void testHomeRailTelemetryCountsOneOperation()
-{
-    std::printf("[test] Home rail telemetry counts one coordinator operation\n");
-    const std::string source =
-        readTestBytes("src/ui/screens/HomeLibraryController.cpp");
-    const std::string startup =
-        sourceFunction(source, "void HomeLibraryController::fetchWorker(");
-    CHECK(!startup.empty());
-    const std::string rail = sourceBetween(startup, "if (railStarted) {", "publishPending();");
-    CHECK(!rail.empty());
-    CHECK(threadTokenCount(sourceTokenString(rail), "++requestCount") == 1u);
-    CHECK(threadTokenCount(
-              sourceTokenString(rail),
-              sourceTokenString("waitHomeRailResult(railRequest, railResult, cancellation.get())")) ==
-          1u);
-    CHECK(threadTokenCount(sourceTokenString(rail), "sleep_for") == 0u);
-    CHECK(threadTokenCount(sourceTokenString(startup),
-                          "requestHomeRailRefresh(railRequest)") == 1u);
-    std::printf("[test] Home rail telemetry counts one coordinator operation OK\n");
-}
+// The "one Home rail refresh == one coordinator operation" accounting is a
+// telemetry property of a live fetch; the coordinator rail tests exercise the
+// single in-flight slot and coalescing, and test_home_library_controller
+// exercises the Home fetch.  The former source-shape pin is removed.

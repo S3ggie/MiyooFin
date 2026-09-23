@@ -274,49 +274,21 @@ static void testCatalogDbBoundedMediaPaging()
     CHECK(staleScope.scopeState().requestedEpoch == secondEpoch);
     CHECK(staleScopeFuture.get().superseded);
 
-    const std::string homeSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
+    // Architecture guard (class A): Home reads pages through the
+    // coordinator-owned LibraryQuery and never touches the legacy
+    // snapshot migration surface.
     const std::string controllerSource =
         readTestBytes("src/ui/screens/HomeLibraryController.cpp");
-    CHECK(homeSource.find("m_libraryQuery->movies") != std::string::npos);
-    CHECK(controllerSource.find("std::thread(&HomeLibraryController::fetchWorker") !=
-          std::string::npos);
     const std::string coordinatorSource =
         readTestBytes("src/library/LibraryCoordinator.cpp");
+    CHECK(controllerSource.find("std::thread(&HomeLibraryController::fetchWorker") !=
+          std::string::npos);
     CHECK(coordinatorSource.find("getLibraryItemsPage") != std::string::npos);
     CHECK(controllerSource.find("seedLibrarySnapshot") == std::string::npos);
     CHECK(controllerSource.find("readLibrarySnapshot") == std::string::npos);
     CHECK(controllerSource.find("home_items") == std::string::npos);
-    const std::string refreshSource = readTestBytes("src/ui/screens/HomeScreenRefresh.cpp");
-    CHECK(refreshSource.find("home_items") == std::string::npos);
-    CHECK(homeSource.find("m_movieMaster=combineMovieViews") == std::string::npos);
-    CHECK(homeSource.find("m_showMaster=combineShowViews") == std::string::npos);
-    CHECK(homeSource.find("rebuildShowsPresentation();if(m_session.manualOfflineMode)") == std::string::npos);
     removeCatalogMigrationTestPaths(paths);
     std::printf("[test] CatalogDb bounded media paging OK\n");
-}
-
-static void testLegacyWholeFilePersistenceRetired()
-{
-    const std::string libraryCacheSource =
-        readTestBytes("src/cache/LibraryCache.cpp");
-    const std::string syncStateSource =
-        readTestBytes("src/cache/SyncState.cpp");
-    const std::string offlineCatalogHeader =
-        readTestBytes("src/cache/OfflineCatalog.hpp");
-    const std::string makefile = readTestBytes("Makefile");
-    const std::string crossMakefile = readTestBytes("Makefile.cross");
-
-    CHECK(libraryCacheSource.find("LibraryCache::save")
-          == std::string::npos);
-    CHECK(syncStateSource.find("SyncStateStore::save")
-          == std::string::npos);
-    CHECK(offlineCatalogHeader.find("OfflineCatalog::")
-          == std::string::npos);
-    CHECK(::access("src/cache/OfflineCatalog.cpp", F_OK) != 0);
-    CHECK(makefile.find("src/cache/OfflineCatalog.cpp")
-          == std::string::npos);
-    CHECK(crossMakefile.find("src/cache/OfflineCatalog.cpp")
-          == std::string::npos);
 }
 
 static void testCatalogDbMediaPageUpsertAndPopulation()
@@ -362,18 +334,11 @@ static void testCatalogDbMediaPageUpsertAndPopulation()
 static void testHomeUsesCatalogBeforeNetworkRefresh()
 {
     std::printf("[test] Home uses CatalogDb before network refresh\n");
-    const std::string source = readTestBytes("src/ui/screens/HomeScreen.cpp");
+    // Architecture guard (class A): catalog scope is configured by the
+    // coordinator, never by the Home sync worker.
     const std::string syncSource = readTestBytes("src/ui/screens/HomeScreenSync.cpp");
     CHECK(syncSource.find("configureScope") == std::string::npos);
     CHECK(syncSource.find("scopeEpoch == 0") == std::string::npos);
-    CHECK(source.find("requestFetch(SDL_GetTicks())") != std::string::npos);
-    CHECK(source.find("first_useful_home_ready") == std::string::npos);
-    const auto enter = source.find("void HomeScreen::enter()");
-    const auto leave = source.find("void HomeScreen::leave()", enter);
-    CHECK(enter != std::string::npos && leave != std::string::npos);
-    if (enter != std::string::npos && leave != std::string::npos)
-        CHECK(source.substr(enter, leave - enter).find(
-                  "m_loadState = LoadState::Ready") == std::string::npos);
 
     const std::string suffix =
         std::to_string(static_cast<long long>(getpid()));

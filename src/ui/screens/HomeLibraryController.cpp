@@ -342,12 +342,8 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
         auto warmShows = m_libraryQuery->shows(-1, 24, {}, cancellation);
         const auto movies = warmMovies.get();
         const auto shows = warmShows.get();
-        // Keep this source-level predicate contiguous for the parity guard.
-        // clang-format off
-        if (!cancellation->load() && !movies.cancelled && !shows.cancelled
-            && !movies.superseded && !shows.superseded
-            && (!movies.items.empty() || !shows.items.empty())) {
-            // clang-format on
+        if (!cancellation->load() && !movies.cancelled && !shows.cancelled && !movies.superseded &&
+            !shows.superseded && (!movies.items.empty() || !shows.items.empty())) {
             std::vector<TabData> warmTabs;
             warmTabs.push_back({"Home", {{"", {}}}});
             warmTabs.push_back({"Movies", {{"Movies", movies.items}}});
@@ -421,19 +417,13 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
         }
     }
     if (!railStarted || !cwOk) {
-        // Keep the assignment marker contiguous for the parity guard.
-        // clang-format off
-        optionalRailFailed=true;
-        // clang-format on
+        optionalRailFailed = true;
         printf("[HomeScreen] Continue watching: %s\n", cwErr.c_str());
     }
     uiDiagnostics().log("[HomeScreen] startup stage=continue_watching_finished");
     uiDiagnostics().log("[HomeScreen] startup stage=recently_added_started");
     if (!railStarted || !raOk) {
-        // Keep the assignment marker contiguous for the parity guard.
-        // clang-format off
-        optionalRailFailed=true;
-        // clang-format on
+        optionalRailFailed = true;
         printf("[HomeScreen] Recently added: %s\n", raErr.c_str());
     }
     uiDiagnostics().log("[HomeScreen] startup stage=recently_added_finished");

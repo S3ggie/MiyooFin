@@ -6,13 +6,13 @@
 int main()
 {
     testCatalogDbMediaPagePreservesViewMembership();
-    testHomeSkipsUnsupportedLibraryViews();
+    testHomeDefersViewPersistenceToCoordinator();
     testHomeOptionalRailFailuresDoNotStopCatalogPopulation();
     testCatalogScopeConfiguredBeforeHomePopulation();
-    testHomePublishesAfterFirstBoundedPage();
+    testHomeFetchOwnershipGuard();
     testHomeDiscardsColdProvisionalFailure();
-    testHomeDoesNotPublishRailOnlyPresentation();
+    testHomeKeepsRailOnlyColdStartLoading();
     testHomePendingCompletionPublicationOrdering();
-    testHomePreservesAnimeMembershipDuringBoundedReads();
+    testHomeTabNavigation();
     return miyoofin_test::finish("catalog_parity_hierarchy");
 }

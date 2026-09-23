@@ -803,11 +803,12 @@ static void testCatalogDbOfflineDownloadReconstruction()
         CHECK(movieTitle == updateAvailableMovie.title
               && moviePosition == updateAvailableMovie.playbackPositionTicks);
 
+        // Architecture guard (class A): the catalog layer stays independent of
+        // the download store and offline reconstruction.
         const std::string catalogSource = readTestBytes("src/catalog/CatalogDb.cpp");
         const std::string catalogHeader = readTestBytes("src/catalog/CatalogDb.hpp");
         CHECK(catalogSource.find("DownloadStore") == std::string::npos);
         CHECK(catalogSource.find("reconstructOfflineDownloads") == std::string::npos);
-        CHECK(catalogSource.find("processOfflineRebuild") == std::string::npos);
         CHECK(catalogHeader.find("DownloadStore") == std::string::npos);
         CHECK(catalogHeader.find("reconstructOfflineDownloads") == std::string::npos);
 

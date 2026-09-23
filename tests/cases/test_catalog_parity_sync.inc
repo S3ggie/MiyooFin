@@ -305,6 +305,10 @@ void testCatalogDbLibrarySnapshotSeed()
     CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
     const auto connection = db.connectionStateForTest();
     CHECK(connection.open && connection.workerOwned);
+    // Architecture guard (class A): CatalogDb stays domain-neutral (no
+    // snapshot seed/read surface); CatalogCompatibility is the adapter layer
+    // that owns the snapshot API, and runtime code seeds/reads only through
+    // the coordinator.  (AGENTS.md ownership boundaries.)
     const std::string catalogHeader = readTestBytes("src/catalog/CatalogDb.hpp");
     const std::string catalogSource = readTestBytes("src/catalog/CatalogDb.cpp");
     const std::string compatibilityHeader =

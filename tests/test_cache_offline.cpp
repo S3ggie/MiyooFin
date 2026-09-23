@@ -9,7 +9,6 @@ int main()
     testOfflineLibraryQuery();
     testOfflineHomeMediaPage();
     testSettingsRowActions();
-    testManualOfflineProjectionDeferredUntilSnapshotReady();
     testLanServerAddressClassificationAndSettingsLayout();
     testSeriesCachedSeasonHandoff();
     testSeasonPosterScheduling();

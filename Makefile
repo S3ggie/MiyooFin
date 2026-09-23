@@ -136,7 +136,7 @@ LIBRARY_SYNC_GUARD_TEST := tests/test_library_sync_guard.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy
+               imagecache update library_coordinator library_hierarchy home_library_controller
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -198,6 +198,7 @@ $(TEST_DIR)/test_session: tests/cases/test_session.inc
 $(TEST_DIR)/test_ui_foundation: tests/cases/test_ui_foundation.inc
 $(TEST_DIR)/test_ui_models: tests/cases/test_ui_models.inc
 $(TEST_DIR)/test_home_artwork_controller: tests/test_home_artwork_controller.cpp
+$(TEST_DIR)/test_home_library_controller: tests/cases/test_catalog_migration_support.hpp
 $(TEST_DIR)/test_cache_offline: tests/cases/test_cache_offline.inc
 $(TEST_DIR)/test_artwork_episode: tests/cases/test_artwork_episode.inc
 $(TEST_DIR)/test_downloads: tests/cases/test_downloads.inc

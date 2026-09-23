@@ -247,12 +247,45 @@
 static void testLibraryStartupTimelineMarkers()
 {
     std::printf("[test] library startup timeline markers\n");
-    std::ifstream source("src/catalog/CatalogDb.cpp");
-    CHECK(source.good());
-    const std::string contents((std::istreambuf_iterator<char>(source)),
-                               std::istreambuf_iterator<char>());
-    CHECK(contents.find("read_media_page_dequeued") != std::string::npos);
-    CHECK(contents.find("read_media_page_ready") != std::string::npos);
+    const std::string suffix = std::to_string(static_cast<long long>(getpid()));
+    const std::string url = "https://sqlite-telemetry-markers-" + suffix + ".example";
+    const std::string user = "telemetry-markers-user";
+    const std::string directory = "cache/library/" + miyoofin::catalog::scopeKey(url, user);
+    const std::string catalogFile = directory + "/catalog.sqlite3";
+    const std::string logPath = "/tmp/miyoofin-catalog-markers-" + suffix + ".log";
+
+    std::remove(logPath.c_str());
+    std::remove((catalogFile + "-journal").c_str());
+    std::remove((catalogFile + "-wal").c_str());
+    std::remove((catalogFile + "-shm").c_str());
+    std::remove(catalogFile.c_str());
+    ::rmdir(directory.c_str());
+
+    // Behavioural seam: drive a real worker-owned media-page read and observe
+    // the diagnostics it persists.  The raw source scan this replaces could
+    // pass on a comment alone; a successful empty read proves the dequeued and
+    // ready markers are emitted by the actual control flow.
+    UiDiagnostics& diagnostics = uiDiagnostics();
+    diagnostics.start(logPath);
+    {
+        CatalogDb db;
+        const auto epoch = db.configureScope(url, user);
+        CHECK(db.waitForIdleForTest(std::chrono::seconds(2)));
+        const auto page = db.readMediaPage("movie", -1, 1, {}, {0, epoch, {}}).get();
+        CHECK(page.success && page.items.empty());
+    }
+    diagnostics.stop();
+
+    const std::string persisted = readTestBytes(logPath);
+    CHECK(persisted.find("[CatalogDb] read_media_page_dequeued") != std::string::npos);
+    CHECK(persisted.find("[CatalogDb] read_media_page_ready") != std::string::npos);
+
+    std::remove(logPath.c_str());
+    std::remove((catalogFile + "-journal").c_str());
+    std::remove((catalogFile + "-wal").c_str());
+    std::remove((catalogFile + "-shm").c_str());
+    std::remove(catalogFile.c_str());
+    ::rmdir(directory.c_str());
     std::printf("[test] library startup timeline markers OK\n");
 }
 

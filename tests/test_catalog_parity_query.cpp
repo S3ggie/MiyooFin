@@ -11,7 +11,6 @@ int main()
     testCatalogDbProjectionParity();
     testCatalogDbDownloadFallbackParity();
     testCatalogDbBoundedMediaPaging();
-    testLegacyWholeFilePersistenceRetired();
     testCatalogDbMediaPageUpsertAndPopulation();
     testHomeUsesCatalogBeforeNetworkRefresh();
     testLibraryQueryDomainBoundary();

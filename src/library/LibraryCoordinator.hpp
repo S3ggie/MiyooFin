@@ -310,6 +310,25 @@ class LibraryCoordinator
     {
         return m_sync;
     }
+
+    // Deterministic admission-snapshot race seam.  When armed, an admission
+    // blocked by an occupied slot pauses after taking its operation snapshot;
+    // a test can then release the slot in that window and prove the diagnostic
+    // reason still comes from the snapshot.
+    void setAdmissionSnapshotPauseForTest(bool pause) noexcept
+    {
+        m_admissionSnapshotPauseForTest.store(pause, std::memory_order_release);
+    }
+    bool admissionSnapshotPausedForTest() const noexcept
+    {
+        return m_admissionSnapshotPausedForTest.load(std::memory_order_acquire);
+    }
+    // Release whatever operation currently owns the serialized slot, without
+    // going through a kind-specific public path.
+    void releaseCurrentOperationForTest() noexcept
+    {
+        releaseOperation(currentOperationKind());
+    }
 #endif
 
     std::shared_ptr<LibraryQuery> query() const
@@ -342,6 +361,66 @@ class LibraryCoordinator
     Status status() const;
 
   private:
+    // One serialized top-level operation owns the coordinator at a time.  Its
+    // kind names the current holder; its phase distinguishes a worker still
+    // executing from a terminal publication that retains the slot until Home
+    // consumes it.  The encoded value is the single authority for the
+    // admission gate, so every admission site asks the same helpers instead of
+    // re-deriving a predicate from per-operation flags.
+    enum class OperationKind : std::uint8_t
+    {
+        None = 0,
+        Startup,
+        FullPopulation,
+        SafetyReconcile,
+        LiveChange,
+        Hierarchy
+    };
+
+    enum class OperationPhase : std::uint8_t
+    {
+        Idle = 0,
+        Executing,
+        PublicationPending
+    };
+
+    struct AdmissionRequest
+    {
+        OperationKind requester = OperationKind::None;
+        bool requireDb = false;
+        bool requireScope = false;
+        bool requireQuery = false;
+        bool requireOnline = false;
+    };
+
+    static constexpr std::uint32_t encodeOperation(OperationKind kind,
+                                                   OperationPhase phase) noexcept
+    {
+        return (static_cast<std::uint32_t>(kind) << 8) | static_cast<std::uint32_t>(phase);
+    }
+
+    static OperationKind operationKindOf(std::uint32_t state) noexcept
+    {
+        return static_cast<OperationKind>(state >> 8);
+    }
+
+    static OperationPhase operationPhaseOf(std::uint32_t state) noexcept
+    {
+        return static_cast<OperationPhase>(state & 0xFFu);
+    }
+
+    OperationKind currentOperationKind() const noexcept;
+    OperationPhase currentOperationPhase() const noexcept;
+    void beginOperation(OperationKind kind) noexcept;
+    void markOperationPublicationPending(OperationKind kind) noexcept;
+    void releaseOperation(OperationKind kind) noexcept;
+    const char* operationBlockReasonLocked(OperationKind kind, OperationPhase phase) const noexcept;
+    // Single admission/accounting gate: lifecycle prerequisites, per-request
+    // extras, and serialized-slot occupancy.  `reasons` receives the legacy
+    // comma-separated diagnostic when it is non-null.
+    bool serializedOperationAdmittedLocked(const AdmissionRequest& request,
+                                           std::string* reasons) const noexcept;
+
     bool takeStartupSyncResultLocked(StartupSyncResult& result);
     bool takeFullPopulationUpdateLocked(std::uint64_t request, FullPopulationUpdate& update);
     bool takeHomeRailResultLocked(std::uint64_t request, HomeRailResult& result);
@@ -360,12 +439,20 @@ class LibraryCoordinator
 
     mutable std::mutex m_startupMutex;
     std::condition_variable m_startupWake;
+    // Serialized top-level slot authority.  Written under m_startupMutex for
+    // Startup/FullPopulation/SafetyReconcile/LiveChange and under
+    // m_hierarchyMutex for Hierarchy, so the encoded atomic keeps the
+    // documented startup->hierarchy lock order.
+    std::atomic<std::uint32_t> m_operationState{
+        encodeOperation(OperationKind::None, OperationPhase::Idle)};
+#ifdef MIYOOFIN_TEST_BUILD
+    // Test-only admission-snapshot race seam state.
+    std::atomic_bool m_admissionSnapshotPauseForTest{false};
+    mutable std::atomic_bool m_admissionSnapshotPausedForTest{false};
+#endif
     std::thread m_startupThread;
     std::shared_ptr<std::atomic_bool> m_startupCancellation;
     StartupSyncResult m_startupResult;
-    bool m_startupResultReady = false;
-    bool m_startupInFlight = false;
-    bool m_fullSyncInFlight = false;
     std::thread m_fullPopulationThread;
     std::shared_ptr<std::atomic_bool> m_fullPopulationCancellation;
     std::deque<FullPopulationUpdate> m_fullPopulationUpdates;
@@ -374,8 +461,6 @@ class LibraryCoordinator
     std::thread m_safetyReconcileThread;
     std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     SafetyReconcileResult m_safetyReconcileResult;
-    bool m_safetyReconcileResultReady = false;
-    bool m_safetyReconcileInFlight = false;
     std::uint64_t m_catalogGeneration = 0;
     std::int64_t m_lastSuccessfulMs = 0;
     std::int64_t m_lastReconcileMs = 0;
@@ -412,7 +497,6 @@ class LibraryCoordinator
     std::uint64_t m_hierarchyGeneration = 0;
     std::size_t m_hierarchyCompleted = 0;
     std::size_t m_hierarchyTotal = 0;
-    std::atomic_bool m_hierarchyMutationInFlight{false};
     bool m_hierarchyStop = false;
     bool m_hierarchyOffline = false;
     bool m_hierarchyForceReconcile = false;

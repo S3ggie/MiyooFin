@@ -563,6 +563,40 @@ void testHierarchyStopPublishesQueuedCancellation()
     std::printf("[test] hierarchy stop publishes queued cancellation OK\n");
 }
 
+void testHierarchyAdmissionGatedBySerializedSlot()
+{
+    std::printf("[test] hierarchy admission gated by serialized slot\n");
+    const auto scope = hierarchyScope("admission-gate");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    session.userId = scope.user;
+    auto coordinator = std::make_unique<library::LibraryCoordinator>(session, db, epoch);
+    coordinator->start();
+
+    // A different serialized operation owns the slot: every hierarchy
+    // admission path is rejected while it is held.
+    CHECK(coordinator->beginFullSync());
+    std::uint64_t request = 0;
+    CHECK(!coordinator->requestSeriesSeasons(hierarchySeries("gated-series"), request));
+    CHECK(!coordinator->requestHierarchy({hierarchySeries("gated-home")}, epoch, false, request));
+
+    // Releasing the slot admits hierarchy work again.
+    coordinator->finishFullSync();
+    CHECK(coordinator->requestSeriesSeasons(hierarchySeries("admitted-series"), request));
+    coordinator->cancelHierarchyRequest(request);
+
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeHierarchyScope(scope);
+    std::printf("[test] hierarchy admission gated by serialized slot OK\n");
+}
+
 // The Home hierarchy late-request race (teardown closing the submission gate
 // while the fetch worker is mid-request) needs a live SDL HomeScreen and a
 // real coordinator interleaving, so it has no deterministic host seam.  The
@@ -580,5 +614,6 @@ int main()
     testHierarchyCancellationAllowsHomeReentry();
     testHierarchyMutationSerializesLiveChanges();
     testHierarchyStopPublishesQueuedCancellation();
+    testHierarchyAdmissionGatedBySerializedSlot();
     return miyoofin_test::finish("library_hierarchy");
 }

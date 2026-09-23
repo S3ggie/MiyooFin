@@ -107,20 +107,22 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
         const bool notRunning = !m_running;
         const bool missingSync = !m_sync;
         const bool startupInFlight = m_startupInFlight;
+        const bool startupResultReady = m_startupResultReady;
         const bool fullSyncInFlight = m_fullSyncInFlight;
         const bool pendingPopulationUpdates = !m_fullPopulationUpdates.empty();
         const bool safetyReconcileInFlight = m_safetyReconcileInFlight;
         const bool safetyReconcileResultReady = m_safetyReconcileResultReady;
         const bool liveChangeActive = m_liveChangeActive.has_value();
         const bool hierarchyMutationInFlight = m_hierarchyMutationInFlight;
-        if (stopped || notRunning || missingSync || startupInFlight || fullSyncInFlight ||
-            pendingPopulationUpdates || safetyReconcileInFlight || safetyReconcileResultReady ||
-            liveChangeActive || hierarchyMutationInFlight) {
+        if (stopped || notRunning || missingSync || startupInFlight || startupResultReady ||
+            fullSyncInFlight || pendingPopulationUpdates || safetyReconcileInFlight ||
+            safetyReconcileResultReady || liveChangeActive || hierarchyMutationInFlight) {
             std::string reasons;
             appendCoordinatorGateReason(reasons, "stopped", stopped);
             appendCoordinatorGateReason(reasons, "not_running", notRunning);
             appendCoordinatorGateReason(reasons, "missing_sync", missingSync);
             appendCoordinatorGateReason(reasons, "startup_in_flight", startupInFlight);
+            appendCoordinatorGateReason(reasons, "startup_result_ready", startupResultReady);
             appendCoordinatorGateReason(reasons, "full_sync_in_flight", fullSyncInFlight);
             appendCoordinatorGateReason(reasons, "pending_population_updates",
                                         pendingPopulationUpdates);
@@ -2219,6 +2221,7 @@ LibraryCoordinator::Status LibraryCoordinator::status() const
     }
     std::lock_guard<std::mutex> lock(m_startupMutex);
     status.startupInFlight = m_startupInFlight;
+    status.startupResultReady = m_startupResultReady;
     status.fullSyncInFlight = m_fullSyncInFlight;
     status.fullPopulationRequest = m_fullPopulationRequest;
     status.fullPopulationGeneration = m_fullPopulationGeneration;

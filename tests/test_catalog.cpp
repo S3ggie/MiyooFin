@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 #include "../src/library/LibrarySync.hpp"
+#include "../src/catalog/CatalogCompatibility.hpp"
 #include <filesystem>
 #include "cases/test_catalog_core.inc"
 #include "cases/test_catalog_migration.inc"
@@ -17,6 +18,7 @@ int main()
     testCatalogDbPriorityOrdering();
     testCatalogDbCancellationAndGeneration();
     testCatalogDbShutdownWithFullQueue();
+    testCatalogDbShutdownDrainsPendingPromises();
     testCatalogDbScopeLifecycle();
     testCatalogDbInvalidScope();
     testCatalogDbSqliteOwnership();

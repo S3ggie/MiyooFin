@@ -137,6 +137,113 @@ static void testCatalogDbShutdownWithFullQueue()
     }
 }
 
+namespace {
+template <typename Result>
+bool stoppedResultIsStructured(std::future<Result> &future)
+{
+    if (!future.valid()) {
+        return false;
+    }
+    if (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+        // Do not call get(): a command drained without fulfillment would hang.
+        return false;
+    }
+    try {
+        const Result result = future.get();
+        return !result.success && result.error == CatalogDbErrorCategory::ScopeNotReady &&
+               !result.message.empty() && !result.workerOwned;
+    } catch (const std::future_error &) {
+        // broken_promise or another future contract violation.
+        return false;
+    }
+}
+
+template <typename Result>
+void checkStoppedResult(const char *label, std::future<Result> &future)
+{
+    if (!stoppedResultIsStructured(future)) {
+        std::printf("  FAIL CatalogDb shutdown did not drain %s with a stopped result\n", label);
+        ++miyoofin_test::failures;
+    }
+}
+} // namespace
+
+static void testCatalogDbShutdownDrainsPendingPromises()
+{
+    std::printf("[test] CatalogDb shutdown drains queued promises\n");
+
+    MediaItem series;
+    series.id = "__shutdown_series__";
+    series.type = "movie";
+    MediaItem season;
+    season.id = "__shutdown_season__";
+    season.type = "season";
+    season.seriesId = series.id;
+    CatalogDbMediaPageWrite page;
+    LibrarySnapshot snapshot;
+
+    std::future<CatalogDbHierarchyResult> seasons;
+    std::future<CatalogDbHierarchyResult> episodes;
+    std::future<CatalogDbHierarchyResult> byIds;
+    std::future<CatalogDbHierarchyResult> deletedIds;
+    std::future<CatalogDbHierarchyWriteResult> write;
+    std::future<CatalogDbHierarchyWriteResult> stage;
+    std::future<CatalogDbHierarchyWriteResult> seasonWrite;
+    std::future<CatalogDbReconcileResult> reconcile;
+    std::future<CatalogDbSyncState> readSync;
+    std::future<CatalogDbSyncState> writeSync;
+    std::future<CatalogCompatibilitySeedResult> seed;
+    std::future<CatalogCompatibilityReadResult> read;
+    std::future<CatalogDbMediaPageResult> mediaPage;
+    std::future<CatalogDbMediaPageUpsertResult> mediaPageUpsert;
+    std::future<CatalogDbTopLevelSyncResult> beginSync;
+    std::future<CatalogDbTopLevelSyncResult> abortSync;
+    std::future<CatalogDbTopLevelSyncResult> finalizeSync;
+    std::future<CatalogDbTestResult> testCommand;
+
+    {
+        CatalogDb db;
+        db.setWorkerPausedForTest(true);
+        seasons = db.getSeasons(series.id);
+        episodes = db.getEpisodes(season.id);
+        byIds = db.readMediaItemsByIds({series.id});
+        deletedIds = db.deleteMediaItemsByIds({series.id});
+        write = db.upsertSeriesHierarchy(series, {}, {}, 1, 0);
+        stage = db.stageSeriesHierarchy(series, {}, {}, 1, 0, true);
+        seasonWrite = db.reconcileSeasonHierarchy(series, season, {}, 1, 0);
+        reconcile = db.reconcileSeries({series}, true);
+        readSync = db.readSyncState(false, 0, 0);
+        writeSync = db.writeSyncState(1, 2, 3);
+        seed = CatalogCompatibility::seedLibrarySnapshot(db, snapshot);
+        read = CatalogCompatibility::readLibrarySnapshot(db);
+        mediaPage = db.readMediaPage("movie", -1, 8);
+        mediaPageUpsert = db.upsertMediaPage(page);
+        beginSync = db.beginTopLevelSync(1);
+        abortSync = db.abortTopLevelSync(1);
+        finalizeSync = db.finalizeTopLevelSync(1);
+        testCommand = db.enqueueTestCommandForTest();
+    }
+
+    checkStoppedResult("getSeasons", seasons);
+    checkStoppedResult("getEpisodes", episodes);
+    checkStoppedResult("readMediaItemsByIds", byIds);
+    checkStoppedResult("deleteMediaItemsByIds", deletedIds);
+    checkStoppedResult("upsertSeriesHierarchy", write);
+    checkStoppedResult("stageSeriesHierarchy", stage);
+    checkStoppedResult("reconcileSeasonHierarchy", seasonWrite);
+    checkStoppedResult("reconcileSeries", reconcile);
+    checkStoppedResult("readSyncState", readSync);
+    checkStoppedResult("writeSyncState", writeSync);
+    checkStoppedResult("seedLibrarySnapshot", seed);
+    checkStoppedResult("readLibrarySnapshot", read);
+    checkStoppedResult("readMediaPage", mediaPage);
+    checkStoppedResult("upsertMediaPage", mediaPageUpsert);
+    checkStoppedResult("beginTopLevelSync", beginSync);
+    checkStoppedResult("abortTopLevelSync", abortSync);
+    checkStoppedResult("finalizeTopLevelSync", finalizeSync);
+    checkStoppedResult("testCommand", testCommand);
+}
+
 static void testCatalogDbScopeLifecycle()
 {
     CatalogDb db;

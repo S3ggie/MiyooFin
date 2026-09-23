@@ -358,6 +358,10 @@ class CatalogDb
 #ifdef MIYOOFIN_TEST_BUILD
     /// Queue a scope-bound lifecycle job using the currently requested epoch.
     CatalogDbEnqueueResult enqueueScopedNoopForTest(CatalogDbPriority priority);
+    /// Enqueue a test-only lifecycle command without blocking and return its
+    /// future. Test-only plumbing that makes destruction-time fulfillment of
+    /// the test-only queue deterministic; production never uses this queue.
+    std::future<CatalogDbTestResult> enqueueTestCommandForTest();
     bool canPublishForTest(std::uint64_t scopeEpoch) const;
     CatalogDbConnectionState connectionStateForTest() const;
     CatalogDbTestResult runSqliteDiagnosticsForTest();
@@ -513,6 +517,12 @@ class CatalogDb
     void processScopeCommand(ScopeCommand command);
 #ifdef MIYOOFIN_TEST_BUILD
     void processTestCommand(const std::shared_ptr<TestCommand>& command);
+    std::future<CatalogDbTestResult> enqueueTestCommand(unsigned char operation,
+                                                        const std::string& value);
+    /// Fulfill every queued test command with the structured stopped result.
+    /// Called from the destructor with m_mutex held; the complete TestCommand
+    /// type lives in CatalogDbTestCommands.cpp.
+    void fulfillStoppedTestCommandsLocked();
 #endif // MIYOOFIN_TEST_BUILD
     void processHierarchyQuery(const std::shared_ptr<QueryCommand>& command);
     void processHierarchyWrite(const std::shared_ptr<HierarchyWriteCommand>& command);

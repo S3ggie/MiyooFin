@@ -1121,7 +1121,22 @@ void CatalogDb::processTestCommand(const std::shared_ptr<TestCommand>& command)
     command->result.set_value(std::move(result));
 }
 
-CatalogDbTestResult CatalogDb::runTestCommand(unsigned char operation, const std::string& value)
+void CatalogDb::fulfillStoppedTestCommandsLocked()
+{
+    for (auto& command : m_testCommands) {
+        if (!command) {
+            continue;
+        }
+        CatalogDbTestResult result;
+        result.error = CatalogDbErrorCategory::ScopeNotReady;
+        result.message = "CatalogDb stopped before test command";
+        command->result.set_value(std::move(result));
+    }
+    m_testCommands.clear();
+}
+
+std::future<CatalogDbTestResult> CatalogDb::enqueueTestCommand(unsigned char operation,
+                                                               const std::string& value)
 {
     auto command = std::make_shared<TestCommand>();
     command->operation = operation;
@@ -1133,18 +1148,30 @@ CatalogDbTestResult CatalogDb::runTestCommand(unsigned char operation, const std
             CatalogDbTestResult stopped;
             stopped.error = CatalogDbErrorCategory::ScopeNotReady;
             stopped.message = "CatalogDb is stopping";
-            return stopped;
+            command->result.set_value(std::move(stopped));
+            return result;
         }
         if (m_testCommands.size() >= kMaxPendingJobs) {
             CatalogDbTestResult full;
             full.error = CatalogDbErrorCategory::OpenFailed;
             full.message = "CatalogDb test command queue is full";
-            return full;
+            command->result.set_value(std::move(full));
+            return result;
         }
         m_testCommands.push_back(command);
     }
     m_wake.notify_one();
-    return result.get();
+    return result;
+}
+
+std::future<CatalogDbTestResult> CatalogDb::enqueueTestCommandForTest()
+{
+    return enqueueTestCommand(kDiagnosticsOperation, {});
+}
+
+CatalogDbTestResult CatalogDb::runTestCommand(unsigned char operation, const std::string& value)
+{
+    return enqueueTestCommand(operation, value).get();
 }
 
 std::future<CatalogDbHierarchyWriteResult> CatalogDb::upsertSeriesHierarchyForTest(

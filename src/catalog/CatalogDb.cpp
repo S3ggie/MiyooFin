@@ -29,6 +29,28 @@ namespace miyoofin {
 // read_media_page_dequeued, read_media_page_ready.
 using namespace catalog_db_internal;
 
+namespace {
+/// Fulfill every still-queued promise-bearing command with the ordinary
+/// structured "stopped" result instead of destroying its promise and producing
+/// a broken_promise. Called with m_mutex held: the worker removes a command from
+/// its queue under that same mutex before processing it, so a command that is
+/// still present here is never also active and its promise is set exactly once.
+template <typename Result, typename Command>
+void fulfillStoppedCommands(std::deque<std::shared_ptr<Command>>& commands, const char* message)
+{
+    for (auto& command : commands) {
+        if (!command) {
+            continue;
+        }
+        Result result;
+        result.error = CatalogDbErrorCategory::ScopeNotReady;
+        result.message = message;
+        command->result.set_value(std::move(result));
+    }
+    commands.clear();
+}
+} // namespace
+
 CatalogDb::CatalogDb() : m_worker(&CatalogDb::workerLoop, this)
 {
     catalogDiagnostic("service_started");
@@ -44,29 +66,26 @@ CatalogDb::~CatalogDb()
         }
         m_scopeCommands.clear();
 #ifdef MIYOOFIN_TEST_BUILD
-        m_testCommands.clear();
+        fulfillStoppedTestCommandsLocked();
 #endif // MIYOOFIN_TEST_BUILD
-        m_queryCommands.clear();
-        m_writeCommands.clear();
-        m_reconcileCommands.clear();
-        m_syncStateCommands.clear();
-        m_librarySeedCommands.clear();
-        m_libraryReadCommands.clear();
-        m_mediaPageCommands.clear();
-        for (auto& command : m_mediaPageUpsertCommands) {
-            CatalogDbMediaPageUpsertResult result;
-            result.error = CatalogDbErrorCategory::ScopeNotReady;
-            result.message = "CatalogDb stopped before page submission";
-            command->result.set_value(std::move(result));
-        }
-        m_mediaPageUpsertCommands.clear();
-        for (auto& command : m_topLevelSyncCommands) {
-            CatalogDbTopLevelSyncResult result;
-            result.error = CatalogDbErrorCategory::ScopeNotReady;
-            result.message = "CatalogDb stopped before sync staging";
-            command->result.set_value(std::move(result));
-        }
-        m_topLevelSyncCommands.clear();
+        fulfillStoppedCommands<CatalogDbHierarchyResult>(m_queryCommands,
+                                                         "CatalogDb stopped before query dispatch");
+        fulfillStoppedCommands<CatalogDbHierarchyWriteResult>(
+            m_writeCommands, "CatalogDb stopped before hierarchy write");
+        fulfillStoppedCommands<CatalogDbReconcileResult>(m_reconcileCommands,
+                                                         "CatalogDb stopped before reconciliation");
+        fulfillStoppedCommands<CatalogDbSyncState>(m_syncStateCommands,
+                                                   "CatalogDb stopped before sync-state access");
+        fulfillStoppedCommands<CatalogCompatibilitySeedResult>(
+            m_librarySeedCommands, "CatalogDb stopped before library seed");
+        fulfillStoppedCommands<CatalogCompatibilityReadResult>(
+            m_libraryReadCommands, "CatalogDb stopped before library read");
+        fulfillStoppedCommands<CatalogDbMediaPageResult>(m_mediaPageCommands,
+                                                         "CatalogDb stopped before page read");
+        fulfillStoppedCommands<CatalogDbMediaPageUpsertResult>(
+            m_mediaPageUpsertCommands, "CatalogDb stopped before page submission");
+        fulfillStoppedCommands<CatalogDbTopLevelSyncResult>(
+            m_topLevelSyncCommands, "CatalogDb stopped before sync staging");
         m_pendingJobs = 0;
     }
     m_wake.notify_one();

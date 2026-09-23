@@ -1402,13 +1402,35 @@ void testFullPopulationCancellationAbortsStagedGeneration()
     // Consuming the cancellation terminal must release the serialized slot;
     // the next request can be admitted even though the first worker was
     // cancelled while its HTTP page was blocked.
+    //
+    // Hold the retry worker inside its views request before cancelling so the
+    // cancellation is deterministically observed by the views-fetch failure
+    // path (not just the pre-flight cancelled() check).  That path must still
+    // publish a cancelled terminal so a consumer waiting on the gate can
+    // distinguish cancellation from a generic fetch failure.
+    std::atomic_bool retryViewsConnected{false};
+    std::atomic_bool releaseRetryViews{false};
+    std::thread retryServer([&] {
+        const int viewsClient = coordinatorAccept(listener);
+        if (viewsClient < 0)
+            return;
+        retryViewsConnected.store(true, std::memory_order_release);
+        while (!releaseRetryViews.load(std::memory_order_acquire))
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ::close(viewsClient);
+    });
     std::uint64_t retryRequest = 0;
     CHECK(coordinator->requestFullPopulation(retryRequest));
+    for (int i = 0; i < 500 && !retryViewsConnected.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(retryViewsConnected.load());
     coordinator->cancelFullPopulation();
+    releaseRetryViews.store(true, std::memory_order_release);
     library::FullPopulationUpdate retryTerminal;
     bool retrySawPage = false;
     CHECK(takeFullUpdate(*coordinator, retryRequest, retryTerminal, retrySawPage));
     CHECK(retryTerminal.terminal && retryTerminal.cancelled);
+    retryServer.join();
     coordinator->stop();
     coordinator.reset();
     db.reset();

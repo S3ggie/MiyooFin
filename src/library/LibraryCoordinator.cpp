@@ -608,6 +608,16 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                                         views, viewsError, client, cancellation.get());
                                 },
                                 viewsError)) {
+                            // Mirror the page-fetch failure path: a request
+                            // aborted by cancellation must publish a cancelled
+                            // terminal, not a generic failure, so a consumer
+                            // waiting on the serialized gate can distinguish
+                            // the two.
+                            terminal.cancelled = cancelled();
+                            terminal.superseded =
+                                !terminal.cancelled && cancellation && cancellation->load();
+                            terminal.error = terminal.cancelled ? CatalogDbErrorCategory::Superseded
+                                                                : CatalogDbErrorCategory::None;
                             terminal.message =
                                 viewsError.empty() ? "Failed to fetch libraries" : viewsError;
                             sync->abort(transactionGeneration).get();

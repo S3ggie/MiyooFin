@@ -20,7 +20,8 @@ namespace miyoofin {
 
 // Layout constants
 static constexpr int TAB_Y = 0;
-static constexpr int HEADER_H = 64; // large wordmark + centered compact nav
+static constexpr int TAB_H = 24;    // compact header used by non-Home tabs
+static constexpr int HEADER_H = 64; // Home-only large wordmark + status cluster
 static constexpr int BOTTOM_H = 24;
 static constexpr int ROWS_Y = 70; // first Home rail heading, below the header
 static constexpr int ROW_LABEL_H = 16;
@@ -50,6 +51,7 @@ static constexpr Uint8 FOCUS_R = 60, FOCUS_G = 150, FOCUS_B = 255;
 static constexpr Uint8 FOCUS_GLOW_R = 24, FOCUS_GLOW_G = 70, FOCUS_GLOW_B = 150;
 static constexpr Uint8 CARD_BORDER_R = 70, CARD_BORDER_G = 76, CARD_BORDER_B = 92;
 static constexpr Uint8 MUTED_TEXT_R = 175, MUTED_TEXT_G = 180, MUTED_TEXT_B = 195;
+static constexpr int HEADER_BRAND_X = 16; // compact (non-Home) brand mark
 
 // Two-tone wordmark geometry.
 static constexpr int LOGO_X = 12;
@@ -268,20 +270,34 @@ void HomeScreen::render(SDL_Surface* fb)
 }
 void HomeScreen::drawTabBar(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, TAB_Y, 640, HEADER_H, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B, 255);
+    // The tall branded header belongs to Home only.  Movies, Shows,
+    // Downloads and Settings keep the legacy 24px compact header so their
+    // existing y=25 content geometry is not overlapped.
+    const bool home = activeTabNamed("Home");
+    const int headerH = home ? HEADER_H : TAB_H;
+    BitmapFont::fillRect(fb, 0, TAB_Y, 640, headerH, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B, 255);
 
-    // Large two-tone wordmark with the tagline beneath it.
-    BitmapFont::drawStringScaled(fb, LOGO_X, LOGO_Y, "Miyoo", LOGO_SCALE, 238, 244, 255,
-                                 HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-    BitmapFont::drawStringScaled(fb, LOGO_X + 5 * BitmapFont::GLYPH_W * LOGO_SCALE, LOGO_Y, "Fin",
-                                 LOGO_SCALE, 70, 150, 255, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-    BitmapFont::drawString(fb, LOGO_X + 1, LOGO_Y + LOGO_SCALE * BitmapFont::GLYPH_H + 2,
-                           "Your Media. Anywhere.", 130, 175, 232, HEADER_BG_R, HEADER_BG_G,
-                           HEADER_BG_B);
+    int tabTextY = TAB_Y + (headerH - BitmapFont::GLYPH_H) / 2;
+    if (home) {
+        // Large two-tone wordmark with the tagline beneath it.
+        BitmapFont::drawStringScaled(fb, LOGO_X, LOGO_Y, "Miyoo", LOGO_SCALE, 238, 244, 255,
+                                     HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
+        BitmapFont::drawStringScaled(fb, LOGO_X + 5 * BitmapFont::GLYPH_W * LOGO_SCALE, LOGO_Y,
+                                     "Fin", LOGO_SCALE, 70, 150, 255, HEADER_BG_R, HEADER_BG_G,
+                                     HEADER_BG_B);
+        BitmapFont::drawString(fb, LOGO_X + 1, LOGO_Y + LOGO_SCALE * BitmapFont::GLYPH_H + 2,
+                               "Your Media. Anywhere.", 130, 175, 232, HEADER_BG_R, HEADER_BG_G,
+                               HEADER_BG_B);
+        tabTextY = 16;
+    } else {
+        // Compact brand mark for the non-Home tabs.
+        BitmapFont::drawString(fb, HEADER_BRAND_X, tabTextY, "MiyooFin", FOCUS_R, FOCUS_G, FOCUS_B,
+                               HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
+    }
 
     // Compact nav centered across the header; the active tab sits in a
-    // bright blue rounded pill.
-    const int tabTextY = 16;
+    // bright blue rounded pill.  Shared by every tab so the centered
+    // headerTabsStartX() hit regions stay valid.
     int x = headerTabsStartX(m_tabs);
     for (int i = 0; i < (int)m_tabs.size(); ++i) {
         const std::string& name = m_tabs[i].name;
@@ -297,23 +313,41 @@ void HomeScreen::drawTabBar(SDL_Surface* fb)
         x += textW + 16;
     }
 
-    // Status cluster (Wi-Fi, battery, clock, gear) pinned to the top right.
-    drawWifiIcon(fb, 514, 22);
-    drawBatteryIcon(fb, 540, 24);
-    std::time_t now = std::time(nullptr);
-    std::tm local{};
+    if (home) {
+        // Status cluster (Wi-Fi, battery, clock, gear) pinned to the top right.
+        drawWifiIcon(fb, 514, 22);
+        drawBatteryIcon(fb, 540, 24);
+        std::time_t now = std::time(nullptr);
+        std::tm local{};
 #if defined(_WIN32)
-    localtime_s(&local, &now);
+        localtime_s(&local, &now);
 #else
-    localtime_r(&now, &local);
+        localtime_r(&now, &local);
 #endif
-    char clock[8];
-    std::snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
-    BitmapFont::drawString(fb, 570, tabTextY, clock, 235, 240, 255, HEADER_BG_R, HEADER_BG_G,
-                           HEADER_BG_B);
-    drawGearIcon(fb, 618, 21);
+        char clock[8];
+        std::snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
+        BitmapFont::drawString(fb, 570, tabTextY, clock, 235, 240, 255, HEADER_BG_R, HEADER_BG_G,
+                               HEADER_BG_B);
+        drawGearIcon(fb, 618, 21);
+    } else {
+        // Legacy right-aligned sync status and login label in the compact bar.
+        std::string status = syncStatusText();
+        std::string login = "Logged in as: " + m_userName;
+        const int maxChars = 24;
+        if ((int)login.size() > maxChars)
+            login = login.substr(0, maxChars - 3) + "...";
+        int loginX = 640 - 8 - (int)login.size() * BitmapFont::GLYPH_W;
+        if (loginX > x + 4)
+            BitmapFont::drawString(fb, loginX, tabTextY, login.c_str(), Theme::TEXT_R,
+                                   Theme::TEXT_G, Theme::TEXT_B, HEADER_BG_R, HEADER_BG_G,
+                                   HEADER_BG_B);
+        int statusX = loginX - 8 - (int)status.size() * BitmapFont::GLYPH_W;
+        if (!status.empty() && statusX > x + 4)
+            BitmapFont::drawString(fb, statusX, tabTextY, status.c_str(), FOCUS_R, FOCUS_G, FOCUS_B,
+                                   HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
+    }
 
-    BitmapFont::fillRect(fb, 0, HEADER_H - 1, 640, 1, 34, 60, 100, 255);
+    BitmapFont::fillRect(fb, 0, headerH - 1, 640, 1, FOCUS_GLOW_R, FOCUS_GLOW_G, FOCUS_GLOW_B, 255);
 }
 
 std::string HomeScreen::syncStatusText() const

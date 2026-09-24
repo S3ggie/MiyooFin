@@ -11,13 +11,13 @@
 #   5. collects framebuffer BMPs + app log into output/ui-script/<name>/,
 #   6. runs the coarse screenshot assertions; exits non-zero on any failure.
 #
-# Usage: sh tools/ui-script/run.sh <smoke|series|login-400>
+# Usage: sh tools/ui-script/run.sh <smoke|movies|series|login-400>
 # Screenshots land in output/ui-script/<name>/ (checked-in? no: gitignored
 # output/ tree). Per-script log-marker + pixel expectations live below.
 
 set -eu
 
-NAME=${1:?usage: run.sh '<smoke|series|login-400>'}
+NAME=${1:?usage: run.sh '<smoke|movies|series|login-400>'}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 SCRIPT_DIR="$ROOT/tools/ui-script"
 SCRIPT="$SCRIPT_DIR/scripts/$NAME.txt"
@@ -153,6 +153,11 @@ case "$NAME" in
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/home.bmp"
         CHECKS="rendered,rails"
+        ;;
+    movies)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/movies.bmp"
+        CHECKS="rendered,compact_header"
         ;;
     series)
         want='[SeriesScreen] enter series=Testville'

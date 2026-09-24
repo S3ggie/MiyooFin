@@ -1,0 +1,8 @@
+# Movies: from a loaded Home, tab once to Movies and capture the compact
+# header. The screenshot assertion verifies the non-Home 24px header does
+# not paint over the y=25 content band (Movies preview / alphabet rail).
+WAIT_LOG [HomeScreen] Library loaded 30000
+KEY NextTab 80 500
+SETTLE 1000
+SCREENSHOT movies
+QUIT

@@ -213,6 +213,49 @@ inline int clampCardScroll(const std::vector<MediaItem>& items, int activeCard, 
     return scroll;
 }
 
+/// Home rail card geometry for the redesigned Home presentation.  Portrait
+/// cards sized so five episode cards and six poster cards fill the 640px
+/// framebuffer width.  Presentation only: artwork request dimensions
+/// (displayArtworkForItem) are unchanged, so decoded art is aspect-fitted
+/// into these boxes.
+inline ArtworkBox homeRailCardSize(const MediaItem& item)
+{
+    if (item.type == "episode")
+        return {120, 128};
+    return {99, 120};
+}
+
+inline constexpr int HOME_RAIL_STRIP_H = 128;
+inline constexpr int HOME_RAIL_MARGIN = 8;
+inline constexpr int HOME_RAIL_GAP = 6;
+
+/// Clamp horizontal pixel scroll for a Home rail using the redesigned card
+/// geometry.  Mirrors clampCardScroll() but with homeRailCardSize() widths.
+inline int clampHomeCardScroll(const std::vector<MediaItem>& items, int activeCard, int curScroll,
+                               int viewWidth)
+{
+    if (items.empty() || activeCard < 0 || activeCard >= (int)items.size())
+        return 0;
+
+    int scroll = curScroll;
+    int cardX = HOME_RAIL_MARGIN;
+    for (int ci = 0; ci < (int)items.size(); ++ci) {
+        int w = homeRailCardSize(items[ci]).w;
+        if (ci == activeCard) {
+            // card left edge must not be left of viewport
+            if (cardX - scroll < 0)
+                scroll = cardX;
+            // card right edge must not be right of viewport
+            if (cardX + w - scroll > viewWidth)
+                scroll = cardX + w - viewWidth;
+        }
+        cardX += w + HOME_RAIL_GAP;
+    }
+    if (scroll < 0)
+        scroll = 0;
+    return scroll;
+}
+
 /// Build the row-artwork identity key for a media item (B5d2a).
 /// Format: "itemId:imageType:imageTag:WxH".
 inline std::string buildRowArtworkKey(const MediaItem& item)

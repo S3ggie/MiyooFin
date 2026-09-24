@@ -26,6 +26,7 @@ int main()
     testShowRowCard();
     testEpisodeRowCard();
     testMixedWidthPositions();
+    testHomeRailGeometry();
     testScrollRightKeepsVisible();
     testScrollLeftDecreases();
     testScrollNeverNegative();

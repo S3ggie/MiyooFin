@@ -5,7 +5,6 @@
 
 namespace miyoofin {
 
-static constexpr int CARD_GAP = 6;
 static constexpr int VISIBLE_ROWS = 3;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
@@ -306,15 +305,15 @@ std::set<std::string> HomeScreen::protectedRowArtworkKeys() const
         const int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size())
             break;
-        int cardX = 4;
+        int cardX = HOME_RAIL_MARGIN;
         for (const auto& item : rows[rowIdx].items) {
-            const ArtworkBox box = artworkBoxSize(item);
+            const ArtworkBox box = homeRailCardSize(item);
             const int screenX = cardX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
-            if (screenX + box.w >= 4 && screenX <= 636)
+            if (screenX + box.w >= HOME_RAIL_MARGIN && screenX <= 640 - HOME_RAIL_MARGIN)
                 add(item);
-            if (screenX > 636)
+            if (screenX > 640 - HOME_RAIL_MARGIN)
                 break;
-            cardX += box.w + CARD_GAP;
+            cardX += box.w + HOME_RAIL_GAP;
         }
     }
     if (const MediaItem* item = currentItem())
@@ -395,26 +394,25 @@ void HomeScreen::tryLoadOneRowArtwork()
     // Submit every horizontally visible card that is not already in the RAM
     // cache. submitDecode preserves outstanding-job de-duplication and the
     // bounded queue, while selected artwork was already queued at priority.
-    static constexpr int HMARGIN = 4;
     for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
         int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size())
             break;
         const MediaRow& row = rows[rowIdx];
-        int cardAccumX = HMARGIN;
+        int cardAccumX = HOME_RAIL_MARGIN;
         for (int ci = 0; ci < (int)row.items.size(); ++ci) {
-            ArtworkBox sz = artworkBoxSize(row.items[ci]);
+            ArtworkBox sz = homeRailCardSize(row.items[ci]);
             int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
-            if (screenX + sz.w < HMARGIN) {
-                cardAccumX += sz.w + CARD_GAP;
+            if (screenX + sz.w < HOME_RAIL_MARGIN) {
+                cardAccumX += sz.w + HOME_RAIL_GAP;
                 continue;
             }
-            if (screenX > 640 - HMARGIN)
+            if (screenX > 640 - HOME_RAIL_MARGIN)
                 break;
             std::string key = rowArtworkKey(row.items[ci]);
             if (!key.empty() && m_rowArtwork.find(key) == m_rowArtwork.end())
                 submitDecode(row.items[ci], false, false);
-            cardAccumX += sz.w + CARD_GAP;
+            cardAccumX += sz.w + HOME_RAIL_GAP;
         }
     }
 }

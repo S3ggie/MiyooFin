@@ -384,6 +384,45 @@ static void testMixedWidthPositions()
     std::printf("[test] B5d1: mixed-width X positions OK\n");
 }
 
+// Home redesign: rail card geometry fills the 640px width with five episode
+// cards and six poster cards across, and the matching clamp keeps the focused
+// card visible.  Presentation-only: the shared artworkBoxSize is untouched.
+static void testHomeRailGeometry()
+{
+    std::printf("[test] Home rail geometry: 5 episodes / 6 posters across\n");
+    MediaItem episode; episode.type = "episode";
+    MediaItem movie;   movie.type = "movie";
+    MediaItem show;    show.type = "show";
+
+    const ArtworkBox e = homeRailCardSize(episode);
+    CHECK(e.w == 120);
+    CHECK(e.h == 128);
+    CHECK(HOME_RAIL_STRIP_H == 128);
+    const ArtworkBox p = homeRailCardSize(movie);
+    CHECK(p.w == 99);
+    CHECK(p.h == 120);
+    CHECK(homeRailCardSize(show).w == 99);
+
+    // Five episode cards + gaps end exactly at the right margin.
+    const int episodeRight = HOME_RAIL_MARGIN + 5 * e.w + 4 * HOME_RAIL_GAP;
+    CHECK(episodeRight == 640 - HOME_RAIL_MARGIN);
+    // Six poster cards + gaps end exactly at the right margin.
+    const int posterRight = HOME_RAIL_MARGIN + 6 * p.w + 5 * HOME_RAIL_GAP;
+    CHECK(posterRight == 640 - HOME_RAIL_MARGIN);
+
+    // Out-of-range/empty input clamps to zero.
+    CHECK(clampHomeCardScroll({}, 0, 30, 640) == 0);
+    std::vector<MediaItem> ten(10, movie);
+    CHECK(clampHomeCardScroll(ten, -1, 5, 640) == 0);
+
+    // Card 9 of ten posters: virtual X = 8 + 9*(99+6) = 953, right = 1052,
+    // so the needed scroll is 1052 - 640 = 412.
+    CHECK(clampHomeCardScroll(ten, 9, 0, 640) == 412);
+    // Returning to card 0 scrolls back so its left edge sits at the margin.
+    CHECK(clampHomeCardScroll(ten, 0, 412, 640) == HOME_RAIL_MARGIN);
+    std::printf("[test] Home rail geometry OK\n");
+}
+
 // B5d1: Scrolling right keeps selected card visible
 static void testScrollRightKeepsVisible()
 {

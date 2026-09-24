@@ -18,7 +18,6 @@ namespace miyoofin {
 // focused rail behind the bottom bar.
 static constexpr int VISIBLE_ROWS = 2;
 static constexpr int SETTINGS_VISIBLE_ROWS = 6;
-static constexpr int CARD_GAP = 6;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
 
@@ -251,6 +250,14 @@ int HomeScreen::tabIndex(const char* name) const
     return -1;
 }
 
+int HomeScreen::headerTabsStartX(const std::vector<TabData>& tabs)
+{
+    int total = 0;
+    for (const auto& tab : tabs)
+        total += static_cast<int>(tab.name.size()) * BitmapFont::GLYPH_W + 16;
+    return (640 - total) / 2;
+}
+
 int HomeScreen::tabIndexAtPoint(const std::vector<TabData>& tabs, int x, int y)
 {
     static constexpr int TAB_Y = 0;
@@ -258,7 +265,7 @@ int HomeScreen::tabIndexAtPoint(const std::vector<TabData>& tabs, int x, int y)
     if (y < TAB_Y || y >= TAB_Y + TAB_H)
         return -1;
 
-    int tabX = HomeScreen::kHeaderTabsX;
+    int tabX = headerTabsStartX(tabs);
     for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
         const int tabWidth = static_cast<int>(tabs[i].name.size()) * BitmapFont::GLYPH_W + 16;
         if (x >= tabX && x < tabX + tabWidth)
@@ -383,8 +390,7 @@ void HomeScreen::clampNavigation()
         m_rowScroll = m_activeRow;
     if (m_activeRow >= m_rowScroll + VISIBLE_ROWS)
         m_rowScroll = m_activeRow - VISIBLE_ROWS + 1;
-    static constexpr int HMARGIN = 4;
-    m_cardScroll = clampCardScroll(items, m_activeCard, m_cardScroll, 640, HMARGIN, CARD_GAP);
+    m_cardScroll = clampHomeCardScroll(items, m_activeCard, m_cardScroll, 640);
 }
 
 bool HomeScreen::handlePointerClick(int x, int y)

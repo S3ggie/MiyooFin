@@ -461,15 +461,16 @@ class HomeScreen : public Screen
     void activateTab(int index);
     /// Presentation flavour for a card.  Grid keeps the legacy tinted
     /// placeholder and in-card title strip (Movies/Shows); Home uses a black
-    /// placeholder and the Phase 1 focus treatment.
+    /// placeholder, a below-card caption and the electric-blue focus glow.
     enum class CardPresentation
     {
         Grid,
         Home
     };
-    /// X offset where the compact header tab strip begins.  Shared by the
-    /// renderer and tabIndexAtPoint() so pointer hit regions match the header.
-    static constexpr int kHeaderTabsX = 150;
+    /// X offset where the compact header tab strip begins.  The strip is
+    /// centered across the 640px header; shared by the renderer and
+    /// tabIndexAtPoint() so pointer hit regions match the rendered header.
+    static int headerTabsStartX(const std::vector<TabData>& tabs);
     void drawTabBar(SDL_Surface* fb);
     void drawRowList(SDL_Surface* fb);
     void drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item, bool selected,

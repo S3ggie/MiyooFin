@@ -46,18 +46,55 @@ MOVIES = [
 ]
 
 # Home-tab rails: Continue Watching reads /Items/Resume, Recently Added
-# reads /Items/Latest. Non-empty rails prove the Home tab renders lists.
+# reads /Items/Latest. Five resume episodes and six latest movies exercise
+# the Home rail geometry (five episode cards / six poster cards across the
+# 640px framebuffer); the rails screenshot assertion is still the verdict.
 RESUME = [
-    {"Id": "movie-1", "Name": "Stub Movie One", "Type": "Movie",
-     "Overview": "First stub movie.", "ProductionYear": 2021,
-     "RunTimeTicks": 54000000000,
-     "UserData": {"Played": False, "PlaybackPositionTicks": 18000000000}},
+    {"Id": "ep-cw1", "Name": "Pilot", "Type": "Episode",
+     "SeriesId": "series-testville", "SeriesName": "Testville",
+     "SeasonId": "season-testville-1", "ParentIndexNumber": 1,
+     "IndexNumber": 1, "RunTimeTicks": 18000000000,
+     "UserData": {"Played": False, "PlaybackPositionTicks": 4000000000}},
+    {"Id": "ep-cw2", "Name": "Second Helping", "Type": "Episode",
+     "SeriesId": "series-testville", "SeriesName": "Testville",
+     "SeasonId": "season-testville-1", "ParentIndexNumber": 1,
+     "IndexNumber": 2, "RunTimeTicks": 18000000000,
+     "UserData": {"Played": False, "PlaybackPositionTicks": 9000000000}},
+    {"Id": "ep-cw3", "Name": "The Long Night", "Type": "Episode",
+     "SeriesId": "series-testville", "SeriesName": "Testville",
+     "SeasonId": "season-testville-2", "ParentIndexNumber": 2,
+     "IndexNumber": 1, "RunTimeTicks": 18000000000,
+     "UserData": {"Played": False, "PlaybackPositionTicks": 13500000000}},
+    {"Id": "ep-cw4", "Name": "Returns", "Type": "Episode",
+     "SeriesId": "series-testville", "SeriesName": "Testville",
+     "SeasonId": "season-testville-2", "ParentIndexNumber": 2,
+     "IndexNumber": 2, "RunTimeTicks": 18000000000,
+     "UserData": {"Played": False, "PlaybackPositionTicks": 2000000000}},
+    {"Id": "ep-cw5", "Name": "Finale", "Type": "Episode",
+     "SeriesId": "series-testville", "SeriesName": "Testville",
+     "SeasonId": "season-testville-2", "ParentIndexNumber": 2,
+     "IndexNumber": 3, "RunTimeTicks": 18000000000,
+     "UserData": {"Played": True, "PlaybackPositionTicks": 0}},
 ]
 LATEST = [
+    {"Id": "movie-1", "Name": "Stub Movie One", "Type": "Movie",
+     "Overview": "First stub movie.", "ProductionYear": 2021,
+     "RunTimeTicks": 54000000000, "UserData": {"Played": False}},
     {"Id": "movie-2", "Name": "Stub Movie Two", "Type": "Movie",
      "Overview": "Second stub movie.", "ProductionYear": 2022,
-     "RunTimeTicks": 60000000000,
-     "UserData": {"Played": False}},
+     "RunTimeTicks": 60000000000, "UserData": {"Played": True}},
+    {"Id": "movie-3", "Name": "Stub Movie Three", "Type": "Movie",
+     "Overview": "Third stub movie.", "ProductionYear": 2023,
+     "RunTimeTicks": 60000000000, "UserData": {"Played": False}},
+    {"Id": "movie-4", "Name": "Stub Movie Four", "Type": "Movie",
+     "Overview": "Fourth stub movie.", "ProductionYear": 2024,
+     "RunTimeTicks": 60000000000, "UserData": {"Played": False}},
+    {"Id": "movie-5", "Name": "Stub Movie Five", "Type": "Movie",
+     "Overview": "Fifth stub movie.", "ProductionYear": 2019,
+     "RunTimeTicks": 60000000000, "UserData": {"Played": False}},
+    {"Id": "movie-6", "Name": "Stub Movie Six", "Type": "Movie",
+     "Overview": "Sixth stub movie.", "ProductionYear": 2020,
+     "RunTimeTicks": 60000000000, "UserData": {"Played": False}},
 ]
 
 SERIES = [

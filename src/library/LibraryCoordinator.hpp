@@ -329,6 +329,18 @@ class LibraryCoordinator
     {
         releaseOperation(currentOperationKind());
     }
+    // True while a terminal result is retained for Home after the worker has
+    // released the serialized slot.
+    bool safetyReconcileResultReadyForTest() const noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        return m_safetyReconcileResultReady;
+    }
+    bool liveChangeResultReadyForTest() const noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        return m_liveChangeResult.has_value();
+    }
 #endif
 
     std::shared_ptr<LibraryQuery> query() const
@@ -461,6 +473,11 @@ class LibraryCoordinator
     std::thread m_safetyReconcileThread;
     std::shared_ptr<std::atomic_bool> m_safetyReconcileCancellation;
     SafetyReconcileResult m_safetyReconcileResult;
+    // True while a terminal safety result is retained for Home after the
+    // worker has already released the serialized slot.  Same-kind admission is
+    // gated on this so a later reconcile cannot overwrite the unconsumed
+    // publication.
+    bool m_safetyReconcileResultReady = false;
     std::uint64_t m_catalogGeneration = 0;
     std::int64_t m_lastSuccessfulMs = 0;
     std::int64_t m_lastReconcileMs = 0;

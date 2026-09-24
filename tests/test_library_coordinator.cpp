@@ -1732,6 +1732,120 @@ void testUnconsumedStartupResultRetainsSerializedSlot()
     std::printf("[test] LibraryCoordinator result retains serialized slot OK\n");
 }
 
+// A safety reconcile releases the serialized slot as soon as its mutation is
+// durable while keeping the terminal result for Home.  Same-kind admission is
+// therefore gated on the pending result (not on slot occupancy), and a
+// different kind such as hierarchy is admitted with the result unconsumed.
+void testUnconsumedSafetyResultAdmitsHierarchyAndSurvives()
+{
+    std::printf("[test] LibraryCoordinator unconsumed safety result admits hierarchy\n");
+    CoordinatorTestScope scope;
+    std::shared_ptr<CatalogDb> db;
+    auto coordinator = makeMaintenanceCoordinator("safety-unconsumed", db, scope);
+    coordinator->start();
+
+    CHECK(coordinator->requestSafetyReconcileForTest());
+    for (int i = 0; i < 2000000 && !coordinator->safetyReconcileResultReadyForTest(); ++i)
+        std::this_thread::yield();
+    CHECK(coordinator->safetyReconcileResultReadyForTest());
+    // The slot is free once the mutation finishes, not merely after Home
+    // consumes the result.
+    CHECK(!coordinator->status().safetyReconcileInFlight);
+
+    // A second same-kind request is rejected by the pending result while the
+    // slot is otherwise free, so it cannot overwrite the publication.
+    CHECK(!coordinator->requestSafetyReconcileForTest());
+
+    // A different kind is admitted with the result still unconsumed.
+    MediaItem series;
+    series.id = "safety-unconsumed-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(coordinator->requestSeriesSeasons(series, hierarchyRequest));
+
+    // The retained result is still consumable after the hierarchy admission.
+    library::SafetyReconcileResult result;
+    CHECK(coordinator->takeSafetyReconcileResult(result));
+    CHECK(!coordinator->takeSafetyReconcileResult(result));
+
+    coordinator->cancelHierarchyRequest(hierarchyRequest);
+    coordinator->stop();
+    coordinator.reset();
+    db.reset();
+    removeCoordinatorTestScope(scope);
+    std::printf("[test] LibraryCoordinator unconsumed safety result admits hierarchy OK\n");
+}
+
+// Hierarchy is admitted while an unconsumed live result retains its
+// publication, and the result survives that admission.
+void testUnconsumedLiveResultAdmitsHierarchy()
+{
+    std::printf("[test] LibraryCoordinator unconsumed live result admits hierarchy\n");
+    auto coordinator = makeCoordinator();
+    coordinator.start();
+
+    JellyfinLibraryChangeBatch first;
+    first.itemsUpdated.push_back("live-first");
+    first.userDataChanged = true;
+    CHECK(coordinator.requestLiveChange(first));
+    for (int i = 0; i < 2000000 && !coordinator.liveChangeResultReadyForTest(); ++i)
+        std::this_thread::yield();
+    CHECK(coordinator.liveChangeResultReadyForTest());
+
+    MediaItem series;
+    series.id = "live-unconsumed-series";
+    std::uint64_t hierarchyRequest = 0;
+    CHECK(coordinator.requestSeriesSeasons(series, hierarchyRequest));
+
+    // The unconsumed result survives the hierarchy admission.
+    library::LiveLibraryChangeResult result;
+    CHECK(coordinator.takeLiveChangeResult(result));
+    CHECK(result.userDataChanged);
+
+    coordinator.cancelHierarchyRequest(hierarchyRequest);
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator unconsumed live result admits hierarchy OK\n");
+}
+
+// A queued later live batch must neither overwrite an unconsumed result nor be
+// lost once that result is consumed.
+void testUnconsumedLiveResultIsNotOverwritten()
+{
+    std::printf("[test] LibraryCoordinator unconsumed live result not overwritten\n");
+    auto coordinator = makeCoordinator();
+    coordinator.start();
+
+    JellyfinLibraryChangeBatch first;
+    first.itemsUpdated.push_back("live-first");
+    first.userDataChanged = true;
+    CHECK(coordinator.requestLiveChange(first));
+    for (int i = 0; i < 2000000 && !coordinator.liveChangeResultReadyForTest(); ++i)
+        std::this_thread::yield();
+    CHECK(coordinator.liveChangeResultReadyForTest());
+
+    // Queue a second live batch while the first result is still unconsumed.
+    JellyfinLibraryChangeBatch second;
+    second.itemsUpdated.push_back("live-second");
+    second.userDataChanged = false;
+    CHECK(coordinator.requestLiveChange(second));
+
+    // The unconsumed result is the first batch's, not an overwrite.
+    library::LiveLibraryChangeResult result;
+    CHECK(coordinator.takeLiveChangeResult(result));
+    CHECK(result.userDataChanged);
+
+    // After consumption the queued batch is processed and published, so no
+    // live change is silently lost.
+    for (int i = 0; i < 2000000 && !coordinator.liveChangeResultReadyForTest(); ++i)
+        std::this_thread::yield();
+    CHECK(coordinator.liveChangeResultReadyForTest());
+    library::LiveLibraryChangeResult next;
+    CHECK(coordinator.takeLiveChangeResult(next));
+    CHECK(!next.userDataChanged);
+
+    coordinator.stop();
+    std::printf("[test] LibraryCoordinator unconsumed live result not overwritten OK\n");
+}
+
 void testAdmissionDiagnosticSnapshotSurvivesConcurrentRelease()
 {
     std::printf("[test] LibraryCoordinator admission diagnostic snapshot race\n");
@@ -1810,6 +1924,9 @@ int main()
     testLegacyFullSyncReservationGatesAndReleases();
     testConcurrentLegacyReservationReservesExactlyOnce();
     testUnconsumedStartupResultRetainsSerializedSlot();
+    testUnconsumedSafetyResultAdmitsHierarchyAndSurvives();
+    testUnconsumedLiveResultAdmitsHierarchy();
+    testUnconsumedLiveResultIsNotOverwritten();
 
     // Keep the diagnostics capture bounded to the full-population and gate
     // tests below.  The logger has a finite file retention limit; resetting

@@ -66,6 +66,9 @@ would be brittle across themes/fonts):
 - `rails` — the list/grid band (y 150–400) is populated, not empty
   (catches the grey-poster / "no seasons" class of bug).
 - `seasons` — the Series-screen list band (y 150–460) is populated.
+- `compact_header` — a non-Home tab keeps the 24px compact header: its
+  background does not paint across the y 25–63 content band. Guards the
+  Home-only 64px branded header from overlapping Movies/Shows content.
 
 Screen reachability is asserted on stdout markers (e.g.
 `[SeriesScreen] enter series=Testville`), which the runner greps from
@@ -75,6 +78,8 @@ the captured app log.
 
 - `smoke.txt` — boot to Home, assert `Library loaded` + rendered frame
   with populated rails (Continue Watching / Recently Added from stub).
+- `movies.txt` — Home → `NextTab` → Movies; captures the compact header
+  and asserts it does not paint over the y=25 content band.
 - `series.txt` — Home → `NextTab`×2 → Shows → `Right` into the grid →
   `Confirm` opens "Testville" → assert seasons listed.
 - `login-400.txt` — boot with a saved server URL but no session, so the

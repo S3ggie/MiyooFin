@@ -400,12 +400,28 @@ HomeLibraryController::HomeLibraryController(const Session& session, library::Li
                                              DownloadManager* downloads)
     : m_session(session), m_libraryQuery(query), m_libraryCoordinator(coordinator),
       m_downloads(downloads)
-{}
+{
+    // Bind this controller to the cold-start owner generation that is armed now
+    // (AppSession reserves before creating Home).  If no sequence is armed the
+    // token stays kNoStartupSequenceToken and the destructor release is inert.
+    if (m_libraryCoordinator)
+        m_startupSequenceToken = m_libraryCoordinator->startupSequenceOwnerToken();
+}
 
 HomeLibraryController::~HomeLibraryController()
 {
     requestStopAllWorkers();
     joinAllWorkers();
+    // The fetch worker owns (and consumes) the coordinator's startup sequence
+    // while it runs.  Releasing only after the join guarantees we never race a
+    // worker that is about to claim the reservation.  If the sequence was never
+    // claimed (the fetch never started or was abandoned), this releases the
+    // reservation generation captured at construction so live changes are
+    // applied; otherwise the coordinator has already taken ownership and this
+    // is a no-op.  A stale token from a superseded owner generation is ignored
+    // by the coordinator, so this cannot clear another owner's handoff/demand.
+    if (m_libraryCoordinator)
+        m_libraryCoordinator->releaseStartupSequence(m_startupSequenceToken);
 }
 
 std::uint64_t HomeLibraryController::catalogScopeEpoch() const

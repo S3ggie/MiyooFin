@@ -8,6 +8,7 @@
 #include "../net/Session.hpp"
 #include "../net/JellyfinApi.hpp"
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
@@ -205,6 +206,46 @@ class LibraryCoordinator
     /// Start session-scoped live events. Safe to call more than once.
     void start();
 
+    /// Opaque owner identity for Home's cold-start sequence.  reserve returns
+    /// one and only the matching value can release that reservation/handoff.
+    /// kNoStartupSequenceToken is never a valid owner, so a controller that
+    /// never reserved (or holds a superseded generation) cannot release.
+    using StartupSequenceToken = std::uint64_t;
+    static constexpr StartupSequenceToken kNoStartupSequenceToken = 0;
+
+    /// Reserve cold-start precedence for Home's startup -> full-population
+    /// sequence.  Call before start() (or before any live batch can be queued)
+    /// so the live-change worker cannot claim the serialized slot ahead of
+    /// startup.  Returns the owner token bound to this reservation generation;
+    /// the owner-held reservation token is consumed by the first
+    /// startup/full-population claim; the startup -> full-population handoff is
+    /// tracked separately and consumed only by the intended FullPopulation
+    /// continuation, so the sequence stays ownership-tracked until it
+    /// completes, aborts, or its owner releases it.  Coordinators that never
+    /// run Home's cold-start sequence (start-only live or hierarchy consumers)
+    /// simply do not reserve and therefore process live work immediately.
+    StartupSequenceToken reserveStartupSequence() noexcept;
+    /// Relinquish the owner-held cold-start reservation when Home abandons its
+    /// startup sequence.  `ownerToken` must match the token returned by the
+    /// reserve call that armed this sequence; a stale token from a superseded
+    /// reservation generation (or kNoStartupSequenceToken) is ignored so a
+    /// non-owner destructor cannot clear another owner's handoff/demand.  This
+    /// covers both a never-claimed reservation and the startup ->
+    /// full-population handoff, where the demand remains armed while Home has
+    /// not yet requested the full population.  It is a no-op while a
+    /// startup/full-population operation actively owns the sequence, so it
+    /// cannot clobber in-flight work.  Idempotent for the matching token.
+    void releaseStartupSequence(StartupSequenceToken ownerToken) noexcept;
+
+    /// Current cold-start sequence owner generation, or
+    /// kNoStartupSequenceToken when no reservation/handoff is outstanding.
+    /// Consumers that will later release the sequence (Home's controller)
+    /// capture this at construction and pass it back to
+    /// releaseStartupSequence(), binding the release to the generation that was
+    /// armed when they were created rather than to whatever owner exists at
+    /// teardown time.
+    StartupSequenceToken startupSequenceOwnerToken() const noexcept;
+
     /// Start the coordinator-owned persisted-checkpoint decision and bounded
     /// startup catch-up.
     bool startStartupSync(bool catalogHasRows);
@@ -341,6 +382,49 @@ class LibraryCoordinator
         std::lock_guard<std::mutex> lock(m_startupMutex);
         return m_liveChangeResult.has_value();
     }
+    // Deterministic cold-start precedence seams.  waitLiveChangeDeferredForTest
+    // blocks until the live-change worker has observed the cold-start demand
+    // gate, proving it did not claim the serialized slot.
+    // waitLiveChangeResultForTest blocks until a retained live result is
+    // published once that demand clears.  Both return false only on timeout.
+    bool waitLiveChangeDeferredForTest(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(m_startupMutex);
+        return m_liveChangeTestWake.wait_for(
+            lock, timeout, [this] { return m_liveChangeDemandDeferralsForTest > 0; });
+    }
+    bool waitLiveChangeResultForTest(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(m_startupMutex);
+        return m_liveChangeTestWake.wait_for(lock, timeout,
+                                             [this] { return m_liveChangeResult.has_value(); });
+    }
+    // Deterministic cold-start ownership observation.  A failed competing
+    // admission must leave the owning sequence's demand armed and claimed.
+    bool startupPopulationDemandArmedForTest() const
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        return m_startupPopulationDemand;
+    }
+    bool startupSequenceClaimedForTest() const
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        return m_startupSequenceClaimed;
+    }
+    // True while the startup -> population handoff owner token is held by Home.
+    // A competing startup admission in this window must not consume it.
+    bool startupHandoffPendingForTest() const
+    {
+        std::lock_guard<std::mutex> lock(m_startupMutex);
+        return m_startupHandoffPending;
+    }
+    // True when no serialized top-level operation currently owns the slot.  Used
+    // to prove a competing startup is rejected by the handoff admission gate
+    // rather than by slot occupancy.
+    bool serializedOperationIdleForTest() const noexcept
+    {
+        return currentOperationKind() == OperationKind::None;
+    }
 #endif
 
     std::shared_ptr<LibraryQuery> query() const
@@ -433,6 +517,28 @@ class LibraryCoordinator
     bool serializedOperationAdmittedLocked(const AdmissionRequest& request,
                                            std::string* reasons) const noexcept;
 
+    // Cold-start priority accounting.  While Home's initial startup/full
+    // population sequence is expected or underway, the live-change worker must
+    // not claim the serialized slot.  Both helpers require m_startupMutex.
+    void markStartupPopulationDemandLocked() noexcept;
+    void clearStartupPopulationDemandLocked() noexcept;
+    // Finalizes cold-start ownership for a request whose admission has ALREADY
+    // succeeded.  A startup/full-population request takes ownership of the
+    // cold-start demand if no sequence already owns it.  After a startup ->
+    // full-population handoff only the intended continuation (a FullPopulation
+    // claim) consumes the handoff; a competing Startup claim must leave the
+    // handoff owner and its demand untouched.  Returns true when this call is
+    // the owner (and therefore responsible for clearing the demand on failure
+    // or terminal completion); false for a competing request that must not
+    // release the active owner's demand.  Callers MUST NOT invoke this before
+    // admission succeeds: consuming the reservation/handoff up front would let
+    // a failed admission (caused by another operation occupying the slot) clear
+    // the owner-held sequence and its demand.  Requires m_startupMutex.
+    bool claimStartupSequenceLocked(OperationKind requester) noexcept;
+    // Ends the owning cold-start sequence: clears the demand gate and releases
+    // ownership.  Requires m_startupMutex.
+    void finishStartupSequenceLocked() noexcept;
+
     bool takeStartupSyncResultLocked(StartupSyncResult& result);
     bool takeFullPopulationUpdateLocked(std::uint64_t request, FullPopulationUpdate& update);
     bool takeHomeRailResultLocked(std::uint64_t request, HomeRailResult& result);
@@ -461,6 +567,9 @@ class LibraryCoordinator
     // Test-only admission-snapshot race seam state.
     std::atomic_bool m_admissionSnapshotPauseForTest{false};
     mutable std::atomic_bool m_admissionSnapshotPausedForTest{false};
+    // Test-only cold-start precedence seam state.  Guarded by m_startupMutex.
+    mutable std::condition_variable m_liveChangeTestWake;
+    std::size_t m_liveChangeDemandDeferralsForTest = 0;
 #endif
     std::thread m_startupThread;
     std::shared_ptr<std::atomic_bool> m_startupCancellation;
@@ -482,6 +591,39 @@ class LibraryCoordinator
     std::int64_t m_lastSuccessfulMs = 0;
     std::int64_t m_lastReconcileMs = 0;
     bool m_manualOfflineMode = false;
+    // Set while Home's cold-start startup/full-population sequence is expected
+    // or in flight.  The live-change worker defers dequeue/claim while this is
+    // set so background event processing cannot preempt startup or the initial
+    // full population.  Guarded by m_startupMutex.
+    bool m_startupPopulationDemand = false;
+    // The owner-held cold-start reservation token: true between
+    // reserveStartupSequence() and the first claim.  releaseStartupSequence()
+    // may only clear the demand while this is set and no operation actively
+    // claims the sequence, so an abandoned reservation can be released but
+    // in-flight work cannot be clobbered.  Guarded by m_startupMutex.
+    bool m_startupSequenceReservationOutstanding = false;
+    // Owner identity of the current reservation generation.  reserve assigns a
+    // fresh value (monotonic, never kNoStartupSequenceToken) and release only
+    // acts when the caller passes the matching value, so a stale or non-owner
+    // Home destructor cannot clear the intended owner's reservation/handoff.
+    // It survives a claim and the startup -> population handoff (the owner
+    // still holds the sequence) and is invalidated by finishStartupSequence()
+    // or an owner release.  Guarded by m_startupMutex.
+    StartupSequenceToken m_startupSequenceOwnerToken = kNoStartupSequenceToken;
+    StartupSequenceToken m_nextStartupSequenceToken = kNoStartupSequenceToken;
+    // True while a startup operation has handed the cold-start sequence off to
+    // the full population Home is about to request.  Startup's worker ownership
+    // has ended but Home still owns the armed demand, so the handoff is tracked
+    // separately from an active claim: only a FullPopulation claim may consume
+    // it, and releaseStartupSequence() may relinquish it.  Keeping it distinct
+    // from m_startupSequenceClaimed means a competing startup/full admission
+    // that loses the handoff cannot clear Home's demand when it fails.
+    // Guarded by m_startupMutex.
+    bool m_startupHandoffPending = false;
+    // True while a claimed startup/full-population operation owns the demand.
+    // Only the first claim takes ownership; a failed competing admission must
+    // not clear another sequence's demand.  Guarded by m_startupMutex.
+    bool m_startupSequenceClaimed = false;
     JellyfinLibraryEventQueue m_liveChangeRequests;
     std::optional<LiveLibraryChangeResult> m_liveChangeResult;
     std::optional<LiveChangeIdentity> m_liveChangeActive;

@@ -93,6 +93,14 @@ void App::configureCatalogScopeForSession()
         m_catalogScopeEpoch = m_catalogDb->configureScope(m_session.serverUrl, m_session.userId);
         m_libraryCoordinator = std::make_shared<library::LibraryCoordinator>(m_session, m_catalogDb,
                                                                              m_catalogScopeEpoch);
+        // Home's cold-start startup/full-population sequence begins as soon as
+        // this session's Home screen runs.  Reserve that precedence before the
+        // live worker starts so a live event cannot claim the serialized slot
+        // ahead of startup.  Home's controller captures the returned owner token
+        // and releases the sequence if Home is torn down before it completes; a
+        // stale controller from a previous generation holds a different token
+        // and cannot clear this owner's reservation/handoff.
+        m_libraryCoordinator->reserveStartupSequence();
         m_libraryCoordinator->start();
         if (m_downloadManager)
             m_downloadManager->setLibraryServices(m_libraryCoordinator->query(),

@@ -159,9 +159,18 @@ bool LibraryCoordinator::serializedOperationAdmittedLocked(const AdmissionReques
         request.requester == OperationKind::SafetyReconcile && m_safetyReconcileResultReady;
     const bool liveResultReady =
         request.requester == OperationKind::LiveChange && m_liveChangeResult.has_value();
+    // While the startup -> full-population handoff is pending the serialized
+    // slot is idle (the startup worker has released it, but Home still owns the
+    // armed cold-start demand until it requests the intended population).  A
+    // competing startup would otherwise pass the occupancy gate, be admitted,
+    // and then clear Home's handoff/demand on its terminal path.  Reject it
+    // explicitly; only requestFullPopulation (which consumes the handoff) may
+    // proceed in this window.
+    const bool startupHandoffPending =
+        request.requester == OperationKind::Startup && m_startupHandoffPending;
     const bool blocked = stopped || notRunning || missingSync || missingDb || scopeNotReady ||
                          missingQuery || offlineSuppressed || occupied || safetyResultReady ||
-                         liveResultReady;
+                         liveResultReady || startupHandoffPending;
     if (!blocked)
         return true;
     if (reasons) {
@@ -189,8 +198,78 @@ bool LibraryCoordinator::serializedOperationAdmittedLocked(const AdmissionReques
             appendCoordinatorGateReason(*reasons, "safety_reconcile_result_ready", true);
         if (liveResultReady)
             appendCoordinatorGateReason(*reasons, "live_change_result_ready", true);
+        if (startupHandoffPending)
+            appendCoordinatorGateReason(*reasons, "startup_handoff_pending", true);
     }
     return false;
+}
+
+void LibraryCoordinator::markStartupPopulationDemandLocked() noexcept
+{
+    // Manual offline never gates live processing: Home's startup/population
+    // sequence is skipped offline and retained live changes must still apply.
+    // The reservation/ownership flags are unaffected, so the demand is
+    // re-armed when the session returns online.
+    if (m_manualOfflineMode)
+        return;
+    m_startupPopulationDemand = true;
+    // Wake the live worker so it re-evaluates the gate and defers even if it
+    // was already runnable when the demand was marked.
+    m_liveChangeWake.notify_all();
+}
+
+void LibraryCoordinator::clearStartupPopulationDemandLocked() noexcept
+{
+    m_startupPopulationDemand = false;
+    // The live worker may be parked waiting for the cold-start sequence to
+    // resolve; wake it so a retained batch is applied promptly.
+    m_liveChangeWake.notify_all();
+}
+
+bool LibraryCoordinator::claimStartupSequenceLocked(OperationKind requester) noexcept
+{
+    bool ownsSequence = false;
+    if (m_startupSequenceClaimed) {
+        // An active startup/full-population operation already owns the demand.
+        // A competing request must not take ownership: if its own admission
+        // later fails it must not clear the owner's demand and release the
+        // active startup gate.
+        ownsSequence = false;
+    } else if (m_startupHandoffPending) {
+        // Startup handed off to the full population Home is about to request.
+        // Only that intended continuation consumes the handoff owner; a
+        // competing startup admission must not steal the token, or its failed
+        // admission would clear Home's armed demand before the population runs.
+        if (requester == OperationKind::FullPopulation) {
+            ownsSequence = true;
+            m_startupHandoffPending = false;
+            m_startupSequenceClaimed = true;
+        }
+    } else {
+        // Unclaimed base reservation (or a coordinator that never reserved):
+        // the first startup/full-population request owns the sequence and
+        // consumes the owner-held reservation token.
+        ownsSequence = true;
+        m_startupSequenceClaimed = true;
+        m_startupSequenceReservationOutstanding = false;
+    }
+    markStartupPopulationDemandLocked();
+    return ownsSequence;
+}
+
+void LibraryCoordinator::finishStartupSequenceLocked() noexcept
+{
+    // The sequence is terminal (completed, failed, cancelled, or superseded):
+    // release the active claim, the owner-held reservation, and the startup ->
+    // population handoff so a later release cannot resurrect a completed
+    // sequence and re-armed offline sessions start from a clean slate.  The
+    // owner token is invalidated so a delayed owner/non-owner release of the
+    // completed generation cannot match a later reservation.
+    m_startupSequenceClaimed = false;
+    m_startupSequenceReservationOutstanding = false;
+    m_startupHandoffPending = false;
+    m_startupSequenceOwnerToken = kNoStartupSequenceToken;
+    clearStartupPopulationDemandLocked();
 }
 
 LibraryCoordinator::LibraryCoordinator(Session session, std::shared_ptr<CatalogDb> db,
@@ -217,14 +296,62 @@ void LibraryCoordinator::start()
         std::lock_guard<std::mutex> hierarchyLock(m_hierarchyMutex);
         m_hierarchyStop = false;
     }
+    // The cold-start reservation is owned explicitly by the startup sequence,
+    // not armed for every online start.  An owner that will run Home's startup
+    // calls reserveStartupSequence() before start() so the live worker cannot
+    // claim the slot ahead of startup; a start-only coordinator leaves the
+    // reservation clear and processes live work immediately.
     m_liveChangeStop = false;
     m_liveChangeThread = std::thread(&LibraryCoordinator::liveChangeWorker, this);
     m_hierarchyThread = std::thread(&LibraryCoordinator::hierarchyWorker, this);
     m_running = true;
 }
 
-bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
+LibraryCoordinator::StartupSequenceToken
+LibraryCoordinator::startupSequenceOwnerToken() const noexcept
 {
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    return m_startupSequenceOwnerToken;
+}
+
+LibraryCoordinator::StartupSequenceToken LibraryCoordinator::reserveStartupSequence() noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    // A fresh reservation is a new owner generation: assign a token that no
+    // earlier (now stale) controller can present, then arm the reservation and
+    // the demand.  An unclaimed handoff from the previous generation stays
+    // armed, but the new token supersedes it for release purposes.
+    m_startupSequenceOwnerToken = ++m_nextStartupSequenceToken;
+    m_startupSequenceReservationOutstanding = true;
+    markStartupPopulationDemandLocked();
+    return m_startupSequenceOwnerToken;
+}
+
+void LibraryCoordinator::releaseStartupSequence(StartupSequenceToken ownerToken) noexcept
+{
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    // Only the current owner generation may release.  A stale token from an
+    // earlier reservation, or kNoStartupSequenceToken from a controller that
+    // never reserved, must not clear the active owner's handoff/demand.
+    if (ownerToken == kNoStartupSequenceToken || ownerToken != m_startupSequenceOwnerToken)
+        return;
+    // Only an unclaimed reservation or an unclaimed startup -> population
+    // handoff is releasable.  Once a startup or full population request has
+    // actively claimed the sequence, the coordinator owns the demand and
+    // clears it on the sequence's terminal publication; the owner must not
+    // clobber that in-flight work.
+    if (m_startupSequenceClaimed)
+        return;
+    if (!m_startupSequenceReservationOutstanding && !m_startupHandoffPending)
+        return;
+    m_startupSequenceReservationOutstanding = false;
+    m_startupHandoffPending = false;
+    m_startupSequenceOwnerToken = kNoStartupSequenceToken;
+    clearStartupPopulationDemandLocked();
+}
+
+bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
+try {
     if (!kCoordinatorStartupSyncEnabled) {
         (void)catalogHasRows;
         uiDiagnostics().log("[LibraryCoordinator] startup_sync_rejected phase=disabled");
@@ -236,6 +363,7 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
     // publish its result, so joining while locked can deadlock at the handoff.
     std::thread priorThread;
     std::string admissionDiagnostic;
+    bool ownsStartupSequence = false;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         AdmissionRequest request;
@@ -252,10 +380,20 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
             // Reserve the startup slot while the prior thread is being joined so
             // another caller cannot start a second operation in the gap.
             beginOperation(OperationKind::Startup);
+            // Only a successful admission may finalize cold-start ownership.
+            // Claiming before admission would consume the owner-held
+            // reservation and then, on a failed admission caused by another
+            // operation occupying the slot, clear it (and the owner token and
+            // armed demand) via finishStartupSequenceLocked().  Deferring the
+            // claim leaves the reservation, token, and demand intact so a later
+            // retry still owns and can release the sequence.
+            ownsStartupSequence = claimStartupSequenceLocked(OperationKind::Startup);
             m_startupCancellation = std::make_shared<std::atomic_bool>(false);
         }
     }
     if (!admissionDiagnostic.empty()) {
+        // The failed admission did not claim the sequence, so the owner-held
+        // reservation and its armed demand remain intact for a retry.
         uiDiagnostics().log(admissionDiagnostic);
         return false;
     }
@@ -274,6 +412,8 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
                                  " catalog_has_rows=" +
                                  std::to_string(catalogHasRows ? 1 : 0) + " reasons=" + reasons;
             releaseOperation(OperationKind::Startup);
+            if (ownsStartupSequence)
+                finishStartupSequenceLocked();
         } else {
             const auto cancellation = m_startupCancellation;
             const auto sync = m_sync;
@@ -383,6 +523,23 @@ bool LibraryCoordinator::startStartupSync(bool catalogHasRows)
         return false;
     }
     return true;
+} catch (...) {
+    // A post-join gate failure or worker-thread construction failure must not
+    // leave the cold-start demand armed, or retained live changes would be
+    // deferred forever.  Only an admitted owner ever reaches throwing code (a
+    // competing request now fails the startup-handoff admission gate and
+    // returns before this point), but re-check ownership here so a non-owner can
+    // never clear the active sequence's demand on the unwind path.
+    std::lock_guard<std::mutex> lock(m_startupMutex);
+    const bool ownedStartupSlot = currentOperationKind() == OperationKind::Startup;
+    releaseOperation(OperationKind::Startup);
+    // Only finalize the sequence when this startup actually claimed it (the
+    // handler cannot see the try body's local flag).  A pre-claim construction
+    // failure leaves m_startupSequenceClaimed false and must preserve the
+    // owner-held reservation/demand for a retry.
+    if (ownedStartupSlot && m_startupSequenceClaimed)
+        finishStartupSequenceLocked();
+    throw;
 }
 
 bool LibraryCoordinator::takeStartupSyncResult(StartupSyncResult& result)
@@ -404,6 +561,33 @@ bool LibraryCoordinator::takeStartupSyncResultLocked(StartupSyncResult& result)
         return false;
     result = std::move(m_startupResult);
     releaseOperation(OperationKind::Startup);
+    // The cold-start sequence continues into a full population exactly when
+    // Home will request one: a successful FullReconcile policy decision, or a
+    // DeltaCatchUp that failed (not cancelled/superseded) and falls back to a
+    // full walk.  A startup that could not decide (for example a missing db or
+    // scope, which leaves the default FullReconcile mode with success=false)
+    // never guarantees that population will follow, so it must not retain the
+    // demand and strand retained live changes.  A cancelled or superseded
+    // startup is likewise terminal, as is every other decision (SkipFresh,
+    // successful DeltaCatchUp).
+    const bool populationExpected =
+        !result.cancelled && !result.superseded &&
+        ((result.mode == StartupSyncMode::FullReconcile && result.success) ||
+         (result.mode == StartupSyncMode::DeltaCatchUp && !result.success));
+    if (populationExpected) {
+        // Startup's worker ownership ends, but the sequence does not: Home
+        // still owns the cold-start handoff until it requests and claims the
+        // full population.  Track that handoff separately from an unclaimed
+        // base reservation so only the intended FullPopulation continuation can
+        // consume it; a competing startup/full admission cannot steal the owner
+        // token and clear Home's demand when it fails.  Home's destructor can
+        // still relinquish an abandoned handoff.
+        m_startupSequenceClaimed = false;
+        m_startupHandoffPending = true;
+        markStartupPopulationDemandLocked();
+    } else {
+        finishStartupSequenceLocked();
+    }
     return true;
 }
 
@@ -451,8 +635,12 @@ bool LibraryCoordinator::takeFullPopulationUpdateLocked(std::uint64_t request,
     // still executing.
     if (m_fullPopulationUpdates.empty() &&
         currentOperationKind() == OperationKind::FullPopulation &&
-        currentOperationPhase() == OperationPhase::PublicationPending)
+        currentOperationPhase() == OperationPhase::PublicationPending) {
         releaseOperation(OperationKind::FullPopulation);
+        // Draining the terminal publication ends the cold-start sequence; a
+        // live change retained during startup/population may now be applied.
+        finishStartupSequenceLocked();
+    }
     return true;
 }
 
@@ -506,6 +694,7 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
 {
     std::thread priorThread;
     std::string admissionDiagnostic;
+    bool ownsStartupSequence = false;
     {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         AdmissionRequest admission;
@@ -524,6 +713,14 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
             if (m_fullPopulationThread.joinable())
                 priorThread = std::move(m_fullPopulationThread);
             beginOperation(OperationKind::FullPopulation);
+            // Only a successful admission consumes the cold-start handoff or
+            // reservation.  Consuming it up front would let an unrelated
+            // operation already occupying the slot as the same FullPopulation
+            // kind (for example a beginFullSync reservation) make this request
+            // fail admission after it had stolen Home's handoff, clearing the
+            // owner token and armed demand.  Deferring keeps the handoff,
+            // token, and demand intact for the intended continuation.
+            ownsStartupSequence = claimStartupSequenceLocked(OperationKind::FullPopulation);
             m_fullPopulationCancellation = std::make_shared<std::atomic_bool>(false);
             m_fullPopulationUpdates.clear();
             request = ++m_fullPopulationRequest;
@@ -531,14 +728,20 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
         }
     }
     if (!admissionDiagnostic.empty()) {
+        // The failed admission did not consume the handoff/reservation, so the
+        // owner-held sequence and its armed demand remain intact.
         uiDiagnostics().log(admissionDiagnostic);
         return false;
     }
-    if (priorThread.joinable())
-        priorThread.join();
 
     std::string postJoinDiagnostic;
     try {
+        // The prior-thread join is part of the admitted operation's unwind
+        // path: if it throws, the serialized slot and cold-start demand must
+        // still be released by the catch below.
+        if (priorThread.joinable())
+            priorThread.join();
+
         {
             std::lock_guard<std::mutex> lock(m_startupMutex);
             if (m_stopped || !m_running || !m_sync || !m_db) {
@@ -554,6 +757,8 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
                     " generation=" + std::to_string(m_fullPopulationGeneration) +
                     " scope_epoch=" + std::to_string(m_scopeEpoch) + " reasons=" + reasons;
                 releaseOperation(OperationKind::FullPopulation);
+                if (ownsStartupSequence)
+                    finishStartupSequenceLocked();
             } else {
                 const auto sync = m_sync;
                 const auto db = m_db;
@@ -964,6 +1169,13 @@ bool LibraryCoordinator::requestFullPopulation(std::uint64_t& request)
     } catch (...) {
         std::lock_guard<std::mutex> lock(m_startupMutex);
         releaseOperation(OperationKind::FullPopulation);
+        // Worker-thread construction or any other post-join failure must not
+        // leave the cold-start demand armed, or retained live changes would be
+        // deferred forever.  Only an admitted owner can reach this unwind path,
+        // but gate on ownership so a non-owner can never clear the active
+        // sequence's demand.
+        if (ownsStartupSequence)
+            finishStartupSequenceLocked();
         throw;
     }
     if (!postJoinDiagnostic.empty()) {
@@ -2004,7 +2216,20 @@ void LibraryCoordinator::liveChangeWorker()
             AdmissionRequest admission;
             admission.requester = OperationKind::LiveChange;
             const bool serializedSlotOpen = serializedOperationAdmittedLocked(admission, nullptr);
-            if (!serializedSlotOpen || !m_liveChangeRequests.pop(batch)) {
+            // Cold-start precedence: while Home's startup/full-population
+            // sequence is expected or underway, do not dequeue or claim the
+            // serialized slot.  The retained batch is applied once the demand
+            // clears (the coordinator notifies m_liveChangeWake).
+            const bool startupDemandDeferred = m_startupPopulationDemand;
+            if (startupDemandDeferred || !serializedSlotOpen || !m_liveChangeRequests.pop(batch)) {
+#ifdef MIYOOFIN_TEST_BUILD
+                if (startupDemandDeferred) {
+                    // Deterministic seam: let a test observe that the worker
+                    // reached the demand gate without claiming the slot.
+                    ++m_liveChangeDemandDeferralsForTest;
+                    m_liveChangeTestWake.notify_all();
+                }
+#endif
                 m_liveChangeWake.wait_for(lock, std::chrono::milliseconds(5));
                 continue;
             }
@@ -2059,6 +2284,11 @@ void LibraryCoordinator::liveChangeWorker()
                 return;
             value.generation = std::max(value.generation, committedGeneration);
             m_liveChangeResult = std::move(value);
+#ifdef MIYOOFIN_TEST_BUILD
+            // Deterministic seam: wake a test waiting for the deferred batch to
+            // be applied after the cold-start demand cleared.
+            m_liveChangeTestWake.notify_all();
+#endif
             // The mutation is durable; release the global serialized slot now
             // and retain the immutable terminal result for Home.  Same-kind
             // admission is gated on the pending result so a later live batch
@@ -2242,7 +2472,23 @@ void LibraryCoordinator::cancelSafetyReconcile() noexcept
 void LibraryCoordinator::setManualOfflineMode(bool manualOffline) noexcept
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
+    const bool wasManualOffline = m_manualOfflineMode;
     m_manualOfflineMode = manualOffline;
+    if (manualOffline) {
+        // Home's startup/full-population sequence is skipped offline, so
+        // cold-start precedence must not strand retained live changes.  An
+        // in-flight startup or population still defers the live worker through
+        // slot occupancy and clears its demand when it terminates.
+        clearStartupPopulationDemandLocked();
+    } else if (wasManualOffline &&
+               (m_startupSequenceReservationOutstanding || m_startupHandoffPending)) {
+        // Returning online with the cold-start reservation or the startup ->
+        // population handoff still unclaimed: re-arm the demand before Home can
+        // start its online fetch so a retained live change cannot claim the
+        // serialized slot ahead of the sequence.  (mark is a no-op while
+        // offline, hence the ordering above.)
+        markStartupPopulationDemandLocked();
+    }
 }
 
 void LibraryCoordinator::stop() noexcept

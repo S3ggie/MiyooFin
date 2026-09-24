@@ -2,6 +2,7 @@
 #include "../src/ui/screens/HomeLibraryController.hpp"
 #include "../src/library/LibraryCoordinator.hpp"
 #include "../src/library/LibrarySync.hpp"
+#include "../src/net/JellyfinLibraryEvents.hpp"
 #include "cases/test_catalog_migration_support.hpp"
 
 #include <chrono>
@@ -485,6 +486,114 @@ static void testInitialPopulationOnlyFirstPagesScheduleArtwork()
     std::printf("[test] HomeLibraryController initial population first-page artwork OK\n");
 }
 
+// Regression: the production release path.  AppSession reserves cold-start
+// precedence before the live worker starts; if Home is torn down without ever
+// starting its fetch, the controller's destructor must release that unclaimed
+// reservation so retained live changes are not permanently deferred.
+static void testDestroyedUnstartedControllerReleasesStartupReservation()
+{
+    std::printf("[test] HomeLibraryController unstarted teardown releases reservation\n");
+    const auto scope = makeControllerScope("abandoned");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    session.userId = scope.user;
+    library::LibraryCoordinator coordinator(session, db, epoch);
+    // Mirror AppSession: reserve before the live worker starts.
+    coordinator.reserveStartupSequence();
+    coordinator.start();
+
+    // A queued user-data-only live change needs no network.  The reservation
+    // deterministically gates it before any startup has been requested.
+    JellyfinLibraryChangeBatch batch;
+    batch.userDataChanged = true;
+    CHECK(coordinator.requestLiveChange(batch));
+    CHECK(coordinator.waitLiveChangeDeferredForTest(std::chrono::seconds(5)));
+    CHECK(!coordinator.liveChangeResultReadyForTest());
+
+    DownloadManager downloads(session, controllerDownloadRoot("abandoned"));
+    auto query = coordinator.query();
+    {
+        HomeLibraryController controller(session, query.get(), &coordinator, &downloads);
+        // Deliberately no startFetch(): Home is abandoned before its primary
+        // startup sequence ever begins.
+    } // ~HomeLibraryController releases the still-unclaimed reservation.
+
+    // The retained live change is applied rather than deferred forever.
+    CHECK(coordinator.waitLiveChangeResultForTest(std::chrono::seconds(5)));
+    library::LiveLibraryChangeResult result;
+    CHECK(coordinator.takeLiveChangeResult(result));
+    CHECK(result.success);
+    CHECK(result.userDataChanged);
+
+    coordinator.stop();
+    removeCatalogMigrationTestPaths(scope.paths);
+    std::printf("[test] HomeLibraryController unstarted teardown releases reservation OK\n");
+}
+
+// Regression: once startup hands off a FullReconcile decision, Home holds the
+// armed cold-start demand until it requests the full population.  If Home is
+// destroyed in that handoff window (before its fetch ever requests the
+// population), the controller's destructor must release the owner-held handoff
+// demand so retained live changes are not permanently deferred.
+static void testDestroyedControllerDuringStartupHandoffReleasesDemand()
+{
+    std::printf("[test] HomeLibraryController handoff teardown releases demand\n");
+    const auto scope = makeControllerScope("handoff-abandoned");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(epoch != 0);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    Session session;
+    session.serverUrl = "http://127.0.0.1:1";
+    session.userId = scope.user;
+    library::LibraryCoordinator coordinator(session, db, epoch);
+    coordinator.reserveStartupSequence();
+    coordinator.start();
+
+    // Retain a live change behind the armed cold-start demand.
+    JellyfinLibraryChangeBatch batch;
+    batch.userDataChanged = true;
+    CHECK(coordinator.requestLiveChange(batch));
+    CHECK(coordinator.waitLiveChangeDeferredForTest(std::chrono::seconds(5)));
+
+    // Drive the sequence to the startup -> population handoff: startup has
+    // published FullReconcile, so Home owns the armed demand but has not yet
+    // requested the full population.
+    CHECK(coordinator.startStartupSync(false));
+    library::StartupSyncResult startup;
+    CHECK(coordinator.waitStartupSyncResult(startup, nullptr) == library::WaitStatus::Ready);
+    CHECK(startup.mode == library::StartupSyncMode::FullReconcile);
+    CHECK(coordinator.startupPopulationDemandArmedForTest());
+    CHECK(!coordinator.startupSequenceClaimedForTest());
+    library::LiveLibraryChangeResult deferred;
+    CHECK(!coordinator.liveChangeResultReadyForTest());
+    CHECK(!coordinator.takeLiveChangeResult(deferred));
+
+    DownloadManager downloads(session, controllerDownloadRoot("handoff-abandoned"));
+    auto query = coordinator.query();
+    {
+        HomeLibraryController controller(session, query.get(), &coordinator, &downloads);
+        // Destroyed before startFetch() ever requests the full population.
+    } // ~HomeLibraryController releases the owner-held handoff demand.
+
+    CHECK(!coordinator.startupPopulationDemandArmedForTest());
+    CHECK(coordinator.waitLiveChangeResultForTest(std::chrono::seconds(5)));
+    library::LiveLibraryChangeResult applied;
+    CHECK(coordinator.takeLiveChangeResult(applied));
+    CHECK(applied.success);
+    CHECK(applied.userDataChanged);
+
+    coordinator.stop();
+    removeCatalogMigrationTestPaths(scope.paths);
+    std::printf("[test] HomeLibraryController handoff teardown releases demand OK\n");
+}
+
 int main()
 {
     testOfflineFetchPublishesDownloadedPresentation();
@@ -492,5 +601,7 @@ int main()
     testColdFetchFailurePublishesTerminalFailure();
     testFetchLifecycleAndReentry();
     testInitialPopulationOnlyFirstPagesScheduleArtwork();
+    testDestroyedUnstartedControllerReleasesStartupReservation();
+    testDestroyedControllerDuringStartupHandoffReleasesDemand();
     return miyoofin_test::finish("home_library_controller");
 }

@@ -197,6 +197,12 @@ class HomeLibraryController
     library::LibraryQuery* m_libraryQuery = nullptr;
     library::LibraryCoordinator* m_libraryCoordinator = nullptr;
     DownloadManager* m_downloads = nullptr;
+    // Owner generation captured from the coordinator when this controller was
+    // created.  The destructor releases only this token, so a controller from a
+    // superseded AppSession/Home generation cannot clear the active owner's
+    // cold-start reservation or startup -> population handoff/demand.
+    library::LibraryCoordinator::StartupSequenceToken m_startupSequenceToken =
+        library::LibraryCoordinator::kNoStartupSequenceToken;
 
     std::thread m_fetchThread;
     std::shared_ptr<std::atomic<bool>> m_fetchCancellation;

@@ -459,11 +459,21 @@ class HomeScreen : public Screen
     /// Reconcile m_activeRow by row label after a Home-row mutation.
     void restoreHomeRowFocus(const std::string& label);
     void activateTab(int index);
+    /// Presentation flavour for a card.  Grid keeps the legacy tinted
+    /// placeholder and in-card title strip (Movies/Shows); Home uses a black
+    /// placeholder and the Phase 1 focus treatment.
+    enum class CardPresentation
+    {
+        Grid,
+        Home
+    };
+    /// X offset where the compact header tab strip begins.  Shared by the
+    /// renderer and tabIndexAtPoint() so pointer hit regions match the header.
+    static constexpr int kHeaderTabsX = 150;
     void drawTabBar(SDL_Surface* fb);
-    void drawInfoPanel(SDL_Surface* fb);
     void drawRowList(SDL_Surface* fb);
-    void drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item,
-                  bool selected);
+    void drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item, bool selected,
+                  CardPresentation presentation = CardPresentation::Grid);
     void drawPlaceholderTab(SDL_Surface* fb, const char* message);
     void drawBottomHints(SDL_Surface* fb);
     void drawLoadingState(SDL_Surface* fb);

@@ -14,7 +14,9 @@
 
 namespace miyoofin {
 
-static constexpr int VISIBLE_ROWS = 3;
+// Match the Home renderer's two visible rails so row scrolling never hides a
+// focused rail behind the bottom bar.
+static constexpr int VISIBLE_ROWS = 2;
 static constexpr int SETTINGS_VISIBLE_ROWS = 6;
 static constexpr int CARD_GAP = 6;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
@@ -256,7 +258,7 @@ int HomeScreen::tabIndexAtPoint(const std::vector<TabData>& tabs, int x, int y)
     if (y < TAB_Y || y >= TAB_Y + TAB_H)
         return -1;
 
-    int tabX = 8;
+    int tabX = HomeScreen::kHeaderTabsX;
     for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
         const int tabWidth = static_cast<int>(tabs[i].name.size()) * BitmapFont::GLYPH_W + 16;
         if (x >= tabX && x < tabX + tabWidth)

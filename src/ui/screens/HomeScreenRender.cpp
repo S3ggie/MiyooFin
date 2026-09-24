@@ -20,14 +20,17 @@ namespace miyoofin {
 // Layout constants
 static constexpr int TAB_Y = 0;
 static constexpr int TAB_H = 24;
-static constexpr int INFO_Y = 26;
-static constexpr int INFO_H = 110;
-static constexpr int ROWS_Y = INFO_Y + INFO_H + 2;
-static constexpr int BOTTOM_H = 18;
+static constexpr int ROWS_Y = 46; // first Home row label, below the header
+static constexpr int BOTTOM_H = 24;
 static constexpr int CARD_GAP = 6;
 static constexpr int ROW_STRIP_H = 96; // max card height across all types
 static constexpr int ROW_LABEL_H = 18;
-static constexpr int VISIBLE_ROWS = 3;
+static constexpr int ROW_CAPTION_H = 42; // progress band + focused title/subtitle
+static constexpr int ROW_BLOCK_H = ROW_LABEL_H + ROW_STRIP_H + ROW_CAPTION_H;
+// Home renders at most two rails (Continue Watching + Recently Added).  Two
+// 156px blocks starting at ROWS_Y=46 end at y=358, so every card, progress
+// band and focused caption stays above the bottom bar (top y=456).
+static constexpr int VISIBLE_ROWS = 2;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
 static constexpr int SEASON_POSTER_W = 74;
@@ -38,9 +41,62 @@ static constexpr int SHOWS_RAIL_W = 36, SHOWS_PREVIEW_H = 105, SHOWS_GRID_TOP = 
 static constexpr int SHOWS_HALF_W = 302, SHOWS_LEFT_X = 36, SHOWS_RIGHT_X = 338;
 static constexpr std::int64_t SYNC_FRESH_WALL_MS = 15LL * 60 * 1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS = 24LL * 60 * 60 * 1000;
-// Selected artwork box origin (top-left of info panel)
-static constexpr int ART_X = 8;
-static constexpr int ART_Y = INFO_Y + 6; // 32
+
+// Phase 1 Home presentation style.  Near-black canvas, blue focus glow and
+// black artwork placeholders.  Kept presentation-local so no other screen or
+// domain model is affected.
+static constexpr Uint8 HOME_BG_R = 8, HOME_BG_G = 8, HOME_BG_B = 12;
+static constexpr Uint8 HEADER_BG_R = 4, HEADER_BG_G = 4, HEADER_BG_B = 8;
+static constexpr Uint8 FOCUS_R = 60, FOCUS_G = 150, FOCUS_B = 255;
+static constexpr Uint8 FOCUS_GLOW_R = 30, FOCUS_GLOW_G = 80, FOCUS_GLOW_B = 150;
+static constexpr Uint8 CARD_BORDER_R = 48, CARD_BORDER_G = 48, CARD_BORDER_B = 58;
+static constexpr int HEADER_BRAND_X = 16;
+
+static void drawFocusGlow(SDL_Surface* fb, int x, int y, int w, int h)
+{
+    // Layered frames approximate a soft blue glow using only solid rects.
+    BitmapFont::drawRect(fb, x - 3, y - 3, w + 6, h + 6, FOCUS_GLOW_R, FOCUS_GLOW_G, FOCUS_GLOW_B);
+    BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, 40, 105, 190);
+    BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, FOCUS_R, FOCUS_G, FOCUS_B);
+    BitmapFont::drawRect(fb, x, y, w, h, 150, 210, 255);
+}
+
+static void drawContinueWatchingProgress(SDL_Surface* fb, int x, int y, int w,
+                                         const MediaItem& item)
+{
+    constexpr int BAR_H = 4;
+    const bool hasProgress = item.played || item.progress > 0.0f || item.playbackPositionTicks > 0;
+    BitmapFont::fillRect(fb, x, y, w, BAR_H, 40, 40, 50, 255);
+    if (!hasProgress)
+        return;
+    const int pct = item.played ? 100 : playbackPercent(item);
+    const int fillW = w * std::max(0, std::min(100, pct)) / 100;
+    if (fillW > 0)
+        BitmapFont::fillRect(fb, x, y, fillW, BAR_H, FOCUS_R, FOCUS_G, FOCUS_B, 255);
+}
+
+/// Focused-item title and subtitle beneath a Home row.  For episodes the
+/// series name is the title and the episode title is the subtitle; otherwise
+/// the item title is followed by its year/genre.
+static void drawFocusedCaption(SDL_Surface* fb, int x, int y, const MediaItem& item)
+{
+    std::string title = item.title;
+    std::string subtitle;
+    if (item.type == "episode" && !item.seriesName.empty()) {
+        title = item.seriesName;
+        subtitle = item.title;
+    } else {
+        if (item.year > 0)
+            subtitle = std::to_string(item.year);
+        if (!item.genre.empty())
+            subtitle += subtitle.empty() ? item.genre : "  |  " + item.genre;
+    }
+    BitmapFont::drawString(fb, x, y, title.c_str(), 235, 240, 255, HOME_BG_R, HOME_BG_G, HOME_BG_B);
+    if (!subtitle.empty())
+        BitmapFont::drawString(fb, x, y + BitmapFont::GLYPH_H, subtitle.c_str(), 150, 155, 170,
+                               HOME_BG_R, HOME_BG_G, HOME_BG_B);
+}
+
 static void blitDecoded(SDL_Surface* fb, const DecodedImage& img, int x, int y, int w, int h)
 {
     if (img.empty())
@@ -110,7 +166,8 @@ void HomeScreen::render(SDL_Surface* fb)
                                    : tab.name == "Shows" ? "No shows on this server"
                                                          : "No content");
         } else {
-            drawInfoPanel(fb);
+            BitmapFont::fillRect(fb, 0, TAB_H, 640, 480 - TAB_H - BOTTOM_H, HOME_BG_R, HOME_BG_G,
+                                 HOME_BG_B, 255);
             drawRowList(fb);
         }
     }
@@ -118,23 +175,22 @@ void HomeScreen::render(SDL_Surface* fb)
 }
 void HomeScreen::drawTabBar(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, TAB_Y, 640, TAB_H, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                         Theme::BG_B * 2 / 3, 255);
-    BitmapFont::fillRect(fb, 0, TAB_Y + TAB_H - 1, 640, 1, Theme::ACCENT_R, Theme::ACCENT_G,
-                         Theme::ACCENT_B, 100);
-    int x = 8, tabY = TAB_Y + (TAB_H - BitmapFont::GLYPH_H) / 2;
+    BitmapFont::fillRect(fb, 0, TAB_Y, 640, TAB_H, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B, 255);
+    // MiyooFin branding mark.
+    BitmapFont::drawString(fb, HEADER_BRAND_X, TAB_Y + (TAB_H - BitmapFont::GLYPH_H) / 2,
+                           "MiyooFin", FOCUS_R, FOCUS_G, FOCUS_B, HEADER_BG_R, HEADER_BG_G,
+                           HEADER_BG_B);
+    int x = kHeaderTabsX, tabY = TAB_Y + (TAB_H - BitmapFont::GLYPH_H) / 2;
     for (int i = 0; i < (int)m_tabs.size(); ++i) {
         const char* name = m_tabs[i].name.c_str();
         if (i == m_activeTab) {
-            BitmapFont::drawString(fb, x, tabY, name, Theme::ACCENT_R, Theme::ACCENT_G,
-                                   Theme::ACCENT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                                   Theme::BG_B * 2 / 3);
+            BitmapFont::drawString(fb, x, tabY, name, 235, 240, 255, HEADER_BG_R, HEADER_BG_G,
+                                   HEADER_BG_B);
             int tw = (int)::strlen(name) * BitmapFont::GLYPH_W;
-            BitmapFont::fillRect(fb, x, TAB_Y + TAB_H - 3, tw, 2, Theme::ACCENT_R, Theme::ACCENT_G,
-                                 Theme::ACCENT_B, 200);
+            BitmapFont::fillRect(fb, x, TAB_Y + TAB_H - 3, tw, 2, FOCUS_R, FOCUS_G, FOCUS_B, 255);
         } else {
-            BitmapFont::drawString(fb, x, tabY, name, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                                   Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
+            BitmapFont::drawString(fb, x, tabY, name, 150, 155, 170, HEADER_BG_R, HEADER_BG_G,
+                                   HEADER_BG_B);
         }
         x += (int)::strlen(name) * BitmapFont::GLYPH_W + 16;
     }
@@ -144,16 +200,17 @@ void HomeScreen::drawTabBar(SDL_Surface* fb)
     if ((int)login.size() > maxChars)
         login = login.substr(0, maxChars - 3) + "...";
     int loginX = 640 - 8 - (int)login.size() * BitmapFont::GLYPH_W;
-    // Do not obscure tabs on unusually narrow font/theme combinations.
+    // Do not obscure tabs; the compact header intentionally shows these only
+    // when there is room to the right of the tab strip.
     if (loginX > x + 4)
         BitmapFont::drawString(fb, loginX, tabY, login.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                               Theme::BG_B * 2 / 3);
+                               Theme::TEXT_B, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
     int statusX = loginX - 8 - (int)status.size() * BitmapFont::GLYPH_W;
     if (!status.empty() && statusX > x + 4)
-        BitmapFont::drawString(fb, statusX, tabY, status.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                               Theme::BG_B * 2 / 3);
+        BitmapFont::drawString(fb, statusX, tabY, status.c_str(), FOCUS_R, FOCUS_G, FOCUS_B,
+                               HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
+    BitmapFont::fillRect(fb, 0, TAB_Y + TAB_H - 1, 640, 1, FOCUS_GLOW_R, FOCUS_GLOW_G, FOCUS_GLOW_B,
+                         255);
 }
 
 std::string HomeScreen::syncStatusText() const
@@ -186,181 +243,32 @@ std::string HomeScreen::syncStatusText() const
         activeTabNamed("Shows"));
 }
 
-void HomeScreen::drawInfoPanel(SDL_Surface* fb)
-{
-    const MediaItem* item = currentItem();
-    if (!item)
-        return;
-    BitmapFont::fillRect(fb, 0, INFO_Y, 640, INFO_H, 24, 24, 32, 255);
-    BitmapFont::fillRect(fb, 0, INFO_Y, 640, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                         60);
-    ArtworkBox box = artworkBoxSize(*item);
-    int px = ART_X, py = ART_Y, pw = box.w, ph = box.h;
-    // Placeholder colour behind everything
-    const SDL_Color tint = presentationArtworkColor(*item);
-    BitmapFont::fillRect(fb, px, py, pw, ph, tint.r, tint.g, tint.b, tint.a);
-
-    // Render decoded artwork if available, aspect-fit centred
-    if (!m_selectedArtwork.empty()) {
-        // Check pre-scaled card surface cache for selected artwork
-        char selCacheKey[512];
-        std::snprintf(selCacheKey, sizeof(selCacheKey), "%s:%dx%d", m_selectedArtworkId.c_str(), pw,
-                      ph);
-        std::string selCK(selCacheKey);
-        auto cached = m_cardSurfaceCache.find(selCK);
-        if (cached != m_cardSurfaceCache.end() && cached->second) {
-            SDL_Surface* cs = cached->second;
-            int drawX = px + (pw - cs->w) / 2;
-            int drawY = py + (ph - cs->h) / 2;
-            SDL_Rect dstRect = {drawX, drawY, cs->w, cs->h};
-            SDL_BlitSurface(cs, nullptr, fb, &dstRect);
-        } else {
-            int imgW = m_selectedArtwork.width;
-            int imgH = m_selectedArtwork.height;
-            float imgAspect = (float)imgW / (float)imgH;
-            float boxAspect = (float)pw / (float)ph;
-            int drawW, drawH;
-            if (imgAspect > boxAspect) {
-                drawW = pw;
-                drawH = (int)(pw / imgAspect + 0.5f);
-                if (drawH > ph)
-                    drawH = ph;
-            } else {
-                drawH = ph;
-                drawW = (int)(ph * imgAspect + 0.5f);
-                if (drawW > pw)
-                    drawW = pw;
-            }
-            int drawX = px + (pw - drawW) / 2;
-            int drawY = py + (ph - drawH) / 2;
-
-            SDL_Surface* imgSurface =
-                SDL_CreateRGBSurfaceFrom((void*)m_selectedArtwork.pixels.data(), imgW, imgH, 32,
-                                         imgW * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-            if (imgSurface) {
-                SDL_Rect srcRect = {0, 0, imgW, imgH};
-                SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-                SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-                // Do NOT cache a surface wrapping m_selectedArtwork — it is
-                // transient and may be freed before the cached surface is
-                // evicted, causing a use-after-free.
-                SDL_FreeSurface(imgSurface);
-            }
-        }
-    }
-
-    BitmapFont::drawRect(fb, px, py, pw, ph, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
-    int mx = px + pw + 10, my = py + 2;
-
-    // Title: for episodes show series name on the first line and the
-    // episode title on a second visually-subordinate line.
-    if (item->type == "episode" && !item->seriesName.empty()) {
-        BitmapFont::drawString(fb, mx, my, item->seriesName.c_str(), Theme::ACCENT_R,
-                               Theme::ACCENT_G, Theme::ACCENT_B, 24, 24, 32);
-        my += BitmapFont::GLYPH_H + 2;
-        BitmapFont::drawString(fb, mx, my, item->title.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, 24, 24, 32);
-    } else {
-        BitmapFont::drawString(fb, mx, my, item->title.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, 24, 24, 32);
-    }
-    my += BitmapFont::GLYPH_H + 2;
-
-    // Metadata: year and/or genre with conditional separator
-    {
-        char line1[128];
-        if (item->year > 0 && !item->genre.empty())
-            std::snprintf(line1, sizeof(line1), "%d  |  %s", item->year, item->genre.c_str());
-        else if (item->year > 0)
-            std::snprintf(line1, sizeof(line1), "%d", item->year);
-        else if (!item->genre.empty())
-            std::snprintf(line1, sizeof(line1), "%s", item->genre.c_str());
-        else
-            line1[0] = '\0';
-        if (line1[0] != '\0') {
-            BitmapFont::drawString(fb, mx, my, line1, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                                   24, 24, 32);
-            my += BitmapFont::GLYPH_H + 2;
-        }
-    }
-
-    // Rating — Jellyfin community rating is 0.0–10.0
-    if (item->rating > 0.0f) {
-        char rn[16];
-        std::snprintf(rn, sizeof(rn), "%.1f/10", (double)item->rating);
-        BitmapFont::drawString(fb, mx, my, rn, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                               Theme::HIGHLIGHT_B, 24, 24, 32);
-        my += BitmapFont::GLYPH_H + 2;
-    }
-
-    // --- Playback progress bar and status ---
-    {
-        const bool hasProgress =
-            item->played || item->progress > 0.0f || item->playbackPositionTicks > 0;
-        if (hasProgress) {
-            const int pct = item->played ? 100 : playbackPercent(*item);
-            constexpr int BAR_W = 180;
-            constexpr int BAR_H = 4;
-            // Percentage text on the progress row
-            const int py = my - 2; // start 2 px above current my
-            char pctBuf[12];
-            std::snprintf(pctBuf, sizeof(pctBuf), "%d%%", pct);
-            BitmapFont::drawString(fb, mx + BAR_W + 4, py, pctBuf, Theme::TEXT_R, Theme::TEXT_G,
-                                   Theme::TEXT_B, 24, 24, 32);
-            // Track (background) — vertically centred in the text row
-            const int barY = py + (BitmapFont::GLYPH_H - BAR_H) / 2;
-            BitmapFont::fillRect(fb, mx, barY, BAR_W, BAR_H, 40, 40, 50, 255);
-            // Filled portion
-            const int fillW = BAR_W * std::max(0, std::min(100, pct)) / 100;
-            if (fillW > 0)
-                BitmapFont::fillRect(fb, mx, barY, fillW, BAR_H, Theme::ACCENT_R, Theme::ACCENT_G,
-                                     Theme::ACCENT_B, 255);
-            my = py + BitmapFont::GLYPH_H;
-
-            // Watched/remaining time or "Watched"
-            if (item->played) {
-                BitmapFont::drawString(fb, mx, my, "Watched", Theme::ACCENT_R, Theme::ACCENT_G,
-                                       Theme::ACCENT_B, 24, 24, 32);
-            } else {
-                const std::string timeStr =
-                    formatPlaybackTime(item->playbackPositionTicks, item->runTimeTicks);
-                if (!timeStr.empty()) {
-                    BitmapFont::drawString(fb, mx, my, timeStr.c_str(), Theme::TEXT_R,
-                                           Theme::TEXT_G, Theme::TEXT_B, 24, 24, 32);
-                }
-            }
-        }
-    }
-
-    BitmapFont::fillRect(fb, 0, INFO_Y + INFO_H, 640, 1, Theme::ACCENT_R, Theme::ACCENT_G,
-                         Theme::ACCENT_B, 60);
-}
-
 void HomeScreen::drawRowList(SDL_Surface* fb)
 {
     const auto& rows = currentTab().rows;
     if (rows.empty())
         return;
-    static constexpr int VGAP = 4;
     static constexpr int HMARGIN = 4;
     for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
         int rowIdx = m_rowScroll + ri;
         if (rowIdx >= (int)rows.size())
             break;
         const MediaRow& row = rows[rowIdx];
-        int rowY = ROWS_Y + ri * (ROW_LABEL_H + ROW_STRIP_H + VGAP + 4);
+        const bool rowFocused = rowIdx == m_activeRow;
+        const bool continueWatching = row.label == "Continue Watching";
+        int rowY = ROWS_Y + ri * ROW_BLOCK_H;
         int caY = rowY + ROW_LABEL_H;
-        char label[64];
+        char label[80];
         std::snprintf(label, sizeof(label), "  %s", row.label.c_str());
-        BitmapFont::drawString(fb, 4, rowY, label,
-                               rowIdx == m_activeRow ? Theme::ACCENT_R : Theme::TEXT_R,
-                               rowIdx == m_activeRow ? Theme::ACCENT_G : Theme::TEXT_G,
-                               rowIdx == m_activeRow ? Theme::ACCENT_B : Theme::TEXT_B, Theme::BG_R,
-                               Theme::BG_G, Theme::BG_B);
+        BitmapFont::drawString(fb, HMARGIN, rowY, label, rowFocused ? FOCUS_R : Theme::TEXT_R,
+                               rowFocused ? FOCUS_G : Theme::TEXT_G,
+                               rowFocused ? FOCUS_B : Theme::TEXT_B, HOME_BG_R, HOME_BG_G,
+                               HOME_BG_B);
         // Draw cards with per-item sizing and pixel-scroll offset
         int cardAccumX = HMARGIN;
         for (int ci = 0; ci < (int)row.items.size(); ++ci) {
-            ArtworkBox sz = artworkBoxSize(row.items[ci]);
+            const MediaItem& item = row.items[ci];
+            ArtworkBox sz = artworkBoxSize(item);
             int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + sz.w < HMARGIN) {
                 // Fully off-screen left
@@ -369,10 +277,17 @@ void HomeScreen::drawRowList(SDL_Surface* fb)
             }
             if (screenX > 640 - HMARGIN)
                 break;
-            bool sel = (rowIdx == m_activeRow && ci == m_activeCard);
+            const bool sel = rowFocused && ci == m_activeCard;
             int cardScreenY = caY + (ROW_STRIP_H - sz.h) / 2;
-            drawCard(fb, screenX, cardScreenY, sz.w, sz.h, row.items[ci], sel);
+            drawCard(fb, screenX, cardScreenY, sz.w, sz.h, item, sel, CardPresentation::Home);
+            if (continueWatching)
+                drawContinueWatchingProgress(fb, screenX, caY + ROW_STRIP_H + 1, sz.w, item);
             cardAccumX += sz.w + CARD_GAP;
+        }
+        // Readable title/subtitle for the focused item in this row.
+        if (rowFocused) {
+            if (const MediaItem* focused = currentItem())
+                drawFocusedCaption(fb, HMARGIN, caY + ROW_STRIP_H + 7, *focused);
         }
     }
 }
@@ -458,8 +373,9 @@ void HomeScreen::drawMoviePreview(SDL_Surface* fb)
                 SDL_Rect src = {0, 0, m_selectedArtwork.width, m_selectedArtwork.height},
                          dst = {px, py, 64, 96};
                 SDL_BlitScaled(image, &src, fb, &dst);
-                // Do NOT cache a surface wrapping m_selectedArtwork — see
-                // comment in drawInfoPanel.
+                // Do NOT cache a surface wrapping m_selectedArtwork — it is
+                // transient and may be freed before the cached surface is
+                // evicted, causing a use-after-free.
                 SDL_FreeSurface(image);
             }
         }
@@ -614,10 +530,16 @@ void HomeScreen::drawShowsGrid(SDL_Surface* fb)
 }
 
 void HomeScreen::drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item,
-                          bool selected)
+                          bool selected, CardPresentation presentation)
 {
-    const SDL_Color tint = presentationArtworkColor(item);
-    BitmapFont::fillRect(fb, x, y, w, h, tint.r, tint.g, tint.b, tint.a);
+    const bool home = presentation == CardPresentation::Home;
+    if (home) {
+        // Black placeholder rectangle; artwork is blitted over it when loaded.
+        BitmapFont::fillRect(fb, x, y, w, h, 0, 0, 0, 255);
+    } else {
+        const SDL_Color tint = presentationArtworkColor(item);
+        BitmapFont::fillRect(fb, x, y, w, h, tint.r, tint.g, tint.b, tint.a);
+    }
 
     // B5d2b: render loaded row artwork over the placeholder
     {
@@ -676,16 +598,24 @@ void HomeScreen::drawCard(SDL_Surface* fb, int x, int y, int w, int h, const Med
         }
     }
 
+    // In-card black strip keeps every card's title readable.
     int ty = y + h - BitmapFont::GLYPH_H - 2;
-    BitmapFont::fillRect(fb, x, ty, w, BitmapFont::GLYPH_H + 2, 0, 0, 0, 160);
+    BitmapFont::fillRect(fb, x, ty, w, BitmapFont::GLYPH_H + 2, 0, 0, 0, home ? 200 : 160);
     int mcc = (w - 4) / BitmapFont::GLYPH_W;
     std::string truncated = BitmapFont::truncateUtf8(item.title, mcc);
     BitmapFont::drawString(fb, x + 2, ty + 1, truncated.c_str(), 255, 255, 255, 0, 0, 0);
     if (selected) {
-        BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, 255, 220, 40);
-        BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, 255, 255, 120);
+        if (home) {
+            drawFocusGlow(fb, x, y, w, h);
+        } else {
+            // Movies/Shows grid selection is intentionally unchanged.
+            BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, 255, 220, 40);
+            BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, 255, 255, 120);
+        }
     } else {
-        BitmapFont::drawRect(fb, x, y, w, h, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
+        BitmapFont::drawRect(fb, x, y, w, h, home ? CARD_BORDER_R : Theme::TEXT_R,
+                             home ? CARD_BORDER_G : Theme::TEXT_G,
+                             home ? CARD_BORDER_B : Theme::TEXT_B);
     }
 }
 

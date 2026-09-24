@@ -485,13 +485,17 @@ static void testHomeTopTabHitTesting()
         {"Home", {}}, {"Movies", {}}, {"Shows", {}},
         {"Downloads", {}}, {"Settings", {}}
     };
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 8, 0) == 0);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 60, 12) == 1);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 124, 12) == 2);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 180, 12) == 3);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 268, 12) == 4);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 8, 24) == -1);
-    CHECK(HomeScreen::tabIndexAtPoint(tabs, 400, 12) == -1);
+    // Probe points match the compact header tab strip, which begins at x=150
+    // and lays out each tab as name*8 + 16: Home 150-197, Movies 198-261,
+    // Shows 262-317, Downloads 318-405, Settings 406-485.
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 160, 0) == 0);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 210, 12) == 1);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 270, 12) == 2);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 330, 12) == 3);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 420, 12) == 4);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 149, 12) == -1);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 550, 12) == -1);
+    CHECK(HomeScreen::tabIndexAtPoint(tabs, 160, 24) == -1);
     std::printf("[test] Home top-tab hit testing OK\n");
 }
 

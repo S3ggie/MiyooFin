@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <set>
 
 using namespace miyoofin;
 
@@ -375,11 +376,121 @@ static void testFetchLifecycleAndReentry()
     std::printf("[test] HomeLibraryController fetch lifecycle and re-entry OK\n");
 }
 
+// Behavioral multi-view/multi-page population regression: a cold catalog walks
+// two library views with two pages each.  Only the first page of each view may
+// schedule artwork; the later pages must not create artwork jobs.  The Home
+// rail still schedules its own artwork, and this is the initial-population
+// path only (user-driven paging is a separate LibraryQuery path).
+static void testInitialPopulationOnlyFirstPagesScheduleArtwork()
+{
+    std::printf("[test] HomeLibraryController initial population first-page artwork\n");
+    const auto scope = makeControllerScope("artwork");
+    auto db = std::make_shared<CatalogDb>();
+    const auto epoch = db->configureScope(scope.url, scope.user);
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+
+    const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(listener >= 0);
+    int reuse = 1;
+    ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(0);
+    CHECK(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+    CHECK(::listen(listener, 8) == 0);
+    socklen_t addressSize = sizeof(address);
+    CHECK(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &addressSize) == 0);
+    const std::string serverUrl = "http://127.0.0.1:" + std::to_string(ntohs(address.sin_port));
+
+    std::thread server([&] {
+        for (;;) {
+            const int client = ::accept(listener, nullptr, nullptr);
+            if (client < 0)
+                return;
+            std::string request;
+            char buffer[4096];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                const ssize_t received = ::recv(client, buffer, sizeof(buffer), 0);
+                if (received <= 0)
+                    break;
+                request.append(buffer, static_cast<std::size_t>(received));
+            }
+            std::string body = R"({"Items":[]})";
+            if (request.find("/Views") != std::string::npos) {
+                body =
+                    R"({"Items":[{"Id":"art-movies","Name":"Movies","CollectionType":"movies"},{"Id":"art-shows","Name":"Shows","CollectionType":"tvshows"}]})";
+            } else if (request.find("Items/Resume") != std::string::npos) {
+                body =
+                    R"({"Items":[{"Id":"art-rail","Type":"Movie","Name":"Rail Movie","ImageTags":{"Primary":"tag-rail"}}]})";
+            } else if (request.find("ParentId=art-movies") != std::string::npos) {
+                body =
+                    request.find("StartIndex=1") != std::string::npos
+                        ? R"({"StartIndex":1,"TotalRecordCount":2,"Items":[{"Id":"art-movie-2","Type":"Movie","Name":"Movie Two","ImageTags":{"Primary":"tag-m2"}}]})"
+                        : R"({"StartIndex":0,"TotalRecordCount":2,"Items":[{"Id":"art-movie-1","Type":"Movie","Name":"Movie One","ImageTags":{"Primary":"tag-m1"}}]})";
+            } else if (request.find("ParentId=art-shows") != std::string::npos) {
+                body =
+                    request.find("StartIndex=1") != std::string::npos
+                        ? R"({"StartIndex":1,"TotalRecordCount":2,"Items":[{"Id":"art-show-2","Type":"Series","Name":"Show Two","ImageTags":{"Primary":"tag-s2"}}]})"
+                        : R"({"StartIndex":0,"TotalRecordCount":2,"Items":[{"Id":"art-show-1","Type":"Series","Name":"Show One","ImageTags":{"Primary":"tag-s1"}}]})";
+            }
+            const std::string response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+            (void)::send(client, response.data(), response.size(), 0);
+            ::close(client);
+        }
+    });
+
+    Session session;
+    session.serverUrl = serverUrl;
+    session.userId = scope.user;
+    library::LibraryCoordinator coordinator(session, db, epoch);
+    coordinator.start();
+    DownloadManager downloads(session, controllerDownloadRoot("artwork"));
+    auto query = coordinator.query();
+
+    HomeLibraryController controller(session, query.get(), &coordinator, &downloads);
+    CHECK(controller.startFetch({}, {}, {}, false, false, false, {}));
+    controller.joinAllWorkers();
+    CHECK(controller.done());
+
+    HomeLibraryController::Presentation presentation;
+    CHECK(controller.takePresentation(presentation));
+    CHECK(presentation.complete);
+
+    std::set<std::string> artworkIds;
+    std::size_t jobCount = 0;
+    for (const auto& work : presentation.artwork) {
+        for (const auto& job : work.jobs) {
+            artworkIds.insert(job.itemId);
+            ++jobCount;
+        }
+    }
+    // Home rails still schedule their own artwork.
+    CHECK(artworkIds.count("art-rail") == 1);
+    // The first page of each Movies/Shows view schedules artwork.
+    CHECK(artworkIds.count("art-movie-1") == 1);
+    CHECK(artworkIds.count("art-show-1") == 1);
+    // Later population pages must not create artwork jobs.
+    CHECK(artworkIds.count("art-movie-2") == 0);
+    CHECK(artworkIds.count("art-show-2") == 0);
+    CHECK(jobCount == 3);
+
+    coordinator.stop();
+    ::shutdown(listener, SHUT_RDWR);
+    ::close(listener);
+    server.join();
+    removeCatalogMigrationTestPaths(scope.paths);
+    std::printf("[test] HomeLibraryController initial population first-page artwork OK\n");
+}
+
 int main()
 {
     testOfflineFetchPublishesDownloadedPresentation();
     testOptionalRailFailureRetainsWarmCatalogContent();
     testColdFetchFailurePublishesTerminalFailure();
     testFetchLifecycleAndReentry();
+    testInitialPopulationOnlyFirstPagesScheduleArtwork();
     return miyoofin_test::finish("home_library_controller");
 }

@@ -784,8 +784,15 @@ void HomeLibraryController::fetchWorker(Session session, std::uint64_t fetchGene
                             }
                             std::printf("[HomeScreen] page_validated start=%d count=%zu more=%d\n",
                                         page.startIndex, page.items.size(), page.hasMore ? 1 : 0);
-                            addArtwork(pending, planMediaPagePosterJobs(page.items),
-                                       update.firstPage);
+                            // During the initial full-population walk only the
+                            // first page of each library view schedules
+                            // artwork; the bounded first-page rows cover the
+                            // rest.  Home rails schedule their own artwork and
+                            // user-driven paging uses the LibraryQuery path, so
+                            // neither is affected by this gate.
+                            if (page.startIndex == 0)
+                                addArtwork(pending, planMediaPagePosterJobs(page.items),
+                                           update.firstPage);
                             auto& targetList =
                                 view.collectionType == "tvshows" ? showsByView : moviesByView;
                             if (targetList.empty() || targetList.back().first != view.name)

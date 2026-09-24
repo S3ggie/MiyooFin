@@ -150,8 +150,18 @@ bool LibraryCoordinator::serializedOperationAdmittedLocked(const AdmissionReques
     const bool selfHierarchy =
         request.requester == OperationKind::Hierarchy && current == OperationKind::Hierarchy;
     const bool occupied = current != OperationKind::None && !selfHierarchy;
+    // Safety and live workers release the serialized slot as soon as their
+    // mutation is durable and retain the terminal result for Home.  A later
+    // request of the same kind must not start (and overwrite the unconsumed
+    // result); every other kind, including hierarchy, is admitted because the
+    // slot is genuinely free.
+    const bool safetyResultReady =
+        request.requester == OperationKind::SafetyReconcile && m_safetyReconcileResultReady;
+    const bool liveResultReady =
+        request.requester == OperationKind::LiveChange && m_liveChangeResult.has_value();
     const bool blocked = stopped || notRunning || missingSync || missingDb || scopeNotReady ||
-                         missingQuery || offlineSuppressed || occupied;
+                         missingQuery || offlineSuppressed || occupied || safetyResultReady ||
+                         liveResultReady;
     if (!blocked)
         return true;
     if (reasons) {
@@ -175,6 +185,10 @@ bool LibraryCoordinator::serializedOperationAdmittedLocked(const AdmissionReques
         if (occupied)
             appendCoordinatorGateReason(*reasons, operationBlockReasonLocked(current, currentPhase),
                                         true);
+        if (safetyResultReady)
+            appendCoordinatorGateReason(*reasons, "safety_reconcile_result_ready", true);
+        if (liveResultReady)
+            appendCoordinatorGateReason(*reasons, "live_change_result_ready", true);
     }
     return false;
 }
@@ -1020,6 +1034,7 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
         beginOperation(OperationKind::SafetyReconcile);
         m_safetyReconcileCancellation = std::make_shared<std::atomic_bool>(false);
         m_safetyReconcileResult = {};
+        m_safetyReconcileResultReady = false;
     }
     if (priorThread.joinable())
         priorThread.join();
@@ -1053,7 +1068,13 @@ bool LibraryCoordinator::requestSafetyReconcile(bool requireMaintenanceDue)
             const auto publish = [this](SafetyReconcileResult value) {
                 std::lock_guard<std::mutex> guard(m_startupMutex);
                 m_safetyReconcileResult = std::move(value);
-                markOperationPublicationPending(OperationKind::SafetyReconcile);
+                m_safetyReconcileResultReady = true;
+                // The mutation is already durable, so release the global
+                // serialized slot immediately and retain the immutable
+                // terminal result for Home.  Same-kind admission is gated on
+                // the result-ready flag above so a later reconcile cannot
+                // overwrite this publication.
+                releaseOperation(OperationKind::SafetyReconcile);
             };
             try {
                 if (!db || scopeEpoch == 0) {
@@ -1199,11 +1220,10 @@ bool LibraryCoordinator::requestSafetyReconcileForTest()
 bool LibraryCoordinator::takeSafetyReconcileResult(SafetyReconcileResult& result)
 {
     std::lock_guard<std::mutex> lock(m_startupMutex);
-    if (currentOperationKind() != OperationKind::SafetyReconcile ||
-        currentOperationPhase() != OperationPhase::PublicationPending)
+    if (!m_safetyReconcileResultReady)
         return false;
     result = std::move(m_safetyReconcileResult);
-    releaseOperation(OperationKind::SafetyReconcile);
+    m_safetyReconcileResultReady = false;
     return true;
 }
 
@@ -2039,7 +2059,11 @@ void LibraryCoordinator::liveChangeWorker()
                 return;
             value.generation = std::max(value.generation, committedGeneration);
             m_liveChangeResult = std::move(value);
-            markOperationPublicationPending(OperationKind::LiveChange);
+            // The mutation is durable; release the global serialized slot now
+            // and retain the immutable terminal result for Home.  Same-kind
+            // admission is gated on the pending result so a later live batch
+            // cannot overwrite it.
+            releaseOperation(OperationKind::LiveChange);
             m_liveChangeWake.notify_one();
         };
 

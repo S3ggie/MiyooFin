@@ -1,3 +1,4 @@
+#include "../UiKit.hpp"
 #include "AuthCheckScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
@@ -88,50 +89,16 @@ void AuthCheckScreen::finishCheck()
 
 void AuthCheckScreen::render(SDL_Surface* fb)
 {
-    BitmapFont::drawString(fb, 8, 8, "MiyooFin", Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
+    ui::SplashSpec spec;
     if (m_ok) {
-        char line[160];
-        std::snprintf(line, sizeof(line), "Welcome back, %s", m_userName.c_str());
-        int lx = (fb->w - (int)::strlen(line) * BitmapFont::GLYPH_W) / 2;
-        int ly = fb->h / 3;
-        BitmapFont::drawString(fb, lx, ly, line, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
-        char hint[64];
-        int secs = (m_welcomeTimer + 999) / 1000;
-        std::snprintf(hint, sizeof(hint), "Starting in %d...", secs);
-        int hx = (fb->w - (int)::strlen(hint) * BitmapFont::GLYPH_W) / 2;
-        int hy = ly + BitmapFont::GLYPH_H + 16;
-        BitmapFont::drawString(fb, hx, hy, hint, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        return;
+        spec.headline = "Welcome back, " + m_userName;
+        spec.detail = "Starting in " + std::to_string((m_welcomeTimer + 999) / 1000) + "...";
+    } else {
+        spec.headline = m_message;
+        spec.busy = m_checkWorker.busy();
     }
-
-    int msgLen = (int)::strlen(m_message.c_str());
-    int msgX = (fb->w - msgLen * BitmapFont::GLYPH_W) / 2;
-    int msgY = fb->h / 3;
-    BitmapFont::drawString(fb, msgX, msgY, m_message.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                           Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
-    if (m_checkWorker.busy()) {
-        static int dotPhase = 0;
-        dotPhase = (dotPhase + 1) % 60;
-        int dots = dotPhase / 15;
-        char buf[32] = "Checking";
-        for (int i = 0; i < dots; ++i)
-            std::strcat(buf, ".");
-        int bufLen = (int)::strlen(buf);
-        int bufX = (fb->w - bufLen * BitmapFont::GLYPH_W) / 2;
-        int bufY = msgY + BitmapFont::GLYPH_H + 12;
-        BitmapFont::drawString(fb, bufX, bufY, buf, Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    }
-
-    int hintY = fb->h - BitmapFont::GLYPH_H - 8;
-    BitmapFont::drawString(fb, 8, hintY, "MENU = Exit", Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    spec.hints = {{ui::Key::Menu, "Exit"}};
+    ui::splash(fb, spec);
 }
 
 } // namespace miyoofin

@@ -1,6 +1,7 @@
 #include "OnScreenKeyboard.hpp"
 #include "Theme.hpp"
 #include "BitmapFont.hpp"
+#include "UiKit.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -306,35 +307,43 @@ int OnScreenKeyboard::handleAction(Action action)
 
 void OnScreenKeyboard::render(SDL_Surface* fb) const
 {
+    namespace d = design;
     for (const auto& k : m_keys) {
-        int x = KEYBOARD_X + k.col * (KEY_W + KEY_GAP);
-        int y = m_config.keyboardTop + k.row * (KEY_H + KEY_GAP);
-        int w = k.colSpan * KEY_W + (k.colSpan - 1) * KEY_GAP;
+        const int x = KEYBOARD_X + k.col * (KEY_W + KEY_GAP);
+        const int y = m_config.keyboardTop + k.row * (KEY_H + KEY_GAP);
+        const int w = k.colSpan * KEY_W + (k.colSpan - 1) * KEY_GAP;
+        const bool sel = (k.row == m_activeKeyRow && k.col == m_activeKeyCol);
+        const bool action = k.colSpan > 1;
+        const bool submit = k.ch == KEY_SUBMIT;
 
-        bool sel = (k.row == m_activeKeyRow && k.col == m_activeKeyCol);
-        Uint8 bgR = sel ? Theme::ACCENT_R : 40;
-        Uint8 bgG = sel ? Theme::ACCENT_G : 40;
-        Uint8 bgB = sel ? Theme::ACCENT_B : 50;
-        Uint8 fgR = sel ? 255 : Theme::TEXT_R;
-        Uint8 fgG = sel ? 255 : Theme::TEXT_G;
-        Uint8 fgB = sel ? 255 : Theme::TEXT_B;
+        d::Rgb face = action ? d::kRaised : d::kPanel;
+        d::Rgb edge = d::kBorder;
+        d::Rgb ink = action ? d::kTextSecondary : d::kText;
+        if (submit) {
+            face = d::kAccentSoft;
+            edge = d::kAccentDim;
+            ink = d::kAccentHi;
+        } else if (k.ch == KEY_CLR) {
+            ink = d::kWarning;
+        }
+        if (sel) {
+            ui::focusRing(fb, x, y, w, KEY_H);
+            face = d::kAccent;
+            edge = d::kAccentHi;
+            ink = d::Rgb{255, 255, 255};
+        }
+        ui::roundFill(fb, x, y, w, KEY_H, 5, edge);
+        ui::roundFill(fb, x + 1, y + 1, w - 2, KEY_H - 2, 4, face);
 
-        std::string label = keyLabel(k);
-
-        BitmapFont::fillRect(fb, x, y, w, KEY_H, bgR, bgG, bgB, 255);
-        BitmapFont::drawRect(fb, x, y, w, KEY_H, fgR, fgG, fgB);
-
-        int labelW = (int)label.size() * BitmapFont::GLYPH_W * KEY_LABEL_SCALE;
-        int lx = x + (w - labelW) / 2;
-        int ly = y + (KEY_H - BitmapFont::GLYPH_H * KEY_LABEL_SCALE) / 2;
-        BitmapFont::drawStringScaled(fb, lx, ly, label.c_str(), KEY_LABEL_SCALE, fgR, fgG, fgB, bgR,
-                                     bgG, bgB);
+        const std::string label = keyLabel(k);
+        const int labelW = ui::textWidth(label, KEY_LABEL_SCALE);
+        ui::text(fb, x + (w - labelW) / 2, y + (KEY_H - BitmapFont::GLYPH_H * KEY_LABEL_SCALE) / 2,
+                 label, ink, KEY_LABEL_SCALE);
     }
-
-    BitmapFont::drawString(
-        fb, 8, m_config.keyboardTop - 16, m_caps ? "CAPS ON" : "CAPS OFF",
-        m_caps ? Theme::ACCENT_R : Theme::TEXT_R, m_caps ? Theme::ACCENT_G : Theme::TEXT_G,
-        m_caps ? Theme::ACCENT_B : Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    if (m_caps) {
+        const int cw = ui::textWidth("CAPS") + 12;
+        ui::chip(fb, 640 - 16 - cw, m_config.keyboardTop - 20, "CAPS", d::kAccentSoft, d::kAccentHi);
+    }
 }
 
 } // namespace miyoofin

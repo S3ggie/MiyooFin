@@ -27,7 +27,7 @@ class OnScreenKeyboard
     struct Config
     {
         const char* submitLabel = "[DONE]";
-        int keyboardTop = 104;
+        int keyboardTop = 140;
     };
 
     OnScreenKeyboard(); // default config
@@ -77,7 +77,7 @@ class OnScreenKeyboard
     static constexpr int GRID_COLS = 10;
     static constexpr int NUM_ROWS = 6;
     static constexpr int KEY_W = 59;
-    static constexpr int KEY_H = 44;
+    static constexpr int KEY_H = 38;
     static constexpr int KEY_GAP = 3;
     static constexpr int KEY_LABEL_SCALE = 2;
     static constexpr int KEYBOARD_WIDTH = GRID_COLS * KEY_W + (GRID_COLS - 1) * KEY_GAP; // 617

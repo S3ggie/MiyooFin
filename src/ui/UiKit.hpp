@@ -64,6 +64,12 @@ void panel(SDL_Surface* fb, int x, int y, int w, int h, Rgb surface = design::kP
 void field(SDL_Surface* fb, int x, int y, int w, int h, const std::string& label,
            const std::string& value, bool focused);
 
+// Inline text input for the keyboard screens: muted label on the left, the
+// value (its tail, when too long) on the right and a caret on the focused
+// field. `masked` shows asterisks (passwords).
+void inputField(SDL_Surface* fb, int x, int y, int w, int h, const std::string& label,
+                const std::string& value, bool focused, bool masked, int labelWidthPx);
+
 // --------------------------------------------------------------------- icons
 void iconBattery(SDL_Surface* fb, int x, int y, int percent, bool charging);
 void iconPlay(SDL_Surface* fb, int x, int y, int size, Rgb c);
@@ -83,6 +89,8 @@ enum class Key
     L,
     R,
     LR,
+    L2,
+    Menu,
     Start,
     Select
 };
@@ -128,6 +136,20 @@ struct FooterSpec
 };
 // Footer strip (design::kFooterH tall): control hints left, link status right.
 void footer(SDL_Surface* fb, const FooterSpec& spec);
+
+// Full-screen status page (startup, connecting, signing in, welcome): large
+// wordmark, a headline, up to two wrapped detail lines, an optional address
+// chip and animated dots while `busy`. The footer shows `hints` only.
+struct SplashSpec
+{
+    std::string headline;
+    Rgb headlineColor = design::kText;
+    std::string detail;
+    std::string address;
+    bool busy = false;
+    std::vector<Hint> hints;
+};
+void splash(SDL_Surface* fb, const SplashSpec& spec);
 
 // ------------------------------------------------------------------- artwork
 // Scales `img` to exactly w x h, CROPPING the overflow (cover, centred) with a

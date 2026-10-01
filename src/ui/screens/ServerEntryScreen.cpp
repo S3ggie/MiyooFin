@@ -1,4 +1,5 @@
 #include "ServerEntryScreen.hpp"
+#include "../UiKit.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../net/JellyfinApi.hpp"
@@ -10,7 +11,7 @@
 
 namespace miyoofin {
 
-static const OnScreenKeyboard::Config kServerKeyboardConfig = {"[DONE]", 104};
+static const OnScreenKeyboard::Config kServerKeyboardConfig = {"[DONE]", 122};
 
 ServerEntryScreen::ServerEntryScreen() : m_keyboard(kServerKeyboardConfig), m_url() {}
 
@@ -193,70 +194,65 @@ void ServerEntryScreen::update(Uint32 dt)
 
 void ServerEntryScreen::render(SDL_Surface* fb)
 {
-    BitmapFont::drawString(
-        fb, 8, 8,
-        m_localAddressEntry ? "Enter Local Jellyfin Address" : "Enter Jellyfin Server URL",
-        Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    const char* hints = (m_localAddressEntry || m_publicAddressEntry)
-                            ? "A=Type  B=Back  [DEL]=Delete  X=Clear  L2=Caps  START=Done"
-                            : "A=Type  B=Delete  X=Clear  L2=Caps  START=Done  SELECT=Cancel";
-    BitmapFont::drawString(fb, 8, 28, hints, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    namespace d = design;
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
+    ui::HeaderSpec header;
+    header.title = m_localAddressEntry    ? "Local Jellyfin address"
+                   : m_publicAddressEntry ? "Public Jellyfin address"
+                                          : "Connect to Jellyfin";
+    header.showStatus = false;
+    ui::header(fb, header);
     drawInputField(fb);
     m_keyboard.render(fb);
     drawStatus(fb);
+
+    ui::FooterSpec footer;
+    footer.showLink = false;
+    using ui::Key;
+    if (m_localAddressEntry || m_publicAddressEntry)
+        footer.hints = {{Key::A, "Type"}, {Key::B, "Back"}, {Key::X, "Clear"}, {Key::L2, "Caps"},
+                        {Key::Start, "Done"}};
+    else
+        footer.hints = {{Key::A, "Type"}, {Key::B, "Delete"}, {Key::X, "Clear"}, {Key::L2, "Caps"},
+                        {Key::Start, "Done"}, {Key::Select, "Cancel"}};
+    ui::footer(fb, footer);
 }
 
 void ServerEntryScreen::drawInputField(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 8, 50, 624, 38, 40, 40, 50, 255);
-    BitmapFont::drawRect(fb, 8, 50, 624, 38, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B);
-    int maxChars = (624 - 8) / BitmapFont::GLYPH_W;
-    std::string display = m_url;
-    if ((int)display.size() > maxChars)
-        display = display.substr((int)display.size() - maxChars);
-    BitmapFont::drawString(fb, 12, 61, display.c_str(), 220, 220, 220, 40, 40, 50);
-    int cursorX = 12 + (int)display.size() * BitmapFont::GLYPH_W;
-    if (cursorX < 620)
-        BitmapFont::fillRect(fb, cursorX, 61, 8, 16, 170, 170, 220, 255);
+    ui::inputField(fb, design::kMargin, 56, design::kScreenW - 2 * design::kMargin, 40, "URL",
+                   m_url, true, false, 5 * BitmapFont::GLYPH_W);
 }
 
 void ServerEntryScreen::drawStatus(SDL_Surface* fb)
 {
-    if (m_message.empty() && !m_connected)
+    namespace d = design;
+    if (m_message.empty() && !m_connected && !m_connecting)
         return;
-    int y = m_keyboard.keyboardBottom() + 16;
-
+    const int y = m_keyboard.keyboardBottom() + 14;
     if (m_connected) {
-        char line1[128];
-        std::snprintf(line1, sizeof(line1), "Connected to %s", m_serverInfo.serverName.c_str());
-        BitmapFont::drawString(fb, 8, y, line1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        y += BitmapFont::GLYPH_H + 2;
-        char line2[128];
-        std::snprintf(line2, sizeof(line2), "Jellyfin version %s", m_serverInfo.version.c_str());
-        BitmapFont::drawString(fb, 8, y, line2, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        y += BitmapFont::GLYPH_H + 2;
-        char line3[128];
-        std::snprintf(line3, sizeof(line3), "Server: %s", m_serverUrl.c_str());
-        BitmapFont::drawString(fb, 8, y, line3, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        y += BitmapFont::GLYPH_H + 6;
-        BitmapFont::drawString(fb, 8, y, "Press any button to continue...", Theme::TEXT_R,
-                               Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        // Success card in place of the keyboard's attention: name, version, address.
+        ui::panel(fb, d::kMargin, y - 4, d::kScreenW - 2 * d::kMargin, 68,
+                  ui::mix(d::kPanel, d::kSuccess, 10), d::kSuccess);
+        ui::statusDot(fb, d::kMargin + 12, y + 6, 8, d::kSuccess);
+        ui::text(fb, d::kMargin + 28, y, "Connected to " + m_serverInfo.serverName, d::kText);
+        ui::text(fb, d::kMargin + 28, y + 20,
+                 ui::fit("Jellyfin " + m_serverInfo.version + "  -  " + m_serverUrl,
+                         d::kScreenW - 2 * d::kMargin - 40),
+                 d::kTextSecondary);
+        ui::text(fb, d::kMargin + 28, y + 40, "Press any button to continue", d::kTextMuted);
     } else if (m_connecting) {
-        static int dotPhase = 0;
-        dotPhase = (dotPhase + 1) % 40;
-        int dots = dotPhase / 8;
-        char buf[32] = "Connecting";
-        for (int i = 0; i < dots; ++i)
-            std::strcat(buf, ".");
-        BitmapFont::drawString(fb, 8, y, buf, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        const int dots = static_cast<int>((SDL_GetTicks() / 400) % 4);
+        ui::statusDot(fb, d::kMargin, y + 4, 8, d::kAccent);
+        ui::text(fb, d::kMargin + 16, y, "Connecting" + std::string(static_cast<std::size_t>(dots), '.'),
+                 d::kAccentHi);
     } else {
-        BitmapFont::drawString(fb, 8, y, m_message.c_str(), Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                               Theme::HIGHLIGHT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B, 75);
+        ui::statusDot(fb, d::kMargin, y + 4, 8, d::kDanger);
+        int ly = y;
+        for (const std::string& line : ui::wrap(m_message, d::kScreenW - 2 * d::kMargin - 16, 2)) {
+            ui::text(fb, d::kMargin + 16, ly, line, d::kDanger);
+            ly += 18;
+        }
     }
 }
 

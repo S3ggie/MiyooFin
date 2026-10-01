@@ -76,7 +76,7 @@ echo "ui-script: stub Jellyfin on 127.0.0.1:$PORT"
 # succeeds against the stub, finds no valid session, and App pushes Login.
 # All other flows use the seeded valid session (loopback only, no real
 # server, no credentials, no network).
-if [ "$NAME" = "login-400" ]; then
+if [ "$NAME" = "login-400" ] || [ "$NAME" = "tour-start" ]; then
     printf 'http://127.0.0.1:%s\n' "$PORT" >"$RUNDIR/server.txt"
 else
     cat >"$RUNDIR/session.txt" <<EOF
@@ -173,6 +173,11 @@ case "$NAME" in
         want='[SeriesScreen] enter series=Testville'
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
+        ;;
+    tour-start)
+        want='[ServerEntryScreen] enter'
+        SHOT="$OUT/shots/server-entry.bmp"
+        CHECKS="rendered"
         ;;
     login-400)
         want='[LoginScreen] Sign-in failed'

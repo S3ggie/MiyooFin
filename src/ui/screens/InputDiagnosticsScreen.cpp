@@ -1,5 +1,6 @@
 #include "InputDiagnosticsScreen.hpp"
 #include "../Theme.hpp"
+#include "../UiKit.hpp"
 #include "../BitmapFont.hpp"
 #include "miyoofin/version.hpp"
 #include <cstdio>
@@ -64,29 +65,25 @@ void InputDiagnosticsScreen::update(Uint32 dt)
 
 void InputDiagnosticsScreen::render(SDL_Surface* fb)
 {
-    // Title bar
-    char title[64];
-    std::snprintf(title, sizeof(title), "%s %s  --  Input Diagnostics", APP_NAME, VERSION_STR);
-    BitmapFont::drawString(fb, 4, 4, title, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    namespace d = design;
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
+    ui::HeaderSpec header;
+    header.title = std::string("Input diagnostics  ") + VERSION_STR;
+    header.showStatus = false;
+    ui::header(fb, header);
 
     // Column headers
-    int headerY = 4 + BitmapFont::GLYPH_H + 4;
-    BitmapFont::drawString(
-        fb, 4, headerY, "Event      Type   Keycode  ScanCode  Btn  Ax  AxVal  Action",
-        Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    BitmapFont::drawString(fb, 4, headerY + BitmapFont::GLYPH_H,
-                           "-------------------------------------------------------------",
-                           Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                           Theme::BG_B);
+    const int headerY = d::kHeaderH + 6;
+    ui::text(fb, 8, headerY, "Event      Type   Keycode  ScanCode  Btn  Ax  AxVal  Action",
+             d::kAccentHi);
+    ui::fill(fb, 8, headerY + BitmapFont::GLYPH_H + 2, d::kScreenW - 16, 1, d::kDivider);
 
-    // Event list  (scrolling, newest at bottom)
-    int listY = headerY + 2 * BitmapFont::GLYPH_H + 2;
-    int maxRows = (fb->h - listY - 8) / (BitmapFont::GLYPH_H + 1);
+    // Event list (scrolling, newest at bottom)
+    int listY = headerY + BitmapFont::GLYPH_H + 6;
+    const int maxRows = (d::kScreenH - d::kFooterH - 4 - listY) / (BitmapFont::GLYPH_H + 1);
     int startIdx = 0;
-    if ((int)m_displayedEvents.size() > maxRows) {
+    if ((int)m_displayedEvents.size() > maxRows)
         startIdx = (int)m_displayedEvents.size() - maxRows;
-    }
 
     for (int i = startIdx; i < (int)m_displayedEvents.size(); ++i) {
         const RawEvent& e = m_displayedEvents[i];
@@ -104,26 +101,17 @@ void InputDiagnosticsScreen::render(SDL_Surface* fb)
         }
 
         // Dim older events
-        int age = (int)m_displayedEvents.size() - 1 - i;
-        Uint8 r = Theme::TEXT_R - (Uint8)(age * 2);
-        Uint8 g = Theme::TEXT_G - (Uint8)(age * 2);
-        Uint8 b = Theme::TEXT_B - (Uint8)(age * 2);
-        if (r < 80)
-            r = 80;
-        if (g < 80)
-            g = 80;
-        if (b < 80)
-            b = 80;
-
-        BitmapFont::drawString(fb, 4, listY, line, r, g, b, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        const int age = (int)m_displayedEvents.size() - 1 - i;
+        const d::Rgb shade = ui::mix(d::kText, d::kTextMuted, std::min(100, age * 6));
+        ui::text(fb, 8, listY, line, shade);
         listY += BitmapFont::GLYPH_H + 1;
     }
 
-    // Bottom hint
-    int hintY = fb->h - BitmapFont::GLYPH_H - 4;
-    BitmapFont::drawString(fb, 4, hintY, "MENU / F1 = Exit   |   Raw event display for mapping",
-                           Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                           Theme::BG_B);
+    ui::FooterSpec footer;
+    footer.showLink = false;
+    footer.hints = {{ui::Key::Menu, "Exit"}};
+    footer.note = "Raw event display for mapping";
+    ui::footer(fb, footer);
 }
 
 } // namespace miyoofin

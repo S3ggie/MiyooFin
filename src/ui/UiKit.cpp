@@ -283,6 +283,25 @@ void field(SDL_Surface* fb, int x, int y, int w, int h, const std::string& label
     text(fb, x + 10, y + h - BitmapFont::GLYPH_H - 5, shown, kText);
 }
 
+void inputField(SDL_Surface* fb, int x, int y, int w, int h, const std::string& label,
+                const std::string& value, bool focused, bool masked, int labelWidthPx)
+{
+    if (focused)
+        focusRing(fb, x, y, w, h);
+    roundFill(fb, x, y, w, h, kRadius, focused ? kAccent : kBorder);
+    roundFill(fb, x + 1, y + 1, w - 2, h - 2, kRadius - 1, kPanel);
+    const int ty = y + (h - BitmapFont::GLYPH_H) / 2;
+    text(fb, x + 12, ty, label, focused ? kAccentHi : kTextMuted);
+    const int vx = x + 12 + labelWidthPx;
+    const int maxGlyphs = (x + w - 12 - 8 - vx) / BitmapFont::GLYPH_W; // leave room for the caret
+    std::string shown = masked ? std::string(value.size(), '*') : value;
+    if (static_cast<int>(shown.size()) > maxGlyphs && maxGlyphs > 0)
+        shown = shown.substr(shown.size() - static_cast<std::size_t>(maxGlyphs));
+    const int tw = text(fb, vx, ty, shown, kText);
+    if (focused && (SDL_GetTicks() / 500) % 2 == 0)
+        fill(fb, vx + tw + 1, ty + 1, 2, BitmapFont::GLYPH_H - 2, kAccentHi);
+}
+
 // --------------------------------------------------------------------- icons
 
 void iconBattery(SDL_Surface* fb, int x, int y, int percent, bool charging)
@@ -390,6 +409,12 @@ int keyBadge(SDL_Surface* fb, int x, int y, Key key)
         badgeBox(fb, x, y, 20, "L", Rgb{58, 66, 90}, kText);
         badgeBox(fb, x + 22, y, 20, "R", Rgb{58, 66, 90}, kText);
         return 42;
+    case Key::L2:
+        badgeBox(fb, x, y, 28, "L2", Rgb{58, 66, 90}, kText);
+        return 28;
+    case Key::Menu:
+        badgeBox(fb, x, y, 40, "MENU", Rgb{58, 66, 90}, kText);
+        return 40;
     case Key::Start:
         badgeBox(fb, x, y, 48, "START", Rgb{58, 66, 90}, kText);
         return 48;
@@ -495,6 +520,45 @@ void footer(SDL_Surface* fb, const FooterSpec& spec)
         const std::string shown = fit(spec.note, rightEdge - x - 8);
         text(fb, rightEdge - textWidth(shown), by, shown, spec.noteColor);
     }
+}
+
+void splash(SDL_Surface* fb, const SplashSpec& spec)
+{
+    fill(fb, 0, 0, kScreenW, kScreenH, kCanvas);
+    // Soft vignette: a slightly lighter band behind the content.
+    gradientV(fb, 0, 70, kScreenW, 260, kCanvas, kPanel);
+    gradientV(fb, 0, 330, kScreenW, 100, kPanel, kCanvas);
+
+    const int markW = textWidth("MiyooFin", 3);
+    const int markX = (kScreenW - markW) / 2;
+    const int w1 = text(fb, markX, 92, "Miyoo", kText, 3);
+    text(fb, markX + w1, 92, "Fin", kAccent, 3);
+
+    int y = 176;
+    const int hw = textWidth(spec.headline);
+    text(fb, (kScreenW - hw) / 2, y, spec.headline, spec.headlineColor);
+    y += 28;
+    for (const std::string& line : wrap(spec.detail, 420, 2)) {
+        text(fb, (kScreenW - textWidth(line)) / 2, y, line, kTextSecondary);
+        y += 20;
+    }
+    if (!spec.address.empty()) {
+        y += 6;
+        const std::string shown = fit(spec.address, 440);
+        const int cw = textWidth(shown) + 12;
+        chip(fb, (kScreenW - cw) / 2, y, shown, kAccentSoft, kAccentHi);
+        y += 30;
+    }
+    if (spec.busy) {
+        const int phase = static_cast<int>((SDL_GetTicks() / 300) % 4);
+        const int dotsX = kScreenW / 2 - 24;
+        for (int i = 0; i < 3; ++i)
+            roundFill(fb, dotsX + i * 18, y + 8, 12, 12, 6, i < phase ? kAccent : kBorder);
+    }
+    FooterSpec footerSpec;
+    footerSpec.showLink = false;
+    footerSpec.hints = spec.hints;
+    footer(fb, footerSpec);
 }
 
 // ------------------------------------------------------------------- artwork

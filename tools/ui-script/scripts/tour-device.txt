@@ -1,0 +1,35 @@
+# Design tour (device): every Home tab plus the drill-down pages on the real
+# library, for visual review of the shared look on the real panel.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 45000
+SCREENSHOT home
+KEY NextTab 3
+SETTLE 3000
+SCREENSHOT movies
+KEY Right 3 800
+KEY Confirm 3 1500
+SETTLE 5000
+SCREENSHOT movie-details
+KEY Back 3 1500
+SETTLE 2000
+KEY NextTab 3
+SETTLE 3000
+SCREENSHOT shows
+KEY Right 3 800
+KEY Confirm 3 1500
+SETTLE 6000
+SCREENSHOT series
+KEY Confirm 3 1500
+SETTLE 6000
+SCREENSHOT episodes
+KEY Back 3 1500
+SETTLE 1500
+KEY Back 3 1500
+SETTLE 2000
+KEY NextTab 3
+SETTLE 2500
+SCREENSHOT downloads
+KEY NextTab 3
+SETTLE 2500
+SCREENSHOT settings
+QUIT

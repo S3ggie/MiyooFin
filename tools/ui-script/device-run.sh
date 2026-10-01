@@ -103,7 +103,7 @@ while [ $# -gt 0 ]; do
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series|home-reentry|offline-playback|login-connect|settings>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series|home-reentry|offline-playback|login-connect|settings|tour>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
@@ -766,6 +766,11 @@ case "$NAME" in
         # entry. The final marker is the last screen the script reaches.
         want='[ServerEntryScreen] enter'
         SHOT="$OUT/shots/login-error.bmp"
+        CHECKS="rendered"
+        ;;
+    tour)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/home.bmp"
         CHECKS="rendered"
         ;;
     settings)

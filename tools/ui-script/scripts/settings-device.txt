@@ -1,0 +1,29 @@
+# settings (device): read-only exercise of HomeSettingsState on the real
+# installed binary. Row 0 is "change server", which needs a SECOND press to
+# act; this script presses it ONCE to arm the confirmation and then drops it
+# (moving the selection, then Back), so nothing is ever confirmed. Never add a
+# second consecutive Confirm on row 0 (change server) or on the Logout row.
+#   1. Confirm arms the prompt              -> screenshot settings-armed
+#   2. Down then Up drops it (selection changed) -> settings-after-move
+#   3. Confirm re-arms, Back cancels it      -> settings-cancelled
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 3000
+SCREENSHOT settings-top
+KEY Confirm 3 1500
+SETTLE 1500
+SCREENSHOT settings-armed
+KEY Down 3 800
+KEY Up 3 800
+SETTLE 1500
+SCREENSHOT settings-after-move
+KEY Confirm 3 1500
+SETTLE 1000
+KEY Back 3 1500
+SETTLE 1500
+SCREENSHOT settings-cancelled
+QUIT

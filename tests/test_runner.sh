@@ -26,6 +26,7 @@ test_update
 test_library_coordinator
 test_library_hierarchy
 test_library_query
+test_worker_slot
 '
 pids=
 

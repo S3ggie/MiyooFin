@@ -5,7 +5,7 @@
 #include "../../net/Session.hpp"
 #include <string>
 #include <atomic>
-#include <thread>
+#include "../WorkerSlot.hpp"
 
 namespace miyoofin {
 
@@ -51,10 +51,9 @@ class AuthCheckScreen : public Screen
     bool m_finished = false;
     Uint32 m_welcomeTimer = 0;
 
-    std::thread m_checkThread;
-    std::atomic<bool> m_checkDone{false};
     std::atomic<bool> m_checkSuccess{false};
     std::string m_checkError;
+    WorkerSlot m_checkWorker; // last member: destroyed (joined) first
 
     void startCheck();
     void finishCheck();

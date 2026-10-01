@@ -14,5 +14,6 @@ int main()
     testHomeKeepsRailOnlyColdStartLoading();
     testHomePendingCompletionPublicationOrdering();
     testHomeTabNavigation();
+    testLibraryCacheHomeParityHarness();
     return miyoofin_test::finish("catalog_parity_hierarchy");
 }

@@ -89,8 +89,7 @@ void HomeScreen::joinAllWorkers()
 {
     if (m_libraryFetch)
         m_libraryFetch->joinAllWorkers();
-    if (m_downloadRefreshThread.joinable())
-        m_downloadRefreshThread.join();
+    m_downloadRefreshWorker.join();
     if (m_artworkController)
         m_artworkController->joinAllWorkers();
 }

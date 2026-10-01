@@ -6,7 +6,7 @@
 #include "../OnScreenKeyboard.hpp"
 #include <string>
 #include <atomic>
-#include <thread>
+#include "../WorkerSlot.hpp"
 
 namespace miyoofin {
 
@@ -97,11 +97,10 @@ class LoginScreen : public Screen
     bool m_success = false;
     bool m_wantsServerEntry = false;
     AuthResult m_result;
-    std::thread m_loginThread;
-    std::atomic<bool> m_loginDone{false};
     std::atomic<bool> m_loginSuccess{false};
     std::string m_loginError;
     AuthResult m_loginResult;
+    WorkerSlot m_loginWorker; // last member: destroyed (joined) first
 
     void submitLogin();
     void finishLogin();

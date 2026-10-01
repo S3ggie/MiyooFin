@@ -28,9 +28,7 @@ ServerEntryScreen::ServerEntryScreen(const std::string& initialUrl, const std::s
 
 ServerEntryScreen::~ServerEntryScreen()
 {
-    if (m_connectThread.joinable()) {
-        m_connectThread.join();
-    }
+    m_connectWorker.join();
 }
 
 void ServerEntryScreen::startConnection()
@@ -47,24 +45,17 @@ void ServerEntryScreen::startConnection()
     }
     std::string normalised = JellyfinApi::normaliseUrl(m_url);
     m_url = normalised;
-    // Never assign over a joinable std::thread (std::terminate). update()
-    // joins the previous attempt before clearing m_connecting, so a joinable
-    // thread here is already finished (join returns immediately); a still-
-    // running worker refuses a second attempt instead of blocking the UI.
-    if (m_connectThread.joinable()) {
-        if (m_connectDone.load())
-            m_connectThread.join();
-        else
-            return;
-    }
+    // A still-running worker refuses a second attempt instead of blocking
+    // the UI; a finished one is reclaimed.
+    if (m_connectWorker.busy() && !m_connectWorker.reap())
+        return;
     m_connecting = true;
-    m_connectDone = false;
     m_connectSuccess = false;
     m_connectError.clear();
     m_message = "Connecting...";
 
     std::string urlCopy = normalised;
-    m_connectThread = std::thread([this, urlCopy]() {
+    m_connectWorker.start([this, urlCopy](const CancelToken&) {
         ServerInfo info;
         std::string err;
         bool ok = JellyfinApi::getSystemInfo(urlCopy, info, err);
@@ -75,7 +66,6 @@ void ServerEntryScreen::startConnection()
             m_connectError = err;
             m_connectSuccess = false;
         }
-        m_connectDone = true;
     });
 }
 
@@ -129,8 +119,7 @@ void ServerEntryScreen::leave()
 {
     m_keyboard.reset();
     printf("[ServerEntryScreen] leave\n");
-    if (m_connectThread.joinable())
-        m_connectThread.join();
+    m_connectWorker.join();
 }
 
 bool ServerEntryScreen::handleAction(Action action)
@@ -189,9 +178,7 @@ bool ServerEntryScreen::handleAction(Action action)
 
 void ServerEntryScreen::update(Uint32 dt)
 {
-    if (m_connecting && m_connectDone) {
-        if (m_connectThread.joinable())
-            m_connectThread.join();
+    if (m_connecting && m_connectWorker.reap()) {
         finishConnection();
     }
     if (m_connected && !m_finished) {

@@ -1608,15 +1608,33 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     CHECK(startupResult.cancelled || startupResult.error == CatalogDbErrorCategory::ScopeNotReady ||
           startupResult.success);
 
+    // The live change queued behind startup runs next and holds the
+    // serialized slot until its result is published. Wait for it so the
+    // safety admission below does not race that worker under CPU load.
+    bool tookQueuedLive = false;
+    for (int i = 0; i < 500 && !(tookQueuedLive = coordinator->takeLiveChangeResult(liveResult));
+         ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(tookQueuedLive);
+
     // A paused safety worker similarly blocks startup, population, and live
     // consumption while retaining the queued event.
     db->setWorkerPausedForTest(true);
     CHECK(coordinator->requestSafetyReconcileForTest());
     CHECK(!coordinator->startStartupSync(false));
     CHECK(!coordinator->requestFullPopulation(request));
+    JellyfinLibraryChangeBatch safetyBatch;
+    safetyBatch.itemsUpdated.push_back("safety-queued-live");
+    CHECK(coordinator->requestLiveChange(safetyBatch));
     CHECK(!coordinator->takeLiveChangeResult(liveResult));
     coordinator->cancelSafetyReconcile();
     db->setWorkerPausedForTest(false);
+    // The event retained behind safety is consumed once safety releases.
+    bool tookRetainedLive = false;
+    for (int i = 0; i < 500 && !(tookRetainedLive = coordinator->takeLiveChangeResult(liveResult));
+         ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    CHECK(tookRetainedLive);
     coordinator->stop();
     coordinator.reset();
     db.reset();

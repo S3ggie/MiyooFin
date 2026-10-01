@@ -448,6 +448,7 @@ static const char *const kThreadAuditFiles[] = {
     "src/diagnostics/UiDiagnostics.cpp",
     "src/download/DownloadManager.cpp",
     "src/library/LibrarySyncEvents.cpp",
+    "src/ui/WorkerSlot.hpp",
     "src/ui/screens/AuthCheckScreen.cpp",
     "src/ui/screens/ConnectScreen.cpp",
     "src/ui/screens/EpisodeBrowserArtwork.cpp",
@@ -465,7 +466,6 @@ static const char *const kThreadAuditFiles[] = {
 // Single-shot workers: exactly one assignment per owner lifetime, joined
 // in leave()/dtor paths — no restart guard applies.
 static const ThreadAuditAllow kThreadSingleShot[] = {
-    {"src/ui/screens/AuthCheckScreen.cpp", "m_checkThread"},
     {"src/ui/screens/MovieDetailsScreen.cpp", "m_prepareThread"},
     {"src/ui/screens/HomeScreen.cpp", "m_hierarchyThread"},
     {"src/ui/screens/HomeScreen.cpp", "m_decodeThread"},

@@ -3,11 +3,11 @@
 
 #include "../../app/Screen.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../WorkerSlot.hpp"
 #include <string>
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <thread>
 
 namespace miyoofin {
 
@@ -74,16 +74,14 @@ class ConnectScreen : public Screen
     Uint32 m_retryTimer = 0;
     Uint32 m_infoTimer = 0; // countdown when showing connected info
 
-    // Connection thread
-    std::thread m_connectThread;
-    std::shared_ptr<std::atomic<bool>> m_connectCancellation;
-    std::atomic<bool> m_connectDone{false};
+    // Connection result; written by the worker, read after WorkerSlot::reap().
     std::atomic<bool> m_connectSuccess{false};
     std::string m_connectError;
     ServerInfo m_connectResult;
 #ifdef MIYOOFIN_TEST_BUILD
     ConnectionAttempt m_connectionAttempt;
 #endif
+    WorkerSlot m_connectWorker; // last member: destroyed (joined) first
 
     void startConnection();
     void finishConnection();

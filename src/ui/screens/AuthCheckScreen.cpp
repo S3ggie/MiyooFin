@@ -13,9 +13,7 @@ AuthCheckScreen::AuthCheckScreen(const Session& session)
 
 AuthCheckScreen::~AuthCheckScreen()
 {
-    if (m_checkThread.joinable()) {
-        m_checkThread.join();
-    }
+    m_checkWorker.join();
 }
 
 void AuthCheckScreen::enter()
@@ -27,9 +25,7 @@ void AuthCheckScreen::enter()
 
 void AuthCheckScreen::leave()
 {
-    if (m_checkThread.joinable()) {
-        m_checkThread.join();
-    }
+    m_checkWorker.join();
 }
 
 bool AuthCheckScreen::handleAction(Action action)
@@ -48,7 +44,7 @@ void AuthCheckScreen::update(Uint32 /*dt*/)
         return;
     }
 
-    if (m_checkDone) {
+    if (m_checkWorker.reap()) {
         finishCheck();
         return;
     }
@@ -56,7 +52,6 @@ void AuthCheckScreen::update(Uint32 /*dt*/)
 
 void AuthCheckScreen::startCheck()
 {
-    m_checkDone = false;
     m_checkSuccess = false;
     m_checkError.clear();
 
@@ -65,7 +60,7 @@ void AuthCheckScreen::startCheck()
     std::string uid = m_session.userId;
     std::string devId = m_session.deviceId;
 
-    m_checkThread = std::thread([this, url, token, uid, devId]() {
+    m_checkWorker.start([this, url, token, uid, devId](const CancelToken&) {
         std::string err;
         bool ok = JellyfinApi::validateToken(url, token, uid, devId, err);
         if (ok) {
@@ -73,14 +68,11 @@ void AuthCheckScreen::startCheck()
         } else {
             m_checkError = err;
         }
-        m_checkDone = true;
     });
 }
 
 void AuthCheckScreen::finishCheck()
 {
-    m_checkDone = false;
-
     if (m_checkSuccess) {
         m_ok = true;
         m_welcomeTimer = 0;
@@ -123,7 +115,7 @@ void AuthCheckScreen::render(SDL_Surface* fb)
     BitmapFont::drawString(fb, msgX, msgY, m_message.c_str(), Theme::TEXT_R, Theme::TEXT_G,
                            Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
 
-    if (!m_checkDone) {
+    if (m_checkWorker.busy()) {
         static int dotPhase = 0;
         dotPhase = (dotPhase + 1) % 60;
         int dots = dotPhase / 15;

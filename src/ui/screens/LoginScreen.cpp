@@ -18,9 +18,7 @@ LoginScreen::LoginScreen(const std::string& serverUrl, const std::string& server
 
 LoginScreen::~LoginScreen()
 {
-    if (m_loginThread.joinable()) {
-        m_loginThread.join();
-    }
+    m_loginWorker.join();
 }
 
 std::string& LoginScreen::activeText()
@@ -39,23 +37,15 @@ void LoginScreen::submitLogin()
         return;
     }
 
-    // Never assign over a joinable std::thread: that calls std::terminate()
-    // (SIGABRT, "exited unexpectedly (134)" on a second Sign In). Checked
-    // before mutating state so refusing a still-running worker changes
-    // nothing. finishLogin() joins the previous attempt, so a joinable
-    // thread here is normally already finished (join returns immediately);
-    // a genuinely running worker refuses instead of blocking the UI thread
-    // on network I/O (unreachable via handleAction: it gates on
-    // !m_connecting, and Back is swallowed while connecting).
-    if (m_loginThread.joinable()) {
-        if (m_loginDone.load())
-            m_loginThread.join();
-        else
-            return;
-    }
+    // A second Sign In must never start a competing worker (SIGABRT,
+    // "exited unexpectedly (134)" before WorkerSlot). Checked before mutating
+    // state so refusing a still-running worker changes nothing; it never
+    // blocks the UI thread on network I/O (unreachable via handleAction: it
+    // gates on !m_connecting, and Back is swallowed while connecting).
+    if (m_loginWorker.busy() && !m_loginWorker.reap())
+        return;
 
     m_connecting = true;
-    m_loginDone = false;
     m_loginSuccess = false;
     m_loginError.clear();
     m_message = "Signing in...";
@@ -65,7 +55,7 @@ void LoginScreen::submitLogin()
     std::string pass = m_password;
     std::string devId = m_deviceId;
 
-    m_loginThread = std::thread([this, url, user, pass, devId]() {
+    m_loginWorker.start([this, url, user, pass, devId](const CancelToken&) {
         AuthResult result;
         AuthError err;
         std::string errMsg;
@@ -77,19 +67,13 @@ void LoginScreen::submitLogin()
             m_loginError = errMsg;
             m_loginSuccess = false;
         }
-        m_loginDone = true;
     });
 }
 
 void LoginScreen::finishLogin()
 {
-    // The worker set m_loginDone as its last act, so it has exited: this
-    // join returns immediately and also establishes the happens-before edge
-    // for m_loginError/m_loginResult. Reclaim here so the next submitLogin()
-    // never assigns over a joinable thread.
-    if (m_loginThread.joinable())
-        m_loginThread.join();
-    m_loginDone = false;
+    // update() reaped the finished worker, which also establishes the
+    // happens-before edge for m_loginError/m_loginResult.
     m_connecting = false;
 
     if (m_loginSuccess) {
@@ -112,9 +96,7 @@ void LoginScreen::enter()
 void LoginScreen::leave()
 {
     m_keyboard.reset();
-    if (m_loginThread.joinable()) {
-        m_loginThread.join();
-    }
+    m_loginWorker.join();
 }
 
 bool LoginScreen::handleAction(Action action)
@@ -204,7 +186,7 @@ bool LoginScreen::handleAction(Action action)
 void LoginScreen::update(Uint32 dt)
 {
     (void)dt;
-    if (m_connecting && m_loginDone) {
+    if (m_connecting && m_loginWorker.reap()) {
         finishLogin();
     }
 }

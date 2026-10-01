@@ -6,7 +6,7 @@
 #include "../OnScreenKeyboard.hpp"
 #include <string>
 #include <atomic>
-#include <thread>
+#include "../WorkerSlot.hpp"
 
 namespace miyoofin {
 
@@ -94,9 +94,7 @@ class ServerEntryScreen : public Screen
     bool m_publicAddressEntry = false;
     bool m_addressEntryCancelled = false;
 
-    // Connection attempt thread
-    std::thread m_connectThread;
-    std::atomic<bool> m_connectDone{false};
+    // Connection attempt result; read after WorkerSlot::reap().
     std::atomic<bool> m_connectSuccess{false};
     std::string m_connectError;
     ServerInfo m_connectResult;
@@ -110,6 +108,7 @@ class ServerEntryScreen : public Screen
     // Drawing helpers
     void drawInputField(SDL_Surface* fb);
     void drawStatus(SDL_Surface* fb);
+    WorkerSlot m_connectWorker; // last member: destroyed (joined) first
 };
 
 } // namespace miyoofin

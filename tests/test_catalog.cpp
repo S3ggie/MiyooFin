@@ -5,9 +5,6 @@
 #include "cases/test_catalog_core.inc"
 #include "cases/test_catalog_migration.inc"
 #include "cases/test_catalog_parity_support.hpp"
-#include "cases/test_catalog_parity_hierarchy.inc"
-#include "cases/test_catalog_parity_sync.inc"
-#include "cases/test_catalog_parity_query.inc"
 
 int main()
 {
@@ -37,25 +34,5 @@ int main()
     testHomeCatalogHierarchyIntegration();
     testCatalogDbOfflineDownloadReconstruction();
     testCatalogDbOfflineRebuildAfterScopeActivation();
-    testCatalogDbProjectionParity();
-    testCatalogDbLibrarySnapshotSeed();
-    testCatalogDbTopLevelSyncStagingLifecycle();
-    testLibrarySyncTeardownDuringStagedGeneration();
-    testCatalogDbBoundedMediaPaging();
-    testCatalogDbMediaPagePreservesViewMembership();
-    testCatalogDbMediaPageUpsertAndPopulation();
-    testCatalogDbMediaPageTopLevelStaging();
-    testHomeDefersViewPersistenceToCoordinator();
-    testHomeOptionalRailFailuresDoNotStopCatalogPopulation();
-    testCatalogScopeConfiguredBeforeHomePopulation();
-    testHomeFetchOwnershipGuard();
-    testHomeDiscardsColdProvisionalFailure();
-    testHomeKeepsRailOnlyColdStartLoading();
-    testHomePendingCompletionPublicationOrdering();
-    testHomeTabNavigation();
-    testHomeUsesCatalogBeforeNetworkRefresh();
-    testLibraryCacheHomeParityHarness();
-    testCatalogDbDownloadFallbackParity();
-    testCatalogDbDuplicateMergeAndAuthoritativeDeletionParity();
     return miyoofin_test::finish("catalog");
 }

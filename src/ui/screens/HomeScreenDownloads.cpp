@@ -9,9 +9,9 @@ namespace miyoofin {
 
 void HomeScreen::refreshDownloads()
 {
-    if (m_downloadRefreshDone)
+    if (m_downloadRefreshWorker.reap())
         finishDownloadRefresh();
-    if (!m_downloadRefreshInFlight && m_downloadRefreshTimer == 0)
+    if (!m_downloadRefreshWorker.busy() && m_downloadRefreshTimer == 0)
         startDownloadRefresh();
 }
 

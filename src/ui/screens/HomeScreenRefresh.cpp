@@ -13,17 +13,13 @@ void HomeScreen::startDownloadRefresh()
         m_downloadSnapshot = {};
         return;
     }
-    if (m_downloadRefreshInFlight)
+    if (m_downloadRefreshWorker.busy())
         return;
-    if (m_downloadRefreshThread.joinable())
-        m_downloadRefreshThread.join();
-    m_downloadRefreshDone = false;
-    m_downloadRefreshInFlight = true;
     std::shared_ptr<DownloadManager> downloads = m_downloads;
     const std::string journalPath = OfflinePlaybackJournal::path(
         "cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
     const bool valid = m_session.valid();
-    m_downloadRefreshThread = std::thread([this, downloads, journalPath, valid] {
+    m_downloadRefreshWorker.start([this, downloads, journalPath, valid](const CancelToken&) {
         PerformanceTelemetry& telemetry = performanceTelemetry();
         telemetry.setWorkerActive(WorkerId::HomeDownloadRefresh, true);
         telemetry.setWorkerQueueDepth(WorkerId::HomeDownloadRefresh, 1);
@@ -46,16 +42,13 @@ void HomeScreen::startDownloadRefresh()
         telemetry.addWorkerCompleted(WorkerId::HomeDownloadRefresh);
         telemetry.setWorkerActive(WorkerId::HomeDownloadRefresh, false);
         telemetry.setWorkerQueueDepth(WorkerId::HomeDownloadRefresh, 0);
-        m_downloadRefreshDone = true;
     });
 }
 
 void HomeScreen::finishDownloadRefresh()
 {
     UiDiagnostics::Scope scope("HomeScreen::publishDownloadSnapshot");
-    // Thread join deferred to next startDownloadRefresh() or joinAllWorkers().
-    m_downloadRefreshDone = false;
-    m_downloadRefreshInFlight = false;
+    // The worker was already reaped by refreshDownloads().
     m_downloadSnapshot = std::move(m_downloadRefreshResult);
     m_missingJournalEntries = std::move(m_downloadJournalResult);
     m_downloadRefreshTimer = 500;

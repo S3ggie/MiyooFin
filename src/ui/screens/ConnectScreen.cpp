@@ -23,11 +23,8 @@ ConnectScreen::~ConnectScreen()
 
 void ConnectScreen::stopConnection()
 {
-    if (m_connectCancellation)
-        m_connectCancellation->store(true, std::memory_order_release);
-    if (m_connectThread.joinable()) {
-        m_connectThread.join();
-    }
+    m_connectWorker.cancel();
+    m_connectWorker.join();
 }
 
 void ConnectScreen::enter()
@@ -42,8 +39,7 @@ void ConnectScreen::leave()
     printf("[ConnectScreen] leave\n");
     // ScreenStack retires this screen on its bounded cleanup worker. Signal
     // cancellation here, but do not make the SDL thread wait for curl.
-    if (m_connectCancellation)
-        m_connectCancellation->store(true, std::memory_order_release);
+    m_connectWorker.cancel();
 }
 
 bool ConnectScreen::handleAction(Action action)
@@ -67,7 +63,7 @@ void ConnectScreen::update(Uint32 dt)
         return;
     }
 
-    if (m_connectDone) {
+    if (m_connectWorker.reap()) {
         finishConnection();
         return;
     }
@@ -84,32 +80,25 @@ void ConnectScreen::update(Uint32 dt)
 
 void ConnectScreen::startConnection()
 {
-    if (m_connectThread.joinable()) {
-        // Reclaim a completed attempt before a retry. A live attempt is
-        // refused so retries can never create competing workers.
-        if (m_connectDone.load(std::memory_order_acquire))
-            m_connectThread.join();
-        else
-            return;
-    }
+    // Reclaim a completed attempt before a retry. A live attempt is refused
+    // so retries can never create competing workers.
+    if (m_connectWorker.busy() && !m_connectWorker.reap())
+        return;
 
-    m_connectDone = false;
     m_connectSuccess = false;
     m_connectError.clear();
     m_message = "Connecting...";
 
     std::string url = m_savedUrl;
-    m_connectCancellation = std::make_shared<std::atomic<bool>>(false);
-    const auto cancellation = m_connectCancellation;
 #ifdef MIYOOFIN_TEST_BUILD
     const auto connectionAttempt = m_connectionAttempt;
 #endif
-    m_connectThread = std::thread([this, url, cancellation
+    m_connectWorker.start([this, url
 #ifdef MIYOOFIN_TEST_BUILD
-                                   ,
-                                   connectionAttempt
+                           ,
+                           connectionAttempt
 #endif
-    ]() {
+    ](const CancelToken& cancellation) {
         ServerInfo info;
         std::string err;
         bool ok = false;
@@ -126,20 +115,13 @@ void ConnectScreen::startConnection()
             m_connectError = err;
             m_connectSuccess = false;
         }
-        m_connectDone = true;
     });
 }
 
 void ConnectScreen::finishConnection()
 {
-    // The completion flag is published before the worker returns. Join only
-    // after that publication, so this is a deterministic worker retirement,
-    // not an ordinary UI-thread network wait; retries then own no stale
-    // joinable worker.
-    if (m_connectThread.joinable())
-        m_connectThread.join();
-    m_connectDone = false;
-
+    // update() reaped the finished worker, so its result fields are visible
+    // and retries own no stale joinable worker.
     if (m_connectSuccess) {
         m_connected = true;
         m_serverInfo = m_connectResult;
@@ -210,7 +192,7 @@ void ConnectScreen::render(SDL_Surface* fb)
     BitmapFont::drawString(fb, urlX, urlY, m_savedUrl.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
                            Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
 
-    if (!m_connectDone && !m_failed) {
+    if (!m_failed) {
         static int dotPhase = 0;
         dotPhase = (dotPhase + 1) % 60;
         int dots = dotPhase / 15;

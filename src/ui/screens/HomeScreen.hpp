@@ -34,6 +34,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include "../WorkerSlot.hpp"
 #include <vector>
 
 namespace miyoofin {
@@ -410,9 +411,6 @@ class HomeScreen : public Screen
     // DownloadManager may hold its mutex while reconciling/persisting on slow
     // SD storage.  Snapshot and playback-journal reads are therefore published
     // by this bounded worker only while the Downloads tab is visible.
-    std::thread m_downloadRefreshThread;
-    std::atomic<bool> m_downloadRefreshDone{false};
-    std::atomic<bool> m_downloadRefreshInFlight{false};
     DownloadSnapshot m_downloadRefreshResult;
     std::vector<OfflinePlaybackEntry> m_downloadJournalResult;
     Uint32 m_downloadRefreshTimer = 0;
@@ -520,6 +518,9 @@ class HomeScreen : public Screen
     void drawShowsAlphabetRail(SDL_Surface* fb);
     int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView>& views);
+
+    // Last member: destroyed (joined) before the result fields it writes.
+    WorkerSlot m_downloadRefreshWorker;
 };
 
 } // namespace miyoofin

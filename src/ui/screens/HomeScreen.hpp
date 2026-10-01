@@ -438,6 +438,10 @@ class HomeScreen : public Screen
     const MediaItem* currentItem() const;
 
     void clampNavigation();
+    /// Copies watch state from refreshed Home rails onto the Movies grid copies.
+    void syncMovieWatchState(const std::vector<MediaItem>& previousContinue,
+                             const std::vector<MediaItem>& continueNow,
+                             const std::vector<MediaItem>& recentNow);
     /// Return the label of the currently focused Home row, or "" if none.
     std::string focusedHomeRowLabel() const;
     /// Reconcile m_activeRow by row label after a Home-row mutation.

@@ -2,8 +2,38 @@
 #include "../data/MovieTitle.hpp"
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace miyoofin {
+
+void applyRailWatchState(std::vector<MediaItem>& movies,
+                         const std::vector<MediaItem>& previousContinue,
+                         const std::vector<MediaItem>& continueNow,
+                         const std::vector<MediaItem>& recentNow)
+{
+    std::map<std::string, const MediaItem*> fresh;
+    for (const auto& item : continueNow)
+        fresh[item.id] = &item;
+    for (const auto& item : recentNow)
+        fresh.emplace(item.id, &item);
+    std::set<std::string> left;
+    for (const auto& item : previousContinue)
+        if (!fresh.count(item.id))
+            left.insert(item.id);
+    for (auto& item : movies) {
+        if (item.type != "movie")
+            continue;
+        auto it = fresh.find(item.id);
+        if (it != fresh.end()) {
+            item.played = it->second->played;
+            item.progress = it->second->progress;
+            item.playbackPositionTicks = it->second->playbackPositionTicks;
+        } else if (left.count(item.id)) {
+            item.progress = 0.0f;
+            item.playbackPositionTicks = 0;
+        }
+    }
+}
 
 std::vector<TabData>
 buildTabs(const std::vector<MediaItem>& continueWatching,

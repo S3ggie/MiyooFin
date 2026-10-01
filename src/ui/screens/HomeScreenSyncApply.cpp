@@ -271,6 +271,12 @@ void HomeScreen::finishHomeRailRefresh()
     if (m_homeRailRefreshSucceeded) {
         m_lastHomeRailRefreshCompletedMs = wallClockMs();
         const std::string focusedLabel = focusedHomeRowLabel();
+        if (m_homeRailContinueValid || m_homeRailRecentValid)
+            syncMovieWatchState(m_cachedSnapshot.continueWatching,
+                                m_homeRailContinueValid ? m_homeRailContinueWatching
+                                                        : m_cachedSnapshot.continueWatching,
+                                m_homeRailRecentValid ? m_homeRailRecentlyAdded
+                                                      : m_cachedSnapshot.recentlyAdded);
         if (m_homeRailContinueValid) {
             updateContinueWatchingRow(m_tabs, m_homeRailContinueWatching);
             m_cachedSnapshot.continueWatching = m_homeRailContinueWatching;
@@ -295,6 +301,23 @@ void HomeScreen::finishHomeRailRefresh()
         startHomeRailRefresh();
     }
 }
+void HomeScreen::syncMovieWatchState(const std::vector<MediaItem>& previousContinue,
+                                     const std::vector<MediaItem>& continueNow,
+                                     const std::vector<MediaItem>& recentNow)
+{
+    // The Movies grid holds its own copies of the items, so a refreshed rail
+    // would otherwise leave stale progress bars there.
+    auto apply = [&](std::vector<MediaItem>& items) {
+        applyRailWatchState(items, previousContinue, continueNow, recentNow);
+    };
+    apply(m_moviePage.items);
+    apply(m_movieWindow);
+    for (auto& tab : m_tabs)
+        if (tab.name == "Movies")
+            for (auto& row : tab.rows)
+                apply(row.items);
+}
+
 void HomeScreen::finishSafetyReconcile()
 {
     if (!m_safetyReconcileInFlight || !m_libraryCoordinator)

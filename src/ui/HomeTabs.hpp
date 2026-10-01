@@ -10,6 +10,14 @@ namespace miyoofin {
 
 void updateContinueWatchingRow(std::vector<TabData>& tabs, const std::vector<MediaItem>& items);
 void updateRecentlyAddedRow(std::vector<TabData>& tabs, const std::vector<MediaItem>& items);
+/// Copies watch state onto grid copies of movies after the Home rails refresh:
+/// movies the rails report take the rail's state; movies that were in the
+/// previous Continue Watching rail but are in neither current rail lose their
+/// resume progress (finished or dropped).
+void applyRailWatchState(std::vector<MediaItem>& movies,
+                         const std::vector<MediaItem>& previousContinue,
+                         const std::vector<MediaItem>& continueNow,
+                         const std::vector<MediaItem>& recentNow);
 std::vector<TabData>
 buildTabs(const std::vector<MediaItem>& continueWatching,
           const std::vector<MediaItem>& recentlyAdded,

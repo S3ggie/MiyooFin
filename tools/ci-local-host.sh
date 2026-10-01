@@ -26,5 +26,8 @@ echo "=== Tests and refactor/boundary checks ==="
 # refactor-check owns the normal make test invocation and its diff check.
 xvfb-run -a make refactor-check
 
+echo "=== Playback bridge tests ==="
+make -j"$jobs" bridge-test
+
 echo "=== Final whitespace check ==="
 git diff --check

@@ -246,6 +246,29 @@ static void testHomeTabRowUpdates()
     std::printf("[test] Home rail insertion and removal order OK\n");
 }
 
+static void testRailWatchStateReachesMovieGrid()
+{
+    std::printf("[test] rail watch state reaches Movies grid\n");
+    auto movie = [](const char* id, float progress, bool played) {
+        MediaItem m = makeHomeItem(id, id, "movie");
+        m.progress = progress;
+        m.playbackPositionTicks = progress > 0 ? 1000 : 0;
+        m.played = played;
+        return m;
+    };
+    // a: still resuming at new position; b: left Continue Watching (finished);
+    // c: not in any rail; d: only in Recently Added, now played.
+    std::vector<MediaItem> grid = {movie("a", 0.2f, false), movie("b", 0.5f, false),
+                                   movie("c", 0.3f, false), movie("d", 0.0f, false)};
+    applyRailWatchState(grid, {movie("a", 0.2f, false), movie("b", 0.5f, false)},
+                        {movie("a", 0.7f, false)}, {movie("d", 0.0f, true)});
+    CHECK(grid[0].progress > 0.69f && grid[0].progress < 0.71f);
+    CHECK(grid[1].progress == 0.0f && grid[1].playbackPositionTicks == 0);
+    CHECK(grid[2].progress > 0.29f);
+    CHECK(grid[3].played);
+    std::printf("[test] rail watch state reaches Movies grid OK\n");
+}
+
 static void testHomeRowIndexByLabel()
 {
     std::printf("[test] homeRowIndexByLabel identity search\n");

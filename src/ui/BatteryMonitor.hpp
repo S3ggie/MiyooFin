@@ -57,9 +57,12 @@ class BatteryMonitor
     // whole number in 0..100 is invalid (-1).
     static int parsePercent(const std::string& content);
 
-    // Extracts "charging":N from axp_test output: 1 or 0, or -1 when the key is
-    // missing or the value is not 0/1 (for example an I2C error without root).
-    static int parseCharging(const std::string& output);
+    // Extracts "charging":N from axp_test output the way OnionOS's batmon does
+    // (sscanf %d, then non-zero means charging): 0 or 1, or -1 when the key is
+    // missing or has no number (for example an I2C error). The raw number is
+    // returned through `rawOut` when given, since the chip may report values
+    // other than 0/1 while charging.
+    static int parseCharging(const std::string& output, int* rawOut = nullptr);
 
     // Width of the fill inside an icon `innerWidth` pixels wide: 0 when unknown
     // or empty, at least 1 pixel for any positive level, innerWidth when full.
@@ -82,12 +85,14 @@ class BatteryMonitor
     unsigned m_probeTimeoutMs;
     int m_percent = -1;
     int m_charging = -1; // -1 unknown, 0 no, 1 yes
+    int m_chargingRaw = -1;
     unsigned m_sinceReadMs = 0;
     bool m_hasRead = false;
     unsigned m_sinceProbeMs = 0;
     bool m_neverProbed = true;
     bool m_probeUnavailable = false;
-    int m_loggedCharging = -2; // last value logged, to log only changes
+    int m_loggedCharging = -2; // last (state, raw) logged, to log only changes
+    int m_loggedRaw = -2;
     // Written by the worker, read by the UI thread only after reap().
     std::string m_probeOutput;
     bool m_probeExecFailed = false;

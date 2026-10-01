@@ -47,12 +47,13 @@ void BatteryMonitor::update(unsigned dtMs)
     if (m_probe.reap()) {
         if (m_probeExecFailed)
             m_probeUnavailable = true; // not found / not executable: stop trying
-        m_charging = parseCharging(m_probeOutput);
-        if (m_charging != m_loggedCharging) {
+        m_charging = parseCharging(m_probeOutput, &m_chargingRaw);
+        if (m_charging != m_loggedCharging || m_chargingRaw != m_loggedRaw) {
             m_loggedCharging = m_charging;
-            char line[64];
-            std::snprintf(line, sizeof(line), "[Battery] charging=%d percent=%d", m_charging,
-                          m_percent);
+            m_loggedRaw = m_chargingRaw;
+            char line[96];
+            std::snprintf(line, sizeof(line), "[Battery] charging=%d raw=%d percent=%d", m_charging,
+                          m_chargingRaw, m_percent);
             std::printf("%s\n", line);
             uiDiagnostics().log(line); // also reaches ui-stall.log on a normal launch
         }
@@ -151,8 +152,10 @@ int BatteryMonitor::parsePercent(const std::string& content)
     return value;
 }
 
-int BatteryMonitor::parseCharging(const std::string& output)
+int BatteryMonitor::parseCharging(const std::string& output, int* rawOut)
 {
+    if (rawOut)
+        *rawOut = -1;
     const std::string key = "\"charging\"";
     const std::size_t at = output.find(key);
     if (at == std::string::npos)
@@ -163,14 +166,18 @@ int BatteryMonitor::parseCharging(const std::string& output)
     ++i;
     while (i < output.size() && (output[i] == ' ' || output[i] == '\t'))
         ++i;
-    if (i >= output.size())
+    long value = 0;
+    std::size_t digits = 0;
+    while (i < output.size() && output[i] >= '0' && output[i] <= '9' && digits < 9) {
+        value = value * 10 + (output[i] - '0');
+        ++i;
+        ++digits;
+    }
+    if (digits == 0)
         return -1;
-    const char value = output[i];
-    // Exactly 0 or 1, not followed by more digits.
-    if ((value != '0' && value != '1') ||
-        (i + 1 < output.size() && output[i + 1] >= '0' && output[i + 1] <= '9'))
-        return -1;
-    return value - '0';
+    if (rawOut)
+        *rawOut = static_cast<int>(value);
+    return value != 0 ? 1 : 0;
 }
 
 int BatteryMonitor::fillWidth(int percent, int innerWidth)

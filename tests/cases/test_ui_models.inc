@@ -878,10 +878,17 @@ static void testBatteryParseCharging()
     CHECK(BatteryMonitor::parseCharging("error during I2C_RDWR ioctl with error code -1") == -1);
     CHECK(BatteryMonitor::parseCharging("") == -1);
     CHECK(BatteryMonitor::parseCharging("{\"battery\":48}") == -1);
-    CHECK(BatteryMonitor::parseCharging("{\"charging\":2}") == -1);
-    CHECK(BatteryMonitor::parseCharging("{\"charging\":10}") == -1);
+    // Like batmon (sscanf %d): any non-zero value means charging, and the raw
+    // number is reported (the chip may use values other than 1).
+    int raw = -5;
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":2}", &raw) == 1 && raw == 2);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":10}", &raw) == 1 && raw == 10);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":0}", &raw) == 0 && raw == 0);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":-1}", &raw) == -1 && raw == -1);
+    CHECK(BatteryMonitor::parseCharging("no key here", &raw) == -1 && raw == -1);
     CHECK(BatteryMonitor::parseCharging("{\"charging\":") == -1);
     CHECK(BatteryMonitor::parseCharging("{\"charging\":x}") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":}") == -1);
     std::printf("[test] BatteryMonitor::parseCharging OK\n");
 }
 
@@ -924,6 +931,12 @@ static void testBatteryChargingProbe()
     {
         BatteryMonitor monitor(missingPercent, axp, 1500);
         CHECK(!monitor.charging()); // nothing probed yet
+        CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
+    }
+    // A non-1 charging value (as OnionOS treats it) still means charging.
+    axp = writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":3}'\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
         CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
     }
     // Not charging, and it follows a change on the next probe interval.

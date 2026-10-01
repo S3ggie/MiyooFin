@@ -15,6 +15,7 @@
 #include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
+#include "../HomeArtworkCache.hpp"
 #include "../HomeDownloadsState.hpp"
 #include "../HomeSettingsModel.hpp"
 #include "../ArtworkLayout.hpp"
@@ -214,14 +215,9 @@ class HomeScreen : public Screen
     /// initial population walk is still in progress.
     static bool shouldProcessPosterJob(bool highPriority, bool populationInProgress);
 
-    /// Row artwork state map — public so tests can inspect it.
-    std::map<std::string, RowArtworkEntry> m_rowArtwork;
-
-    /// LRU eviction order: oldest key at front.  Loaded keys occur once.
-    std::deque<std::string> m_rowArtworkOrder;
-
-    // Pre-scaled card surface cache (performance: avoid per-frame create/scale/free)
-    std::map<std::string, SDL_Surface*> m_cardSurfaceCache;
+    /// Row artwork images (bounded LRU) and pre-scaled card surfaces; public so
+    /// tests can inspect it.
+    HomeArtworkCache m_rowArtworkCache;
 
     // --- Offline snapshot cache (public for testing) -----------------------
     using OfflineSnapshotSignature = HomeLibraryController::OfflineSnapshotSignature;

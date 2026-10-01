@@ -8,10 +8,6 @@ namespace miyoofin {
 static constexpr int VISIBLE_ROWS = 3;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
-// Upper bound on cached card surfaces.  Each row artwork entry can produce
-// surfaces at several box sizes; this cap prevents unbounded growth when
-// distinct keys accumulate faster than row-eviction cleans them up.
-static constexpr int MAX_CARD_SURFACES = 128;
 
 void HomeScreen::tryLoadSelectedArtwork()
 {
@@ -36,8 +32,9 @@ void HomeScreen::tryLoadSelectedArtwork()
 
     // A terminal worker tombstone applies to the selected preview as well as
     // its row card; do not resubmit the same identity every UI frame.
-    const auto rowState = m_rowArtwork.find(key);
-    if (rowState != m_rowArtwork.end() && rowState->second.status == RowArtworkStatus::Failed) {
+    const auto rowState = m_rowArtworkCache.entries.find(key);
+    if (rowState != m_rowArtworkCache.entries.end() &&
+        rowState->second.status == RowArtworkStatus::Failed) {
         m_selectedArtworkAttempted = true;
         m_selectedArtworkId = key;
         return;
@@ -95,123 +92,28 @@ bool HomeScreen::acceptsShowsArtworkResult(const HomeArtworkController::DecodeRe
 
 void HomeScreen::evictRowArtworkIfNeeded()
 {
-    const std::set<std::string> protectedKeys = protectedRowArtworkKeys();
-    while ((int)m_rowArtworkOrder.size() > ROW_ARTWORK_RAM_LIMIT) {
-        auto victim = std::find_if(
-            m_rowArtworkOrder.begin(), m_rowArtworkOrder.end(),
-            [&](const std::string& key) { return protectedKeys.find(key) == protectedKeys.end(); });
-        // A temporary overflow is preferable to evicting an image being
-        // rendered.  This is only possible when every cached key is visible.
-        if (victim == m_rowArtworkOrder.end())
-            break;
-        // Also evict any cached card surfaces for this key
-        for (auto it = m_cardSurfaceCache.begin(); it != m_cardSurfaceCache.end();) {
-            if (it->first.compare(0, victim->size(), *victim) == 0 &&
-                (it->first.size() == victim->size() || it->first[victim->size()] == ':')) {
-                if (it->second)
-                    SDL_FreeSurface(it->second);
-                it = m_cardSurfaceCache.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        m_rowArtwork.erase(*victim);
-        m_rowArtworkOrder.erase(victim);
-    }
+    m_rowArtworkCache.evictIfNeeded(protectedRowArtworkKeys());
 }
 
 void HomeScreen::touchRowArtwork(const std::string& key)
 {
-    auto it = std::find(m_rowArtworkOrder.begin(), m_rowArtworkOrder.end(), key);
-    if (it != m_rowArtworkOrder.end())
-        m_rowArtworkOrder.erase(it);
-    m_rowArtworkOrder.push_back(key);
+    m_rowArtworkCache.touch(key);
 }
 
 void HomeScreen::storeDecodedRowArtwork(const std::string& key, DecodedImage image)
 {
-    // Evict any card surfaces whose cache key starts with this row artwork
-    // key.  Surfaces created by prepareCardSurface now own their pixels, but
-    // evicting here ensures stale artwork is never served after an artwork
-    // refresh for the same item.
-    for (auto it = m_cardSurfaceCache.begin(); it != m_cardSurfaceCache.end();) {
-        if (it->first.compare(0, key.size(), key) == 0 &&
-            (it->first.size() == key.size() || it->first[key.size()] == ':')) {
-            if (it->second)
-                SDL_FreeSurface(it->second);
-            it = m_cardSurfaceCache.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    RowArtworkEntry& entry = m_rowArtwork[key];
-    entry.status = RowArtworkStatus::Loaded;
-    entry.image = std::make_shared<DecodedImage>(std::move(image));
-    touchRowArtwork(key);
-    evictRowArtworkIfNeeded();
+    m_rowArtworkCache.store(key, std::move(image), protectedRowArtworkKeys());
 }
 
 void HomeScreen::prepareCardSurface(const std::string& cacheKey, const DecodedImage& img, int boxW,
                                     int boxH)
 {
-    if (img.empty() || boxW <= 0 || boxH <= 0)
-        return;
-    // Prevent unbounded card-surface cache growth.  When the cache exceeds
-    // the limit, flush it entirely — it will be rebuilt on the next frame
-    // for whatever is currently visible.
-    if ((int)m_cardSurfaceCache.size() > MAX_CARD_SURFACES)
-        freeAllCardSurfaces();
-    // Free old cached surface for this key
-    auto it = m_cardSurfaceCache.find(cacheKey);
-    if (it != m_cardSurfaceCache.end()) {
-        if (it->second)
-            SDL_FreeSurface(it->second);
-        m_cardSurfaceCache.erase(it);
-    }
-    // Compute aspect-fit destination dimensions
-    const float imgAspect = (float)img.width / (float)img.height;
-    const float boxAspect = (float)boxW / (float)boxH;
-    int dw, dh;
-    if (imgAspect > boxAspect) {
-        dw = boxW;
-        dh = (int)(boxW / imgAspect + 0.5f);
-        if (dh > boxH)
-            dh = boxH;
-    } else {
-        dh = boxH;
-        dw = (int)(boxH * imgAspect + 0.5f);
-        if (dw > boxW)
-            dw = boxW;
-    }
-    // Create a temporary surface wrapping the decoded pixels for blitting.
-    SDL_Surface* src =
-        SDL_CreateRGBSurfaceFrom((void*)img.pixels.data(), img.width, img.height, 32, img.width * 4,
-                                 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (!src)
-        return;
-    // Always blit into an owned surface.  The source pixels belong to a
-    // DecodedImage behind a shared_ptr that storeDecodedRowArtwork may
-    // replace at any time; wrapping the source directly (the old 1:1 path)
-    // created a use-after-free when the old entry was destroyed, producing
-    // TV-static garbage and duplicate artwork on neighboring cards.
-    SDL_Surface* owned =
-        SDL_CreateRGBSurface(0, dw, dh, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (owned) {
-        SDL_Rect srcR = {0, 0, img.width, img.height};
-        SDL_Rect dstR = {0, 0, dw, dh};
-        SDL_BlitScaled(src, &srcR, owned, &dstR);
-        m_cardSurfaceCache[cacheKey] = owned;
-    }
-    SDL_FreeSurface(src);
+    m_rowArtworkCache.prepareCardSurface(cacheKey, img, boxW, boxH);
 }
 
 void HomeScreen::freeAllCardSurfaces()
 {
-    for (auto& kv : m_cardSurfaceCache) {
-        if (kv.second)
-            SDL_FreeSurface(kv.second);
-    }
-    m_cardSurfaceCache.clear();
+    m_rowArtworkCache.clearCardSurfaces();
 }
 
 void HomeScreen::submitDecode(const MediaItem& item, bool highPriority, bool shows)
@@ -255,7 +157,7 @@ void HomeScreen::drainDecodedArtwork()
             // corrupt-cache deletion; Home applies only its terminal UI
             // tombstone.
             if (result.terminalFailure)
-                m_rowArtwork[key].status = RowArtworkStatus::Failed;
+                m_rowArtworkCache.entries[key].status = RowArtworkStatus::Failed;
         } else {
             if (key == m_selectedArtworkId) {
                 m_selectedArtwork = result.image;
@@ -360,7 +262,7 @@ void HomeScreen::updateShowsDecodeWorkingSet()
         m_artworkController->setShowsWorkingSet(m_showsArtworkGeneration, m_activeShowsDecodeKeys);
     for (size_t i = 0; i < desired.size(); ++i) {
         const std::string key = rowArtworkKey(*desired[i]);
-        if (m_rowArtwork.find(key) == m_rowArtwork.end())
+        if (m_rowArtworkCache.entries.find(key) == m_rowArtworkCache.entries.end())
             submitDecode(*desired[i], i == 0, true);
     }
 }
@@ -384,7 +286,8 @@ void HomeScreen::tryLoadOneRowArtwork()
         for (int i = first; i < last; ++i) {
             const MediaItem& item = row.items[i];
             std::string key = rowArtworkKey(item);
-            if (key.empty() || m_rowArtwork.find(key) != m_rowArtwork.end())
+            if (key.empty() ||
+                m_rowArtworkCache.entries.find(key) != m_rowArtworkCache.entries.end())
                 continue;
             submitDecode(item, i == first, false);
         }
@@ -410,7 +313,8 @@ void HomeScreen::tryLoadOneRowArtwork()
             if (screenX > 640 - HOME_RAIL_MARGIN)
                 break;
             std::string key = rowArtworkKey(row.items[ci]);
-            if (!key.empty() && m_rowArtwork.find(key) == m_rowArtwork.end())
+            if (!key.empty() &&
+                m_rowArtworkCache.entries.find(key) == m_rowArtworkCache.entries.end())
                 submitDecode(row.items[ci], false, false);
             cardAccumX += sz.w + HOME_RAIL_GAP;
         }

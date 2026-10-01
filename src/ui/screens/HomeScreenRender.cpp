@@ -496,8 +496,8 @@ void HomeScreen::drawMoviePreview(SDL_Surface* fb)
         char cacheKey[512];
         std::snprintf(cacheKey, sizeof(cacheKey), "%s:%dx%d", m_selectedArtworkId.c_str(), 64, 96);
         std::string ck(cacheKey);
-        auto cached = m_cardSurfaceCache.find(ck);
-        if (cached != m_cardSurfaceCache.end() && cached->second) {
+        auto cached = m_rowArtworkCache.cardSurfaces.find(ck);
+        if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
             SDL_Surface* cs = cached->second;
             SDL_Rect dst = {px + (64 - cs->w) / 2, py + (96 - cs->h) / 2, cs->w, cs->h};
             SDL_BlitSurface(cs, nullptr, fb, &dst);
@@ -586,10 +586,10 @@ void HomeScreen::drawShowsPreview(SDL_Surface* fb)
     const SDL_Color tint = presentationArtworkColor(*item);
     BitmapFont::fillRect(fb, px, py, 64, 96, tint.r, tint.g, tint.b, tint.a);
     std::string key = rowArtworkKey(*item);
-    auto it = m_rowArtwork.find(key);
+    auto it = m_rowArtworkCache.entries.find(key);
     const DecodedImage* imgPtr = nullptr;
     bool fromRowArtwork = false;
-    if (it != m_rowArtwork.end() && it->second.status == RowArtworkStatus::Loaded &&
+    if (it != m_rowArtworkCache.entries.end() && it->second.status == RowArtworkStatus::Loaded &&
         it->second.image) {
         imgPtr = it->second.image.get();
         fromRowArtwork = true;
@@ -601,8 +601,8 @@ void HomeScreen::drawShowsPreview(SDL_Surface* fb)
         std::snprintf(ckBuf, sizeof(ckBuf), "%s:64x96",
                       key.empty() ? m_selectedArtworkId.c_str() : key.c_str());
         std::string ck(ckBuf);
-        auto cached = m_cardSurfaceCache.find(ck);
-        if (cached != m_cardSurfaceCache.end() && cached->second) {
+        auto cached = m_rowArtworkCache.cardSurfaces.find(ck);
+        if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
             SDL_Surface* cs = cached->second;
             SDL_Rect dst = {px + (64 - cs->w) / 2, py + (96 - cs->h) / 2, cs->w, cs->h};
             SDL_BlitSurface(cs, nullptr, fb, &dst);
@@ -682,16 +682,17 @@ void HomeScreen::drawCard(SDL_Surface* fb, int x, int y, int w, int h, const Med
     {
         std::string key = rowArtworkKey(item);
         if (!key.empty()) {
-            auto it = m_rowArtwork.find(key);
-            if (it != m_rowArtwork.end() && it->second.status == RowArtworkStatus::Loaded &&
-                it->second.image && !it->second.image->empty()) {
+            auto it = m_rowArtworkCache.entries.find(key);
+            if (it != m_rowArtworkCache.entries.end() &&
+                it->second.status == RowArtworkStatus::Loaded && it->second.image &&
+                !it->second.image->empty()) {
                 const DecodedImage& img = *it->second.image;
                 // Check pre-scaled card surface cache
                 char cacheKeyBuf[512];
                 std::snprintf(cacheKeyBuf, sizeof(cacheKeyBuf), "%s:%dx%d", key.c_str(), w, h);
                 std::string cacheKey(cacheKeyBuf);
-                auto cached = m_cardSurfaceCache.find(cacheKey);
-                if (cached != m_cardSurfaceCache.end() && cached->second) {
+                auto cached = m_rowArtworkCache.cardSurfaces.find(cacheKey);
+                if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
                     // Cache hit — plain blit, no create/scale/free
                     SDL_Surface* cs = cached->second;
                     int drawX = x + (w - cs->w) / 2;

@@ -15,6 +15,9 @@ int main()
     testHomeDownloadsStateExpandCollapse();
     testHomeDownloadsStateRemovalAndBulkConfirm();
     testHomeDownloadsStateJournalDiscard();
+    testHomeArtworkCacheLruEviction();
+    testHomeArtworkCacheProtectedAndTouch();
+    testHomeArtworkCacheCardSurfaces();
     testHomeTabsProjection();
     testHomeTabRowUpdates();
     testHomeRowIndexByLabel();

@@ -778,8 +778,8 @@ bool HomeScreen::handleAction(Action action)
                 {
                     UiDiagnostics::Scope constructionScope("MovieDetailsScreen::construction");
                     std::shared_ptr<const DecodedImage> gridArtwork;
-                    const auto artwork = m_rowArtwork.find(rowArtworkKey(*item));
-                    if (artwork != m_rowArtwork.end() &&
+                    const auto artwork = m_rowArtworkCache.entries.find(rowArtworkKey(*item));
+                    if (artwork != m_rowArtworkCache.entries.end() &&
                         artwork->second.status == RowArtworkStatus::Loaded &&
                         artwork->second.image && !artwork->second.image->empty()) {
                         gridArtwork = artwork->second.image;

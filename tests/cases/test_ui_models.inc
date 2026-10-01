@@ -627,3 +627,92 @@ static void testHomeDownloadsStateJournalDiscard()
     CHECK(state.journalDiscardConfirmId.empty());
     std::printf("[test] HomeDownloadsState journal discard confirm OK\n");
 }
+
+// --- HomeArtworkCache: bounded LRU of decoded row artwork + card surfaces.
+
+static DecodedImage homeArtworkImage(int w, int h)
+{
+    DecodedImage image;
+    image.width = w;
+    image.height = h;
+    image.pixels.assign(static_cast<size_t>(w) * h * 4, 0x7F);
+    return image;
+}
+
+static void testHomeArtworkCacheLruEviction()
+{
+    std::printf("[test] HomeArtworkCache LRU eviction\n");
+    HomeArtworkCache cache;
+    const std::set<std::string> none;
+    const int total = ROW_ARTWORK_RAM_LIMIT + 3;
+    for (int i = 0; i < total; ++i)
+        cache.store("k" + std::to_string(i), homeArtworkImage(2, 2), none);
+    CHECK(static_cast<int>(cache.entries.size()) == ROW_ARTWORK_RAM_LIMIT);
+    CHECK(cache.order.size() == cache.entries.size());
+    CHECK(cache.entries.count("k0") == 0 && cache.entries.count("k2") == 0); // oldest gone
+    CHECK(cache.entries.count("k3") == 1);                                   // first survivor
+    CHECK(cache.entries.count("k" + std::to_string(total - 1)) == 1);        // newest kept
+    CHECK(cache.entries.at("k3").status == RowArtworkStatus::Loaded && cache.entries.at("k3").image);
+    std::printf("[test] HomeArtworkCache LRU eviction OK\n");
+}
+
+static void testHomeArtworkCacheProtectedAndTouch()
+{
+    std::printf("[test] HomeArtworkCache protected keys and touch\n");
+    {
+        // A protected key survives eviction; the next-oldest goes instead.
+        HomeArtworkCache cache;
+        const std::set<std::string> protectedKeys{"k0"};
+        for (int i = 0; i <= ROW_ARTWORK_RAM_LIMIT; ++i)
+            cache.store("k" + std::to_string(i), homeArtworkImage(2, 2), protectedKeys);
+        CHECK(cache.entries.count("k0") == 1 && cache.entries.count("k1") == 0);
+        CHECK(static_cast<int>(cache.entries.size()) == ROW_ARTWORK_RAM_LIMIT);
+    }
+    {
+        // When every cached key is protected the cache overflows rather than
+        // evicting an image being rendered.
+        HomeArtworkCache cache;
+        std::set<std::string> everything;
+        for (int i = 0; i <= ROW_ARTWORK_RAM_LIMIT; ++i)
+            everything.insert("k" + std::to_string(i));
+        for (int i = 0; i <= ROW_ARTWORK_RAM_LIMIT; ++i)
+            cache.store("k" + std::to_string(i), homeArtworkImage(2, 2), everything);
+        CHECK(static_cast<int>(cache.entries.size()) == ROW_ARTWORK_RAM_LIMIT + 1);
+    }
+    {
+        // touch() makes a key most recently used, so it outlives older keys.
+        HomeArtworkCache cache;
+        const std::set<std::string> none;
+        for (int i = 0; i < ROW_ARTWORK_RAM_LIMIT; ++i)
+            cache.store("k" + std::to_string(i), homeArtworkImage(2, 2), none);
+        cache.touch("k0");
+        cache.store("extra", homeArtworkImage(2, 2), none);
+        CHECK(cache.entries.count("k0") == 1 && cache.entries.count("k1") == 0);
+    }
+    std::printf("[test] HomeArtworkCache protected keys and touch OK\n");
+}
+
+static void testHomeArtworkCacheCardSurfaces()
+{
+    std::printf("[test] HomeArtworkCache card surfaces\n");
+    HomeArtworkCache cache;
+    const std::set<std::string> none;
+    // 100x50 image into a 64x96 box: width-limited aspect fit -> 64x32.
+    cache.prepareCardSurface("item:poster:64x96", homeArtworkImage(100, 50), 64, 96);
+    CHECK(cache.cardSurfaces.count("item:poster:64x96") == 1);
+    SDL_Surface *card = cache.cardSurfaces["item:poster:64x96"];
+    CHECK(card != nullptr && card->w == 64 && card->h == 32);
+    // Invalid input creates nothing.
+    cache.prepareCardSurface("bad", DecodedImage{}, 64, 96);
+    cache.prepareCardSurface("bad", homeArtworkImage(2, 2), 0, 96);
+    CHECK(cache.cardSurfaces.count("bad") == 0);
+    // Surfaces for "item" and "item:..." drop on store("item"), but a key that
+    // merely shares the prefix ("item2") is untouched.
+    cache.prepareCardSurface("item2:poster:64x96", homeArtworkImage(10, 10), 64, 96);
+    cache.store("item", homeArtworkImage(2, 2), none);
+    CHECK(cache.cardSurfaces.count("item:poster:64x96") == 0);
+    CHECK(cache.cardSurfaces.count("item2:poster:64x96") == 1);
+    cache.clearCardSurfaces();
+    CHECK(cache.cardSurfaces.empty());
+    std::printf("[test] HomeArtworkCache card surfaces OK\n");
+}

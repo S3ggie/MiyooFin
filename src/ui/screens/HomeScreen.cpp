@@ -292,6 +292,7 @@ void HomeScreen::update(Uint32 dt)
     } else {
         m_downloadRefreshTimer = 0;
     }
+    m_battery.update(dt);
     if (m_loadState == LoadState::Ready &&
         (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
         refreshDownloads();

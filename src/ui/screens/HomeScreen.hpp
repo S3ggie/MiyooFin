@@ -15,6 +15,7 @@
 #include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
+#include "../BatteryMonitor.hpp"
 #include "../HomeArtworkCache.hpp"
 #include "../HomeDownloadsState.hpp"
 #include "../HomeSettingsModel.hpp"
@@ -241,6 +242,7 @@ class HomeScreen : public Screen
     int m_rowScroll;
     int m_cardScroll;
     HomeSettingsState m_settingsState;
+    BatteryMonitor m_battery; // header battery icon level (UI thread only)
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;

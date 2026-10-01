@@ -20,6 +20,9 @@ int main()
     testHomeArtworkCacheCardSurfaces();
     testHomeSettingsStateNavigation();
     testHomeSettingsStateConfirmation();
+    testBatteryParsePercent();
+    testBatteryIconMath();
+    testBatteryMonitorReadsAndThrottles();
     testHomeTabsProjection();
     testHomeTabRowUpdates();
     testHomeRowIndexByLabel();

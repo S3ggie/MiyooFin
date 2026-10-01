@@ -2,8 +2,8 @@
 // projection, and artwork planning. These models drive screen behavior but
 // are independent of SDL rendering, so they are tested directly here.
 
-static MediaItem makeHomeItem(const std::string &id, const std::string &title,
-                              const std::string &type = "")
+static MediaItem makeHomeItem(const std::string& id, const std::string& title,
+                              const std::string& type = "")
 {
     MediaItem item;
     item.id = id;
@@ -22,8 +22,8 @@ static void testPresentationArtworkAdapter()
     CHECK(repeated.r == 188 && repeated.g == 196 && repeated.b == 92);
     item.title = "bbbb";
     const SDL_Color sameLength = presentationArtworkColor(item);
-    CHECK(sameLength.r == repeated.r && sameLength.g == repeated.g
-          && sameLength.b == repeated.b && sameLength.a == 255);
+    CHECK(sameLength.r == repeated.r && sameLength.g == repeated.g && sameLength.b == repeated.b &&
+          sameLength.a == 255);
     item.title.assign(300, 'x');
     const SDL_Color longTitle = presentationArtworkColor(item);
     CHECK(longTitle.r == 132 && longTitle.g == 148 && longTitle.b == 116);
@@ -73,9 +73,9 @@ static void testShowsSyncProgress()
     progress.completed = 3;
     progress.total = 10;
     CHECK(progress.percent() == 30);
-    CHECK(progress.percent(50) == 50);   // monotonic against previous
+    CHECK(progress.percent(50) == 50); // monotonic against previous
     CHECK(progress.percent(80) == 80);
-    progress.completed = 13;             // over-complete is bounded
+    progress.completed = 13; // over-complete is bounded
     CHECK(progress.percent() == 100);
     progress.completed = 0;
     CHECK(progress.percent(100) == 100); // never regresses
@@ -170,8 +170,7 @@ static void testHomeTabsProjection()
     movies.id = "m1";
     movies.name = "Movies";
     movies.collectionType = "movies";
-    movies.items = {makeHomeItem("m1", "Beta", "movie"),
-                    makeHomeItem("m2", "Alpha", "movie"),
+    movies.items = {makeHomeItem("m1", "Beta", "movie"), makeHomeItem("m2", "Alpha", "movie"),
                     makeHomeItem("m1", "Beta duplicate", "movie")};
     CachedLibraryView shows;
     shows.id = "s1";
@@ -251,10 +250,7 @@ static void testHomeRowIndexByLabel()
 {
     std::printf("[test] homeRowIndexByLabel identity search\n");
     std::vector<MediaRow> rows = {
-        {"Continue Watching", {}},
-        {"Recently Added", {}},
-        {"Special Row", {}}
-    };
+        {"Continue Watching", {}}, {"Recently Added", {}}, {"Special Row", {}}};
 
     // Found at index 0
     CHECK(homeRowIndexByLabel(rows, "Continue Watching") == 0);
@@ -267,17 +263,10 @@ static void testHomeRowIndexByLabel()
     // Empty rows → -1
     CHECK(homeRowIndexByLabel({}, "Continue Watching") == -1);
     // Duplicate labels → first index
-    std::vector<MediaRow> dups = {
-        {"Row", {}},
-        {"Other", {}},
-        {"Row", {}}
-    };
+    std::vector<MediaRow> dups = {{"Row", {}}, {"Other", {}}, {"Row", {}}};
     CHECK(homeRowIndexByLabel(dups, "Row") == 0);
     // Empty label matches
-    std::vector<MediaRow> emptyLabel = {
-        {"", {}},
-        {"Something", {}}
-    };
+    std::vector<MediaRow> emptyLabel = {{"", {}}, {"Something", {}}};
     CHECK(homeRowIndexByLabel(emptyLabel, "") == 0);
     CHECK(homeRowIndexByLabel(emptyLabel, "Something") == 1);
     std::printf("[test] homeRowIndexByLabel identity search OK\n");
@@ -368,8 +357,8 @@ static void testColdStartPopulationProducesNonEmptyTabs()
 
     // Populated byView => post-finalize rebuild shape.
     std::vector<std::pair<std::string, std::vector<MediaItem>>> moviesByView;
-    moviesByView.push_back({"Movies", {makeHomeItem("m1", "Alpha", "movie"),
-                                       makeHomeItem("m2", "Beta", "movie")}});
+    moviesByView.push_back(
+        {"Movies", {makeHomeItem("m1", "Alpha", "movie"), makeHomeItem("m2", "Beta", "movie")}});
     std::vector<std::pair<std::string, std::vector<MediaItem>>> showsByView;
     showsByView.push_back({"Shows", {makeHomeItem("s1", "ShowOne", "show")}});
     const auto populatedTabs = buildTabs(cw, ra, moviesByView, showsByView);
@@ -481,11 +470,24 @@ static void testCollectBoundedSeriesIds()
 {
     std::printf("[test] Bounded series ID collection from rails\n");
     // Episodes carry seriesId; movies do not.
-    MediaItem ep1; ep1.id="ep-1"; ep1.type="episode"; ep1.seriesId="show-A";
-    MediaItem ep2; ep2.id="ep-2"; ep2.type="episode"; ep2.seriesId="show-B";
-    MediaItem ep3; ep3.id="ep-3"; ep3.type="episode"; ep3.seriesId="show-A"; // dup
-    MediaItem mov; mov.id="mov-1"; mov.type="movie"; // no seriesId
-    MediaItem sh;  sh.id="sh-1";  sh.type="show";   // no seriesId
+    MediaItem ep1;
+    ep1.id = "ep-1";
+    ep1.type = "episode";
+    ep1.seriesId = "show-A";
+    MediaItem ep2;
+    ep2.id = "ep-2";
+    ep2.type = "episode";
+    ep2.seriesId = "show-B";
+    MediaItem ep3;
+    ep3.id = "ep-3";
+    ep3.type = "episode";
+    ep3.seriesId = "show-A"; // dup
+    MediaItem mov;
+    mov.id = "mov-1";
+    mov.type = "movie"; // no seriesId
+    MediaItem sh;
+    sh.id = "sh-1";
+    sh.type = "show"; // no seriesId
 
     // CW and RA both contribute; duplicates across lists are removed.
     const auto ids = collectBoundedSeriesIds({ep1, ep3}, {mov, ep2, sh});
@@ -516,7 +518,7 @@ static void testCollectBoundedSeriesIds()
 
 // --- HomeDownloadsState: Downloads-tab selection, expansion and confirmation.
 
-static DownloadItem homeDlMovie(const std::string &id)
+static DownloadItem homeDlMovie(const std::string& id)
 {
     DownloadItem item;
     item.itemId = id;
@@ -526,7 +528,7 @@ static DownloadItem homeDlMovie(const std::string &id)
     return item;
 }
 
-static DownloadItem homeDlEpisode(const std::string &id, int number)
+static DownloadItem homeDlEpisode(const std::string& id, int number)
 {
     DownloadItem item;
     item.itemId = id;
@@ -652,7 +654,8 @@ static void testHomeArtworkCacheLruEviction()
     CHECK(cache.entries.count("k0") == 0 && cache.entries.count("k2") == 0); // oldest gone
     CHECK(cache.entries.count("k3") == 1);                                   // first survivor
     CHECK(cache.entries.count("k" + std::to_string(total - 1)) == 1);        // newest kept
-    CHECK(cache.entries.at("k3").status == RowArtworkStatus::Loaded && cache.entries.at("k3").image);
+    CHECK(cache.entries.at("k3").status == RowArtworkStatus::Loaded &&
+          cache.entries.at("k3").image);
     std::printf("[test] HomeArtworkCache LRU eviction OK\n");
 }
 
@@ -700,7 +703,7 @@ static void testHomeArtworkCacheCardSurfaces()
     // 100x50 image into a 64x96 box: width-limited aspect fit -> 64x32.
     cache.prepareCardSurface("item:poster:64x96", homeArtworkImage(100, 50), 64, 96);
     CHECK(cache.cardSurfaces.count("item:poster:64x96") == 1);
-    SDL_Surface *card = cache.cardSurfaces["item:poster:64x96"];
+    SDL_Surface* card = cache.cardSurfaces["item:poster:64x96"];
     CHECK(card != nullptr && card->w == 64 && card->h == 32);
     // Invalid input creates nothing.
     cache.prepareCardSurface("bad", DecodedImage{}, 64, 96);
@@ -746,7 +749,7 @@ static void testHomeSettingsStateConfirmation()
 {
     std::printf("[test] HomeSettingsState two-press confirmation\n");
     HomeSettingsState state;
-    CHECK(!state.cancelConfirmation()); // nothing pending
+    CHECK(!state.cancelConfirmation());                    // nothing pending
     CHECK(!state.press(HomeSettingsConfirmation::Logout)); // first press arms
     CHECK(state.confirmation == HomeSettingsConfirmation::Logout);
     CHECK(state.press(HomeSettingsConfirmation::Logout)); // second press confirms
@@ -765,4 +768,99 @@ static void testHomeSettingsStateConfirmation()
     state.move(1, 12);
     CHECK(state.confirmation == HomeSettingsConfirmation::None);
     std::printf("[test] HomeSettingsState two-press confirmation OK\n");
+}
+
+// --- BatteryMonitor: header battery icon level from OnionOS batmon -----------
+
+static void testBatteryParsePercent()
+{
+    std::printf("[test] BatteryMonitor::parsePercent\n");
+    CHECK(BatteryMonitor::parsePercent("48") == 48);
+    CHECK(BatteryMonitor::parsePercent("48\n") == 48);
+    CHECK(BatteryMonitor::parsePercent("  7 \r\n") == 7);
+    CHECK(BatteryMonitor::parsePercent("0") == 0);
+    CHECK(BatteryMonitor::parsePercent("100") == 100);
+    CHECK(BatteryMonitor::parsePercent(std::string("55\0\0", 4)) == 55); // stale NULs
+    // Anything that is not a whole number in 0..100 is unknown.
+    CHECK(BatteryMonitor::parsePercent("") == -1);
+    CHECK(BatteryMonitor::parsePercent("\n") == -1);
+    CHECK(BatteryMonitor::parsePercent("101") == -1);
+    CHECK(BatteryMonitor::parsePercent("-5") == -1);
+    CHECK(BatteryMonitor::parsePercent("abc") == -1);
+    CHECK(BatteryMonitor::parsePercent("48%") == -1);
+    CHECK(BatteryMonitor::parsePercent("48 49") == -1);
+    CHECK(BatteryMonitor::parsePercent("99999") == -1);
+    std::printf("[test] BatteryMonitor::parsePercent OK\n");
+}
+
+static void testBatteryIconMath()
+{
+    std::printf("[test] BatteryMonitor fill width and colours\n");
+    CHECK(BatteryMonitor::fillWidth(-1, 18) == 0); // unknown: empty
+    CHECK(BatteryMonitor::fillWidth(0, 18) == 0);
+    CHECK(BatteryMonitor::fillWidth(1, 18) == 1);  // any charge shows a sliver
+    CHECK(BatteryMonitor::fillWidth(48, 18) == 9); // 48% of 18 = 8.64 -> 9
+    CHECK(BatteryMonitor::fillWidth(50, 18) == 9);
+    CHECK(BatteryMonitor::fillWidth(99, 18) == 18); // rounds up to full
+    CHECK(BatteryMonitor::fillWidth(100, 18) == 18);
+    CHECK(BatteryMonitor::fillWidth(50, 0) == 0);
+    // Monotonic: more charge never draws a shorter bar.
+    int previous = 0;
+    for (int p = 0; p <= 100; ++p) {
+        const int w = BatteryMonitor::fillWidth(p, 18);
+        CHECK(w >= previous && w <= 18);
+        previous = w;
+    }
+    // Colour thresholds: red <= 15, amber 16-40, green above.
+    auto isColor = [](BatteryMonitor::Color c, int r, int g, int b) {
+        return c.r == r && c.g == g && c.b == b;
+    };
+    CHECK(isColor(BatteryMonitor::levelColor(15), 225, 80, 80));
+    CHECK(isColor(BatteryMonitor::levelColor(16), 235, 190, 70));
+    CHECK(isColor(BatteryMonitor::levelColor(40), 235, 190, 70));
+    CHECK(isColor(BatteryMonitor::levelColor(41), 110, 210, 120));
+    CHECK(isColor(BatteryMonitor::levelColor(100), 110, 210, 120));
+    std::printf("[test] BatteryMonitor fill width and colours OK\n");
+}
+
+static void testBatteryMonitorReadsAndThrottles()
+{
+    std::printf("[test] BatteryMonitor reads and throttles\n");
+    const std::string path = "/tmp/miyoofin-battery-test-" + std::to_string(::getpid());
+    auto write = [&](const char* text) {
+        std::FILE* f = std::fopen(path.c_str(), "w");
+        CHECK(f != nullptr);
+        if (!f)
+            return;
+        std::fputs(text, f);
+        std::fclose(f);
+    };
+    std::remove(path.c_str());
+    BatteryMonitor missing(path);
+    missing.update(16);
+    CHECK(missing.percent() == -1); // no file: unknown, not a fake full battery
+
+    write("73\n");
+    BatteryMonitor monitor(path);
+    CHECK(monitor.percent() == -1); // nothing read before the first update
+    monitor.update(16);
+    CHECK(monitor.percent() == 73); // first update reads immediately
+    write("12\n");
+    monitor.update(BatteryMonitor::kRefreshMs - 1000);
+    CHECK(monitor.percent() == 73); // still within the interval: not re-read
+    monitor.update(999);
+    CHECK(monitor.percent() == 73); // one ms short
+    monitor.update(1);
+    CHECK(monitor.percent() == 12); // interval elapsed: re-read
+    // A garbage or vanished file drops back to unknown on the next read.
+    write("not a number");
+    monitor.update(BatteryMonitor::kRefreshMs);
+    CHECK(monitor.percent() == -1);
+    write("88");
+    monitor.update(BatteryMonitor::kRefreshMs);
+    CHECK(monitor.percent() == 88);
+    std::remove(path.c_str());
+    monitor.update(BatteryMonitor::kRefreshMs);
+    CHECK(monitor.percent() == -1);
+    std::printf("[test] BatteryMonitor reads and throttles OK\n");
 }

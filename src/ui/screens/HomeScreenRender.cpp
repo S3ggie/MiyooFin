@@ -135,11 +135,17 @@ static void drawWifiIcon(SDL_Surface* fb, int x, int y)
     BitmapFont::fillRect(fb, x + 7, y + 9, 3, 3, 90, 205, 120, 255);
 }
 
-static void drawBatteryIcon(SDL_Surface* fb, int x, int y)
+// Outline plus a fill that follows the battery level (percent < 0 = unknown:
+// drawn empty rather than pretending to be full).
+static void drawBatteryIcon(SDL_Surface* fb, int x, int y, int percent)
 {
     BitmapFont::drawRect(fb, x, y, 22, 11, 190, 200, 215);
-    BitmapFont::fillRect(fb, x + 2, y + 2, 13, 7, 110, 210, 120, 255);
     BitmapFont::fillRect(fb, x + 22, y + 3, 2, 5, 190, 200, 215, 255);
+    const int fill = BatteryMonitor::fillWidth(percent, 18);
+    if (fill > 0) {
+        const BatteryMonitor::Color c = BatteryMonitor::levelColor(percent);
+        BitmapFont::fillRect(fb, x + 2, y + 2, fill, 7, c.r, c.g, c.b, 255);
+    }
 }
 
 static void drawGearIcon(SDL_Surface* fb, int x, int y)
@@ -316,7 +322,7 @@ void HomeScreen::drawTabBar(SDL_Surface* fb)
     if (home) {
         // Status cluster (Wi-Fi, battery, clock, gear) pinned to the top right.
         drawWifiIcon(fb, 514, 22);
-        drawBatteryIcon(fb, 540, 24);
+        drawBatteryIcon(fb, 540, 24, m_battery.percent());
         std::time_t now = std::time(nullptr);
         std::tm local{};
 #if defined(_WIN32)

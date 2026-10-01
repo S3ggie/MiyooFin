@@ -76,6 +76,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/net/HlsPlaylist.cpp \
     $(SRC_DIR)/ui/BitmapFont.cpp \
     $(SRC_DIR)/ui/OnScreenKeyboard.cpp \
+    $(SRC_DIR)/ui/BatteryMonitor.cpp \
     $(SRC_DIR)/ui/HomeArtworkCache.cpp \
     $(SRC_DIR)/ui/HomeDownloadsState.cpp \
     $(SRC_DIR)/ui/HomeSettingsModel.cpp \

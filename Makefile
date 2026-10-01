@@ -46,27 +46,63 @@ else
 BUILD_DIR   := output/build
 TEST_DIR    := output/test
 endif
-CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic -g -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
+# -g1 (line tables, function names) keeps sanitizer/assert traces readable at a
+# fraction of -g's compile and link cost. Use DEBUG_FLAG=-g for full DWARF.
+DEBUG_FLAG  ?= -g1
+CXXFLAGS    := -std=c++17 -Wall -Wextra -Wpedantic $(DEBUG_FLAG) -O0 -DMIYOOFIN_ENABLE_PERF_TELEMETRY=$(PERF_TELEMETRY)
 LDFLAGS     :=
 ifeq ($(SANITIZE),1)
-SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g
+SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all $(DEBUG_FLAG)
 CXXFLAGS    += $(SANITIZE_FLAGS)
 LDFLAGS     += -fsanitize=address,undefined
 # Sanitizer flags for the vendored sqlite host object.  These must stay a
 # separate variable: SQLITE_CFLAGS is assigned (not appended) below, so
 # appending here would be silently overwritten.
-SQLITE_SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+SQLITE_SANITIZE_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer $(DEBUG_FLAG)
 endif
 ifeq ($(TSAN),1)
 # ThreadSanitizer is most accurate at -O1; the appended -O1 deliberately
 # overrides the default -O0.  The vendored SQLite host object must also be
 # instrumented so its internal synchronization is visible to TSan.
-TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 -g
+TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 $(DEBUG_FLAG)
 CXXFLAGS    += $(TSAN_FLAGS)
 LDFLAGS     += -fsanitize=thread
-SQLITE_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 -g
+SQLITE_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -O1 $(DEBUG_FLAG)
 endif
 INCLUDES    := -I. -Iinclude
+
+# Optional compiler cache: used automatically when installed (USE_CCACHE=0 to
+# skip). pch_defines/time_macros are required for ccache to cache PCH builds.
+USE_CCACHE  ?= 1
+CCACHE      := $(if $(filter 1,$(USE_CCACHE)),$(shell command -v ccache 2>/dev/null))
+ifneq ($(CCACHE),)
+export CCACHE_SLOPPINESS ?= pch_defines,time_macros
+CXX         := $(CCACHE) $(CXX)
+CC          := $(CCACHE) $(CC)
+endif
+
+# Precompiled headers. Without them every translation unit re-parsed ~150k lines
+# of standard-library/SDL/curl (and, for tests, project) headers. A PCH only
+# works with the exact flags it was built with, so each tree (production, test
+# library, test binaries; plain/ASan/TSan) builds its own. GCC ignores an
+# invalid PCH and falls back to the plain header (-Winvalid-pch reports it), so
+# this can only change speed. USE_PCH=0 disables it.
+USE_PCH          ?= 1
+ifeq ($(USE_PCH),1)
+PCH_SRC          := src/pch.hpp
+PCH_DIR          := $(BUILD_DIR)/pch
+PCH_HDR          := $(PCH_DIR)/pch.hpp
+PCH_GCH          := $(PCH_HDR).gch
+PCH_USE          := -include $(PCH_HDR) -Winvalid-pch
+TEST_PCH_DIR     := $(TEST_DIR)/pch
+TEST_LIB_PCH_HDR := $(TEST_PCH_DIR)/pch.hpp
+TEST_LIB_PCH_GCH := $(TEST_LIB_PCH_HDR).gch
+TEST_LIB_PCH_USE := -include $(TEST_LIB_PCH_HDR) -Winvalid-pch
+TEST_PCH_HDR     := $(TEST_PCH_DIR)/test_pch.hpp
+TEST_PCH_GCH     := $(TEST_PCH_HDR).gch
+TEST_PCH_DEP     := $(TEST_PCH_HDR).d
+TEST_PCH_USE     := -include $(TEST_PCH_HDR) -Winvalid-pch
+endif
 SQLITE_DIR  := vendor/sqlite
 SQLITE_SRC  := $(SQLITE_DIR)/sqlite3.c
 SQLITE_DEFINES := -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 \
@@ -116,8 +152,8 @@ $(TARGET): $(OBJS) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(SDL_LIBS) $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
-$(BUILD_DIR)/%.o: src/%.cpp | $(OUT_DIRS)
-	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
+$(BUILD_DIR)/%.o: src/%.cpp $(PCH_GCH) | $(OUT_DIRS)
+	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) $(PCH_USE) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 # Vendored third-party stb_image triggers -Wunused-parameter under -Wall
@@ -129,6 +165,29 @@ $(TEST_DIR)/objects/image/stb_image_impl.o: TEST_CXXFLAGS += -Wno-unused-paramet
 $(SQLITE_HOST_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | $(BUILD_DIR)/sqlite
 	$(CC) $(SQLITE_CFLAGS) -MMD -MP -I$(SQLITE_DIR) -c -o $@ $<
 	@echo "  [CC]   $@"
+
+ifeq ($(USE_PCH),1)
+$(PCH_GCH): $(PCH_SRC) | $(PCH_DIR)
+	cp $(PCH_SRC) $(PCH_HDR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -x c++-header -o $@ $(PCH_HDR)
+	@echo "  [PCH]  $@"
+
+$(TEST_LIB_PCH_GCH): $(PCH_SRC) | $(TEST_PCH_DIR)
+	cp $(PCH_SRC) $(TEST_LIB_PCH_HDR)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -x c++-header -o $@ $(TEST_LIB_PCH_HDR)
+	@echo "  [PCH]  $@"
+
+# The test PCH includes project headers (through test_support.hpp), so it is
+# regenerated whenever any of them changes: -MMD records them in a .d file.
+$(TEST_PCH_GCH): $(PCH_SRC) tests/test_support.hpp | $(TEST_PCH_DIR)
+	printf '#include "$(abspath $(PCH_SRC))"\n#include "$(abspath tests/test_support.hpp)"\n' > $(TEST_PCH_HDR)
+	$(CXX) $(TEST_CXXFLAGS) -MMD -MP -MF $(TEST_PCH_DEP) $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -x c++-header -o $@ $(TEST_PCH_HDR)
+	@echo "  [PCH]  $@"
+-include $(TEST_PCH_DEP)
+
+$(PCH_DIR) $(TEST_PCH_DIR):
+	@mkdir -p $@
+endif
 
 # Create output directories
 $(OUT_DIRS):
@@ -239,8 +298,8 @@ clang-tidy:
 	@bear -- $(MAKE) clean all
 	@clang-tidy $(SRCS) -p . --config-file=.clang-tidy --quiet
 
-$(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) | $(TEST_DIR)
-	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
+$(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) $(TEST_PCH_GCH) | $(TEST_DIR)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(TEST_PCH_USE) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
@@ -270,9 +329,9 @@ $(TEST_DIR)/test_library_hierarchy: src/library/LibraryCoordinator.hpp
 $(TEST_DIR)/test_library_query: src/library/LibraryQuery.hpp src/library/LibraryCoordinator.hpp
 $(TEST_DIR)/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
 
-$(TEST_DIR)/objects/%.o: src/%.cpp | $(TEST_DIR)
+$(TEST_DIR)/objects/%.o: src/%.cpp $(TEST_LIB_PCH_GCH) | $(TEST_DIR)
 	@mkdir -p $(@D)
-	$(CXX) $(TEST_CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) -c -o $@ $<
+	$(CXX) $(TEST_CXXFLAGS) -MMD -MP $(INCLUDES) $(SDL_CFLAGS) $(CURL_CFLAGS) $(TEST_LIB_PCH_USE) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 $(TEST_PROD_LIB): $(TEST_PROD_OBJS) | $(TEST_DIR)
@@ -330,13 +389,15 @@ check-miyoo-libs:
 # -------------------------------------------------------------------
 DOCKER_TAG := miyoofin-toolchain
 DOCKER_USER := $(shell id -u):$(shell id -g)
+# Parallel jobs for the cross build inside the container (override: make onionos JOBS=2).
+JOBS ?= $(shell nproc 2>/dev/null || echo 2)
 ARM_TARGET := output/build-arm/miyoofin
 
 .PHONY: onionos
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter benchmark
+	    make -f Makefile.cross -j$(JOBS) PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image

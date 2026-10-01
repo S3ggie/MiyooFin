@@ -15,7 +15,7 @@ fi
 echo "=== ASan+UBSan tests ==="
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=0:strict_string_checks=1}" \
 UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1}" \
-xvfb-run -a make test-sanitize -j2
+xvfb-run -a make test-sanitize -j"${MIYOOFIN_JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 echo "=== Scripted UI tests ==="
 xvfb-run -a make ui-script-test

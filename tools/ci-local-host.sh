@@ -17,8 +17,10 @@ fi
 echo "=== First-party formatting (clang-format-18) ==="
 CLANG_FORMAT=clang-format-18 make format-check
 
+jobs=${MIYOOFIN_JOBS:-$(nproc 2>/dev/null || echo 2)}
+
 echo "=== Host build ==="
-make -j2
+make -j"$jobs"
 
 echo "=== Tests and refactor/boundary checks ==="
 # refactor-check owns the normal make test invocation and its diff check.

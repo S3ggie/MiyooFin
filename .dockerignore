@@ -1,0 +1,8 @@
+# Docker build context for Dockerfile.onionos and Dockerfile.developer-ssh.
+# Between them they COPY only the two paths whitelisted below, so send nothing
+# else. Without this the whole repo (including multi-GB output/ build trees)
+# was uploaded on every `docker build` / `make onionos`. The legacy builder
+# only reads this root file, so it is deliberately not per-Dockerfile.
+*
+!vendor/miyoo/lib
+!tools/miyoo/build-developer-ssh.sh

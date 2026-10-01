@@ -50,6 +50,35 @@ DEPS      := $(OBJS:.o=.d)
 .DEFAULT_GOAL := all
 -include $(DEPS)
 TARGET    := output/build-arm/miyoofin
+# Compile flags (RELEASE, PERF_TELEMETRY) are not tracked by the -MMD header
+# dependencies, so a config stamp makes objects rebuild when they change and
+# lets everything else stay incremental (no need to wipe output/build-arm).
+# The SQLite object has fixed flags and is deliberately not tied to it.
+BUILD_CONFIG := output/build-arm/.config
+.PHONY: FORCE
+$(BUILD_CONFIG): FORCE | output/build-arm
+	@printf 'RELEASE=%s PERF_TELEMETRY=%s\n' '$(RELEASE)' '$(PERF_TELEMETRY)' | cmp -s - $@ || \
+	    printf 'RELEASE=%s PERF_TELEMETRY=%s\n' '$(RELEASE)' '$(PERF_TELEMETRY)' > $@
+$(filter-out $(SQLITE_ARM_OBJ),$(OBJS)): $(BUILD_CONFIG)
+
+# Precompiled header (system headers only). Built with the exact ARM flags, so
+# it also depends on the config stamp. USE_PCH=0 disables it; GCC falls back to
+# the plain header if the PCH is ever invalid (-Winvalid-pch reports it).
+USE_PCH  ?= 1
+ifeq ($(USE_PCH),1)
+PCH_SRC  := src/pch.hpp
+PCH_DIR  := output/build-arm/pch
+PCH_HDR  := $(PCH_DIR)/pch.hpp
+PCH_GCH  := $(PCH_HDR).gch
+PCH_USE  := -include $(PCH_HDR) -Winvalid-pch
+$(PCH_GCH): $(PCH_SRC) $(BUILD_CONFIG) | $(PCH_DIR)
+	cp $(PCH_SRC) $(PCH_HDR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -x c++-header -o $@ $(PCH_HDR)
+	@echo "  [PCH]  $@"
+$(PCH_DIR):
+	@mkdir -p $@
+endif
+
 OUT_DIRS  := output/build-arm/app output/build-arm/data output/build-arm/input \
              output/build-arm/image output/build-arm/net output/build-arm/cache \
              output/build-arm/download output/build-arm/catalog \
@@ -79,8 +108,8 @@ $(TARGET): $(OBJS) | output/build-arm
 	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $^ -lSDL2 -lcurl -lpthread
 	@echo "  [LINK] $@"
 
-output/build-arm/%.o: src/%.cpp | $(OUT_DIRS)
-	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) -c -o $@ $<
+output/build-arm/%.o: src/%.cpp $(PCH_GCH) | $(OUT_DIRS)
+	$(CXX) $(CXXFLAGS) -MMD -MP $(INCLUDES) $(PCH_USE) -c -o $@ $<
 	@echo "  [CC]   $@"
 
 $(SQLITE_ARM_OBJ): $(SQLITE_SRC) $(SQLITE_DIR)/sqlite3.h | output/build-arm/sqlite
@@ -101,7 +130,7 @@ BRIDGE_ARM := output/build-arm/miyoofin-https-bridge
 
 bridge: $(BRIDGE_ARM)
 
-$(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp | output/build-arm
+$(BRIDGE_ARM): $(BRIDGE_SRC) tools/https_bridge_parse.hpp tools/playback_route.hpp $(BUILD_CONFIG) | output/build-arm
 	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 
@@ -126,7 +155,7 @@ REPORTER_ARM     := output/build-arm/miyoofin-playback-reporter
 
 reporter: $(REPORTER_ARM)
 
-$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp | output/build-arm
+$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp $(BUILD_CONFIG) | output/build-arm
 	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 

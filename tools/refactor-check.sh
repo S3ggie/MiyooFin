@@ -157,5 +157,5 @@ for source in src/ui/screens/*Render.cpp; do
     fi
 done
 
-make test
+make -j"${MIYOOFIN_JOBS:-$(nproc 2>/dev/null || echo 2)}" test
 git diff --check

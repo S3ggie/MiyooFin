@@ -42,7 +42,7 @@ constexpr int GRID_CARD_H = 96;
 constexpr int GRID_GAP = 8;
 constexpr int ALPHA_X = 8;
 constexpr int ALPHA_W = 28;
-constexpr int BROWSE_X = 44;                       // content left of the alphabet rail
+constexpr int BROWSE_X = 44;                         // content left of the alphabet rail
 constexpr int BROWSE_W = d::kScreenW - BROWSE_X - 8; // 588
 constexpr int INFO_Y = d::kHeaderH + 8;
 constexpr int INFO_H = 56;
@@ -142,8 +142,7 @@ void drawInfoBar(SDL_Surface* fb, const MediaItem* item, bool show)
 {
     ui::panel(fb, BROWSE_X, INFO_Y, BROWSE_W, INFO_H);
     if (!item) {
-        ui::text(fb, BROWSE_X + 14, INFO_Y + (INFO_H - 16) / 2, "Nothing selected",
-                 d::kTextMuted);
+        ui::text(fb, BROWSE_X + 14, INFO_Y + (INFO_H - 16) / 2, "Nothing selected", d::kTextMuted);
         return;
     }
     ui::textClamped(fb, BROWSE_X + 14, INFO_Y + 8, BROWSE_W - 28, item->title, d::kText);
@@ -168,7 +167,8 @@ void drawInfoBar(SDL_Surface* fb, const MediaItem* item, bool show)
         ui::chip(fb, x, y, "Watched", ui::mix(d::kCanvas, d::kSuccess, 22), d::kSuccess);
     } else if (item->progress > 0) {
         char state[24];
-        std::snprintf(state, sizeof(state), "%d%% watched", static_cast<int>(item->progress * 100.0f + 0.5f));
+        std::snprintf(state, sizeof(state), "%d%% watched",
+                      static_cast<int>(item->progress * 100.0f + 0.5f));
         ui::chip(fb, x, y, state, d::kAccentSoft, d::kAccentHi);
     }
 }
@@ -315,7 +315,6 @@ std::string HomeScreen::syncStatusText() const
         activeTabNamed("Shows"));
 }
 
-
 void HomeScreen::drawRowList(SDL_Surface* fb)
 {
     const auto& rows = currentTab().rows;
@@ -367,8 +366,8 @@ void HomeScreen::drawMovieGrid(SDL_Surface* fb)
         if (gr < m_rowScroll || gr >= m_rowScroll + MOVIE_GRID_ROWS)
             continue;
         drawCard(fb, left + gc * (GRID_CARD_W + GRID_GAP),
-                 GRID_TOP + (gr - m_rowScroll) * (GRID_CARD_H + GRID_GAP), GRID_CARD_W,
-                 GRID_CARD_H, row->items[i], !m_movieRailFocused && i == m_activeCard);
+                 GRID_TOP + (gr - m_rowScroll) * (GRID_CARD_H + GRID_GAP), GRID_CARD_W, GRID_CARD_H,
+                 row->items[i], !m_movieRailFocused && i == m_activeCard);
     }
     if (row->items.empty() && m_movieActiveLetter >= 0) {
         char message[48];
@@ -434,7 +433,8 @@ void HomeScreen::drawShowsGrid(SDL_Surface* fb)
             std::snprintf(b, sizeof(b), "No shows starting with %c", 'A' + m_showsActiveLetter);
         else
             std::snprintf(b, sizeof(b), "No shows on this server");
-        drawCenteredNote(fb, b, m_showsActiveLetter >= 0 ? "Pick another letter." : "", d::kTextSecondary);
+        drawCenteredNote(fb, b, m_showsActiveLetter >= 0 ? "Pick another letter." : "",
+                         d::kTextSecondary);
     }
 }
 
@@ -518,9 +518,8 @@ void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
                          "Open a movie or episode and choose Download to watch it offline.",
                          d::kTextSecondary);
         if (!m_downloadsState.missingJournal.empty()) {
-            ui::panel(fb, d::kMargin, d::kScreenH - d::kFooterH - 52,
-                      d::kScreenW - 2 * d::kMargin, 40, ui::mix(d::kPanel, d::kWarning, 14),
-                      d::kWarning);
+            ui::panel(fb, d::kMargin, d::kScreenH - d::kFooterH - 52, d::kScreenW - 2 * d::kMargin,
+                      40, ui::mix(d::kPanel, d::kWarning, 14), d::kWarning);
             ui::text(fb, d::kMargin + 14, d::kScreenH - d::kFooterH - 40,
                      "Missing offline progress: press X to discard", d::kWarning);
         }
@@ -642,8 +641,7 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
     ui::FooterSpec spec;
     using ui::Key;
     std::string link;
-    linkPresentation(m_userName, m_link ? m_link->status() : LinkStatus::Checking, link,
-                     spec.link);
+    linkPresentation(m_userName, m_link ? m_link->status() : LinkStatus::Checking, link, spec.link);
     spec.rightText = link;
     spec.note = syncStatusText();
 
@@ -665,8 +663,8 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
             spec.message = "Press A again to log out";
             spec.messageColor = d::kDanger;
         } else {
-            spec.hints = {{Key::Dpad, "Scroll"}, {Key::A, "Change"}, {Key::B, "Back"},
-                          {Key::LR, "Tabs"}};
+            spec.hints = {
+                {Key::Dpad, "Scroll"}, {Key::A, "Change"}, {Key::B, "Back"}, {Key::LR, "Tabs"}};
         }
     } else if (activeTabNamed("Downloads")) {
         const DownloadHierarchyRow* selectedRow =
@@ -710,20 +708,26 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
             spec.hints.push_back({Key::B, "Back"});
         }
     } else if (activeTabNamed("Movies")) {
-        spec.hints = m_movieRailFocused
-                         ? std::vector<ui::Hint>{{Key::Dpad, "Move"}, {Key::A, "Filter"},
-                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}}
-                         : std::vector<ui::Hint>{{Key::Dpad, "Browse"}, {Key::A, "Open"},
-                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}};
+        spec.hints =
+            m_movieRailFocused
+                ? std::vector<ui::Hint>{{Key::Dpad, "Move"},
+                                        {Key::A, "Filter"},
+                                        {Key::B, "Back"},
+                                        {Key::LR, "Tabs"}}
+                : std::vector<ui::Hint>{
+                      {Key::Dpad, "Browse"}, {Key::A, "Open"}, {Key::B, "Back"}, {Key::LR, "Tabs"}};
     } else if (activeTabNamed("Shows")) {
-        spec.hints = m_showsFocus == ShowsFocus::AlphabetRail
-                         ? std::vector<ui::Hint>{{Key::Dpad, "Move"}, {Key::A, "Filter"},
-                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}}
-                         : std::vector<ui::Hint>{{Key::Dpad, "Browse"}, {Key::A, "Open"},
-                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}};
+        spec.hints =
+            m_showsFocus == ShowsFocus::AlphabetRail
+                ? std::vector<ui::Hint>{{Key::Dpad, "Move"},
+                                        {Key::A, "Filter"},
+                                        {Key::B, "Back"},
+                                        {Key::LR, "Tabs"}}
+                : std::vector<ui::Hint>{
+                      {Key::Dpad, "Browse"}, {Key::A, "Open"}, {Key::B, "Back"}, {Key::LR, "Tabs"}};
     } else {
-        spec.hints = {{Key::Dpad, "Navigate"}, {Key::A, "Select"}, {Key::B, "Back"},
-                      {Key::LR, "Tabs"}};
+        spec.hints = {
+            {Key::Dpad, "Navigate"}, {Key::A, "Select"}, {Key::B, "Back"}, {Key::LR, "Tabs"}};
     }
     ui::footer(fb, spec);
 }

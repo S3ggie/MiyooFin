@@ -389,9 +389,9 @@ void HomeScreen::clampNavigation()
         m_rowScroll = m_activeRow;
     if (m_activeRow >= m_rowScroll + VISIBLE_ROWS)
         m_rowScroll = m_activeRow - VISIBLE_ROWS + 1;
-    m_cardScroll = clampHomeCardScroll(
-        static_cast<int>(items.size()), m_activeCard, m_cardScroll, 640,
-        homeRailCardSize(homeRailIsLandscape(rows[m_activeRow].label)).w);
+    m_cardScroll =
+        clampHomeCardScroll(static_cast<int>(items.size()), m_activeCard, m_cardScroll, 640,
+                            homeRailCardSize(homeRailIsLandscape(rows[m_activeRow].label)).w);
 }
 
 bool HomeScreen::handlePointerClick(int x, int y)

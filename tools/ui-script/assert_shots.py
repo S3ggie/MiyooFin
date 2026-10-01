@@ -9,9 +9,8 @@ goldens (those would be brittle across themes/fonts):
   rails     the list/grid band is populated, not empty/uniform
             (catches the grey-poster / "no seasons" class of bug)
   seasons   the lower list band on a Series screen is populated
-  compact_header  a non-Home tab keeps the 24px compact header: the header
-            background does not paint over the y=25 content band (guards the
-            Home-only 64px branded header from overlapping Movies/Shows)
+  compact_header  every tab shares the 44px header: the header background
+            fills y0-42 and does not paint over the content band below it
 
 Usage:
   assert_shots.py --shot <file.bmp> --checks rendered,rails
@@ -44,11 +43,8 @@ MIN_DISTINCT_SEASONS = 5
 MIN_BRIGHT_SEASONS = 0.004
 BRIGHT_LUM = 170
 
-# Non-Home tabs use the legacy 24px compact header (content at y=25); the
-# Home-only branded header is 64px.  HEADER_BG is the compact/Home header
-# background (HEADER_BG_R/G/B = 4,6,14).  A 64px header painted across a
-# non-Home tab would fill y 25-63 with this colour, so require that band to
-# be almost entirely content.
+# Every tab shares the 44px kit header (background 4,6,14). The content band
+# just below it must be almost entirely content, never header background.
 HEADER_BG = (4, 6, 14)
 MIN_HEADER_BG_FRACTION = 0.30
 MAX_HEADER_BG_CONTENT_FRACTION = 0.05
@@ -142,11 +138,11 @@ def header_bg_fraction(px, y0, y1):
 
 
 def check_compact_header(px):
-    header = header_bg_fraction(px, 0, 24)
-    content = header_bg_fraction(px, 25, 64)
+    header = header_bg_fraction(px, 0, 43)
+    content = header_bg_fraction(px, 46, 64)
     ok = header >= MIN_HEADER_BG_FRACTION \
         and content <= MAX_HEADER_BG_CONTENT_FRACTION
-    return ok, ("header_bg y0-24=%.3f (>=%.2f) content_header_bg y25-63=%.3f (<=%.2f)"
+    return ok, ("header_bg y0-42=%.3f (>=%.2f) content_header_bg y46-63=%.3f (<=%.2f)"
                 % (header, MIN_HEADER_BG_FRACTION,
                    content, MAX_HEADER_BG_CONTENT_FRACTION))
 

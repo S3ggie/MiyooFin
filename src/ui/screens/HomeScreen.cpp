@@ -23,9 +23,8 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
         TokenValidation result = TokenValidation::Unavailable;
         RouteRequest(session).run(
             [&](const std::string& base) {
-                result = JellyfinApi::validateTokenStatus(base, session.accessToken,
-                                                          session.userId, session.deviceId, error,
-                                                          cancel.get());
+                result = JellyfinApi::validateTokenStatus(base, session.accessToken, session.userId,
+                                                          session.deviceId, error, cancel.get());
                 return result == TokenValidation::Valid;
             },
             error);

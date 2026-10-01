@@ -104,8 +104,8 @@ void MovieDetailsScreen::renderContent(SDL_Surface* fb)
             ui::text(fb, rx, y, m_overviewLines[i], d::kTextSecondary);
         if (overviewScrollable) {
             const int trackH = visibleLines * kLinePitch - 2;
-            const int thumbH = std::max(14, trackH * visibleLines /
-                                                static_cast<int>(m_overviewLines.size()));
+            const int thumbH =
+                std::max(14, trackH * visibleLines / static_cast<int>(m_overviewLines.size()));
             const int thumbY = ry + (trackH - thumbH) * m_overviewScroll / maxScroll;
             ui::fill(fb, d::kScreenW - 10, ry, 3, trackH, d::kDivider);
             ui::roundFill(fb, d::kScreenW - 10, thumbY, 3, thumbH, 1, d::kAccentDim);
@@ -122,16 +122,16 @@ void MovieDetailsScreen::renderContent(SDL_Surface* fb)
     if (m_downloads && m_planId) {
         const auto& p = m_planSnapshot;
         if (m_confirmDownload) {
-            footer.message =
-                "Download ~" + formatBytes(p.plan.additionalRequiredBytes) + "?  A confirm  B cancel";
+            footer.message = "Download ~" + formatBytes(p.plan.additionalRequiredBytes) +
+                             "?  A confirm  B cancel";
             footer.messageColor = d::kAccentHi;
         } else if (p.state == DownloadPlanState::Planning) {
             status = p.plan.sizeKnown ? "Download ~" + formatBytes(p.plan.additionalRequiredBytes) +
                                             "  preparing..."
                                       : "Checking download size...";
         } else if (p.state == DownloadPlanState::Ready) {
-            status = "Download ~" + formatBytes(p.plan.additionalRequiredBytes) +
-                     "   Free " + formatBytes(p.plan.usableFreeBytes);
+            status = "Download ~" + formatBytes(p.plan.additionalRequiredBytes) + "   Free " +
+                     formatBytes(p.plan.usableFreeBytes);
         } else if (p.state == DownloadPlanState::Error) {
             status = p.plan.error;
             statusColor = d::kDanger;

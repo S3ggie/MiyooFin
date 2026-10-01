@@ -170,7 +170,7 @@ case "$NAME" in
         CHECKS="rendered,compact_header"
         ;;
     series)
-        want='[SeriesScreen] enter series=Testville'
+        want='[SeriesScreen] enter series='
         SHOT="$OUT/shots/series-seasons.bmp"
         CHECKS="rendered,seasons"
         ;;

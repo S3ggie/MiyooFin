@@ -85,7 +85,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
     rows.insert(rows.end(),
                 {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR}, {"ACCOUNT", "Log Out"}});
     namespace d = design;
-    constexpr int ROW_H = 58, PITCH = 66, TOP = d::kHeaderH + 10, W = d::kScreenW - 2 * d::kMargin - 8;
+    constexpr int ROW_H = 58, PITCH = 66, TOP = d::kHeaderH + 10,
+                  W = d::kScreenW - 2 * d::kMargin - 8;
     const int total = static_cast<int>(rows.size());
     for (int visible = 0; visible < HomeSettingsState::kVisibleRows; ++visible) {
         const int index = m_settingsState.scroll + visible;
@@ -115,7 +116,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
         const int trackH = HomeSettingsState::kVisibleRows * PITCH - 8;
         const int thumbH = std::max(16, trackH * HomeSettingsState::kVisibleRows / total);
         const int maxScroll = total - HomeSettingsState::kVisibleRows;
-        const int thumbY = TOP + (trackH - thumbH) * m_settingsState.scroll / std::max(1, maxScroll);
+        const int thumbY =
+            TOP + (trackH - thumbH) * m_settingsState.scroll / std::max(1, maxScroll);
         ui::fill(fb, d::kScreenW - 10, TOP, 3, trackH, d::kDivider);
         ui::roundFill(fb, d::kScreenW - 10, thumbY, 3, thumbH, 1, d::kAccentDim);
     }

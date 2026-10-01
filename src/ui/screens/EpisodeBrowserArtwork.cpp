@@ -16,8 +16,6 @@
 
 namespace miyoofin {
 
-
-
 void EpisodeBrowserScreen::clearSelectedEpisodeArtwork()
 {
     m_episodeArtwork = {};

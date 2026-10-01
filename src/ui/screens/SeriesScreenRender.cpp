@@ -166,10 +166,8 @@ void SeriesScreen::render(SDL_Surface* fb)
             ui::text(fb, META_X, y, lines[i], d::kTextSecondary);
         if (overviewScrollable) {
             const int trackH = visible * OVERVIEW_PITCH - 2;
-            const int thumbH =
-                std::max(14, trackH * visible / static_cast<int>(lines.size()));
-            const int thumbY =
-                OVERVIEW_Y + (trackH - thumbH) * m_overviewScroll / maxScroll;
+            const int thumbH = std::max(14, trackH * visible / static_cast<int>(lines.size()));
+            const int thumbY = OVERVIEW_Y + (trackH - thumbH) * m_overviewScroll / maxScroll;
             ui::fill(fb, 284, OVERVIEW_Y, 3, trackH, d::kDivider);
             ui::roundFill(fb, 284, thumbY, 3, thumbH, 1, d::kAccentDim);
         }
@@ -222,20 +220,24 @@ void SeriesScreen::render(SDL_Surface* fb)
             if (it != m_seasonArtworkSurfaces.end() && it->second.surface)
                 artPtr = &it->second;
         }
-        drawSeasonPoster(fb, COL_X[gridCol], GRID_TOP_Y + gridRow * GRID_ROW_H, POSTER_W,
-                         POSTER_H, m_seasons[itemIdx], itemIdx == m_selectedSeason, artPtr);
+        drawSeasonPoster(fb, COL_X[gridCol], GRID_TOP_Y + gridRow * GRID_ROW_H, POSTER_W, POSTER_H,
+                         m_seasons[itemIdx], itemIdx == m_selectedSeason, artPtr);
     }
     if (totalSeasons > GRID_VISIBLE) {
         const int rows = gridRowCount(totalSeasons);
         const int trackH = GRID_ROWS * GRID_ROW_H - 16;
         const int thumbH = std::max(16, trackH * GRID_ROWS / rows);
-        const int thumbY = GRID_TOP_Y + (trackH - thumbH) * m_gridScroll / std::max(1, rows - GRID_ROWS);
+        const int thumbY =
+            GRID_TOP_Y + (trackH - thumbH) * m_gridScroll / std::max(1, rows - GRID_ROWS);
         ui::fill(fb, d::kScreenW - 8, GRID_TOP_Y, 3, trackH, d::kDivider);
         ui::roundFill(fb, d::kScreenW - 8, thumbY, 3, thumbH, 1, d::kAccentDim);
     }
 
-    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Open"}, {ui::Key::B, "Back"},
-                    {ui::Key::Y, "Season"},  {ui::Key::X, "Series"}};
+    footer.hints = {{ui::Key::Dpad, "Move"},
+                    {ui::Key::A, "Open"},
+                    {ui::Key::B, "Back"},
+                    {ui::Key::Y, "Season"},
+                    {ui::Key::X, "Series"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});
     ui::footer(fb, footer);

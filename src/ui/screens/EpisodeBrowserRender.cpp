@@ -56,8 +56,8 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
     namespace d = design;
     ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
     ui::HeaderSpec header;
-    header.title = m_series.title +
-                   (m_season.title.empty() ? std::string() : "  /  " + m_season.title);
+    header.title =
+        m_series.title + (m_season.title.empty() ? std::string() : "  /  " + m_season.title);
     header.showStatus = false;
     ui::header(fb, header);
     ui::FooterSpec footer;
@@ -116,7 +116,8 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
         int tx = EB_LIST_X + 10;
         if (!num.empty())
             tx += ui::chip(fb, tx, ry + 9, num, focused ? d::kAccent : d::kRaised,
-                           focused ? d::Rgb{255, 255, 255} : d::kTextSecondary) + 8;
+                           focused ? d::Rgb{255, 255, 255} : d::kTextSecondary) +
+                  8;
         const bool partial = !ep.played && playbackPercent(ep) > 0;
         const int rightPad = ep.played ? 26 : 10;
         ui::textClamped(fb, tx, ry + 11, EB_LIST_X + EB_LIST_W - rightPad - tx, ep.title,
@@ -130,8 +131,8 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
     if (total > EB_LIST_VISIBLE) {
         const int trackH = EB_LIST_VISIBLE * EB_ROW_PITCH - 4;
         const int thumbH = std::max(16, trackH * EB_LIST_VISIBLE / total);
-        const int thumbY = EB_LIST_Y + (trackH - thumbH) * m_listScroll /
-                                           std::max(1, total - EB_LIST_VISIBLE);
+        const int thumbY =
+            EB_LIST_Y + (trackH - thumbH) * m_listScroll / std::max(1, total - EB_LIST_VISIBLE);
         ui::fill(fb, EB_LIST_X + EB_LIST_W + 4, EB_LIST_Y, 3, trackH, d::kDivider);
         ui::roundFill(fb, EB_LIST_X + EB_LIST_W + 4, thumbY, 3, thumbH, 1, d::kAccentDim);
     }
@@ -201,15 +202,15 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
         std::string status;
         d::Rgb color = d::kTextSecondary;
         if (m_confirmDownload) {
-            footer.message = std::string("Download ") +
-                             (m_planIsSeason ? "season " + std::to_string(m_season.indexNumber)
-                                             : "episode") +
-                             "?  A confirm  B cancel";
+            footer.message =
+                std::string("Download ") +
+                (m_planIsSeason ? "season " + std::to_string(m_season.indexNumber) : "episode") +
+                "?  A confirm  B cancel";
             footer.messageColor = d::kAccentHi;
         } else if (p.state == DownloadPlanState::Planning) {
-            status = p.plan.sizeKnown ? "~" + formatBytes(p.plan.additionalRequiredBytes) +
-                                            "  preparing..."
-                                      : std::string("Preparing download...");
+            status = p.plan.sizeKnown
+                         ? "~" + formatBytes(p.plan.additionalRequiredBytes) + "  preparing..."
+                         : std::string("Preparing download...");
         } else if (p.state == DownloadPlanState::Ready) {
             status = std::to_string(p.itemCount) + " eps  ~" +
                      formatBytes(p.plan.additionalRequiredBytes) + "  free " +
@@ -230,7 +231,9 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
     ui::button(fb, 520, EB_BTN_Y, 104, EB_BTN_H, "Get Season", ui::ButtonStyle::Secondary,
                onButtons && m_actionBtn == ActionButton::DownloadSeason);
 
-    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Select"}, {ui::Key::B, "Back"},
+    footer.hints = {{ui::Key::Dpad, "Move"},
+                    {ui::Key::A, "Select"},
+                    {ui::Key::B, "Back"},
                     {ui::Key::Y, "Get season"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});

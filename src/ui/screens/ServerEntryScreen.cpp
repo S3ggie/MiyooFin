@@ -210,11 +210,14 @@ void ServerEntryScreen::render(SDL_Surface* fb)
     footer.showLink = false;
     using ui::Key;
     if (m_localAddressEntry || m_publicAddressEntry)
-        footer.hints = {{Key::A, "Type"}, {Key::B, "Back"}, {Key::X, "Clear"}, {Key::L2, "Caps"},
+        footer.hints = {{Key::A, "Type"},
+                        {Key::B, "Back"},
+                        {Key::X, "Clear"},
+                        {Key::L2, "Caps"},
                         {Key::Start, "Done"}};
     else
-        footer.hints = {{Key::A, "Type"}, {Key::B, "Delete"}, {Key::X, "Clear"}, {Key::L2, "Caps"},
-                        {Key::Start, "Done"}, {Key::Select, "Cancel"}};
+        footer.hints = {{Key::A, "Type"},  {Key::B, "Delete"},   {Key::X, "Clear"},
+                        {Key::L2, "Caps"}, {Key::Start, "Done"}, {Key::Select, "Cancel"}};
     ui::footer(fb, footer);
 }
 
@@ -244,8 +247,8 @@ void ServerEntryScreen::drawStatus(SDL_Surface* fb)
     } else if (m_connecting) {
         const int dots = static_cast<int>((SDL_GetTicks() / 400) % 4);
         ui::statusDot(fb, d::kMargin, y + 4, 8, d::kAccent);
-        ui::text(fb, d::kMargin + 16, y, "Connecting" + std::string(static_cast<std::size_t>(dots), '.'),
-                 d::kAccentHi);
+        ui::text(fb, d::kMargin + 16, y,
+                 "Connecting" + std::string(static_cast<std::size_t>(dots), '.'), d::kAccentHi);
     } else {
         ui::statusDot(fb, d::kMargin, y + 4, 8, d::kDanger);
         int ly = y;

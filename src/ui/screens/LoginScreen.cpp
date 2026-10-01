@@ -254,11 +254,14 @@ void LoginScreen::drawHints(SDL_Surface* fb)
     footer.showLink = false;
     using ui::Key;
     if (m_inFields)
-        footer.hints = {{Key::Dpad, "Switch field / keys"}, {Key::L2, "Caps"},
-                        {Key::Start, "Sign in"}};
+        footer.hints = {
+            {Key::Dpad, "Switch field / keys"}, {Key::L2, "Caps"}, {Key::Start, "Sign in"}};
     else
-        footer.hints = {{Key::A, "Type"}, {Key::B, "Delete"}, {Key::X, "Clear"},
-                        {Key::L2, "Caps"}, {Key::Start, "Sign in"}};
+        footer.hints = {{Key::A, "Type"},
+                        {Key::B, "Delete"},
+                        {Key::X, "Clear"},
+                        {Key::L2, "Caps"},
+                        {Key::Start, "Sign in"}};
     ui::footer(fb, footer);
 }
 

@@ -342,7 +342,8 @@ void OnScreenKeyboard::render(SDL_Surface* fb) const
     }
     if (m_caps) {
         const int cw = ui::textWidth("CAPS") + 12;
-        ui::chip(fb, 640 - 16 - cw, m_config.keyboardTop - 20, "CAPS", d::kAccentSoft, d::kAccentHi);
+        ui::chip(fb, 640 - 16 - cw, m_config.keyboardTop - 20, "CAPS", d::kAccentSoft,
+                 d::kAccentHi);
     }
 }
 

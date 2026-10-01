@@ -244,7 +244,7 @@ class HomeScreen : public Screen
     int m_cardScroll;
     HomeSettingsState m_settingsState;
     std::unique_ptr<ConnectionMonitor> m_link; // footer "<user> connected" (probes off-thread)
-    BatteryMonitor m_battery; // header battery icon level (UI thread only)
+    BatteryMonitor m_battery;                  // header battery icon level (UI thread only)
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;

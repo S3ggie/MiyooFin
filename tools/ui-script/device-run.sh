@@ -90,6 +90,7 @@ set -eu
 DRY_RUN=0
 DEVICE_KEYS=1
 SERVER_UNAVAILABLE=0
+NO_SESSION=0
 TIMEOUT_S=${MIYOOFIN_UI_TIMEOUT_S:-300}
 NAME=""
 
@@ -98,16 +99,22 @@ while [ $# -gt 0 ]; do
         --dry-run) DRY_RUN=1; shift ;;
         --desktop-keys) DEVICE_KEYS=0; shift ;;
         --server-unavailable) SERVER_UNAVAILABLE=1; shift ;;
+        --no-session) NO_SESSION=1; shift ;;
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series|home-reentry|offline-playback>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series|home-reentry|offline-playback|login-connect>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
     esac
 done
-[ -n "$NAME" ] || { echo "usage: device-run.sh [--dry-run] [--desktop-keys] [--server-unavailable] [--timeout-s N] <smoke|series>" >&2; exit 2; }
+[ -n "$NAME" ] || { echo "usage: device-run.sh [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series>" >&2; exit 2; }
+# login-connect needs the saved server URL but no session, so it implies
+# --no-session. The two configuration surgeries are mutually exclusive.
+[ "$NAME" != login-connect ] || NO_SESSION=1
+[ "$NO_SESSION$SERVER_UNAVAILABLE" != 11 ] \
+    || { echo "device-run: --no-session and --server-unavailable are mutually exclusive" >&2; exit 2; }
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 SCRIPT_DIR="$ROOT/tools/ui-script"
@@ -149,6 +156,8 @@ command -v python3 >/dev/null 2>&1 || { echo "device-run: python3 required" >&2;
 . "$SCRIPT_DIR/launcher-surgery.sh"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/server-unavailable-surgery.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/no-session-surgery.sh"
 TARGET=$MIYOO_SSH_TARGET
 
 fail() { echo "device-run($NAME): $*" >&2; exit 1; }
@@ -173,6 +182,8 @@ else
 fi
 if [ "$SERVER_UNAVAILABLE" = 1 ]; then
     SERVER_MODE_LINE='ssh: server-unavailable: back up server.txt + session.txt (without printing contents), route server endpoint overrides to the closed loopback endpoint'
+elif [ "$NO_SESSION" = 1 ]; then
+    SERVER_MODE_LINE='ssh: no-session: back up session.txt (without printing contents), blank it in place so the app boots Connect -> Login, restore byte-for-byte after exit'
 else
     SERVER_MODE_LINE='ssh: use the real saved server/session (no configuration changes)'
 fi
@@ -337,6 +348,13 @@ restore_launcher() {
 # The configuration surgery is also piped as exact bytes to the device. It
 # never captures or prints session.txt; only helper diagnostics are logged.
 remote_config_apply() {
+    if [ "$NO_SESSION" = 1 ]; then
+        {
+            cat "$SCRIPT_DIR/no-session-surgery.sh"
+            printf '\nmiyoofin_no_session_apply "$@"\n'
+        } | miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$SESSION_BACKUP"
+        return
+    fi
     {
         cat "$SCRIPT_DIR/server-unavailable-surgery.sh"
         printf '\nmiyoofin_server_unavailable_apply "$@"\n'
@@ -344,6 +362,13 @@ remote_config_apply() {
 }
 
 remote_config_restore_once() {
+    if [ "$NO_SESSION" = 1 ]; then
+        {
+            cat "$SCRIPT_DIR/no-session-surgery.sh"
+            printf '\nmiyoofin_no_session_restore "$@"\n'
+        } | miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$SESSION_BACKUP"
+        return
+    fi
     {
         cat "$SCRIPT_DIR/server-unavailable-surgery.sh"
         printf '\nmiyoofin_server_unavailable_restore "$@"\n'
@@ -440,10 +465,10 @@ trap 'exit 143' TERM
 # expected state. In particular NEVER clobber an existing harness backup:
 # it means a previous run failed to restore, and only the operator knows
 # whether the installed launcher is safe to overwrite.
-miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$BACKUP" "$SERVER_UNAVAILABLE" "$SERVER_BACKUP" "$SESSION_BACKUP" <<'EOF' || fail "device precondition check failed"
+miyoo_ssh "$TARGET" sh -s -- "$APP_DIR" "$BACKUP" "$SERVER_UNAVAILABLE" "$SERVER_BACKUP" "$SESSION_BACKUP" "$NO_SESSION" <<'EOF' || fail "device precondition check failed"
 set -eu
 appdir=${1:?}; bak=${2:?}
-server_unavailable=${3:-0}; server_bak=${4:?}; session_bak=${5:?}
+server_unavailable=${3:-0}; server_bak=${4:?}; session_bak=${5:?}; no_session=${6:-0}
 [ -x "$appdir/launch.sh" ] || { echo "device-run: $appdir/launch.sh missing/not executable" >&2; exit 1; }
 grep -q '^./miyoofin' "$appdir/launch.sh" \
     || { echo "device-run: $appdir/launch.sh has no ./miyoofin line to inject before" >&2; exit 1; }
@@ -469,6 +494,11 @@ if [ "$server_unavailable" = 1 ]; then
     [ -f "$appdir/session.txt" ] || { echo "device-run: --server-unavailable requires session.txt" >&2; exit 1; }
     [ ! -e "$appdir/$server_bak" ] || { echo "device-run: stale server configuration backup present" >&2; exit 1; }
     [ ! -e "$appdir/$session_bak" ] || { echo "device-run: stale session configuration backup present" >&2; exit 1; }
+fi
+if [ "$no_session" = 1 ]; then
+    [ -f "$appdir/server.txt" ] || { echo "device-run: --no-session requires server.txt (saved server URL)" >&2; exit 1; }
+    [ -f "$appdir/session.txt" ] || { echo "device-run: --no-session requires session.txt" >&2; exit 1; }
+    [ ! -e "$appdir/$session_bak" ] || { echo "device-run: stale session backup present: restore it first" >&2; exit 1; }
 fi
 echo "device-run: preconditions OK (MainUI resident, no miyoofin, no stale backup)"
 EOF
@@ -513,7 +543,7 @@ NEEDS_RESTORE=1
 # Arm the configuration restore before the first byte of either file changes.
 # The shared helper backs up and verifies both files without ever printing
 # session.txt, then routes only server.txt and the saved session route keys.
-if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+if [ "$SERVER_UNAVAILABLE" = 1 ] || [ "$NO_SESSION" = 1 ]; then
     NEEDS_CONFIG_RESTORE=1
     remote_config_apply \
         || fail "server-unavailable configuration injection failed (restore runs on exit)"
@@ -593,7 +623,7 @@ done
 
 # Do not put the real server/session back until MiyooFin is definitely gone;
 # this is also the first restore point used by the EXIT trap on failure paths.
-if [ "$SERVER_UNAVAILABLE" = 1 ]; then
+if [ "$SERVER_UNAVAILABLE" = 1 ] || [ "$NO_SESSION" = 1 ]; then
     restore_server_config || fail "server configuration restore failed (see CRITICAL lines above)"
 fi
 
@@ -728,6 +758,14 @@ case "$NAME" in
         SHOT="$OUT/shots/dl-after-delete.bmp"
         CHECKS="rendered"
         ;;
+    login-connect)
+        # Boots with no session: ConnectScreen connects, LoginScreen takes two
+        # failing Sign Ins (worker refuse/reap path), Back returns to server
+        # entry. The final marker is the last screen the script reaches.
+        want='[ServerEntryScreen] enter'
+        SHOT="$OUT/shots/login-error.bmp"
+        CHECKS="rendered"
+        ;;
     dlview)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/downloads-tab.bmp"
@@ -778,6 +816,19 @@ if [ -n "$nonfatal_want" ]; then
     grep -Fq "$nonfatal_want" "$OUT/app.log" \
         || fail "expected nonfatal unavailable-server marker missing from log: $nonfatal_want"
     echo "device-run: nonfatal marker OK: $nonfatal_want"
+fi
+
+if [ "$NAME" = login-connect ]; then
+    # Prove every migrated worker path ran: Connect hand-off, and TWO Sign In
+    # attempts (the second must start after the first was reaped).
+    grep -Fq '[App] ConnectScreen success -> Login' "$OUT/app.log" \
+        || fail "ConnectScreen did not hand off to Login"
+    _signin_fails=$(grep -Fc '[LoginScreen] Sign-in failed' "$OUT/app.log" || true)
+    [ "${_signin_fails:-0}" -ge 2 ] \
+        || fail "expected at least 2 failed Sign In attempts in the log, saw ${_signin_fails:-0}"
+    ! grep -qiE 'abort|terminate called|SIGABRT' "$OUT/app.log" \
+        || fail "app log contains an abort/terminate marker"
+    echo "device-run: login-connect markers OK (Connect->Login, ${_signin_fails} failed Sign Ins, no abort)"
 fi
 
 if [ -n "$SHOT" ]; then

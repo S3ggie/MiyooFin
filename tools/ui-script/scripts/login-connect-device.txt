@@ -1,0 +1,35 @@
+# login-connect (device): ConnectScreen -> LoginScreen -> ServerEntryScreen on
+# the real installed ARM binary and real server. Run only through
+# `device-run.sh login-connect`, which implies --no-session: session.txt is
+# blanked (and restored byte-for-byte) so the app boots with its saved server
+# URL but no session.
+#
+# Exercises the WorkerSlot paths migrated from hand-rolled threads:
+#   - ConnectScreen: connect attempt, reap, hand-off to Login.
+#   - LoginScreen: two failing Sign Ins back to back (a second attempt must
+#     start cleanly after the first is reaped; SIGABRT regression "134").
+#   - LoginScreen -> ServerEntryScreen: Back while idle joins and rebuilds.
+# The credentials are the unit-test path (a single "1" for each field, a user
+# that does not exist), so the server answers with an authentication failure.
+# Nothing is typed into ServerEntryScreen and nothing is submitted there, so
+# server.txt is never rewritten. Raw:40 is START (Action::Settings = Sign In).
+WAIT_LOG [ConnectScreen] enter 30000
+WAIT_LOG [LoginScreen] enter 60000
+SETTLE 2000
+KEY Down 80 500
+KEY Confirm 80 500
+KEY Up 80 500
+KEY Right 80 500
+KEY Down 80 500
+KEY Confirm 80 500
+KEY Raw:40 80 800
+WAIT_LOG [LoginScreen] Sign-in failed 60000
+SETTLE 1500
+KEY Raw:40 80 800
+SETTLE 8000
+SCREENSHOT login-error
+KEY Up 80 500
+KEY Back 80 800
+WAIT_LOG [ServerEntryScreen] enter 30000
+SETTLE 2000
+QUIT

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include "../tools/playback_clock_parser.hpp"
+#include "../tools/playback_resume.hpp"
 #include "../tools/playback_route.hpp"
 
 static int g_failures = 0;
@@ -603,6 +604,71 @@ static void testPosCfgFallbackToSampledPts()
 // ================================================================
 // Main
 // ================================================================
+// --- Resume refresh: server position parsing and request-file rewrite -------
+
+static void testParseUserPositionTicks()
+{
+    std::printf("[test] playback_parse_user_position_ticks\n");
+    std::int64_t ticks = -1;
+    // A realistic item body: the position lives inside UserData.
+    CHECK(playback_parse_user_position_ticks(
+        "{\"Name\":\"Movie\",\"RunTimeTicks\":72000000000,\"UserData\":{"
+        "\"PlaybackPositionTicks\":24000000000,\"PlayCount\":1,\"IsFavorite\":false,"
+        "\"Played\":false,\"Key\":\"k\"},\"Id\":\"abc\"}",
+        ticks));
+    CHECK(ticks == 24000000000LL);
+    // Spaces around the value are accepted.
+    CHECK(playback_parse_user_position_ticks("{\"UserData\": {\"PlaybackPositionTicks\" : 5}}",
+                                             ticks));
+    CHECK(ticks == 5);
+    // A played / not-started item reports 0 or omits the field: valid, zero.
+    CHECK(
+        playback_parse_user_position_ticks("{\"UserData\":{\"PlaybackPositionTicks\":0}}", ticks));
+    CHECK(ticks == 0);
+    CHECK(playback_parse_user_position_ticks("{\"UserData\":{\"Played\":true}}", ticks));
+    CHECK(ticks == 0);
+    CHECK(playback_parse_user_position_ticks("{\"UserData\":{\"PlaybackPositionTicks\":null}}",
+                                             ticks));
+    CHECK(ticks == 0);
+    // Anything else is a failure and must not be trusted (caller keeps cache).
+    CHECK(!playback_parse_user_position_ticks("{\"Name\":\"no user data\"}", ticks));
+    CHECK(!playback_parse_user_position_ticks("", ticks));
+    CHECK(!playback_parse_user_position_ticks("{\"UserData\":{\"PlaybackPositionTicks\":-5}}",
+                                              ticks));
+    CHECK(!playback_parse_user_position_ticks("{\"UserData\":{\"PlaybackPositionTicks\":\"7\"}}",
+                                              ticks));
+    CHECK(!playback_parse_user_position_ticks("{\"UserData\":{\"PlaybackPositionTicks\":", ticks));
+    CHECK(!playback_parse_user_position_ticks("{\"UserData\":", ticks));
+    // A value that overflows int64 is rejected, not wrapped.
+    CHECK(!playback_parse_user_position_ticks(
+        "{\"UserData\":{\"PlaybackPositionTicks\":99999999999999999999}}", ticks));
+    // A field named like ours outside UserData is ignored.
+    CHECK(playback_parse_user_position_ticks(
+        "{\"PlaybackPositionTicks\":999,\"UserData\":{\"PlayCount\":0}}", ticks));
+    CHECK(ticks == 0);
+    std::printf("[test] playback_parse_user_position_ticks OK\n");
+}
+
+static void testReplaceResumeTicks()
+{
+    std::printf("[test] playback_replace_resume_ticks\n");
+    CHECK_EQ(playback_replace_resume_ticks(
+                 "item_id=a\nitem_type=movie\nresume_ticks=100\nsource_mode=jellyfin\n", 555),
+             "item_id=a\nitem_type=movie\nresume_ticks=555\nsource_mode=jellyfin\n");
+    // Missing line is appended; a missing final newline is tolerated.
+    CHECK_EQ(playback_replace_resume_ticks("item_id=a\nsource_mode=local", 7),
+             "item_id=a\nsource_mode=local\nresume_ticks=7\n");
+    CHECK_EQ(playback_replace_resume_ticks("", 9), "resume_ticks=9\n");
+    // Only the exact key is replaced; lookalikes and later duplicates stay.
+    CHECK_EQ(
+        playback_replace_resume_ticks("base_resume_ticks=1\nresume_ticks=2\nresume_ticks=3\n", 8),
+        "base_resume_ticks=1\nresume_ticks=8\nresume_ticks=3\n");
+    // CRLF-ending lines keep their other content intact.
+    CHECK_EQ(playback_replace_resume_ticks("item_id=a\r\nresume_ticks=1\r\n", 4),
+             "item_id=a\r\nresume_ticks=4\n");
+    std::printf("[test] playback_replace_resume_ticks OK\n");
+}
+
 int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
@@ -678,6 +744,10 @@ int main()
     testPosCfgStaleBytesAfterNul();
     testPosCfgOverridesSampledPts();
     testPosCfgFallbackToSampledPts();
+
+    std::printf("\n--- Resume refresh ---\n");
+    testParseUserPositionTicks();
+    testReplaceResumeTicks();
 
     std::printf("\n");
     if (g_failures == 0) {

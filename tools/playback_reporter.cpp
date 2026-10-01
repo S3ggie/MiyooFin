@@ -22,6 +22,7 @@
 // Onion FFplay does not emit), we parse showinfo pts_time values from
 // the sampled filtergraph.  Each sampled PTS triggers a progress report.
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,6 +37,7 @@
 #include <curl/curl.h>
 
 #include "playback_clock_parser.hpp"
+#include "playback_resume.hpp"
 #include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
 
@@ -292,15 +294,181 @@ static bool report_event(const char* name, const std::string& path, const Playba
 }
 
 // ===================================================================
+// Resume refresh (--refresh-resume)
+//
+// Remote playback writes resume_ticks from the screen's CACHED item, which
+// is stale after the item is watched on another device. Before the player
+// starts, the runner calls this mode: it asks the server for the current
+// position and rewrites resume_ticks in playback-request.txt. Best effort:
+// any failure keeps the cached value. Nothing sensitive is printed.
+// ===================================================================
+
+static const int REFRESH_TIMEOUT_SEC = 3;
+static const size_t MAX_REFRESH_BODY = 256 * 1024;
+
+static size_t append_write(void* ptr, size_t size, size_t nmemb, void* userdata)
+{
+    std::string* out = static_cast<std::string*>(userdata);
+    const size_t bytes = size * nmemb;
+    if (out->size() + bytes > MAX_REFRESH_BODY)
+        return 0; // oversized: abort the transfer
+    out->append(static_cast<const char*>(ptr), bytes);
+    return bytes;
+}
+
+struct GetResult
+{
+    long httpStatus = 0;
+    bool transportFailure = false;
+    std::string body;
+};
+
+static GetResult get_body(const std::string& url, const std::vector<std::string>& headers,
+                          const std::string& cacertPath)
+{
+    GetResult result;
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        result.transportFailure = true;
+        return result;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)REFRESH_TIMEOUT_SEC);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)REFRESH_TIMEOUT_SEC);
+    // TLS verification — MUST remain enabled
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    if (!cacertPath.empty())
+        curl_easy_setopt(curl, CURLOPT_CAINFO, cacertPath.c_str());
+    struct curl_slist* hdrList = nullptr;
+    for (const auto& h : headers)
+        hdrList = curl_slist_append(hdrList, h.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrList);
+    char ua[128];
+    std::snprintf(ua, sizeof(ua), "%s/%s", APP_NAME, VERSION_STR);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, ua);
+    const CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK)
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpStatus);
+    result.transportFailure = res != CURLE_OK;
+    curl_slist_free_all(hdrList);
+    curl_easy_cleanup(curl);
+    return result;
+}
+
+// Ids end up in a URL path; accept only the characters Jellyfin ids use.
+static bool safe_path_id(const std::string& id)
+{
+    if (id.empty() || id.size() > 64)
+        return false;
+    for (unsigned char c : id) {
+        if (!(std::isalnum(c) || c == '_' || c == '.' || c == '-'))
+            return false;
+    }
+    return true;
+}
+
+static int refresh_resume(const std::string& appDir)
+{
+    const std::string requestPath = appDir + "/playback-request.txt";
+    const std::string reqContent = read_file(requestPath);
+    if (reqContent.empty()) {
+        std::printf("resume_refresh skipped reason=no_request\n");
+        return 0;
+    }
+    const std::string itemId = read_kv_from_content(reqContent, "item_id");
+    const std::string sourceMode = read_kv_from_content(reqContent, "source_mode");
+    // Downloaded playback reconciles through the offline journal instead.
+    if (sourceMode == "local") {
+        std::printf("resume_refresh skipped reason=local\n");
+        return 0;
+    }
+    const int64_t cachedTicks =
+        parse_resume_ticks(read_kv_from_content(reqContent, "resume_ticks"));
+
+    const std::string sessionContent = read_file(appDir + "/session.txt");
+    const std::string serverUrl = read_kv_from_content(sessionContent, "server_url");
+    const std::string localServerUrl = read_kv_from_content(sessionContent, "local_server_url");
+    const std::string publicServerUrl = read_kv_from_content(sessionContent, "public_server_url");
+    const std::string accessToken = read_kv_from_content(sessionContent, "access_token");
+    const std::string userId = read_kv_from_content(sessionContent, "user_id");
+    const std::string deviceId = read_kv_from_content(sessionContent, "device_id");
+    if (serverUrl.empty() || accessToken.empty() || !safe_path_id(userId) ||
+        !safe_path_id(itemId)) {
+        std::printf("resume_refresh skipped reason=no_session_or_bad_id\n");
+        return 0;
+    }
+
+    const std::string publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
+    const std::string lanRoute =
+        localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    const PlaybackRoute route = playback_route(publicRoute, lanRoute);
+    std::string cacertPath = appDir + "/cacert.pem";
+    const bool https = route.primary.compare(0, 8, "https://") == 0 ||
+                       route.fallback.compare(0, 8, "https://") == 0;
+    if (!nonempty_file(cacertPath)) {
+        if (https) {
+            // Never weaken TLS verification: keep the cached position.
+            std::printf("resume_refresh skipped reason=no_ca\n");
+            return 0;
+        }
+        cacertPath.clear();
+    }
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    std::vector<std::string> headers;
+    headers.push_back("X-Emby-Token: " + accessToken);
+    build_identity_headers(deviceId, headers);
+    const std::string path = "/Users/" + userId + "/Items/" + itemId;
+    GetResult result = get_body(route.primary + path, headers, cacertPath);
+    if (!route.fallback.empty() &&
+        playback_should_fallback(result.transportFailure, result.httpStatus))
+        result = get_body(route.fallback + path, headers, cacertPath);
+    curl_global_cleanup();
+
+    int64_t serverTicks = 0;
+    const bool ok = !result.transportFailure && result.httpStatus >= 200 &&
+                    result.httpStatus < 300 &&
+                    playback_parse_user_position_ticks(result.body, serverTicks);
+    if (!ok) {
+        std::printf("resume_refresh failed http=%ld transport=%d kept=%lld\n", result.httpStatus,
+                    result.transportFailure ? 1 : 0, (long long)cachedTicks);
+        return 0;
+    }
+    if (serverTicks == cachedTicks) {
+        std::printf("resume_refresh unchanged ticks=%lld\n", (long long)cachedTicks);
+        return 0;
+    }
+    FILE* out = std::fopen(requestPath.c_str(), "w");
+    const std::string updated = playback_replace_resume_ticks(reqContent, serverTicks);
+    if (!out || std::fwrite(updated.data(), 1, updated.size(), out) != updated.size()) {
+        if (out)
+            std::fclose(out);
+        std::printf("resume_refresh failed reason=write kept=%lld\n", (long long)cachedTicks);
+        return 0;
+    }
+    std::fclose(out);
+    std::printf("resume_refresh updated old=%lld new=%lld\n", (long long)cachedTicks,
+                (long long)serverTicks);
+    return 0;
+}
+
+// ===================================================================
 // Main
 // ===================================================================
 
 int main(int argc, char* argv[])
 {
+    if (argc == 3 && std::strcmp(argv[2], "--refresh-resume") == 0)
+        return refresh_resume(argv[1]);
     if (argc != 2) {
         std::fprintf(stderr,
-                     "Usage: %s <app-dir>\n"
-                     "Jellyfin playback reporter for MiyooFin.\n",
+                     "Usage: %s <app-dir> [--refresh-resume]\n"
+                     "Jellyfin playback reporter for MiyooFin.\n"
+                     "--refresh-resume: update resume_ticks in playback-request.txt from the\n"
+                     "server (remote playback only) and exit.\n",
                      argv[0]);
         return 1;
     }

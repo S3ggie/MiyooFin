@@ -131,6 +131,50 @@ done
 playback_log "=== External playback request (item=${REQUEST_ITEM_ID}, type=${REQUEST_ITEM_TYPE}, source_mode=${REQUEST_SOURCE_MODE}) ==="
 
 # -------------------------------------------------------------------
+# Remote playback only: ask the server where playback really is.  The screen
+# wrote resume_ticks from its CACHED item, which is stale after the item is
+# watched on another device; starting there would resume in the wrong place
+# and later report that stale base back over the newer progress.  The reporter
+# rewrites resume_ticks in playback-request.txt.  Best effort and bounded: the
+# reporter has its own short HTTP timeouts and this watchdog stops it (TERM,
+# then KILL) if it ever hangs, so a slow or unreachable server never blocks
+# playback; every failure keeps the cached position.  Downloaded (local)
+# playback reconciles through the offline journal instead.
+# -------------------------------------------------------------------
+refresh_resume_from_server() {
+    [ -f "$APP_DIR/miyoofin-playback-reporter" ] || return 0
+    _rr_limit=${MIYOOFIN_RESUME_REFRESH_TIMEOUT_S:-8}
+    case "$_rr_limit" in ''|*[!0-9]*) _rr_limit=8 ;; esac
+    _rr_out="$APP_DIR/playback-resume-refresh.txt"
+    rm -f "$_rr_out"
+    "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --refresh-resume > "$_rr_out" 2>/dev/null &
+    _rr_pid=$!
+    (
+        sleep "$_rr_limit"
+        kill -TERM "$_rr_pid" 2>/dev/null || exit 0
+        sleep 2
+        kill -KILL "$_rr_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    _rr_guard=$!
+    wait "$_rr_pid" 2>/dev/null || true
+    kill "$_rr_guard" 2>/dev/null || true
+    wait "$_rr_guard" 2>/dev/null || true
+    if [ -s "$_rr_out" ]; then
+        playback_log "$(head -1 "$_rr_out")"
+    else
+        playback_log "resume_refresh no result (kept cached ticks)"
+    fi
+    rm -f "$_rr_out"
+    REQUEST_RESUME_TICKS=$(read_kv playback-request.txt resume_ticks)
+    case "$REQUEST_RESUME_TICKS" in
+        ''|*[!0-9]*) REQUEST_RESUME_TICKS=0 ;;
+    esac
+}
+if [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
+    refresh_resume_from_server
+fi
+
+# -------------------------------------------------------------------
 # Construct the EXACT proven forced-transcode URL.
 # Never echo or log the URL (contains token).
 # -------------------------------------------------------------------

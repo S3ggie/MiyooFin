@@ -76,6 +76,78 @@ run_case https_with_ca 'server_url=https://jellyfin.example.com' yes
 
 echo '[test] playback runner route-aware CA handling OK'
 
+# Remote playback refreshes resume_ticks from the server before building the
+# stream URL; the refresh is bounded and every failure keeps the cached value.
+# run_refresh_case NAME MODE REPORTER_BODY [ENV_ASSIGNMENT]
+run_refresh_case() {
+    case_dir=$1
+    mode=$2
+    reporter_body=$3
+    extra_env=${4:-}
+    app_dir="$TMP_ROOT/$case_dir"
+    mkdir -p "$app_dir"
+    cp "$RUNNER" "$app_dir/playback_runner.sh"
+    printf '%s\n' 'item_id=item' 'item_type=movie' 'resume_ticks=100' "source_mode=$mode" \
+        'download_scope=scope1' > "$app_dir/playback-request.txt"
+    printf '%s\n' 'server_url=http://192.168.1.10:8096' 'access_token=token' > "$app_dir/session.txt"
+    printf '#!/bin/sh\nexit 0\n' > "$app_dir/miyoofin-https-bridge"
+    printf '#!/bin/sh\n%s\n' "$reporter_body" > "$app_dir/miyoofin-playback-reporter"
+    chmod +x "$app_dir/miyoofin-https-bridge" "$app_dir/miyoofin-playback-reporter"
+    (cd "$app_dir" && env $extra_env sh ./playback_runner.sh) >/dev/null 2>&1 || true
+}
+
+# Success: the reporter rewrites resume_ticks; the runner must use the new value.
+run_refresh_case refresh_ok jellyfin '
+if [ "${2:-}" = --refresh-resume ]; then
+    printf "item_id=item\nitem_type=movie\nresume_ticks=24000000000\nsource_mode=jellyfin\n" > "$1/playback-request.txt"
+    echo "resume_refresh updated old=100 new=24000000000"
+fi'
+grep -q 'resume_refresh updated old=100 new=24000000000' "$TMP_ROOT/refresh_ok/playback-launch.log" \
+    || fail 'runner did not log the refresh result'
+grep -q 'Resume ticks=24000000000 ' "$TMP_ROOT/refresh_ok/playback-launch.log" \
+    || fail 'runner did not use the refreshed resume ticks'
+
+# A reporter that fails (or prints nothing) leaves the cached ticks in place.
+run_refresh_case refresh_failed jellyfin '
+if [ "${2:-}" = --refresh-resume ]; then echo "resume_refresh failed http=0 transport=1 kept=100"; fi'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_failed/playback-launch.log" \
+    || fail 'failed refresh changed the cached resume ticks'
+run_refresh_case refresh_silent jellyfin 'exit 1'
+grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_silent/playback-launch.log" \
+    || fail 'silent refresh was not reported'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_silent/playback-launch.log" \
+    || fail 'silent refresh changed the cached resume ticks'
+
+# A garbage rewrite is sanitised: the URL must never carry arbitrary text.
+run_refresh_case refresh_garbage jellyfin '
+if [ "${2:-}" = --refresh-resume ]; then
+    printf "item_id=item\nresume_ticks=12;rm -rf /\nsource_mode=jellyfin\n" > "$1/playback-request.txt"
+fi'
+grep -q 'Resume ticks=0 ' "$TMP_ROOT/refresh_garbage/playback-launch.log" \
+    || fail 'non-numeric refreshed ticks were not sanitised'
+
+# A hung reporter that even ignores TERM must not block playback: the watchdog
+# escalates to KILL and the runner carries on with the cached position.
+START_S=$(date +%s)
+run_refresh_case refresh_hung jellyfin '
+if [ "${2:-}" = --refresh-resume ]; then trap "" TERM INT HUP; while :; do :; done; fi' \
+    MIYOOFIN_RESUME_REFRESH_TIMEOUT_S=1
+ELAPSED_S=$(( $(date +%s) - START_S ))
+[ "$ELAPSED_S" -le 15 ] || fail "hung reporter blocked the runner for ${ELAPSED_S}s"
+grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_hung/playback-launch.log" \
+    || fail 'hung refresh was not reported'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_hung/playback-launch.log" \
+    || fail 'hung refresh changed the cached resume ticks'
+
+# Downloaded playback never asks the server (it reconciles via the journal).
+run_refresh_case refresh_local local '
+if [ "${2:-}" = --refresh-resume ]; then touch "$1/refresh-was-called"; fi'
+[ ! -e "$TMP_ROOT/refresh_local/refresh-was-called" ] || fail 'local playback called the resume refresh'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_local/playback-launch.log" \
+    || fail 'local case did not reach the resume log (setup problem)'
+
+echo '[test] playback runner resume refresh OK'
+
 # Onion FFplay selects its native drivers after MiyooFin releases SDL.  Do not
 # force the SDL2 driver names inherited by the application onto the player.
 ! grep -q 'export SDL_VIDEODRIVER=mmiyoo' "$RUNNER" || fail 'runner forces MiyooFin video driver onto FFplay'
@@ -102,6 +174,8 @@ while :; do :; done
 EOF
 cat > "$LIFECYCLE_DIR/miyoofin-playback-reporter" <<'EOF'
 #!/bin/sh
+# The runner asks for a resume refresh first; answer it and exit.
+[ "${2:-}" = --refresh-resume ] && exit 0
 printf '%s\n' "$$" > "$(dirname "$0")/reporter-shell.pid"
 trap '' TERM INT HUP
 while :; do :; done

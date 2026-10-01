@@ -181,6 +181,7 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@sh $(MEDIA_ITEM_HEADER_TEST)
 	@sh $(LIBRARY_SYNC_GUARD_TEST)
 	@sh $(MODULE_BOUNDARIES_TEST)
+	@$(MAKE) --no-print-directory reporter-test
 	@python3 $(TELEMETRY_DECODER_TEST)
 
 # Convenience entry point for the sanitizer run: rebuilds and runs the host
@@ -484,15 +485,16 @@ REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
 .PHONY: reporter
 reporter: $(REPORTER_HOST)
 
-$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | $(BUILD_DIR)
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
 .PHONY: reporter-test
-reporter-test: $(REPORTER_TEST)
+reporter-test: $(REPORTER_TEST) $(REPORTER_HOST)
 	@$(REPORTER_TEST)
+	@REPORTER=$(REPORTER_HOST) sh tests/test_playback_resume_refresh.sh
 
-$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp | $(TEST_DIR)
+$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 

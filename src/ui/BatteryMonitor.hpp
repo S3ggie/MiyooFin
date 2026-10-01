@@ -27,7 +27,11 @@ class BatteryMonitor
 {
   public:
     static constexpr unsigned kRefreshMs = 30000;
-    static constexpr unsigned kChargingRefreshMs = 10000;
+    // Charging is polled once per second so plugging in shows up promptly; each
+    // probe is one short-lived process.
+    static constexpr unsigned kChargingRefreshMs = 1000;
+    // A failed probe keeps the last known state; this many in a row means unknown.
+    static constexpr int kChargingUnknownLimit = 5;
 
     explicit BatteryMonitor(std::string percentPath = "/tmp/percBat",
                             std::string axpPath = "/customer/app/axp_test",
@@ -86,6 +90,7 @@ class BatteryMonitor
     int m_percent = -1;
     int m_charging = -1; // -1 unknown, 0 no, 1 yes
     int m_chargingRaw = -1;
+    int m_unknownStreak = 0;
     unsigned m_sinceReadMs = 0;
     bool m_hasRead = false;
     unsigned m_sinceProbeMs = 0;

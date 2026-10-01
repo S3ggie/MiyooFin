@@ -47,7 +47,18 @@ void BatteryMonitor::update(unsigned dtMs)
     if (m_probe.reap()) {
         if (m_probeExecFailed)
             m_probeUnavailable = true; // not found / not executable: stop trying
-        m_charging = parseCharging(m_probeOutput, &m_chargingRaw);
+        int raw = -1;
+        const int parsed = parseCharging(m_probeOutput, &raw);
+        if (parsed >= 0) {
+            m_charging = parsed;
+            m_chargingRaw = raw;
+            m_unknownStreak = 0;
+        } else if (++m_unknownStreak >= kChargingUnknownLimit) {
+            // A single failed query keeps the last state (no flicker); a
+            // sustained failure means we genuinely do not know.
+            m_charging = -1;
+            m_chargingRaw = -1;
+        }
         if (m_charging != m_loggedCharging || m_chargingRaw != m_loggedRaw) {
             m_loggedCharging = m_charging;
             m_loggedRaw = m_chargingRaw;

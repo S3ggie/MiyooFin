@@ -933,6 +933,25 @@ static void testBatteryChargingProbe()
         CHECK(!monitor.charging()); // nothing probed yet
         CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
     }
+    // A failed query must not flicker the bolt: the last known state is kept
+    // for a few probes and only a sustained failure means unknown.
+    axp = writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":1}'\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
+        CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
+        writeFakeAxp(dir, "echo 'error during I2C_RDWR ioctl with error code -1'\n");
+        auto cycle = [&] {
+            monitor.update(BatteryMonitor::kChargingRefreshMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            monitor.update(0);
+        };
+        for (int i = 0; i < BatteryMonitor::kChargingUnknownLimit - 2; ++i)
+            cycle();
+        CHECK(monitor.charging()); // a couple of failures: still charging
+        for (int i = 0; i < 4; ++i)
+            cycle();
+        CHECK(!monitor.charging()); // sustained failure: unknown, no bolt
+    }
     // A non-1 charging value (as OnionOS treats it) still means charging.
     axp = writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":3}'\n");
     {

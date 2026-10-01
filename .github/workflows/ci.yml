@@ -7,6 +7,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # Compiler cache (Makefile uses ccache automatically when it is installed).
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_MAXSIZE: 400M
+  CCACHE_COMPILERCHECK: content
+
 jobs:
   host:
     name: Host build, tests, and boundary checks
@@ -14,12 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ github.job }}-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libsdl2-dev libsdl2-ttf-dev \
-            libcurl4-openssl-dev libjson-c-dev clang-format-18 python3 xvfb
+            libcurl4-openssl-dev libjson-c-dev ccache clang-format-18 python3 xvfb
           clang-format-18 --version
 
       - name: Host build, tests, and boundary checks
@@ -37,12 +52,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ github.job }}-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libsdl2-dev libsdl2-ttf-dev \
-            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+            libcurl4-openssl-dev libjson-c-dev ccache python3 xvfb
 
       - name: Scripted UI flows
         # Sequential on purpose: flows share the /tmp screenshot flag file.
@@ -105,12 +128,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ github.job }}-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libsdl2-dev libsdl2-ttf-dev \
-            libcurl4-openssl-dev libjson-c-dev python3 xvfb
+            libcurl4-openssl-dev libjson-c-dev ccache python3 xvfb
 
       - name: Tests under ASan+UBSan
         # xvfb provides a display for the SDL-backed host tests on the runner.
@@ -130,12 +161,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ github.job }}-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libsdl2-dev libsdl2-ttf-dev \
-            libcurl4-openssl-dev libjson-c-dev python3
+            libcurl4-openssl-dev libjson-c-dev ccache python3
 
       - name: Focused concurrency suites under TSan
         # Newer Ubuntu kernels expose ASLR entropy that TSan's fixed shadow

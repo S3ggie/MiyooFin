@@ -1,5 +1,6 @@
 #include "HomeSettingsModel.hpp"
 #include "../net/ServerAddress.hpp"
+#include <algorithm>
 
 namespace miyoofin {
 
@@ -37,6 +38,41 @@ HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
     if (row == count - 3)
         return HomeSettingsRowAction::CheckForUpdates;
     return row == count - 1 ? HomeSettingsRowAction::Logout : HomeSettingsRowAction::None;
+}
+
+void HomeSettingsState::move(int delta, int rowCount)
+{
+    const int previous = selected;
+    if (delta < 0 && selected > 0)
+        --selected;
+    else if (delta > 0 && selected < rowCount - 1)
+        ++selected;
+    if (selected != previous)
+        confirmation = HomeSettingsConfirmation::None;
+    clampScroll(rowCount);
+}
+
+void HomeSettingsState::clampScroll(int rowCount)
+{
+    scroll = std::max(0, std::min(selected, rowCount - kVisibleRows));
+}
+
+bool HomeSettingsState::cancelConfirmation()
+{
+    if (confirmation == HomeSettingsConfirmation::None)
+        return false;
+    confirmation = HomeSettingsConfirmation::None;
+    return true;
+}
+
+bool HomeSettingsState::press(HomeSettingsConfirmation requested)
+{
+    if (confirmation == requested) {
+        confirmation = HomeSettingsConfirmation::None;
+        return true;
+    }
+    confirmation = requested;
+    return false;
 }
 
 } // namespace miyoofin

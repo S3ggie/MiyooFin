@@ -716,3 +716,53 @@ static void testHomeArtworkCacheCardSurfaces()
     CHECK(cache.cardSurfaces.empty());
     std::printf("[test] HomeArtworkCache card surfaces OK\n");
 }
+
+// --- HomeSettingsState: Settings-tab selection, scroll and two-press confirm.
+
+static void testHomeSettingsStateNavigation()
+{
+    std::printf("[test] HomeSettingsState navigation and scroll\n");
+    HomeSettingsState state;
+    const int rows = 12;
+    state.move(-1, rows); // already at the top
+    CHECK(state.selected == 0 && state.scroll == 0);
+    for (int i = 0; i < 20; ++i)
+        state.move(1, rows);
+    CHECK(state.selected == rows - 1); // stops at the last row
+    CHECK(state.scroll == rows - HomeSettingsState::kVisibleRows);
+    state.move(-1, rows);
+    CHECK(state.selected == rows - 2 && state.scroll == rows - HomeSettingsState::kVisibleRows);
+    for (int i = 0; i < 20; ++i)
+        state.move(-1, rows);
+    CHECK(state.selected == 0 && state.scroll == 0);
+    // Fewer rows than the window never scrolls.
+    state.selected = 2;
+    state.clampScroll(HomeSettingsState::kVisibleRows - 2);
+    CHECK(state.scroll == 0);
+    std::printf("[test] HomeSettingsState navigation and scroll OK\n");
+}
+
+static void testHomeSettingsStateConfirmation()
+{
+    std::printf("[test] HomeSettingsState two-press confirmation\n");
+    HomeSettingsState state;
+    CHECK(!state.cancelConfirmation()); // nothing pending
+    CHECK(!state.press(HomeSettingsConfirmation::Logout)); // first press arms
+    CHECK(state.confirmation == HomeSettingsConfirmation::Logout);
+    CHECK(state.press(HomeSettingsConfirmation::Logout)); // second press confirms
+    CHECK(state.confirmation == HomeSettingsConfirmation::None);
+    // Pressing a different action re-arms instead of confirming.
+    CHECK(!state.press(HomeSettingsConfirmation::Logout));
+    CHECK(!state.press(HomeSettingsConfirmation::ChangeServer));
+    CHECK(state.confirmation == HomeSettingsConfirmation::ChangeServer);
+    CHECK(state.cancelConfirmation());
+    CHECK(state.confirmation == HomeSettingsConfirmation::None);
+    // Moving the selection drops a pending confirmation, but pushing against
+    // an edge (no change) keeps it.
+    CHECK(!state.press(HomeSettingsConfirmation::CheckForUpdates));
+    state.move(-1, 12); // at the top: selection unchanged
+    CHECK(state.confirmation == HomeSettingsConfirmation::CheckForUpdates);
+    state.move(1, 12);
+    CHECK(state.confirmation == HomeSettingsConfirmation::None);
+    std::printf("[test] HomeSettingsState two-press confirmation OK\n");
+}

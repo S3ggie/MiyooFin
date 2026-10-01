@@ -903,9 +903,9 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
         const char* hints = "A=Select  B=Back  L/R=Tabs  Y=Logout";
         if (activeTabNamed("Settings")) {
             const char* hint = "Up/Down=Scroll  B=Back  L/R=Tabs";
-            if (m_settingsConfirmation == SettingsConfirmation::ChangeServer)
+            if (m_settingsState.confirmation == SettingsConfirmation::ChangeServer)
                 hint = "A again: Change Server";
-            else if (m_settingsConfirmation == SettingsConfirmation::Logout)
+            else if (m_settingsState.confirmation == SettingsConfirmation::Logout)
                 hint = "A again: Log Out";
             BitmapFont::drawString(fb, 8, y + 2, hint, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
                                    Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);

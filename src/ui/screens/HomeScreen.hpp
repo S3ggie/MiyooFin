@@ -240,8 +240,7 @@ class HomeScreen : public Screen
     int m_activeCard;
     int m_rowScroll;
     int m_cardScroll;
-    int m_settingsSelected = 0;
-    int m_settingsScroll = 0;
+    HomeSettingsState m_settingsState;
 
     // Tab data (owned, populated by background fetch)
     std::vector<TabData> m_tabs;
@@ -300,14 +299,7 @@ class HomeScreen : public Screen
     bool m_logoutArmed = false;
     Uint32 m_logoutTimer = 0;
     bool m_logoutRequested = false;
-    enum class SettingsConfirmation
-    {
-        None,
-        ChangeServer,
-        Logout,
-        CheckForUpdates
-    };
-    SettingsConfirmation m_settingsConfirmation = SettingsConfirmation::None;
+    using SettingsConfirmation = HomeSettingsConfirmation;
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
     bool m_publicAddressRequested = false;

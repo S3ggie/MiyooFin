@@ -32,6 +32,41 @@ std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& sessi
 int homeSettingsRowCount(const Session& session);
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session);
 
+enum class HomeSettingsConfirmation
+{
+    None,
+    ChangeServer,
+    Logout,
+    CheckForUpdates
+};
+
+// UI-thread selection/scroll state and the two-press confirmation for the
+// Settings tab. Performs no I/O: Home carries out whatever a confirmed press
+// means (request flags, update install).
+class HomeSettingsState
+{
+  public:
+    static constexpr int kVisibleRows = 6;
+
+    int selected = 0;
+    int scroll = 0;
+    HomeSettingsConfirmation confirmation = HomeSettingsConfirmation::None;
+
+    // Up (delta < 0) / Down (delta > 0) within [0, rowCount). Changing the
+    // selection drops a pending confirmation; scroll is always re-clamped.
+    void move(int delta, int rowCount);
+
+    // Re-clamps scroll for the current selection (tab switches).
+    void clampScroll(int rowCount);
+
+    // Back: clears a pending confirmation. True when one was pending.
+    bool cancelConfirmation();
+
+    // Two-press confirmation. True when this press confirms `requested` (the
+    // confirmation is cleared); false when it only arms it.
+    bool press(HomeSettingsConfirmation requested);
+};
+
 } // namespace miyoofin
 
 #endif // MIYOOFIN_HOME_SETTINGS_MODEL_HPP

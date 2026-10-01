@@ -18,6 +18,8 @@ int main()
     testHomeArtworkCacheLruEviction();
     testHomeArtworkCacheProtectedAndTouch();
     testHomeArtworkCacheCardSurfaces();
+    testHomeSettingsStateNavigation();
+    testHomeSettingsStateConfirmation();
     testHomeTabsProjection();
     testHomeTabRowUpdates();
     testHomeRowIndexByLabel();

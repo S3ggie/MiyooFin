@@ -7,7 +7,6 @@
 
 namespace miyoofin {
 
-static constexpr int SETTINGS_VISIBLE_ROWS = 6;
 static std::int64_t wallClockMs()
 {
     return static_cast<std::int64_t>(std::time(nullptr)) * 1000;
@@ -76,7 +75,7 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
     {
         std::string updateValue = updateStatusText(m_updateSnapshot);
         if (m_updateSnapshot.stage == UpdateStage::Available &&
-            m_settingsConfirmation == SettingsConfirmation::CheckForUpdates) {
+            m_settingsState.confirmation == SettingsConfirmation::CheckForUpdates) {
             updateValue = "Press A again to install v" + m_updateSnapshot.availableVersion;
         }
         rows.push_back({"UPDATES", updateValue});
@@ -85,12 +84,12 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                 {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR}, {"ACCOUNT", "Log Out"}});
     static constexpr int ROW_H = 68;
     static constexpr int TOP = 34;
-    for (int visible = 0; visible < SETTINGS_VISIBLE_ROWS; ++visible) {
-        const int index = m_settingsScroll + visible;
+    for (int visible = 0; visible < HomeSettingsState::kVisibleRows; ++visible) {
+        const int index = m_settingsState.scroll + visible;
         if (index >= static_cast<int>(rows.size()))
             break;
         const int y = TOP + visible * ROW_H;
-        const bool selected = index == m_settingsSelected;
+        const bool selected = index == m_settingsState.selected;
         if (selected)
             BitmapFont::fillRect(fb, 8, y - 2, 624, ROW_H - 4, Theme::ACCENT_R, Theme::ACCENT_G,
                                  Theme::ACCENT_B, 70);

@@ -17,7 +17,6 @@ namespace miyoofin {
 // Match the Home renderer's two visible rails so row scrolling never hides a
 // focused rail behind the bottom bar.
 static constexpr int VISIBLE_ROWS = 2;
-static constexpr int SETTINGS_VISIBLE_ROWS = 6;
 static constexpr int MOVIE_GRID_COLUMNS = 8;
 static constexpr int MOVIE_GRID_ROWS = 3;
 
@@ -447,30 +446,14 @@ bool HomeScreen::handleAction(Action action)
     if (activeTabNamed("Downloads") && handleDownloadsAction(action))
         return true;
     if (activeTabNamed("Settings")) {
-        if (action == Action::Back) {
-            if (m_settingsConfirmation != SettingsConfirmation::None) {
-                m_settingsConfirmation = SettingsConfirmation::None;
-                return true;
-            }
-            return false;
-        }
+        if (action == Action::Back)
+            return m_settingsState.cancelConfirmation();
         if (action == Action::Up || action == Action::Down) {
-            const int previous = m_settingsSelected;
-            if (action == Action::Up && m_settingsSelected > 0) {
-                --m_settingsSelected;
-            } else if (action == Action::Down &&
-                       m_settingsSelected < settingsRowCount(m_session) - 1) {
-                ++m_settingsSelected;
-            }
-            if (m_settingsSelected != previous)
-                m_settingsConfirmation = SettingsConfirmation::None;
-            m_settingsScroll =
-                std::max(0, std::min(m_settingsSelected,
-                                     settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
+            m_settingsState.move(action == Action::Up ? -1 : 1, settingsRowCount(m_session));
             return true;
         }
         if (action == Action::Confirm) {
-            switch (settingsRowAction(m_settingsSelected, m_session)) {
+            switch (settingsRowAction(m_settingsState.selected, m_session)) {
             case SettingsRowAction::OfflineMode: {
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
                 if (m_libraryCoordinator)
@@ -507,18 +490,15 @@ bool HomeScreen::handleAction(Action action)
             case SettingsRowAction::ChangeServer:
             case SettingsRowAction::Logout: {
                 const SettingsConfirmation requested =
-                    settingsRowAction(m_settingsSelected, m_session) ==
+                    settingsRowAction(m_settingsState.selected, m_session) ==
                             SettingsRowAction::ChangeServer
                         ? SettingsConfirmation::ChangeServer
                         : SettingsConfirmation::Logout;
-                if (m_settingsConfirmation == requested) {
+                if (m_settingsState.press(requested)) {
                     if (requested == SettingsConfirmation::ChangeServer)
                         m_changeServerRequested = true;
                     else
                         m_logoutRequested = true;
-                    m_settingsConfirmation = SettingsConfirmation::None;
-                } else {
-                    m_settingsConfirmation = requested;
                 }
                 return true;
             }
@@ -529,12 +509,8 @@ bool HomeScreen::handleAction(Action action)
                 if (stage == UpdateStage::ReadyToRestart) {
                     m_updateExitRequested = true;
                 } else if (stage == UpdateStage::Available) {
-                    if (m_settingsConfirmation == SettingsConfirmation::CheckForUpdates) {
+                    if (m_settingsState.press(SettingsConfirmation::CheckForUpdates))
                         m_updateManager.confirmInstall();
-                        m_settingsConfirmation = SettingsConfirmation::None;
-                    } else {
-                        m_settingsConfirmation = SettingsConfirmation::CheckForUpdates;
-                    }
                 } else if (stage == UpdateStage::Idle || stage == UpdateStage::UpToDate ||
                            stage == UpdateStage::Error) {
                     m_updateManager.checkForUpdates();
@@ -550,8 +526,7 @@ bool HomeScreen::handleAction(Action action)
             return true;
         if (action != Action::NextTab && action != Action::PrevTab)
             return true;
-        m_settingsScroll = std::max(
-            0, std::min(m_settingsSelected, settingsRowCount(m_session) - SETTINGS_VISIBLE_ROWS));
+        m_settingsState.clampScroll(settingsRowCount(m_session));
     }
     auto queueDownAtPageEdge = [this](MediaPageState& page, int selected, int count, int columns) {
         if (!gridAtBottomRow(selected, count, columns) || !page.hasMore)

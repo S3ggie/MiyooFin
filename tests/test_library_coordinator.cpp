@@ -493,6 +493,9 @@ void testCoordinatorBlockingWaits()
             std::unique_lock<std::mutex> lock(barrierMutex);
             barrierWake.wait(lock, [&] { return entered; });
         }
+        // ponytail: `entered` is set just before the blocking wait begins; a short
+        // grace lets the waiter block so stop() races the wait, not its entry.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         std::thread stopper([&] { coordinator->stop(); });
         waiter.join();
         CHECK(waitStatus == library::WaitStatus::Stopped);

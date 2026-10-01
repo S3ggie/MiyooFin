@@ -3,16 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../data/MediaItem.hpp"
-#include "../../net/Session.hpp"
-#include "../../image/ImageDecoder.hpp"
-#include "../../cache/LibraryCache.hpp"
-#include "../../download/DownloadManager.hpp"
-#include "../../download/DownloadUi.hpp"
-#include "../../download/DownloadHierarchy.hpp"
-#include "../../playback/OfflinePlaybackJournal.hpp"
-#include "../../library/LibraryQuery.hpp"
 #include "../../library/LibraryCoordinator.hpp"
-#include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
 #include "../BatteryMonitor.hpp"
@@ -23,21 +14,15 @@
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
 #include "../HomeTabs.hpp"
-#include "../HomeArtworkPlan.hpp"
 #include "HomeLibraryController.hpp"
 #include "HomeArtworkController.hpp"
-#include "../../diagnostics/TelemetryIds.hpp"
 #include "../../update/UpdateManager.hpp"
 #include <atomic>
 #include <algorithm>
 #include <cstdint>
-#include <deque>
-#include <future>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string>
-#include <thread>
 #include "../WorkerSlot.hpp"
 #include <vector>
 

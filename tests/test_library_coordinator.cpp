@@ -384,6 +384,11 @@ void testCoordinatorBlockingWaits()
         coordinator->start();
         db->setWorkerPausedForTest(true);
         CHECK(coordinator->startStartupSync(false));
+        // The worker thread reaches the Executing phase asynchronously; a
+        // waiter that checks first would see InvalidRequest, not Stopped.
+        for (int i = 0; i < 500 && !coordinator->status().startupInFlight; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        CHECK(coordinator->status().startupInFlight);
         std::mutex barrierMutex;
         std::condition_variable barrierWake;
         int entered = 0;
@@ -1138,8 +1143,15 @@ void testHomeRailStopPublishesCompletion()
 void testHomeRailCancellationReleasesSlot()
 {
     std::printf("[test] LibraryCoordinator Home rail cancellation reuse\n");
+    // A listener that accepts connections (kernel backlog) but never answers
+    // keeps each request in flight until the cancellation lands. A refused
+    // port fails fast and can finish before the cancel, so it is not used.
+    const int listener = coordinatorTestListener();
+    if (listener < 0)
+        return;
     Session session;
-    session.serverUrl = "http://127.0.0.1:1";
+    session.serverUrl = coordinatorTestUrl(listener);
+    session.userId = "home-rail-cancel-user";
     auto coordinator = library::LibraryCoordinator(session, std::make_shared<CatalogDb>(), 0);
     coordinator.start();
 
@@ -1159,6 +1171,7 @@ void testHomeRailCancellationReleasesSlot()
           library::WaitStatus::Ready);
     CHECK(secondResult.request == secondRequest && secondResult.cancelled);
     coordinator.stop();
+    ::close(listener);
     std::printf("[test] LibraryCoordinator Home rail cancellation reuse OK\n");
 }
 

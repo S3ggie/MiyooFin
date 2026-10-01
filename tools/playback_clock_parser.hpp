@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <ctime>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -297,6 +298,38 @@ inline bool parse_pos_cfg_position(const std::string& fileData, const char* stre
     if (found)
         outSeconds = bestSeconds;
     return found;
+}
+
+// -------------------------------------------------------------------
+// pos.cfg trust rule
+//
+// pos.cfg keeps ONE record per stream key, and the key is the same URL for
+// every item ("http://127.0.0.1:18080/stream"). If the player exits without
+// rewriting its record (killed, crashed, unusual exit), the record still holds
+// the PREVIOUS item's position, and reporting resume + that value would write
+// a wrong position to the server. The saved value may therefore replace the
+// sampled showinfo PTS only when:
+//   - the file was written during this playback (mtime >= start, with slack
+//     for FAT's 2 second timestamp resolution), and
+//   - it agrees with the position the player actually reported (within
+//     POS_CFG_MAX_DRIFT_SEC). The player's own clock is the ground truth for
+//     "where did this playback end"; pos.cfg only refines it.
+// Otherwise the caller keeps the sampled PTS (the pre-pos.cfg behaviour).
+// -------------------------------------------------------------------
+static const long POS_CFG_MTIME_SLACK_SEC = 2;
+static const double POS_CFG_MAX_DRIFT_SEC = 15.0;
+
+inline bool pos_cfg_is_trustworthy(time_t cfgMtime, time_t playbackStart, uint32_t cfgSeconds,
+                                   double sampledPts)
+{
+    if (cfgMtime <= 0 || playbackStart <= 0)
+        return false; // unknown time: do not trust
+    if (cfgMtime + POS_CFG_MTIME_SLACK_SEC < playbackStart)
+        return false; // written before this playback started: stale
+    if (sampledPts < 0.0)
+        return false;
+    const double drift = std::fabs(static_cast<double>(cfgSeconds) - sampledPts);
+    return drift <= POS_CFG_MAX_DRIFT_SEC;
 }
 
 #endif // PLAYBACK_CLOCK_PARSER_HPP

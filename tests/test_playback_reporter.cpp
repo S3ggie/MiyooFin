@@ -669,6 +669,33 @@ static void testReplaceResumeTicks()
     std::printf("[test] playback_replace_resume_ticks OK\n");
 }
 
+// --- pos.cfg trust rule: a stale or disagreeing record must not win ---------
+
+static void testPosCfgTrustRule()
+{
+    std::printf("[test] pos_cfg_is_trustworthy\n");
+    const time_t start = 1000000;
+    // Written during playback and agreeing with the player's clock: trusted.
+    CHECK(pos_cfg_is_trustworthy(start + 30, start, 261, 260.4));
+    CHECK(pos_cfg_is_trustworthy(start + 30, start, 262, 258.0)); // small drift is fine
+    CHECK(pos_cfg_is_trustworthy(start, start, 10, 10.0));        // same second
+    // FAT timestamps have 2s resolution: written just before start is allowed.
+    CHECK(pos_cfg_is_trustworthy(start - 2, start, 10, 10.0));
+    // Written before this playback started: the PREVIOUS item's record. Reject.
+    CHECK(!pos_cfg_is_trustworthy(start - 3, start, 261, 260.0));
+    CHECK(!pos_cfg_is_trustworthy(start - 86400, start, 261, 260.0));
+    // Fresh but wildly different from what the player reported: reject.
+    CHECK(!pos_cfg_is_trustworthy(start + 30, start, 5000, 8.0));
+    CHECK(!pos_cfg_is_trustworthy(start + 30, start, 8, 5000.0));
+    CHECK(pos_cfg_is_trustworthy(start + 30, start, 275, 260.0));  // exactly 15s: allowed
+    CHECK(!pos_cfg_is_trustworthy(start + 30, start, 276, 260.0)); // just over: rejected
+    // Unknown times or a negative sampled position are never trusted.
+    CHECK(!pos_cfg_is_trustworthy(0, start, 10, 10.0));
+    CHECK(!pos_cfg_is_trustworthy(start + 30, 0, 10, 10.0));
+    CHECK(!pos_cfg_is_trustworthy(start + 30, start, 10, -1.0));
+    std::printf("[test] pos_cfg_is_trustworthy OK\n");
+}
+
 int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
@@ -744,6 +771,7 @@ int main()
     testPosCfgStaleBytesAfterNul();
     testPosCfgOverridesSampledPts();
     testPosCfgFallbackToSampledPts();
+    testPosCfgTrustRule();
 
     std::printf("\n--- Resume refresh ---\n");
     testParseUserPositionTicks();

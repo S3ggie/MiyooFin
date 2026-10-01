@@ -488,6 +488,7 @@ int main(int argc, char* argv[])
         return 1;
     }
     reporter_log("Reporter starting (app-dir=%s)", appDir.c_str());
+    const time_t playbackStart = time(nullptr);
 
     // Read session.txt
     std::string sessionContent = read_file(appDir + "/session.txt");
@@ -700,9 +701,19 @@ int main(int argc, char* argv[])
         if (!posData.empty()) {
             uint32_t posSec = 0;
             if (parse_pos_cfg_position(posData, streamKey, posSec)) {
-                reporter_log("pos.cfg final position=%us", (unsigned)posSec);
-                lastPts = static_cast<double>(posSec);
-                usedPosCfg = true;
+                struct stat cfgStat;
+                const time_t cfgMtime = stat(POS_CFG_PATH, &cfgStat) == 0 ? cfgStat.st_mtime : 0;
+                if (pos_cfg_is_trustworthy(cfgMtime, playbackStart, posSec, lastPts)) {
+                    reporter_log("pos.cfg final position=%us", (unsigned)posSec);
+                    lastPts = static_cast<double>(posSec);
+                    usedPosCfg = true;
+                } else {
+                    // Stale (not written this playback) or disagreeing with the
+                    // player's own clock: report the sampled PTS instead.
+                    reporter_log("pos.cfg position=%us rejected (stale or disagrees with "
+                                 "sampled pts=%.1fs); using last PTS",
+                                 (unsigned)posSec, lastPts);
+                }
             } else {
                 reporter_log("pos.cfg position unavailable; using last PTS");
             }

@@ -311,7 +311,9 @@ remote_restore_once() {
 # with the manual recovery command on any mismatch.
 restore_launcher() {
     attempt=1
-    delay=2
+    # Initial retry delay (doubles per attempt). Tests set it to 0.
+    delay=${MIYOOFIN_RESTORE_BACKOFF_S:-2}
+    case "$delay" in ''|*[!0-9]*) delay=2 ;; esac
     while [ "$attempt" -le "$RESTORE_ATTEMPTS" ]; do
         if RESTORE_OUT=$(remote_restore_once 2>&1); then
             printf '%s\n' "$RESTORE_OUT"

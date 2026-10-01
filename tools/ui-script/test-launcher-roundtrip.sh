@@ -30,6 +30,8 @@
 #   (also runs as the first step of `make ui-script-test`).
 
 set -eu
+# The restore-retry scenarios exercise the retry logic, not real waiting.
+export MIYOOFIN_RESTORE_BACKOFF_S=0
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 SCRIPT_DIR="$ROOT/tools/ui-script"

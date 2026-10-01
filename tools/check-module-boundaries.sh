@@ -83,6 +83,7 @@ SYSTEM_ONLY_IN = {
 SYSTEM_FILE_ALLOWS = {
     ("src/app/App.cpp", "curl/"): "process-wide curl_global_init/cleanup",
     ("src/main.cpp", "vendor/sqlite"): "sets sqlite3_temp_directory before any DB opens",
+    ("src/pch.hpp", "curl/"): "precompiled header parses libcurl once; only net/download use it",
 }
 
 INCLUDE = re.compile(r"^\s*#\s*include\s*([\"<])([^\">]+)[\">]")

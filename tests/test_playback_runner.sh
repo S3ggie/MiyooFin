@@ -50,32 +50,6 @@ EOF
     (cd "$app_dir" && sh ./playback_runner.sh) >/dev/null 2>&1 || true
 }
 
-# HTTP-only routes pass an empty CA argument and launch normally.
-run_case http_only 'server_url=http://192.168.1.10:8096' no
-[ -f "$TMP_ROOT/http_only/bridge-args.txt" ] || fail 'HTTP-only route did not launch bridge'
-grep -q '^http://192.168.1.10:8096/' "$TMP_ROOT/http_only/bridge-args.txt" || fail 'HTTP-only route did not use HTTP upstream'
-[ "$(sed -n '2p' "$TMP_ROOT/http_only/bridge-args.txt")" = "" ] || fail 'HTTP-only route passed a CA path'
-[ "$(sed -n '3p' "$TMP_ROOT/http_only/bridge-args.txt")" = 18080 ] || fail 'HTTP-only route passed unexpected port'
-
-# LAN HTTP with an HTTPS fallback launches LAN only when CA data is absent.
-run_case lan_fallback 'server_url=http://192.168.1.10:8096
-public_server_url=https://jellyfin.example.com' no
-[ -f "$TMP_ROOT/lan_fallback/bridge-args.txt" ] || fail 'LAN route did not launch bridge'
-! grep -q -- '--fallback-url\|https://jellyfin.example.com' "$TMP_ROOT/lan_fallback/bridge-args.txt" || fail 'HTTPS fallback was not disabled'
-grep -q 'Secure HTTPS fallback unavailable: cacert.pem not found' "$TMP_ROOT/lan_fallback/playback-launch.log" || fail 'missing fallback warning'
-[ "$(sed -n '2p' "$TMP_ROOT/lan_fallback/bridge-args.txt")" = "" ] || fail 'LAN-only launch passed a CA path'
-
-# HTTPS-only playback is rejected before the bridge starts without CA data.
-run_case https_only 'server_url=https://jellyfin.example.com' no
-! [ -f "$TMP_ROOT/https_only/bridge-args.txt" ] || fail 'HTTPS-only route launched without CA'
-grep -q 'ERROR: cacert.pem not found for HTTPS playback' "$TMP_ROOT/https_only/playback-launch.log" || fail 'missing HTTPS-only rejection'
-
-# An HTTPS route retains the CA argument when it is available.
-run_case https_with_ca 'server_url=https://jellyfin.example.com' yes
-[ "$(sed -n '2p' "$TMP_ROOT/https_with_ca/bridge-args.txt")" = "$TMP_ROOT/https_with_ca/cacert.pem" ] || fail 'HTTPS route did not pass CA path'
-
-echo '[test] playback runner route-aware CA handling OK'
-
 # Remote playback refreshes resume_ticks from the server before building the
 # stream URL; the refresh is bounded and every failure keeps the cached value.
 # run_refresh_case NAME MODE REPORTER_BODY [ENV_ASSIGNMENT]
@@ -96,67 +70,35 @@ run_refresh_case() {
     (cd "$app_dir" && env $extra_env sh ./playback_runner.sh) >/dev/null 2>&1 || true
 }
 
-# Success: the reporter rewrites resume_ticks; the runner must use the new value.
+# Every case below uses its own directory and the runner's own one-second
+# settle delays dominate its wall time, so run them all concurrently and
+# assert afterwards.
+run_case http_only 'server_url=http://192.168.1.10:8096' no &
+run_case lan_fallback 'server_url=http://192.168.1.10:8096
+public_server_url=https://jellyfin.example.com' no &
+run_case https_only 'server_url=https://jellyfin.example.com' no &
+run_case https_with_ca 'server_url=https://jellyfin.example.com' yes &
 run_refresh_case refresh_ok jellyfin '
 if [ "${2:-}" = --refresh-resume ]; then
     printf "item_id=item\nitem_type=movie\nresume_ticks=24000000000\nsource_mode=jellyfin\n" > "$1/playback-request.txt"
     echo "resume_refresh updated old=100 new=24000000000"
-fi'
-grep -q 'resume_refresh updated old=100 new=24000000000' "$TMP_ROOT/refresh_ok/playback-launch.log" \
-    || fail 'runner did not log the refresh result'
-grep -q 'Resume ticks=24000000000 ' "$TMP_ROOT/refresh_ok/playback-launch.log" \
-    || fail 'runner did not use the refreshed resume ticks'
-
-# A reporter that fails (or prints nothing) leaves the cached ticks in place.
+fi' &
 run_refresh_case refresh_failed jellyfin '
-if [ "${2:-}" = --refresh-resume ]; then echo "resume_refresh failed http=0 transport=1 kept=100"; fi'
-grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_failed/playback-launch.log" \
-    || fail 'failed refresh changed the cached resume ticks'
-run_refresh_case refresh_silent jellyfin 'exit 1'
-grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_silent/playback-launch.log" \
-    || fail 'silent refresh was not reported'
-grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_silent/playback-launch.log" \
-    || fail 'silent refresh changed the cached resume ticks'
-
-# A garbage rewrite is sanitised: the URL must never carry arbitrary text.
+if [ "${2:-}" = --refresh-resume ]; then echo "resume_refresh failed http=0 transport=1 kept=100"; fi' &
+run_refresh_case refresh_silent jellyfin 'exit 1' &
 run_refresh_case refresh_garbage jellyfin '
 if [ "${2:-}" = --refresh-resume ]; then
     printf "item_id=item\nresume_ticks=12;rm -rf /\nsource_mode=jellyfin\n" > "$1/playback-request.txt"
-fi'
-grep -q 'Resume ticks=0 ' "$TMP_ROOT/refresh_garbage/playback-launch.log" \
-    || fail 'non-numeric refreshed ticks were not sanitised'
-
-# A hung reporter that even ignores TERM must not block playback: the watchdog
-# escalates to KILL and the runner carries on with the cached position.
-START_S=$(date +%s)
+fi' &
+run_refresh_case refresh_local local '
+if [ "${2:-}" = --refresh-resume ]; then touch "$1/refresh-was-called"; fi' &
+( START_S=$(date +%s)
 run_refresh_case refresh_hung jellyfin '
 if [ "${2:-}" = --refresh-resume ]; then trap "" TERM INT HUP; while :; do :; done; fi' \
     MIYOOFIN_RESUME_REFRESH_TIMEOUT_S=1
-ELAPSED_S=$(( $(date +%s) - START_S ))
-[ "$ELAPSED_S" -le 15 ] || fail "hung reporter blocked the runner for ${ELAPSED_S}s"
-grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_hung/playback-launch.log" \
-    || fail 'hung refresh was not reported'
-grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_hung/playback-launch.log" \
-    || fail 'hung refresh changed the cached resume ticks'
-
-# Downloaded playback never asks the server (it reconciles via the journal).
-run_refresh_case refresh_local local '
-if [ "${2:-}" = --refresh-resume ]; then touch "$1/refresh-was-called"; fi'
-[ ! -e "$TMP_ROOT/refresh_local/refresh-was-called" ] || fail 'local playback called the resume refresh'
-grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_local/playback-launch.log" \
-    || fail 'local case did not reach the resume log (setup problem)'
-
-echo '[test] playback runner resume refresh OK'
-
-# Onion FFplay selects its native drivers after MiyooFin releases SDL.  Do not
-# force the SDL2 driver names inherited by the application onto the player.
-! grep -q 'export SDL_VIDEODRIVER=mmiyoo' "$RUNNER" || fail 'runner forces MiyooFin video driver onto FFplay'
-! grep -q 'export SDL_AUDIODRIVER=mmiyoo' "$RUNNER" || fail 'runner forces MiyooFin audio driver onto FFplay'
-grep -q 'PLAYBACK_FFPLAY_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so' "$RUNNER" || fail 'Onion audio bridge path is missing'
-grep -q 'LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \\' "$RUNNER" || fail 'FFplay does not use Onion audio bridge'
-! grep -q 'ffplay_argv=.*\$PLAY_URL' "$RUNNER" || fail 'FFplay argv diagnostic leaks input URL'
-
-echo '[test] playback runner Onion native SDL and DSP audio setup OK'
+  echo $(( $(date +%s) - START_S )) > "$TMP_ROOT/refresh_hung.elapsed" ) &
+# The forced-exit lifecycle test below is sequential (about 6s) and runs while
+# the cases above are still executing; their results are checked after `wait`.
 
 # A supported app exit terminates the runner while it is blocked in FFplay.
 # The runner must clean up its exact external children rather than leaving an
@@ -235,3 +177,71 @@ LIFECYCLE_REPORTER_PID=
 LIFECYCLE_BRIDGE_PID=
 
 echo '[test] playback runner forced-exit child cleanup/reap OK'
+
+wait
+
+# HTTP-only routes pass an empty CA argument and launch normally.
+[ -f "$TMP_ROOT/http_only/bridge-args.txt" ] || fail 'HTTP-only route did not launch bridge'
+grep -q '^http://192.168.1.10:8096/' "$TMP_ROOT/http_only/bridge-args.txt" || fail 'HTTP-only route did not use HTTP upstream'
+[ "$(sed -n '2p' "$TMP_ROOT/http_only/bridge-args.txt")" = "" ] || fail 'HTTP-only route passed a CA path'
+[ "$(sed -n '3p' "$TMP_ROOT/http_only/bridge-args.txt")" = 18080 ] || fail 'HTTP-only route passed unexpected port'
+
+# LAN HTTP with an HTTPS fallback launches LAN only when CA data is absent.
+[ -f "$TMP_ROOT/lan_fallback/bridge-args.txt" ] || fail 'LAN route did not launch bridge'
+! grep -q -- '--fallback-url\|https://jellyfin.example.com' "$TMP_ROOT/lan_fallback/bridge-args.txt" || fail 'HTTPS fallback was not disabled'
+grep -q 'Secure HTTPS fallback unavailable: cacert.pem not found' "$TMP_ROOT/lan_fallback/playback-launch.log" || fail 'missing fallback warning'
+[ "$(sed -n '2p' "$TMP_ROOT/lan_fallback/bridge-args.txt")" = "" ] || fail 'LAN-only launch passed a CA path'
+
+# HTTPS-only playback is rejected before the bridge starts without CA data.
+! [ -f "$TMP_ROOT/https_only/bridge-args.txt" ] || fail 'HTTPS-only route launched without CA'
+grep -q 'ERROR: cacert.pem not found for HTTPS playback' "$TMP_ROOT/https_only/playback-launch.log" || fail 'missing HTTPS-only rejection'
+
+# An HTTPS route retains the CA argument when it is available.
+[ "$(sed -n '2p' "$TMP_ROOT/https_with_ca/bridge-args.txt")" = "$TMP_ROOT/https_with_ca/cacert.pem" ] || fail 'HTTPS route did not pass CA path'
+
+echo '[test] playback runner route-aware CA handling OK'
+
+
+# Success: the reporter rewrites resume_ticks; the runner must use the new value.
+grep -q 'resume_refresh updated old=100 new=24000000000' "$TMP_ROOT/refresh_ok/playback-launch.log" \
+    || fail 'runner did not log the refresh result'
+grep -q 'Resume ticks=24000000000 ' "$TMP_ROOT/refresh_ok/playback-launch.log" \
+    || fail 'runner did not use the refreshed resume ticks'
+
+# A reporter that fails (or prints nothing) leaves the cached ticks in place.
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_failed/playback-launch.log" \
+    || fail 'failed refresh changed the cached resume ticks'
+grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_silent/playback-launch.log" \
+    || fail 'silent refresh was not reported'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_silent/playback-launch.log" \
+    || fail 'silent refresh changed the cached resume ticks'
+
+# A garbage rewrite is sanitised: the URL must never carry arbitrary text.
+grep -q 'Resume ticks=0 ' "$TMP_ROOT/refresh_garbage/playback-launch.log" \
+    || fail 'non-numeric refreshed ticks were not sanitised'
+
+# A hung reporter that even ignores TERM must not block playback: the watchdog
+# escalates to KILL and the runner carries on with the cached position.
+ELAPSED_S=$(cat "$TMP_ROOT/refresh_hung.elapsed" 2>/dev/null || echo 999)
+[ "$ELAPSED_S" -le 15 ] || fail "hung reporter blocked the runner for ${ELAPSED_S}s"
+grep -q 'resume_refresh no result' "$TMP_ROOT/refresh_hung/playback-launch.log" \
+    || fail 'hung refresh was not reported'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_hung/playback-launch.log" \
+    || fail 'hung refresh changed the cached resume ticks'
+
+# Downloaded playback never asks the server (it reconciles via the journal).
+[ ! -e "$TMP_ROOT/refresh_local/refresh-was-called" ] || fail 'local playback called the resume refresh'
+grep -q 'Resume ticks=100 ' "$TMP_ROOT/refresh_local/playback-launch.log" \
+    || fail 'local case did not reach the resume log (setup problem)'
+
+echo '[test] playback runner resume refresh OK'
+
+# Onion FFplay selects its native drivers after MiyooFin releases SDL.  Do not
+# force the SDL2 driver names inherited by the application onto the player.
+! grep -q 'export SDL_VIDEODRIVER=mmiyoo' "$RUNNER" || fail 'runner forces MiyooFin video driver onto FFplay'
+! grep -q 'export SDL_AUDIODRIVER=mmiyoo' "$RUNNER" || fail 'runner forces MiyooFin audio driver onto FFplay'
+grep -q 'PLAYBACK_FFPLAY_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so' "$RUNNER" || fail 'Onion audio bridge path is missing'
+grep -q 'LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \\' "$RUNNER" || fail 'FFplay does not use Onion audio bridge'
+! grep -q 'ffplay_argv=.*\$PLAY_URL' "$RUNNER" || fail 'FFplay argv diagnostic leaks input URL'
+
+echo '[test] playback runner Onion native SDL and DSP audio setup OK'

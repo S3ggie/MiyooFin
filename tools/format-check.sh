@@ -52,6 +52,7 @@ fi
 clang_format=${CLANG_FORMAT:-clang-format}
 if command -v "$clang_format" >/dev/null 2>&1; then
     python3 - "$source_list" "$clang_format" <<'PY'
+import concurrent.futures
 import os
 import subprocess
 import sys
@@ -59,11 +60,24 @@ import sys
 with open(sys.argv[1], "rb") as handle:
     sources = [os.fsdecode(path) for path in handle.read().split(b"\0") if path]
 
-for source in sources:
-    subprocess.run(
+
+def check(source):
+    return source, subprocess.run(
         [sys.argv[2], "--dry-run", "--Werror", "--style=file", source],
-        check=True,
+        capture_output=True,
+        text=True,
     )
+
+
+# One clang-format process per file, run on every core (this was serial).
+failed = False
+with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
+    for source, result in pool.map(check, sources):
+        if result.returncode != 0:
+            failed = True
+            sys.stderr.write(result.stdout + result.stderr)
+if failed:
+    sys.exit(1)
 PY
     echo "clang-format check passed"
     exit 0

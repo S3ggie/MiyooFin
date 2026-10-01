@@ -234,14 +234,21 @@ test: $(TEST_TARGET) $(SQLITE_TEST_TARGET) $(CATALOG_BENCHMARK_TARGET)
 	@$(TEST_TARGET)
 	@$(SQLITE_TEST_TARGET)
 	@$(CATALOG_BENCHMARK_TARGET)
+# Shell/Python tests of scripts and source layout do not exercise any compiled
+# code, so rerunning them under ASan/TSan only repeats them. They run in the
+# plain `make test`.
+ifeq ($(filter 1,$(SANITIZE) $(TSAN)),)
 	@sh $(RUNNER_TEST)
 	@sh $(CA_BUNDLE_TEST)
 	@sh $(ONION_REMOTE_LAUNCH_TEST)
 	@sh $(MEDIA_ITEM_HEADER_TEST)
 	@sh $(LIBRARY_SYNC_GUARD_TEST)
 	@sh $(MODULE_BOUNDARIES_TEST)
+endif
 	@$(MAKE) --no-print-directory reporter-test
+ifeq ($(filter 1,$(SANITIZE) $(TSAN)),)
 	@python3 $(TELEMETRY_DECODER_TEST)
+endif
 
 # Convenience entry point for the sanitizer run: rebuilds and runs the host
 # test suite with AddressSanitizer + UndefinedBehaviorSanitizer in its own
@@ -275,12 +282,17 @@ $(TSAN_RUNNER_TARGET): $(TSAN_RUNNER) $(TSAN_GROUP_TARGETS) | $(TEST_DIR)
 	chmod +x $@
 	@echo "  [TSAN] $@"
 
-.PHONY: refactor-check format-check clang-tidy ci-local ci-local-full
+.PHONY: refactor-check format-check clang-tidy ci-local ci-local-full ci-quick
 refactor-check:
 	@sh tools/refactor-check.sh
 
 format-check:
 	@sh tools/format-check.sh
+
+# Fast inner loop: format, host build, tests and boundary checks (no sanitizers,
+# UI flows or ARM). Run `make ci-local` before pushing.
+ci-quick:
+	@sh tools/ci-local-host.sh
 
 ci-local:
 	@sh tools/ci-local.sh

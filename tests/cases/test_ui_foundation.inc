@@ -9,7 +9,7 @@ static void testServerEntryKeyboardCaps()
     // Numeric characters remain unchanged in caps mode.
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.entryText(), "1");
-    screen.handleAction(Action::PrevPage);  // L2
+    screen.handleAction(Action::PrevPage); // L2
     CHECK(screen.capsEnabled());
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.entryText(), "11");
@@ -77,8 +77,7 @@ static void testSettingsAddressEntryCancel()
     CHECK_EQ(session.serverId, before.serverId);
 
     // Editing an existing public address remains equally non-mutating.
-    ServerEntryScreen existingPublic(session.publicServerUrl, "", session.serverId,
-                                     false, true);
+    ServerEntryScreen existingPublic(session.publicServerUrl, "", session.serverId, false, true);
     existingPublic.handleAction(Action::Back);
     CHECK(existingPublic.addressEntryCancelled());
     CHECK_EQ(existingPublic.entryText(), before.publicServerUrl);
@@ -93,8 +92,7 @@ static void testSettingsAddressEntryCancel()
     // On the actual Settings stack B returns to the prior Settings screen.
     ScreenStack stack;
     stack.push(std::make_unique<ServerEntryScreen>());
-    stack.push(std::make_unique<ServerEntryScreen>("", "", session.serverId,
-                                                   false, true));
+    stack.push(std::make_unique<ServerEntryScreen>("", "", session.serverId, false, true));
     CHECK(stack.size() == 2);
     stack.top()->handleAction(Action::Back);
     CHECK(stack.size() == 1);
@@ -143,28 +141,35 @@ static void testOnScreenKeyboardGrid()
     int totalKeys = 0;
     for (int row = 0; row < 6; ++row) {
         kb.reset();
-        for (int i = 0; i < row; ++i) kb.handleAction(Action::Down);
-        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left); // go to leftmost
+        for (int i = 0; i < row; ++i)
+            kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i)
+            kb.handleAction(Action::Left); // go to leftmost
         int n = 0;
         int prevCol = -1;
         for (int i = 0; i < 12; ++i) {
-            const auto *k = kb.activeKey();
+            const auto* k = kb.activeKey();
             if (k && k->col != prevCol) {
                 n++;
                 prevCol = k->col;
             }
             kb.handleAction(Action::Right);
         }
-        if (row < 5) CHECK(n == 10); else CHECK(n == 5);
+        if (row < 5)
+            CHECK(n == 10);
+        else
+            CHECK(n == 5);
         totalKeys += n;
     }
     CHECK(totalKeys == 55);
 
     // Action row: five 2-column keys
     kb.reset();
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
-    const OnScreenKeyboard::Key *k = kb.activeKey();
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        kb.handleAction(Action::Left);
+    const OnScreenKeyboard::Key* k = kb.activeKey();
     CHECK(k != nullptr);
     CHECK(k->colSpan == 2);
     for (int i = 0; i < 4; ++i) {
@@ -181,9 +186,11 @@ static void testOnScreenKeyboardSpace()
 {
     std::printf("[test] OnScreenKeyboard space key\n");
     OnScreenKeyboard kb;
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
-    const OnScreenKeyboard::Key *k = kb.activeKey();
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        kb.handleAction(Action::Left);
+    const OnScreenKeyboard::Key* k = kb.activeKey();
     CHECK(k != nullptr);
     CHECK(k->ch == ' ');
     CHECK(k->row == 5);
@@ -198,12 +205,16 @@ static void testServerEntrySpace()
     std::printf("[test] ServerEntryScreen space insertion\n");
     ServerEntryScreen screen;
     CHECK_EQ(screen.entryText(), "");
-    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    for (int i = 0; i < 6; ++i)
+        screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        screen.handleAction(Action::Left);
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.entryText(), " ");
-    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Up);
-    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    for (int i = 0; i < 6; ++i)
+        screen.handleAction(Action::Up);
+    for (int i = 0; i < 12; ++i)
+        screen.handleAction(Action::Left);
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.entryText(), " 1");
     screen.handleAction(Action::Back);
@@ -218,12 +229,16 @@ static void testLoginUsernameSpace()
     std::printf("[test] LoginScreen username space insertion\n");
     LoginScreen screen("https://server", "Server", "device");
     screen.handleAction(Action::Down);
-    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    for (int i = 0; i < 6; ++i)
+        screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        screen.handleAction(Action::Left);
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.username(), " ");
-    for (int i = 0; i < 5; ++i) screen.handleAction(Action::Up);
-    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    for (int i = 0; i < 5; ++i)
+        screen.handleAction(Action::Up);
+    for (int i = 0; i < 12; ++i)
+        screen.handleAction(Action::Left);
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.username(), " 1");
     std::printf("[test] LoginScreen username space insertion OK\n");
@@ -235,8 +250,10 @@ static void testLoginPasswordSpace()
     LoginScreen screen("https://server", "Server", "device");
     screen.handleAction(Action::Right);
     screen.handleAction(Action::Down);
-    for (int i = 0; i < 6; ++i) screen.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) screen.handleAction(Action::Left);
+    for (int i = 0; i < 6; ++i)
+        screen.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        screen.handleAction(Action::Left);
     screen.handleAction(Action::Confirm);
     CHECK_EQ(screen.password(), " ");
     CHECK(screen.password().size() == (size_t)1);
@@ -250,12 +267,15 @@ static void testSharedKeyboardLayoutConsistency()
     OnScreenKeyboard kbA(OnScreenKeyboard::Config{"[DONE]", 104});
     OnScreenKeyboard kbB(OnScreenKeyboard::Config{"[SIGN IN]", 134});
 
-    auto getChar = [](OnScreenKeyboard &kb, int r, int c) -> char {
+    auto getChar = [](OnScreenKeyboard& kb, int r, int c) -> char {
         kb.reset();
-        for (int i = 0; i < r; ++i) kb.handleAction(Action::Down);
-        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
-        for (int i = 0; i < c; ++i) kb.handleAction(Action::Right);
-        const auto *k = kb.activeKey();
+        for (int i = 0; i < r; ++i)
+            kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i)
+            kb.handleAction(Action::Left);
+        for (int i = 0; i < c; ++i)
+            kb.handleAction(Action::Right);
+        const auto* k = kb.activeKey();
         return k ? k->ch : '\0';
     };
     for (int row = 0; row < 5; ++row)
@@ -271,12 +291,15 @@ static void testSharedKeyboardLayoutConsistency()
         CHECK(std::string(cB.submitLabel) == "[SIGN IN]");
     }
 
-    auto getSubmitInfo = [](OnScreenKeyboard &kb) -> std::pair<char, std::string> {
+    auto getSubmitInfo = [](OnScreenKeyboard& kb) -> std::pair<char, std::string> {
         kb.reset();
-        for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
-        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
-        for (int i = 0; i < 3; ++i) kb.handleAction(Action::Right); // 3rd key
-        const auto *k = kb.activeKey();
+        for (int i = 0; i < 6; ++i)
+            kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i)
+            kb.handleAction(Action::Left);
+        for (int i = 0; i < 3; ++i)
+            kb.handleAction(Action::Right); // 3rd key
+        const auto* k = kb.activeKey();
         return k ? std::make_pair(k->ch, std::string(k->label))
                  : std::make_pair('\0', std::string());
     };
@@ -288,12 +311,15 @@ static void testSharedKeyboardLayoutConsistency()
     CHECK(subA.second != subB.second);
 
     // Other action labels are shared
-    auto getActionLabel = [](OnScreenKeyboard &kb, int keyIdx) -> std::string {
+    auto getActionLabel = [](OnScreenKeyboard& kb, int keyIdx) -> std::string {
         kb.reset();
-        for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
-        for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
-        for (int i = 0; i < keyIdx; ++i) kb.handleAction(Action::Right);
-        const auto *k = kb.activeKey();
+        for (int i = 0; i < 6; ++i)
+            kb.handleAction(Action::Down);
+        for (int i = 0; i < 12; ++i)
+            kb.handleAction(Action::Left);
+        for (int i = 0; i < keyIdx; ++i)
+            kb.handleAction(Action::Right);
+        const auto* k = kb.activeKey();
         return k ? k->label : "";
     };
     CHECK(getActionLabel(kbA, 0) == getActionLabel(kbB, 0));
@@ -308,11 +334,12 @@ static void testKeyboardVerticalNavActionRow()
 {
     std::printf("[test] Keyboard vertical navigation to action row\n");
     OnScreenKeyboard kb;
-    const OnScreenKeyboard::Key *k;
+    const OnScreenKeyboard::Key* k;
 
     // Row 0 col 0 (center 0.5) → SPACE (center 1.0)
     kb.reset();
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
     k = kb.activeKey();
     CHECK(k != nullptr);
     CHECK(k->row == 5);
@@ -320,16 +347,20 @@ static void testKeyboardVerticalNavActionRow()
 
     // Row 0 col 9 (center 9.5) → CANCEL (center 9.0)
     kb.reset();
-    for (int i = 0; i < 9; ++i) kb.handleAction(Action::Right);
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 9; ++i)
+        kb.handleAction(Action::Right);
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
     k = kb.activeKey();
     CHECK(k != nullptr);
     CHECK(k->col == 8);
 
     // DEL on action row → Up lands near col 2–3 on row 4
     kb.reset();
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
-    for (int i = 0; i < 12; ++i) kb.handleAction(Action::Left);
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
+    for (int i = 0; i < 12; ++i)
+        kb.handleAction(Action::Left);
     kb.handleAction(Action::Right); // DEL at col 2
     k = kb.activeKey();
     CHECK(k != nullptr);
@@ -347,7 +378,8 @@ static void testKeyboardVerticalNavActionRow()
     CHECK(kb.selectionRow() == 0);
 
     // Down at row 5 stays at row 5
-    for (int i = 0; i < 6; ++i) kb.handleAction(Action::Down);
+    for (int i = 0; i < 6; ++i)
+        kb.handleAction(Action::Down);
     CHECK(kb.selectionRow() == 5);
     kb.handleAction(Action::Down);
     CHECK(kb.selectionRow() == 5);
@@ -358,19 +390,27 @@ static void testKeyboardVerticalNavActionRow()
 static void testUiDiagnostics()
 {
     std::printf("[test] UI diagnostics watchdog/ring\n");
-    UiDiagnostics::Watchdog w; uint64_t duration=0; w.seen=1000;
-    CHECK(w.poll(1100,1200,false,duration)==0);
-    w.seen=1000; CHECK(w.poll(1000,1501,false,duration)==1);
-    CHECK(w.poll(1000,1700,false,duration)==0);
-    CHECK(w.poll(1800,1850,false,duration)==2 && duration==850);
-    w.seen=1000; CHECK(w.poll(1000,1600,true,duration)==0);
-    UiDiagnostics d; for(size_t i=0;i<UiDiagnostics::EVENT_CAPACITY+2;i++) d.event(("event"+std::to_string(i)).c_str());
-    const auto events=d.recentEvents();
-    CHECK(events.size()==UiDiagnostics::EVENT_CAPACITY && events.front()=="event2");
-    { UiDiagnostics::Scope scope("test-fast-scope"); }
+    UiDiagnostics::Watchdog w;
+    uint64_t duration = 0;
+    w.seen = 1000;
+    CHECK(w.poll(1100, 1200, false, duration) == 0);
+    w.seen = 1000;
+    CHECK(w.poll(1000, 1501, false, duration) == 1);
+    CHECK(w.poll(1000, 1700, false, duration) == 0);
+    CHECK(w.poll(1800, 1850, false, duration) == 2 && duration == 850);
+    w.seen = 1000;
+    CHECK(w.poll(1000, 1600, true, duration) == 0);
+    UiDiagnostics d;
+    for (size_t i = 0; i < UiDiagnostics::EVENT_CAPACITY + 2; i++)
+        d.event(("event" + std::to_string(i)).c_str());
+    const auto events = d.recentEvents();
+    CHECK(events.size() == UiDiagnostics::EVENT_CAPACITY && events.front() == "event2");
+    {
+        UiDiagnostics::Scope scope("test-fast-scope");
+    }
 
-    const std::string path = "/tmp/miyoofin-ui-diagnostics-"
-        + std::to_string(static_cast<long long>(getpid())) + ".log";
+    const std::string path =
+        "/tmp/miyoofin-ui-diagnostics-" + std::to_string(static_cast<long long>(getpid())) + ".log";
     std::remove(path.c_str());
     d.start(path);
     d.log("[CatalogDb] diagnostic test line");
@@ -422,7 +462,9 @@ static void testLoginKeyboardBackDeletes()
 //   - refuse: `if (... M.joinable() ...) ... return` (a joinable worker
 //     refuses the new attempt, so the assignment never runs joinable), or
 //   - gate-once: `if (!M.joinable()) M = std::thread(` (long-lived workers
-//     started exactly once; the target is never joinable here).
+//     started exactly once; the target is never joinable here), or
+//   - move-out: `P = std::move(M)` after `M.joinable()` in the same function
+//     (the old worker is moved out under a lock and joined outside it).
 // Matching runs on comment-stripped token text (string literals preserved,
 // so a URL cannot end the strip early), so explanatory comments mentioning
 // joinable/join can never satisfy the check. Single-shot workers (one
@@ -436,23 +478,28 @@ static void testLoginKeyboardBackDeletes()
 // (never a re-assignment) and out of scope here.
 static const std::size_t kThreadGuardRawWindow = 4000;
 
-struct ThreadAuditAllow {
-    const char *file;
-    const char *member;
+struct ThreadAuditAllow
+{
+    const char* file;
+    const char* member;
 };
 
-static const char *const kThreadAuditFiles[] = {
+static const char* const kThreadAuditFiles[] = {
     "src/app/AppPlayback.cpp",
     "src/app/AppSession.cpp",
     "src/diagnostics/PerformanceTelemetryService.cpp",
     "src/diagnostics/UiDiagnostics.cpp",
     "src/download/DownloadManager.cpp",
+    "src/library/LibraryCoordinator.cpp",
+    "src/library/LibraryQuery.cpp",
     "src/library/LibrarySyncEvents.cpp",
     "src/ui/WorkerSlot.hpp",
     "src/ui/screens/AuthCheckScreen.cpp",
     "src/ui/screens/ConnectScreen.cpp",
     "src/ui/screens/EpisodeBrowserArtwork.cpp",
     "src/ui/screens/EpisodeBrowserData.cpp",
+    "src/ui/screens/HomeArtworkController.cpp",
+    "src/ui/screens/HomeLibraryController.cpp",
     "src/ui/screens/HomeScreen.cpp",
     "src/ui/screens/HomeScreenRefresh.cpp",
     "src/ui/screens/HomeScreenSync.cpp",
@@ -473,6 +520,13 @@ static const ThreadAuditAllow kThreadSingleShot[] = {
     {"src/download/DownloadManager.cpp", "m_thread"},
     {"src/download/DownloadManager.cpp", "m_planThread"},
     {"src/download/DownloadManager.cpp", "m_reconcileThread"},
+    // start() returns early once running or stopped, and stop is terminal, so
+    // each of these is assigned once per coordinator lifetime.
+    {"src/library/LibraryCoordinator.cpp", "m_liveChangeThread"},
+    {"src/library/LibraryCoordinator.cpp", "m_hierarchyThread"},
+    // Constructor-started workers: assigned once, joined in the destructor.
+    {"src/library/LibraryQuery.cpp", "m_continuationThread"},
+    {"src/ui/screens/HomeArtworkController.cpp", "m_decodeThread"},
 };
 
 // stop()-then-start: the assigning function calls stop() first and stop()
@@ -481,17 +535,16 @@ static const ThreadAuditAllow kThreadStopDelegated[] = {
     {"src/diagnostics/PerformanceTelemetryService.cpp", "m_serviceThread"},
 };
 
-static bool threadAuditAllowed(const ThreadAuditAllow *list, std::size_t n,
-                               const std::string &file,
-                               const std::string &member)
+static bool threadAuditAllowed(const ThreadAuditAllow* list, std::size_t n, const std::string& file,
+                               const std::string& member)
 {
     for (std::size_t i = 0; i < n; ++i)
-        if (file == list[i].file && member == list[i].member) return true;
+        if (file == list[i].file && member == list[i].member)
+            return true;
     return false;
 }
 
-static std::size_t threadTokenCount(const std::string &hay,
-                                    const std::string &token)
+static std::size_t threadTokenCount(const std::string& hay, const std::string& token)
 {
     std::size_t count = 0, pos = 0;
     while ((pos = hay.find(token, pos)) != std::string::npos) {
@@ -503,37 +556,52 @@ static std::size_t threadTokenCount(const std::string &hay,
 
 // Token-space guard probe over `seg` (comment-stripped token text ending at
 // the `M = std::thread(` assignment) for member `member`.
-static bool threadSiteGuarded(const std::string &seg,
-                              const std::string &member)
+static bool threadSiteGuarded(const std::string& seg, const std::string& member)
 {
     // Gate-once: `if (!M.joinable()) M = std::thread(` (seg ends at the
     // assignment, so the token tail is `...M=`).
     const std::string gate = "if(!" + member + ".joinable())" + member + "=";
-    if (seg.size() >= gate.size() &&
-        seg.compare(seg.size() - gate.size(), gate.size(), gate) == 0)
+    if (seg.size() >= gate.size() && seg.compare(seg.size() - gate.size(), gate.size(), gate) == 0)
         return true;
+    // Move-out: `P = std::move(M)` after `M.joinable()`. The previous worker
+    // is moved to a local under the lock (so M is no longer joinable here) and
+    // joined by the caller outside the lock, as LibraryCoordinator does for
+    // its full-population, safety-reconcile and Home-rail workers.
+    const std::string moveOut = "=std::move(" + member + ")";
+    const std::size_t movedAt = seg.find(moveOut);
+    if (movedAt != std::string::npos) {
+        const std::size_t seenBefore = seg.find(member + ".joinable()");
+        if (seenBefore != std::string::npos && seenBefore < movedAt)
+            return true;
+    }
     // Restart: `M.joinable()` ... `M.join()` in order before the assign.
     const std::string joinable = member + ".joinable()";
     const std::string joined = member + ".join()";
     const std::size_t seen = seg.find(joinable);
-    if (seen == std::string::npos) return false;
-    if (seg.find(joined, seen) != std::string::npos) return true;
+    if (seen == std::string::npos)
+        return false;
+    if (seg.find(joined, seen) != std::string::npos)
+        return true;
     // Refuse: `if (... M.joinable() ...` with a return before any `;`.
     const std::size_t iff = seg.rfind("if(", seen);
-    if (iff == std::string::npos) return false;
+    if (iff == std::string::npos)
+        return false;
     const std::size_t semi = seg.find(";", iff);
-    if (semi != std::string::npos && semi < seen) return false;
+    if (semi != std::string::npos && semi < seen)
+        return false;
     const std::size_t ret = seg.find("return", seen);
-    if (ret == std::string::npos) return false;
+    if (ret == std::string::npos)
+        return false;
     const std::size_t semi2 = seg.find(";", seen);
     return semi2 == std::string::npos || semi2 > ret;
 }
 
-static void auditThreadFile(const char *path)
+static void auditThreadFile(const char* path)
 {
     const std::string raw = readTestBytes(path);
     CHECK(!raw.empty());
-    if (raw.empty()) return;
+    if (raw.empty())
+        return;
     // Comment-stripped with newlines preserved, so raw offsets stay stable
     // and the guard window can stop at the enclosing function's end.
     const std::string stripped = stripSourceComments(raw);
@@ -557,8 +625,7 @@ static void auditThreadFile(const char *path)
                              stripped[p - 1] == '\r' || stripped[p - 1] == '\n'))
                 --p;
             const std::size_t end = p;
-            while (p > 0 && (std::isalnum(
-                                 static_cast<unsigned char>(stripped[p - 1])) ||
+            while (p > 0 && (std::isalnum(static_cast<unsigned char>(stripped[p - 1])) ||
                              stripped[p - 1] == '_'))
                 --p;
             member = stripped.substr(p, end - p);
@@ -566,43 +633,42 @@ static void auditThreadFile(const char *path)
         }
         if (!shaped) {
             std::printf("  FAIL %s: non-assignment std::thread( site "
-                        "(needs explicit handling)\n", path);
+                        "(needs explicit handling)\n",
+                        path);
             CHECK(false);
             rawPos += kSpawn.size();
             continue;
         }
         const std::string assignTok = member + "=std::thread(";
         bool pass = false;
-        if (threadAuditAllowed(
-                       kThreadSingleShot,
-                       sizeof(kThreadSingleShot) / sizeof(kThreadSingleShot[0]),
-                       file, member)) {
+        if (threadAuditAllowed(kThreadSingleShot,
+                               sizeof(kThreadSingleShot) / sizeof(kThreadSingleShot[0]), file,
+                               member)) {
+            // Joined directly, or moved to a local under a lock and joined
+            // outside it (LibraryCoordinator::stop).
             pass = threadTokenCount(hay, assignTok) == 1u &&
-                   hay.find(member + ".join()") != std::string::npos;
+                   (hay.find(member + ".join()") != std::string::npos ||
+                    hay.find("=std::move(" + member + ")") != std::string::npos);
         } else {
             // Same-function neighbourhood: back to the previous top-level
             // `}` (a column-0 close ends the enclosing function), capped at
             // kThreadGuardRawWindow chars so one-line functions cannot
             // borrow a guard from an unrelated earlier function.
             std::size_t winStart =
-                (rawPos > kThreadGuardRawWindow) ? rawPos - kThreadGuardRawWindow
-                                                 : 0;
+                (rawPos > kThreadGuardRawWindow) ? rawPos - kThreadGuardRawWindow : 0;
             const std::size_t close = stripped.rfind("\n}", rawPos);
             if (close != std::string::npos && close + 2 > winStart)
                 winStart = close + 2;
-            const std::string seg = sourceTokenString(
-                stripped.substr(winStart, rawPos - winStart));
+            const std::string seg = sourceTokenString(stripped.substr(winStart, rawPos - winStart));
             if (threadAuditAllowed(kThreadStopDelegated,
-                                   sizeof(kThreadStopDelegated) /
-                                       sizeof(kThreadStopDelegated[0]),
+                                   sizeof(kThreadStopDelegated) / sizeof(kThreadStopDelegated[0]),
                                    file, member)) {
                 // Delegation proof spans the whole assigning function head
                 // (stop() runs at its top, far above the assignment), while
                 // the joinable()/join() proof lives TU-wide in stop().
-                const std::size_t fnStart =
-                    (close == std::string::npos) ? 0 : close + 2;
-                const std::string fnHead = sourceTokenString(
-                    stripped.substr(fnStart, rawPos - fnStart));
+                const std::size_t fnStart = (close == std::string::npos) ? 0 : close + 2;
+                const std::string fnHead =
+                    sourceTokenString(stripped.substr(fnStart, rawPos - fnStart));
                 pass = fnHead.find("stop()") != std::string::npos &&
                        hay.find(member + ".joinable()") != std::string::npos &&
                        hay.find(member + ".join()") != std::string::npos;
@@ -611,8 +677,7 @@ static void auditThreadFile(const char *path)
             }
         }
         if (!pass)
-            std::printf("  thread-guard MISSING: %s %s\n", path,
-                        member.c_str());
+            std::printf("  thread-guard MISSING: %s %s\n", path, member.c_str());
         CHECK(pass);
         rawPos += kSpawn.size();
     }
@@ -627,7 +692,8 @@ static void testThreadRestartGuards()
     // unguarded restart fails here instead of slipping past a
     // hand-maintained function list. Behavioural proof lives in the
     // login-400 ui-script flow (double submit plus Back to the URL screen).
-    for (const char *path : kThreadAuditFiles) auditThreadFile(path);
+    for (const char* path : kThreadAuditFiles)
+        auditThreadFile(path);
     std::printf("[test] std::thread restart guards OK\n");
 }
 
@@ -638,17 +704,16 @@ static void testConnectScreenWorkerLifecycle()
     std::atomic<bool> leaveStarted{false};
     std::atomic<bool> leaveCancelled{false};
     {
-        ConnectScreen screen(
-            "http://blocked.test",
-            [&](const std::string&, ServerInfo&, std::string& error,
-                const std::atomic<bool>* cancelled) {
-                leaveStarted.store(true);
-                while (!cancelled->load())
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                leaveCancelled.store(true);
-                error = "cancelled";
-                return false;
-            });
+        ConnectScreen screen("http://blocked.test",
+                             [&](const std::string&, ServerInfo&, std::string& error,
+                                 const std::atomic<bool>* cancelled) {
+                                 leaveStarted.store(true);
+                                 while (!cancelled->load())
+                                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                 leaveCancelled.store(true);
+                                 error = "cancelled";
+                                 return false;
+                             });
         screen.enter();
         for (int i = 0; i < 100 && !leaveStarted.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -663,9 +728,8 @@ static void testConnectScreenWorkerLifecycle()
     std::atomic<bool> destructionCancelled{false};
     {
         auto screen = std::make_unique<ConnectScreen>(
-            "http://blocked.test",
-            [&](const std::string&, ServerInfo&, std::string& error,
-                const std::atomic<bool>* cancelled) {
+            "http://blocked.test", [&](const std::string&, ServerInfo&, std::string& error,
+                                       const std::atomic<bool>* cancelled) {
                 destructionStarted.store(true);
                 while (!cancelled->load())
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -685,7 +749,7 @@ static void testConnectScreenWorkerLifecycle()
 static void testNoDetachedProductionThreads()
 {
     std::printf("[test] no detached production threads\n");
-    for (const char *path : kThreadAuditFiles) {
+    for (const char* path : kThreadAuditFiles) {
         const std::string source = sourceTokenString(stripSourceComments(readTestBytes(path)));
         CHECK(source.find(".detach(") == std::string::npos);
         CHECK(source.find("pthread_detach(") == std::string::npos);

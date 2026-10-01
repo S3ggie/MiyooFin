@@ -55,8 +55,8 @@ Mixed sites are classified by their dominant purpose.
 |---|------|-------|---------------|
 | 16 | `testNetworkLayerDoesNotDependOnPresentationModels` (`src/net` walk) | A | Network layer has no `TabData`/`MediaRow`/presentation-model references. |
 | 17 | `testLibraryQueryDomainBoundary` (`src` walk) | D | No TU outside the coordinator/query may construct `LibraryQuery`. (Directory walk, same function as #9.) |
-| 18 | `testThreadRestartGuards` (`kThreadAuditFiles`, 18 files) | A | No unguarded `std::thread` restart (SIGABRT pin). |
-| 19 | `testNoDetachedProductionThreads` (`kThreadAuditFiles`, 18 files) | A | No `.detach()`/`pthread_detach()` in audited production TUs. |
+| 18 | `testThreadRestartGuards` (`kThreadAuditFiles`, 0 files) | A | No unguarded `std::thread` restart (SIGABRT pin). Accepted guards: restart (`joinable`/`join`), refuse, gate-once, and move-out (`P = std::move(M)` joined outside the lock, as `LibraryCoordinator` does). |
+| 19 | `testNoDetachedProductionThreads` (`kThreadAuditFiles`, 0 files) | A | No `.detach()`/`pthread_detach()` in audited production TUs. |
 | 20 | `test_media_item_header.sh` | A | `MediaItem` is independent of SDL/UI and placeholder-artwork types. |
 | 21 | `test_onion_remote_launcher.sh` | A | Online Home startup has no full-snapshot read/blocking seed; catalog scope precedes Home. |
 | 22 | `test_playback_runner.sh` | A | Runner must not force MiyooFin SDL drivers onto FFplay. |

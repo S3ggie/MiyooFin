@@ -1,11 +1,13 @@
 # settings (device): read-only exercise of HomeSettingsState on the real
-# installed binary. Row 0 is "change server", which needs a SECOND press to
-# act; this script presses it ONCE to arm the confirmation and then drops it
-# (moving the selection, then Back), so nothing is ever confirmed. Never add a
-# second consecutive Confirm on row 0 (change server) or on the Logout row.
-#   1. Confirm arms the prompt              -> screenshot settings-armed
-#   2. Down then Up drops it (selection changed) -> settings-after-move
-#   3. Confirm re-arms, Back cancels it      -> settings-cancelled
+# installed binary. Settings rows: 0 = Offline Mode (a TOGGLE: never Confirm
+# it), 1 = change server (needs a SECOND Confirm to act), 2 = address entry
+# (opens a screen: never Confirm it), last = Logout. This script has exactly
+# ONE Confirm, on row 1, which only ARMS the change-server prompt; it then
+# moves the selection, which must drop the prompt. Never add a second Confirm
+# here. (Back-cancel and re-arm are covered by the host unit tests.)
+#   1. Down selects row 1                   -> settings-top
+#   2. Confirm arms the prompt              -> settings-armed
+#   3. Down then Up drops it (selection changed) -> settings-cancelled
 WAIT_LOG [HomeScreen] Library loaded 90000
 SETTLE 8000
 KEY NextTab 3
@@ -13,17 +15,14 @@ KEY NextTab 3
 KEY NextTab 3
 KEY NextTab 3
 SETTLE 3000
+KEY Down 3 800
+SETTLE 1000
 SCREENSHOT settings-top
 KEY Confirm 3 1500
 SETTLE 1500
 SCREENSHOT settings-armed
 KEY Down 3 800
 KEY Up 3 800
-SETTLE 1500
-SCREENSHOT settings-after-move
-KEY Confirm 3 1500
-SETTLE 1000
-KEY Back 3 1500
 SETTLE 1500
 SCREENSHOT settings-cancelled
 QUIT

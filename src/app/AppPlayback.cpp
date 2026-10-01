@@ -9,7 +9,6 @@
 #include "../net/JellyfinApi.hpp"
 #include "../ui/Theme.hpp"
 #include "../ui/BitmapFont.hpp"
-#include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>

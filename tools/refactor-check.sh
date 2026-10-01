@@ -99,6 +99,7 @@ if failed:
 
 sh "$repo_root/tools/check-library-sync-construction.sh" "$repo_root"
 sh "$repo_root/tools/check-library-sync-ui-boundary.sh" "$repo_root"
+sh "$repo_root/tools/check-module-boundaries.sh" "$repo_root"
 
 catalogdb_sources="src/catalog/CatalogDb.cpp src/catalog/CatalogDbSchema.cpp src/catalog/CatalogDbSchemaOps.cpp src/catalog/CatalogDbWrite.cpp src/catalog/CatalogDbQuery.cpp src/catalog/CatalogDbSyncState.cpp src/catalog/CatalogDbHierarchy.cpp src/catalog/CatalogDbInternal.hpp src/catalog/CatalogDb.hpp"
 catalogdb_prohibited='JellyfinApi|DownloadStore|LibraryCache|TitleOrganization|MovieTitle|movieOrganizationalLess|organizationalLess|LibrarySnapshot|seedLibrarySnapshot|readLibrarySnapshot|\.\./net/|\.\./download/|\.\./ui/|\.\./app/|\.\./cache/|\.\./library/'

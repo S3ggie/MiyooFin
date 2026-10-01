@@ -145,8 +145,12 @@ dispatch, and `*ForTest` definitions live in `catalog/CatalogDbTestCommands.cpp`
 only when `MIYOOFIN_TEST_BUILD` is defined and is registered only in the test source list. The
 remaining `*ForTest` helpers are small guarded definitions inside their owning modules.
 
-Module includes flow low-to-high: `data/` and `diagnostics/` are leaves; `net/`, `catalog/`,
+Module includes flow low-to-high: `data/` is a leaf and `diagnostics/` is a leaf apart from one
+exception (`input/Action.hpp`, for recorded input actions); `net/`, `catalog/`,
 `cache/`, `download/`, `library/`, and `playback/` build on them; `app/` and `ui/` consume the rest.
+`tools/check-module-boundaries.sh` holds the allowed-dependency table (with its per-file exceptions
+and the SDL/curl/sqlite header rules) and fails CI on any other direct include edge;
+`tests/test_module_boundaries.sh` tests the checker. Transitive use is not checked.
 `tools/refactor-check.sh` enforces the CatalogDb boundary, the render-only MovieDetails boundary,
 test-only source registration, the production UI boundary around `LibrarySync`, and the absence of
 stale include paths. Download planning receives the coordinator-exposed `LibraryQuery` and
@@ -240,5 +244,5 @@ main.cpp
             ├─ EpisodeBrowserScreen + rendering/artwork/playback/download units
             ├─ JellyfinApi + JSON/auth/library/hierarchy/playback/download + HLS units
             └─ DownloadManager + planning/reconcile/transfer units
-  data / diagnostics (leaves; no upward includes)
+  data / diagnostics (leaves; no upward includes; see tools/check-module-boundaries.sh)
 ```

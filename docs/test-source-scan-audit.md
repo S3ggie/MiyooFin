@@ -63,6 +63,7 @@ Mixed sites are classified by their dominant purpose.
 | 23 | `test_library_sync_guard.sh` (via `tools/check-library-sync-*.sh`) | D | `LibrarySync` construction and UI/app include boundary. Operates on synthetic fixtures, not the real tree. |
 | 24 | `test_desktop_runtime.sh` | D | Desktop/Onion mode-selection wiring guard: the launcher must select desktop input/window/playback modes, the runner must keep its Onion default, and the host build must emit header dependencies. The desktop branch's case dispatch, driver clearing, and configurable FFplay binary are asserted by the executable fixture, not by a source scan. |
 | 25 | `test_ca_bundle.sh` | D | No first-party production or tooling unit may bypass libcurl certificate verification (`CURLOPT_SSL_VERIFYPEER`/`VERIFYHOST 0L`, `--insecure`, `-k`, `--no-check-certificate`). Forbidden-API guard over `src`, `tools`, and `distributions/onionos`; the same script's Makefile packaging checks are build wiring and are not production-source scans. |
+| 26 | `test_module_boundaries.sh` (via `tools/check-module-boundaries.sh`) | D | Module dependency table over direct `#include` edges in `src/`, plus where SDL, curl, and sqlite headers may appear. Fixture cases prove the checker rejects/accepts correctly; the last case runs it on the real tree. |
 
 ### Out-of-scope shell checks
 
@@ -80,12 +81,12 @@ this test-scan inventory.
 | A | 15 |
 | B | 0 |
 | C | 0 |
-| D | 10 |
-| **Total** | **25** |
+| D | 11 |
+| **Total** | **26** |
 
 Note: sites 9 and 17 are the same test function counted once for its
-`readTestBytes` scan and once for its directory walk, so the table lists 25
-rows but 24 distinct test/script units.
+`readTestBytes` scan and once for its directory walk, so the table lists 26
+rows but 25 distinct test/script units.
 
 B and C are zero for the retained sites as an enumerated result rather than an
 assumption. Two facts support it:

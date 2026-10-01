@@ -1,21 +1,13 @@
 #include "EpisodeBrowserScreen.hpp"
 #include "../ArtworkPresentation.hpp"
-#include "../Theme.hpp"
-#include "../BitmapFont.hpp"
+#include "../UiKit.hpp"
+#include "EpisodeBrowserLayout.hpp"
 #include "../../download/DownloadSupport.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 namespace miyoofin {
-
-static constexpr int FB_W = 640, FB_H = 480, BOTTOM_H = 18;
-static constexpr int LEFT_X = 16, HEAD_Y = 16, LIST_Y = 46, LIST_W = 285, LIST_ROW_H = 18;
-static constexpr int THUMB_X = 326, THUMB_Y = 38, THUMB_W = 288, THUMB_H = 162;
-static constexpr int META_X = 326, META_Y = THUMB_Y + THUMB_H + 6, META_WRAP = 34;
-static constexpr int BTN_W = 78, BTN_H = 20, BTN_Y = FB_H - BOTTOM_H - BTN_H - 6;
-static constexpr int BTN_PLAY_X = 326, BTN_EP_X = 410, BTN_SEASON_X = 494;
-static constexpr Uint8 FOCUS_OR = 255, FOCUS_OG = 220, FOCUS_OB = 40;
-static constexpr Uint8 FOCUS_IR = 255, FOCUS_IG = 255, FOCUS_IB = 120;
 
 static std::vector<std::string> wrapText(const char* text, int wrapCols)
 {
@@ -50,15 +42,6 @@ static std::vector<std::string> wrapText(const char* text, int wrapCols)
     return lines;
 }
 
-static void renderBottomHints(SDL_Surface* fb, const char* hint)
-{
-    int y = FB_H - BOTTOM_H;
-    BitmapFont::fillRect(fb, 0, y, FB_W, BOTTOM_H, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                         Theme::BG_B * 2 / 3, 255);
-    BitmapFont::drawString(fb, 8, y + 2, hint, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
-}
-
 static std::string formatEpNum(int indexNumber)
 {
     if (indexNumber <= 0)
@@ -70,254 +53,188 @@ static std::string formatEpNum(int indexNumber)
 
 void EpisodeBrowserScreen::render(SDL_Surface* fb)
 {
-    // --- Loading state ---
+    namespace d = design;
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
+    ui::HeaderSpec header;
+    header.title = m_series.title +
+                   (m_season.title.empty() ? std::string() : "  /  " + m_season.title);
+    header.showStatus = false;
+    ui::header(fb, header);
+    ui::FooterSpec footer;
+    footer.showLink = false;
+
+    auto centered = [&](const std::string& title, const std::string& detail, d::Rgb color) {
+        const int w = 360, h = detail.empty() ? 64 : 92;
+        const int x = (d::kScreenW - w) / 2, y = 170;
+        ui::panel(fb, x, y, w, h);
+        ui::text(fb, x + (w - ui::textWidth(title)) / 2, y + 18, title, color);
+        int ly = y + 44;
+        for (const std::string& line : ui::wrap(detail, w - 32, 2)) {
+            ui::text(fb, x + (w - ui::textWidth(line)) / 2, ly, line, d::kTextSecondary);
+            ly += 18;
+        }
+    };
+
     if (m_loadState == LoadState::Loading) {
-        BitmapFont::drawString(fb, LEFT_X, HEAD_Y, "EPISODES", Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        const char* msg = "Loading episodes...";
-        int mx = (FB_W - (int)std::strlen(msg) * BitmapFont::GLYPH_W) / 2;
-        BitmapFont::drawString(fb, mx, FB_H / 3, msg, Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        renderBottomHints(fb, "B=Back");
+        centered("Loading episodes...", "", d::kText);
+        footer.hints = {{ui::Key::B, "Back"}};
+        ui::footer(fb, footer);
         return;
     }
-    // --- Error state ---
     if (m_loadState == LoadState::Error) {
-        BitmapFont::drawString(fb, LEFT_X, HEAD_Y, "EPISODES", Theme::ACCENT_R, Theme::ACCENT_G,
-                               Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        const char* hdr = "Failed to load episodes";
-        int hx = (FB_W - (int)std::strlen(hdr) * BitmapFont::GLYPH_W) / 2;
-        BitmapFont::drawString(fb, hx, FB_H / 3, hdr, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                               Theme::HIGHLIGHT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        char errBuf[128];
-        std::snprintf(errBuf, sizeof(errBuf), "%s", m_error.c_str());
-        int maxC = (FB_W - 32) / BitmapFont::GLYPH_W;
-        if ((int)std::strlen(errBuf) > maxC)
-            errBuf[maxC] = '\0';
-        int ex = (FB_W - (int)std::strlen(errBuf) * BitmapFont::GLYPH_W) / 2;
-        BitmapFont::drawString(fb, ex, FB_H / 3 + BitmapFont::GLYPH_H + 8, errBuf, Theme::TEXT_R,
-                               Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        renderBottomHints(fb, "A=Retry  B=Back");
+        centered("Could not load episodes", m_error, d::kDanger);
+        footer.hints = {{ui::Key::A, "Retry"}, {ui::Key::B, "Back"}};
+        ui::footer(fb, footer);
         return;
     }
 
-    // === Ready: left panel ===
-    int total = (int)m_episodes.size();
-    BitmapFont::drawString(fb, LEFT_X, HEAD_Y, "EPISODES", Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    const int total = (int)m_episodes.size();
+    if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
+        centered("No episodes", "This season has no episodes yet.", d::kTextSecondary);
+        footer.hints = {{ui::Key::B, "Back"}};
+        ui::footer(fb, footer);
+        return;
+    }
 
-    // --- Left panel: episode list rows ---
-    for (int vis = 0; vis < LIST_VISIBLE; ++vis) {
-        int idx = m_listScroll + vis;
+    // ---- left: episode list
+    for (int vis = 0; vis < EB_LIST_VISIBLE; ++vis) {
+        const int idx = m_listScroll + vis;
         if (idx >= total)
             break;
-        int ry = LIST_Y + vis * LIST_ROW_H;
-        const auto& ep = m_episodes[idx];
+        const MediaItem& ep = m_episodes[idx];
+        const int ry = EB_LIST_Y + vis * EB_ROW_PITCH;
+        const bool isSel = idx == m_selectedEpisode;
+        const bool focused = isSel && m_focus == FocusArea::EpisodeList;
+        if (focused)
+            ui::focusRing(fb, EB_LIST_X, ry, EB_LIST_W, EB_ROW_H);
+        ui::roundFill(fb, EB_LIST_X, ry, EB_LIST_W, EB_ROW_H, d::kRadius,
+                      focused ? d::kRaised : (isSel ? d::kAccentSoft : d::kPanel));
+        ui::roundOutline(fb, EB_LIST_X, ry, EB_LIST_W, EB_ROW_H, d::kRadius,
+                         focused ? d::kAccent : (isSel ? d::kAccentDim : d::kBorder));
 
-        std::string epNum = formatEpNum(ep.indexNumber);
-        std::string label = epNum.empty() ? ep.title : epNum + "  " + ep.title;
+        const std::string num = formatEpNum(ep.indexNumber);
+        int tx = EB_LIST_X + 10;
+        if (!num.empty())
+            tx += ui::chip(fb, tx, ry + 9, num, focused ? d::kAccent : d::kRaised,
+                           focused ? d::Rgb{255, 255, 255} : d::kTextSecondary) + 8;
+        const bool partial = !ep.played && playbackPercent(ep) > 0;
+        const int rightPad = ep.played ? 26 : 10;
+        ui::textClamped(fb, tx, ry + 11, EB_LIST_X + EB_LIST_W - rightPad - tx, ep.title,
+                        isSel ? d::kText : d::kTextSecondary);
+        if (ep.played)
+            ui::iconCheck(fb, EB_LIST_X + EB_LIST_W - 22, ry + 13, 12, d::kSuccess);
+        else if (partial)
+            ui::progressBar(fb, EB_LIST_X + 8, ry + EB_ROW_H - 6, EB_LIST_W - 16, 3,
+                            playbackPercent(ep), d::kAccent);
+    }
+    if (total > EB_LIST_VISIBLE) {
+        const int trackH = EB_LIST_VISIBLE * EB_ROW_PITCH - 4;
+        const int thumbH = std::max(16, trackH * EB_LIST_VISIBLE / total);
+        const int thumbY = EB_LIST_Y + (trackH - thumbH) * m_listScroll /
+                                           std::max(1, total - EB_LIST_VISIBLE);
+        ui::fill(fb, EB_LIST_X + EB_LIST_W + 4, EB_LIST_Y, 3, trackH, d::kDivider);
+        ui::roundFill(fb, EB_LIST_X + EB_LIST_W + 4, thumbY, 3, thumbH, 1, d::kAccentDim);
+    }
 
-        int maxChars = LIST_W / BitmapFont::GLYPH_W;
-        if ((int)label.size() > maxChars) {
-            if (maxChars > 3) {
-                label[maxChars - 1] = '.';
-                label[maxChars - 2] = '.';
-                label[maxChars - 3] = '.';
-            }
-            label.resize(maxChars > 0 ? maxChars : 1);
-        }
+    // ---- right: thumbnail, facts, bio, actions
+    const MediaItem& ep = m_episodes[m_selectedEpisode];
+    constexpr int radius = 6;
+    if (m_episodeArtworkSurface.surface) {
+        SDL_Rect dst = {EB_THUMB_X, EB_THUMB_Y, m_episodeArtworkSurface.surface->w,
+                        m_episodeArtworkSurface.surface->h};
+        SDL_BlitSurface(m_episodeArtworkSurface.surface, nullptr, fb, &dst);
+    } else {
+        ui::placeholderTile(fb, EB_THUMB_X, EB_THUMB_Y, EB_THUMB_W, EB_THUMB_H, ep.title, radius);
+    }
+    ui::roundCorners(fb, EB_THUMB_X, EB_THUMB_Y, EB_THUMB_W, EB_THUMB_H, radius, d::kCanvas);
+    if (!ep.played && playbackPercent(ep) > 0) {
+        ui::bottomScrim(fb, EB_THUMB_X, EB_THUMB_Y, EB_THUMB_W, EB_THUMB_H, 26, 200);
+        ui::progressBar(fb, EB_THUMB_X + 10, EB_THUMB_Y + EB_THUMB_H - 14, EB_THUMB_W - 20, 4,
+                        playbackPercent(ep), d::kAccent);
+    }
+    ui::roundOutline(fb, EB_THUMB_X, EB_THUMB_Y, EB_THUMB_W, EB_THUMB_H, radius, d::kBorder);
 
-        bool isSel = (idx == m_selectedEpisode);
-        bool isFocused = (m_focus == FocusArea::EpisodeList && isSel);
+    ui::textClamped(fb, EB_RIGHT_X + 10, EB_TITLE_Y, EB_RIGHT_W - 10, ep.title, d::kText);
+    int cx = EB_RIGHT_X + 10;
+    auto addChip = [&](const std::string& label, d::Rgb bg, d::Rgb fg) {
+        if (cx + ui::textWidth(label) + 12 > d::kScreenW - d::kMargin)
+            return;
+        cx += ui::chip(fb, cx, EB_CHIPS_Y, label, bg, fg) + 6;
+    };
+    if (ep.parentIndexNumber > 0 && ep.indexNumber > 0)
+        addChip("S" + std::to_string(ep.parentIndexNumber) + " E" + std::to_string(ep.indexNumber),
+                d::kAccentSoft, d::kAccentHi);
+    if (ep.runTimeTicks > 0)
+        addChip(std::to_string(ticksToMinutes(ep.runTimeTicks)) + " min", d::kRaised,
+                d::kTextSecondary);
+    if (ep.rating > 0.0f) {
+        char rating[16];
+        std::snprintf(rating, sizeof(rating), "%.1f", (double)ep.rating);
+        addChip(rating, d::kRaised, d::kTextSecondary);
+    }
+    if (ep.played)
+        addChip("Watched", ui::mix(d::kCanvas, d::kSuccess, 22), d::kSuccess);
 
-        if (isFocused) {
-            BitmapFont::fillRect(fb, LEFT_X - 2, ry - 1, LIST_W + 4, LIST_ROW_H, FOCUS_OR, FOCUS_OG,
-                                 FOCUS_OB, 255);
-            BitmapFont::drawString(fb, LEFT_X, ry, label.c_str(), 0, 0, 0, FOCUS_OR, FOCUS_OG,
-                                   FOCUS_OB);
-        } else if (isSel) {
-            BitmapFont::fillRect(fb, LEFT_X - 2, ry - 1, LIST_W + 4, LIST_ROW_H,
-                                 Theme::ACCENT_R / 2, Theme::ACCENT_G / 2, Theme::ACCENT_B / 2,
-                                 255);
-            BitmapFont::drawString(fb, LEFT_X, ry, label.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                                   Theme::TEXT_B, Theme::ACCENT_R / 2, Theme::ACCENT_G / 2,
-                                   Theme::ACCENT_B / 2);
-        } else {
-            BitmapFont::drawString(fb, LEFT_X, ry, label.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                                   Theme::TEXT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    bool overviewScrollable = false;
+    if (!ep.overview.empty()) {
+        const auto lines = wrapText(ep.overview.c_str(), EB_META_WRAP);
+        const int vis = episodeOverviewVisibleLines();
+        const int maxScroll = std::max(0, (int)lines.size() - vis);
+        m_overviewScroll = std::max(0, std::min(m_overviewScroll, maxScroll));
+        overviewScrollable = maxScroll > 0;
+        int y = EB_OVERVIEW_Y;
+        for (int i = m_overviewScroll; i < m_overviewScroll + vis && i < (int)lines.size();
+             ++i, y += EB_OVERVIEW_PITCH)
+            ui::text(fb, EB_RIGHT_X + 10, y, lines[i], d::kTextSecondary);
+        if (overviewScrollable) {
+            const int trackH = vis * EB_OVERVIEW_PITCH - 2;
+            const int thumbH = std::max(14, trackH * vis / (int)lines.size());
+            const int thumbY = EB_OVERVIEW_Y + (trackH - thumbH) * m_overviewScroll / maxScroll;
+            ui::fill(fb, d::kScreenW - 10, EB_OVERVIEW_Y, 3, trackH, d::kDivider);
+            ui::roundFill(fb, d::kScreenW - 10, thumbY, 3, thumbH, 1, d::kAccentDim);
         }
     }
 
-    if (m_listScroll > 0)
-        BitmapFont::drawString(fb, LEFT_X + LIST_W - 16, LIST_Y - 2, "^", Theme::ACCENT_R,
-                               Theme::ACCENT_G, Theme::ACCENT_B, Theme::BG_R, Theme::BG_G,
-                               Theme::BG_B);
-    if (m_listScroll + LIST_VISIBLE < total)
-        BitmapFont::drawString(fb, LEFT_X + LIST_W - 16, LIST_Y + LIST_VISIBLE * LIST_ROW_H, "v",
-                               Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, Theme::BG_R,
-                               Theme::BG_G, Theme::BG_B);
-
-    // === Right panel ===
-    if (total <= 0 || m_selectedEpisode < 0 || m_selectedEpisode >= total) {
-        const char* msg = "No episodes";
-        int mx = (FB_W - (int)std::strlen(msg) * BitmapFont::GLYPH_W) / 2;
-        BitmapFont::drawString(fb, mx, FB_H / 3, msg, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        renderBottomHints(fb, "B=Back");
-        return;
-    }
-
-    const auto& ep = m_episodes[m_selectedEpisode];
-
+    // Download plan status above the buttons.
     if (m_downloads && m_planId) {
         auto p = m_downloads->planSnapshot(m_planId);
         std::string status;
-        if (m_confirmDownload)
-            status =
-                std::string("Download ") +
-                (m_planIsSeason ? "Season " + std::to_string(m_season.indexNumber) : "Episode") +
-                "?";
-        else if (p.state == DownloadPlanState::Planning)
-            status = (p.plan.sizeKnown ? "~" + formatBytes(p.plan.additionalRequiredBytes) +
-                                             "  Preparing download..."
-                                       : "Preparing download...");
-        else if (p.state == DownloadPlanState::Ready)
-            status = std::to_string(p.itemCount) + " episodes  ~" +
-                     formatBytes(p.plan.additionalRequiredBytes) + " needed  " +
-                     formatBytes(p.plan.usableFreeBytes) + " free";
-        else if (p.state == DownloadPlanState::Error)
+        d::Rgb color = d::kTextSecondary;
+        if (m_confirmDownload) {
+            footer.message = std::string("Download ") +
+                             (m_planIsSeason ? "season " + std::to_string(m_season.indexNumber)
+                                             : "episode") +
+                             "?  A confirm  B cancel";
+            footer.messageColor = d::kAccentHi;
+        } else if (p.state == DownloadPlanState::Planning) {
+            status = p.plan.sizeKnown ? "~" + formatBytes(p.plan.additionalRequiredBytes) +
+                                            "  preparing..."
+                                      : std::string("Preparing download...");
+        } else if (p.state == DownloadPlanState::Ready) {
+            status = std::to_string(p.itemCount) + " eps  ~" +
+                     formatBytes(p.plan.additionalRequiredBytes) + "  free " +
+                     formatBytes(p.plan.usableFreeBytes);
+        } else if (p.state == DownloadPlanState::Error) {
             status = p.plan.error;
+            color = d::kDanger;
+        }
         if (!status.empty())
-            BitmapFont::drawString(fb, META_X, BTN_Y - 28, status.c_str(), Theme::ACCENT_R,
-                                   Theme::ACCENT_G, Theme::ACCENT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
-        if (m_confirmDownload)
-            BitmapFont::drawString(fb, META_X, BTN_Y - 14, "A=Confirm  B=Cancel", Theme::TEXT_R,
-                                   Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
+            ui::textClamped(fb, EB_RIGHT_X + 10, EB_BTN_Y - 24, EB_RIGHT_W - 10, status, color);
     }
 
-    // Placeholder thumbnail (coloured box as fallback/background)
-    const SDL_Color color = presentationArtworkColor(ep);
-    BitmapFont::fillRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H, color.r, color.g, color.b,
-                         color.a);
+    const bool onButtons = m_focus == FocusArea::ActionButtons;
+    ui::button(fb, 316, EB_BTN_Y, 72, EB_BTN_H, "Play", ui::ButtonStyle::Primary,
+               onButtons && m_actionBtn == ActionButton::Play);
+    ui::button(fb, 398, EB_BTN_Y, 112, EB_BTN_H, "Get Episode", ui::ButtonStyle::Secondary,
+               onButtons && m_actionBtn == ActionButton::DownloadEpisode);
+    ui::button(fb, 520, EB_BTN_Y, 104, EB_BTN_H, "Get Season", ui::ButtonStyle::Secondary,
+               onButtons && m_actionBtn == ActionButton::DownloadSeason);
 
-    if (m_episodeArtworkSurface.surface) {
-        SDL_Rect dstRect = {m_episodeArtworkSurface.x, m_episodeArtworkSurface.y, 0, 0};
-        SDL_BlitSurface(m_episodeArtworkSurface.surface, nullptr, fb, &dstRect);
-    }
-
-    // Thumbnail border (drawn after artwork)
-    BitmapFont::drawRect(fb, THUMB_X, THUMB_Y, THUMB_W, THUMB_H, Theme::TEXT_R, Theme::TEXT_G,
-                         Theme::TEXT_B);
-
-    // Episode title
-    int my = META_Y;
-    std::string titleStr = ep.title;
-    int maxTC = (FB_W - META_X - 8) / BitmapFont::GLYPH_W;
-    if ((int)titleStr.size() > maxTC) {
-        if (maxTC > 3) {
-            titleStr[maxTC - 1] = '.';
-            titleStr[maxTC - 2] = '.';
-            titleStr[maxTC - 3] = '.';
-        }
-        titleStr.resize(maxTC);
-    }
-    BitmapFont::drawString(fb, META_X, my, titleStr.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    my += BitmapFont::GLYPH_H + 2;
-
-    // Metadata: "S1 E3 | 11 min | 8.4/10"
-    bool hasMeta = false;
-    char metaBuf[128];
-    metaBuf[0] = '\0';
-    if (ep.parentIndexNumber > 0 && ep.indexNumber > 0) {
-        std::snprintf(metaBuf, sizeof(metaBuf), "S%d E%d", ep.parentIndexNumber, ep.indexNumber);
-        hasMeta = true;
-    }
-    if (ep.runTimeTicks > 0) {
-        int mins = ticksToMinutes(ep.runTimeTicks);
-        int len = (int)std::strlen(metaBuf);
-        if (hasMeta)
-            std::snprintf(metaBuf + len, sizeof(metaBuf) - len, " | %d min", mins);
-        else {
-            std::snprintf(metaBuf, sizeof(metaBuf), "%d min", mins);
-            hasMeta = true;
-        }
-    }
-    if (ep.rating > 0.0f) {
-        int len = (int)std::strlen(metaBuf);
-        if (hasMeta)
-            std::snprintf(metaBuf + len, sizeof(metaBuf) - len, " | %.1f/10", (double)ep.rating);
-        else
-            std::snprintf(metaBuf, sizeof(metaBuf), "%.1f/10", (double)ep.rating);
-    }
-    if (hasMeta) {
-        BitmapFont::drawString(fb, META_X, my, metaBuf, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        my += BitmapFont::GLYPH_H + 2;
-    }
-
-    // Overview (word-wrapped, scrollable)
-    bool overviewScrollable = false;
-    if (!ep.overview.empty()) {
-        auto lines = wrapText(ep.overview.c_str(), META_WRAP);
-        int vis = (BTN_Y - 4 - my) / BitmapFont::GLYPH_H;
-        if (vis < 1)
-            vis = 1;
-        int maxScroll = (int)lines.size() - vis;
-        if (maxScroll < 0)
-            maxScroll = 0;
-        if (m_overviewScroll > maxScroll)
-            m_overviewScroll = maxScroll;
-        if (m_overviewScroll < 0)
-            m_overviewScroll = 0;
-        overviewScrollable = (maxScroll > 0);
-        int drawY = my;
-        for (int i = m_overviewScroll; i < m_overviewScroll + vis && i < (int)lines.size(); ++i) {
-            BitmapFont::drawString(fb, META_X, drawY, lines[i].c_str(), Theme::TEXT_R,
-                                   Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
-            drawY += BitmapFont::GLYPH_H;
-        }
-    }
-
-    // --- Action buttons ---
-    auto drawBtn = [&](int bx, const char* label, bool focused) {
-        if (focused) {
-            BitmapFont::fillRect(fb, bx - 1, BTN_Y - 1, BTN_W + 2, BTN_H + 2, FOCUS_OR, FOCUS_OG,
-                                 FOCUS_OB, 255);
-            BitmapFont::drawRect(fb, bx - 2, BTN_Y - 2, BTN_W + 4, BTN_H + 4, FOCUS_OR, FOCUS_OG,
-                                 FOCUS_OB);
-            BitmapFont::drawRect(fb, bx - 1, BTN_Y - 1, BTN_W + 2, BTN_H + 2, FOCUS_IR, FOCUS_IG,
-                                 FOCUS_IB);
-        } else {
-            BitmapFont::fillRect(fb, bx, BTN_Y, BTN_W, BTN_H, Theme::BG_R * 2 / 3,
-                                 Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3, 255);
-            BitmapFont::drawRect(fb, bx, BTN_Y, BTN_W, BTN_H, Theme::TEXT_R, Theme::TEXT_G,
-                                 Theme::TEXT_B);
-        }
-        int tw = (int)std::strlen(label) * BitmapFont::GLYPH_W;
-        int tx = bx + (BTN_W - tw) / 2;
-        int ty = BTN_Y + (BTN_H - BitmapFont::GLYPH_H) / 2;
-        BitmapFont::drawString(fb, tx, ty, label, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               focused ? FOCUS_OR : (Theme::BG_R * 2 / 3),
-                               focused ? FOCUS_OG : (Theme::BG_G * 2 / 3),
-                               focused ? FOCUS_OB : (Theme::BG_B * 2 / 3));
-    };
-
-    bool playFocused = (m_focus == FocusArea::ActionButtons && m_actionBtn == ActionButton::Play);
-    bool dlFocused =
-        (m_focus == FocusArea::ActionButtons && m_actionBtn == ActionButton::DownloadEpisode);
-    bool seasonFocused =
-        (m_focus == FocusArea::ActionButtons && m_actionBtn == ActionButton::DownloadSeason);
-    drawBtn(BTN_PLAY_X, "PLAY", playFocused);
-    drawBtn(BTN_EP_X, "EPISODE", dlFocused);
-    drawBtn(BTN_SEASON_X, "SEASON", seasonFocused);
-
-    // Bottom hint bar
-    renderBottomHints(fb, overviewScrollable ? "A=Select B=Back Y=Season L/R=Bio"
-                                             : "A=Select B=Back Y=Season");
+    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Select"}, {ui::Key::B, "Back"},
+                    {ui::Key::Y, "Get season"}};
+    if (overviewScrollable)
+        footer.hints.push_back({ui::Key::LR, "Bio"});
+    ui::footer(fb, footer);
 }
 
 } // namespace miyoofin

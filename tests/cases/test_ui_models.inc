@@ -319,7 +319,7 @@ static void testHomeArtworkPlan()
     CHECK(seasonJobs.size() == 2);
     CHECK_EQ(seasonJobs[0].itemId, "season-1");
     CHECK_EQ(seasonJobs[0].imageTag, "s-tag");
-    CHECK(seasonJobs[0].width == 74 && seasonJobs[0].height == 111);
+    CHECK(seasonJobs[0].width == 128 && seasonJobs[0].height == 192);
     CHECK_EQ(seasonJobs[1].itemId, "season-2");
 
     // Rails deduplicate across both source rows.

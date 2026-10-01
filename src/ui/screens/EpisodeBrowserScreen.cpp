@@ -1,4 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
+#include "EpisodeBrowserLayout.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
@@ -11,39 +12,6 @@
 namespace miyoofin {
 
 // -------------------------------------------------------------------
-// Layout constants — 640x480 framebuffer, two-panel design
-// -------------------------------------------------------------------
-static constexpr int FB_W = 640;
-static constexpr int FB_H = 480;
-static constexpr int BOTTOM_H = 18;
-
-// Left panel — episode text list
-static constexpr int LEFT_X = 16;
-static constexpr int HEAD_Y = 16;
-static constexpr int LIST_Y = 46;
-static constexpr int LIST_W = 285;
-static constexpr int LIST_ROW_H = 18;
-
-// Right panel — placeholder thumbnail + metadata + buttons
-static constexpr int THUMB_X = 326;
-static constexpr int THUMB_Y = 38;
-static constexpr int THUMB_W = 288;
-static constexpr int THUMB_H = 162;
-static constexpr int META_X = 326;
-static constexpr int META_Y = THUMB_Y + THUMB_H + 6;
-static constexpr int META_WRAP = 34;
-
-// Action buttons
-static constexpr int BTN_W = 78;
-static constexpr int BTN_H = 20;
-static constexpr int BTN_Y = FB_H - BOTTOM_H - BTN_H - 6;
-static constexpr int BTN_PLAY_X = 326;
-static constexpr int BTN_EP_X = 410;
-static constexpr int BTN_SEASON_X = 494;
-
-// Yellow double-border focus colours
-static constexpr Uint8 FOCUS_OR = 255, FOCUS_OG = 220, FOCUS_OB = 40;
-static constexpr Uint8 FOCUS_IR = 255, FOCUS_IG = 255, FOCUS_IB = 120;
 // -------------------------------------------------------------------
 // Word-wrap helper (same algorithm as SeriesScreen)
 // -------------------------------------------------------------------
@@ -283,15 +251,8 @@ bool EpisodeBrowserScreen::handleAction(Action action)
     if (action == Action::NextTab) {
         if (total > 0 && m_selectedEpisode >= 0 && m_selectedEpisode < total) {
             const auto& ep = m_episodes[m_selectedEpisode];
-            auto lines = wrapText(ep.overview.c_str(), META_WRAP);
-            int overviewY = META_Y + BitmapFont::GLYPH_H + 2;
-            bool hasMeta = (ep.parentIndexNumber > 0 && ep.indexNumber > 0) ||
-                           ep.runTimeTicks > 0 || ep.rating > 0.0f;
-            if (hasMeta)
-                overviewY += BitmapFont::GLYPH_H + 2;
-            int vis = (BTN_Y - 4 - overviewY) / BitmapFont::GLYPH_H;
-            if (vis < 1)
-                vis = 1;
+            auto lines = wrapText(ep.overview.c_str(), EB_META_WRAP);
+            const int vis = episodeOverviewVisibleLines();
             int maxScroll = (int)lines.size() - vis;
             if (maxScroll < 0)
                 maxScroll = 0;

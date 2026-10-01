@@ -371,7 +371,7 @@ static void testMovieDetailsUsesGridArtworkImmediately()
         screen.render(fb);
         Uint8 r=0,g=0,b=0,a=0;
         const Uint32 pixel=*reinterpret_cast<Uint32*>(
-            static_cast<Uint8*>(fb->pixels) + 50*fb->pitch + 30*4);
+            static_cast<Uint8*>(fb->pixels) + 190*fb->pitch + 112*4);
         SDL_GetRGBA(pixel,fb->format,&r,&g,&b,&a);
         CHECK(r==17 && g==34 && b==51 && a==255);
         SDL_FreeSurface(fb);

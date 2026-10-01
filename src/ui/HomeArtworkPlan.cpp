@@ -1,5 +1,6 @@
 #include "HomeArtworkPlan.hpp"
 #include "../data/TitleOrganization.hpp"
+#include "ArtworkLayout.hpp"
 #include <set>
 #include <algorithm>
 
@@ -88,7 +89,7 @@ std::vector<HomePosterJob> planSeasonPosterJobs(const std::vector<MediaItem>& se
         auto tag = season.imageTags.find("Primary");
         if (season.id.empty() || tag == season.imageTags.end() || tag->second.empty())
             continue;
-        HomePosterJob job{season.id, ImageType::Primary, tag->second, 74, 111};
+        HomePosterJob job{season.id, ImageType::Primary, tag->second, ARTWORK_POSTER_W, ARTWORK_POSTER_H};
         std::string key = job.itemId + ":" + job.imageTag;
         if (seen.insert(key).second)
             out.push_back(std::move(job));

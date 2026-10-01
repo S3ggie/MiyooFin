@@ -1,4 +1,5 @@
 #include "SeriesScreen.hpp"
+#include "SeriesScreenInternal.hpp"
 #include "EpisodeBrowserScreen.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
@@ -15,39 +16,6 @@
 #include <cstring>
 
 namespace miyoofin {
-
-// -------------------------------------------------------------------
-// Layout constants — 640×480 framebuffer
-// -------------------------------------------------------------------
-static constexpr int FB_W = 640;
-static constexpr int FB_H = 480;
-static constexpr int BOTTOM_H = 18;
-
-// Top-left heading
-static constexpr int HEAD_X = 22;
-static constexpr int HEAD_Y = 16;
-
-// Season poster grid
-static constexpr int COL_X[2] = {48, 154};
-static constexpr int GRID_TOP_Y = 51;
-static constexpr int GRID_ROW_H = 135; // y=51, y=186, y=321
-static constexpr int GRID_ROWS = 3;    // visible rows
-static constexpr int GRID_COLS = 2;
-static constexpr int GRID_VISIBLE = GRID_ROWS * GRID_COLS; // 6
-static constexpr int POSTER_W = 74;
-static constexpr int POSTER_H = 111;
-static constexpr int OVERLAY_H = 18; // title bar at bottom of poster
-
-// Right-side show poster placeholder
-static constexpr int SHOW_X = 360;
-static constexpr int SHOW_Y = 51;
-static constexpr int SHOW_W = 160;
-static constexpr int SHOW_H = 240;
-
-// Metadata under the show poster
-static constexpr int META_X = 363;
-static constexpr int META_Y = 305;
-static constexpr int META_WRAP = 24; // chars before wrapping overview
 
 SeriesScreen::SeriesScreen(const Session& session, const MediaItem& series,
                            std::shared_ptr<DownloadManager> downloads, bool networkOffline,

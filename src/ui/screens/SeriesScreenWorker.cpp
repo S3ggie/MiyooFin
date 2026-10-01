@@ -1,6 +1,7 @@
 #include "SeriesScreen.hpp"
 #include "SeriesScreenInternal.hpp"
 #include "../Theme.hpp"
+#include "../ArtworkLayout.hpp"
 #include "../BitmapFont.hpp"
 #include "../../cache/ImageCache.hpp"
 #include "../../image/ImageDecoder.hpp"
@@ -196,8 +197,8 @@ std::string SeriesScreen::seasonArtworkKey(const MediaItem& season)
     auto it = season.imageTags.find("Primary");
     if (it == season.imageTags.end() || it->second.empty())
         return {};
-    return season.id + ":" + it->second + ":" + std::to_string(POSTER_W) + "x" +
-           std::to_string(POSTER_H);
+    return season.id + ":" + it->second + ":" + std::to_string(ARTWORK_POSTER_W) + "x" +
+           std::to_string(ARTWORK_POSTER_H);
 }
 
 void SeriesScreen::tryLoadSeriesArtwork()
@@ -214,8 +215,8 @@ void SeriesScreen::tryLoadSeriesArtwork()
     }
 
     const std::string& tag = it->second;
-    constexpr int w = SHOW_W; // 160
-    constexpr int h = SHOW_H; // 240
+    constexpr int w = ARTWORK_POSTER_W;
+    constexpr int h = ARTWORK_POSTER_H;
 
     printf("[SeriesScreen] Artwork: loading %s tag=%s (%dx%d)\n", m_series.id.c_str(), tag.c_str(),
            w, h);
@@ -323,9 +324,9 @@ void SeriesScreen::tryLoadOneVisibleSeasonArtwork()
         const std::string& tag = tagIt->second;
 
         printf("[SeriesScreen] SeasonArtwork: loading %s tag=%s (%dx%d)\n", season.id.c_str(),
-               tag.c_str(), POSTER_W, POSTER_H);
+               tag.c_str(), ARTWORK_POSTER_W, ARTWORK_POSTER_H);
 
-        queueArtwork(key, season, POSTER_W, POSTER_H, false);
+        queueArtwork(key, season, ARTWORK_POSTER_W, ARTWORK_POSTER_H, false);
         return;
     }
 }

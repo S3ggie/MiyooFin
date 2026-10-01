@@ -53,7 +53,7 @@ class EpisodeBrowserScreen : public Screen
     static int findEpisodeIndex(const std::vector<MediaItem>& episodes,
                                 const std::string& episodeId);
 
-    static constexpr int LIST_VISIBLE = 22;
+    static constexpr int LIST_VISIBLE = 9; // keep equal to EB_LIST_VISIBLE
 
     /// Return the selected index first, then the visible viewport nearest to
     /// it, excluding unavailable indices.

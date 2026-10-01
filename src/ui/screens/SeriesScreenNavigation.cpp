@@ -132,12 +132,7 @@ bool SeriesScreen::handleAction(Action action)
 
     case Action::NextTab: {
         auto lines = wrapOverview(m_series.overview.c_str(), META_WRAP);
-        int overviewStartY = META_Y + BitmapFont::GLYPH_H + 2;
-        if (m_series.year > 0 || !m_series.genre.empty())
-            overviewStartY += BitmapFont::GLYPH_H + 2;
-        int vis = ((FB_H - BOTTOM_H) - overviewStartY) / BitmapFont::GLYPH_H;
-        if (vis < 1)
-            vis = 1;
+        const int vis = overviewVisibleLines();
         int maxS = (int)lines.size() - vis;
         if (maxS < 0)
             maxS = 0;

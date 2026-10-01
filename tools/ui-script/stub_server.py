@@ -289,7 +289,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/Shows/") and path.endswith("/Seasons"):
             self._send(200, page(seasons_for(path.split("/")[2])))
         elif path.startswith("/Shows/") and path.endswith("/Episodes"):
-            self._send(200, page(episodes_for(path.split("/")[2])))
+            eps = episodes_for(path.split("/")[2])
+            wanted = qs.get("SeasonId", [""])[0]
+            self._send(200, page([e for e in eps if not wanted or e["SeasonId"] == wanted]))
         elif path.startswith("/Items/") and "/Images/" in path:
             # Fixture artwork: portrait posters for Primary, landscape for Thumb.
             parts = path.split("/")

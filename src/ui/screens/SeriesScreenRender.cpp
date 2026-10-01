@@ -1,8 +1,7 @@
 #include "SeriesScreen.hpp"
 #include "SeriesScreenInternal.hpp"
 #include "../ArtworkPresentation.hpp"
-#include "../Theme.hpp"
-#include "../BitmapFont.hpp"
+#include "../UiKit.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -35,16 +34,6 @@ void SeriesScreen::clampGridScroll()
 // Rendering helpers
 // -------------------------------------------------------------------
 
-static void renderBottomHints(SDL_Surface* fb, const char* hint)
-{
-    int y = FB_H - BOTTOM_H;
-    BitmapFont::fillRect(fb, 0, y, FB_W, BOTTOM_H, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                         Theme::BG_B * 2 / 3, 255);
-
-    BitmapFont::drawString(fb, 8, y + 2, hint, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
-}
-
 SeriesScreen::PreparedArtwork SeriesScreen::prepareArtworkSurface(const DecodedImage& image,
                                                                   int boxX, int boxY, int boxW,
                                                                   int boxH)
@@ -52,39 +41,10 @@ SeriesScreen::PreparedArtwork SeriesScreen::prepareArtworkSurface(const DecodedI
     PreparedArtwork prepared;
     if (image.empty())
         return prepared;
-
-    float imgAspect = (float)image.width / (float)image.height;
-    float boxAspect = (float)boxW / (float)boxH;
-    int drawW, drawH;
-    if (imgAspect > boxAspect) {
-        drawW = boxW;
-        drawH = (int)(boxW / imgAspect + 0.5f);
-        if (drawH > boxH)
-            drawH = boxH;
-    } else {
-        drawH = boxH;
-        drawW = (int)(boxH * imgAspect + 0.5f);
-        if (drawW > boxW)
-            drawW = boxW;
-    }
-
-    SDL_Surface* source =
-        SDL_CreateRGBSurfaceFrom((void*)image.pixels.data(), image.width, image.height, 32,
-                                 image.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    SDL_Surface* destination =
-        SDL_CreateRGBSurface(0, drawW, drawH, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (source && destination) {
-        SDL_Rect sourceRect = {0, 0, image.width, image.height};
-        SDL_Rect destinationRect = {0, 0, drawW, drawH};
-        SDL_BlitScaled(source, &sourceRect, destination, &destinationRect);
-        prepared.surface = destination;
-        prepared.x = boxX + (boxW - drawW) / 2;
-        prepared.y = boxY + (boxH - drawH) / 2;
-    } else if (destination) {
-        SDL_FreeSurface(destination);
-    }
-    if (source)
-        SDL_FreeSurface(source);
+    // Exactly boxW x boxH: covered, or ambient-filled; never letterboxed.
+    prepared.surface = ui::artworkSurface(image, boxW, boxH);
+    prepared.x = boxX;
+    prepared.y = boxY;
     return prepared;
 }
 
@@ -95,47 +55,26 @@ void SeriesScreen::freePreparedArtwork(PreparedArtwork& artwork)
     artwork = {};
 }
 
-/// Draw a season poster card (placeholder colour + optional artwork + title overlay + border).
+/// Draw a season card: artwork (or a styled placeholder), rounded, with a
+/// caption underneath. The selected card gets the focus ring.
 void SeriesScreen::drawSeasonPoster(SDL_Surface* fb, int x, int y, int w, int h,
                                     const MediaItem& season, bool selected,
                                     const PreparedArtwork* artwork)
 {
-    // Placeholder colour fill (always drawn as fallback)
-    const SDL_Color color = presentationArtworkColor(season);
-    BitmapFont::fillRect(fb, x, y, w, h, color.r, color.g, color.b, color.a);
-
+    namespace d = design;
+    constexpr int radius = 5;
     if (artwork && artwork->surface) {
-        SDL_Rect dstRect = {x + artwork->x, y + artwork->y, 0, 0};
+        SDL_Rect dstRect = {x, y, artwork->surface->w, artwork->surface->h};
         SDL_BlitSurface(artwork->surface, nullptr, fb, &dstRect);
-    }
-
-    // Dark overlay along the bottom for the title
-    int overlayY = y + h - OVERLAY_H;
-    BitmapFont::fillRect(fb, x, overlayY, w, OVERLAY_H, 0, 0, 0, 160);
-
-    // Season label — compact fallback if full title doesn't fit
-    int maxChars = (w - 4) / BitmapFont::GLYPH_W;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%s", season.title.c_str());
-    if ((int)std::strlen(buf) > maxChars && season.indexNumber > 0) {
-        std::snprintf(buf, sizeof(buf), "S%d", season.indexNumber);
-    }
-    if ((int)std::strlen(buf) > maxChars) {
-        if (maxChars > 2) {
-            buf[maxChars - 1] = '.';
-            buf[maxChars - 2] = '.';
-        }
-        buf[maxChars] = '\0';
-    }
-    BitmapFont::drawString(fb, x + 2, overlayY + 1, buf, 255, 255, 255, 0, 0, 0);
-
-    // Selection border — yellow double-border (HomeScreen style)
-    if (selected) {
-        BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, 255, 220, 40);  // outer
-        BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, 255, 255, 120); // inner
     } else {
-        BitmapFont::drawRect(fb, x, y, w, h, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
+        ui::placeholderTile(fb, x, y, w, h, season.title, radius);
     }
+    ui::roundCorners(fb, x, y, w, h, radius, d::kCanvas);
+    if (selected)
+        ui::focusRing(fb, x, y, w, h, radius);
+    else
+        ui::roundOutline(fb, x, y, w, h, radius, d::kBorder);
+    ui::textClamped(fb, x, y + h + 6, w, season.title, selected ? d::kText : d::kTextSecondary);
 }
 
 // -------------------------------------------------------------------
@@ -144,164 +83,162 @@ void SeriesScreen::drawSeasonPoster(SDL_Surface* fb, int x, int y, int w, int h,
 
 void SeriesScreen::render(SDL_Surface* fb)
 {
-    // --- Loading state ---
+    namespace d = design;
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
+    ui::HeaderSpec header;
+    header.title = "Show";
+    header.showStatus = false;
+    ui::header(fb, header);
+
+    ui::FooterSpec footer;
+    footer.showLink = false;
+
+    auto centered = [&](const std::string& title, const std::string& detail, d::Rgb color) {
+        const int w = 360, h = detail.empty() ? 64 : 92;
+        const int x = (d::kScreenW - w) / 2, y = 170;
+        ui::panel(fb, x, y, w, h);
+        ui::text(fb, x + (w - ui::textWidth(title)) / 2, y + 18, title, color);
+        int ly = y + 44;
+        for (const std::string& line : ui::wrap(detail, w - 32, 2)) {
+            ui::text(fb, x + (w - ui::textWidth(line)) / 2, ly, line, d::kTextSecondary);
+            ly += 18;
+        }
+    };
+
     if (m_loadState == LoadState::Loading) {
-        const char* msg = "Loading seasons...";
-        int mx = (FB_W - (int)std::strlen(msg) * BitmapFont::GLYPH_W) / 2;
-        int my = FB_H / 3;
-        BitmapFont::drawString(fb, mx, my, msg, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        renderBottomHints(fb, "A=Retry  B=Back");
+        centered("Loading seasons...", "", d::kText);
+        footer.hints = {{ui::Key::B, "Back"}};
+        ui::footer(fb, footer);
         return;
     }
-
-    // --- Error state ---
     if (m_loadState == LoadState::Error) {
-        const char* header = "Failed to load seasons";
-        int hx = (FB_W - (int)std::strlen(header) * BitmapFont::GLYPH_W) / 2;
-        int hy = FB_H / 3;
-        BitmapFont::drawString(fb, hx, hy, header, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                               Theme::HIGHLIGHT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        char errBuf[128];
-        std::snprintf(errBuf, sizeof(errBuf), "%s", m_error.c_str());
-        int maxCols = (FB_W - 32) / BitmapFont::GLYPH_W;
-        if ((int)std::strlen(errBuf) > maxCols)
-            errBuf[maxCols] = '\0';
-        int ex = (FB_W - (int)std::strlen(errBuf) * BitmapFont::GLYPH_W) / 2;
-        int ey = hy + BitmapFont::GLYPH_H + 8;
-        BitmapFont::drawString(fb, ex, ey, errBuf, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        renderBottomHints(fb, "A=Retry  B=Back");
+        centered("Could not load seasons", m_error, d::kDanger);
+        footer.hints = {{ui::Key::A, "Retry"}, {ui::Key::B, "Back"}};
+        ui::footer(fb, footer);
         return;
     }
 
-    // =================================================================
-    // Ready state — full two-panel layout
-    // =================================================================
+    // ---- left column: show poster, facts, bio
+    {
+        constexpr int radius = 6;
+        if (m_seriesArtworkSurface.surface) {
+            SDL_Rect dst = {SHOW_X, SHOW_Y, m_seriesArtworkSurface.surface->w,
+                            m_seriesArtworkSurface.surface->h};
+            SDL_BlitSurface(m_seriesArtworkSurface.surface, nullptr, fb, &dst);
+        } else {
+            ui::placeholderTile(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H, m_series.title, radius);
+        }
+        ui::roundCorners(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H, radius, d::kCanvas);
+        ui::roundOutline(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H, radius, d::kBorder);
 
-    // 1. Top-left heading
-    BitmapFont::drawString(fb, HEAD_X, HEAD_Y, "SEASONS", Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        const int tx = SHOW_X + SHOW_W + 12;
+        const int tw = 300 - 12 - tx;
+        int ty = SHOW_Y;
+        for (const std::string& line : ui::wrap(m_series.title, tw, 3)) {
+            ui::text(fb, tx, ty, line, d::kText);
+            ty += 18;
+        }
+        ty += 6;
+        auto chipLine = [&](const std::string& label, d::Rgb bg, d::Rgb fg) {
+            ui::chip(fb, tx, ty, ui::fit(label, tw - 12), bg, fg);
+            ty += 26;
+        };
+        if (m_series.year > 0)
+            chipLine(std::to_string(m_series.year), d::kRaised, d::kTextSecondary);
+        if (!m_series.genre.empty())
+            chipLine(m_series.genre, d::kRaised, d::kTextSecondary);
+        if (!m_seasons.empty())
+            chipLine(std::to_string(m_seasons.size()) +
+                         (m_seasons.size() == 1 ? " season" : " seasons"),
+                     d::kAccentSoft, d::kAccentHi);
+    }
 
+    bool overviewScrollable = false;
+    if (!m_series.overview.empty()) {
+        const auto lines = wrapOverview(m_series.overview.c_str(), META_WRAP);
+        const int visible = overviewVisibleLines();
+        const int maxScroll = std::max(0, static_cast<int>(lines.size()) - visible);
+        m_overviewScroll = std::max(0, std::min(m_overviewScroll, maxScroll));
+        overviewScrollable = maxScroll > 0;
+        int y = OVERVIEW_Y;
+        for (int i = m_overviewScroll; i < m_overviewScroll + visible && i < (int)lines.size();
+             ++i, y += OVERVIEW_PITCH)
+            ui::text(fb, META_X, y, lines[i], d::kTextSecondary);
+        if (overviewScrollable) {
+            const int trackH = visible * OVERVIEW_PITCH - 2;
+            const int thumbH =
+                std::max(14, trackH * visible / static_cast<int>(lines.size()));
+            const int thumbY =
+                OVERVIEW_Y + (trackH - thumbH) * m_overviewScroll / maxScroll;
+            ui::fill(fb, 284, OVERVIEW_Y, 3, trackH, d::kDivider);
+            ui::roundFill(fb, 284, thumbY, 3, thumbH, 1, d::kAccentDim);
+        }
+    }
+    ui::fill(fb, 292, d::kHeaderH + 12, 1, d::kScreenH - d::kFooterH - d::kHeaderH - 24,
+             d::kDivider);
+
+    // ---- right column: heading with download plan status, then season cards
+    const int gridX = COL_X[0];
+    ui::fill(fb, gridX, GRID_HEAD_Y + 2, 3, 12, d::kAccent);
+    ui::text(fb, gridX + 10, GRID_HEAD_Y, "Seasons", d::kText);
     if (m_downloads && m_planId) {
         auto p = m_downloads->planSnapshot(m_planId);
         std::string status;
-        const char* what = m_planWholeSeries ? "Series" : "Season";
-        if (m_confirmDownload)
-            status = std::string("Download ") + what + "?";
-        else if (p.state == DownloadPlanState::Planning)
-            status = p.plan.sizeKnown
-                         ? std::to_string(p.itemCount) + " episodes  ~" +
-                               formatBytes(p.plan.additionalRequiredBytes) + " estimated"
-                         : std::string("Planning ") + what + " download...";
-        else if (p.state == DownloadPlanState::Ready)
-            status = std::to_string(p.itemCount) + " episodes  ~" +
-                     formatBytes(p.plan.additionalRequiredBytes) + " needed  " +
-                     formatBytes(p.plan.usableFreeBytes) + " free";
-        else if (p.state == DownloadPlanState::Error)
+        d::Rgb color = d::kTextSecondary;
+        const char* what = m_planWholeSeries ? "series" : "season";
+        if (m_confirmDownload) {
+            footer.message = std::string("Download ") + what + "?  A confirm  B cancel";
+            footer.messageColor = d::kAccentHi;
+        } else if (p.state == DownloadPlanState::Planning) {
+            status = p.plan.sizeKnown ? std::to_string(p.itemCount) + " eps  ~" +
+                                            formatBytes(p.plan.additionalRequiredBytes)
+                                      : std::string("Planning ") + what + "...";
+        } else if (p.state == DownloadPlanState::Ready) {
+            status = std::to_string(p.itemCount) + " eps  ~" +
+                     formatBytes(p.plan.additionalRequiredBytes) + "  free " +
+                     formatBytes(p.plan.usableFreeBytes);
+        } else if (p.state == DownloadPlanState::Error) {
             status = p.plan.error;
-        if (!status.empty())
-            BitmapFont::drawString(fb, HEAD_X, HEAD_Y + 14, status.c_str(), Theme::ACCENT_R,
-                                   Theme::ACCENT_G, Theme::ACCENT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
-        if (m_confirmDownload)
-            BitmapFont::drawString(fb, HEAD_X, HEAD_Y + 28, "A=Confirm  B=Cancel", Theme::TEXT_R,
-                                   Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
+            color = d::kDanger;
+        }
+        if (!status.empty()) {
+            const int avail = d::kScreenW - d::kMargin - (gridX + 10 + 7 * 8 + 12);
+            const std::string shown = ui::fit(status, avail);
+            ui::text(fb, d::kScreenW - d::kMargin - ui::textWidth(shown), GRID_HEAD_Y, shown,
+                     color);
+        }
     }
 
-    // 2. Season poster grid (left side, 2 columns × 3 rows)
-    int totalSeasons = (int)m_seasons.size();
+    const int totalSeasons = (int)m_seasons.size();
     for (int vis = 0; vis < GRID_VISIBLE; ++vis) {
-        int gridRow = vis / GRID_COLS;
-        int gridCol = vis % GRID_COLS;
-        int itemIdx = (m_gridScroll + gridRow) * GRID_COLS + gridCol;
+        const int gridRow = vis / GRID_COLS, gridCol = vis % GRID_COLS;
+        const int itemIdx = (m_gridScroll + gridRow) * GRID_COLS + gridCol;
         if (itemIdx >= totalSeasons)
             break;
-
-        int px = COL_X[gridCol];
-        int py = GRID_TOP_Y + gridRow * GRID_ROW_H;
-        bool sel = (itemIdx == m_selectedSeason);
-
-        // Look up prepared season artwork (read-only, no mutation during render)
         const PreparedArtwork* artPtr = nullptr;
-        std::string key = seasonArtworkKey(m_seasons[itemIdx]);
+        const std::string key = seasonArtworkKey(m_seasons[itemIdx]);
         if (!key.empty()) {
             auto it = m_seasonArtworkSurfaces.find(key);
             if (it != m_seasonArtworkSurfaces.end() && it->second.surface)
                 artPtr = &it->second;
         }
-
-        drawSeasonPoster(fb, px, py, POSTER_W, POSTER_H, m_seasons[itemIdx], sel, artPtr);
+        drawSeasonPoster(fb, COL_X[gridCol], GRID_TOP_Y + gridRow * GRID_ROW_H, POSTER_W,
+                         POSTER_H, m_seasons[itemIdx], itemIdx == m_selectedSeason, artPtr);
+    }
+    if (totalSeasons > GRID_VISIBLE) {
+        const int rows = gridRowCount(totalSeasons);
+        const int trackH = GRID_ROWS * GRID_ROW_H - 16;
+        const int thumbH = std::max(16, trackH * GRID_ROWS / rows);
+        const int thumbY = GRID_TOP_Y + (trackH - thumbH) * m_gridScroll / std::max(1, rows - GRID_ROWS);
+        ui::fill(fb, d::kScreenW - 8, GRID_TOP_Y, 3, trackH, d::kDivider);
+        ui::roundFill(fb, d::kScreenW - 8, thumbY, 3, thumbH, 1, d::kAccentDim);
     }
 
-    // 3. Right-side show poster placeholder
-    const SDL_Color color = presentationArtworkColor(m_series);
-    BitmapFont::fillRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H, color.r, color.g, color.b, color.a);
-
-    if (m_seriesArtworkSurface.surface) {
-        SDL_Rect dstRect = {m_seriesArtworkSurface.x, m_seriesArtworkSurface.y, 0, 0};
-        SDL_BlitSurface(m_seriesArtworkSurface.surface, nullptr, fb, &dstRect);
-    }
-
-    // Poster border (drawn after artwork)
-    BitmapFont::drawRect(fb, SHOW_X, SHOW_Y, SHOW_W, SHOW_H, Theme::TEXT_R, Theme::TEXT_G,
-                         Theme::TEXT_B);
-
-    // 4. Metadata under the show poster
-    int my = META_Y;
-
-    // Series title
-    BitmapFont::drawString(fb, META_X, my, m_series.title.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    my += BitmapFont::GLYPH_H + 2;
-
-    // Year and first genre
-    if (m_series.year > 0 || !m_series.genre.empty()) {
-        char meta[128];
-        if (m_series.year > 0 && !m_series.genre.empty())
-            std::snprintf(meta, sizeof(meta), "%d  |  %s", m_series.year, m_series.genre.c_str());
-        else if (m_series.year > 0)
-            std::snprintf(meta, sizeof(meta), "%d", m_series.year);
-        else
-            std::snprintf(meta, sizeof(meta), "%s", m_series.genre.c_str());
-        BitmapFont::drawString(fb, META_X, my, meta, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
-        my += BitmapFont::GLYPH_H + 2;
-    }
-
-    // Overview / bio (word-wrapped, scrollable)
-    bool overviewScrollable = false;
-    if (!m_series.overview.empty()) {
-        auto lines = wrapOverview(m_series.overview.c_str(), META_WRAP);
-        int overviewEndY = FB_H - BOTTOM_H;
-        int visibleLines = (overviewEndY - my) / BitmapFont::GLYPH_H;
-        if (visibleLines < 1)
-            visibleLines = 1;
-
-        int maxScroll = (int)lines.size() - visibleLines;
-        if (maxScroll < 0)
-            maxScroll = 0;
-        if (m_overviewScroll > maxScroll)
-            m_overviewScroll = maxScroll;
-        if (m_overviewScroll < 0)
-            m_overviewScroll = 0;
-
-        overviewScrollable = (maxScroll > 0);
-
-        int drawY = my;
-        for (int i = m_overviewScroll; i < m_overviewScroll + visibleLines && i < (int)lines.size();
-             ++i) {
-            BitmapFont::drawString(fb, META_X, drawY, lines[i].c_str(), Theme::TEXT_R,
-                                   Theme::TEXT_G, Theme::TEXT_B, Theme::BG_R, Theme::BG_G,
-                                   Theme::BG_B);
-            drawY += BitmapFont::GLYPH_H;
-        }
-    }
-
-    // 5. Bottom hint bar
-    renderBottomHints(fb, overviewScrollable ? "A=Open B=Back Y=Season X=Series L/R=Bio"
-                                             : "A=Open B=Back Y=Season X=Series");
+    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Open"}, {ui::Key::B, "Back"},
+                    {ui::Key::Y, "Season"},  {ui::Key::X, "Series"}};
+    if (overviewScrollable)
+        footer.hints.push_back({ui::Key::LR, "Bio"});
+    ui::footer(fb, footer);
 }
 
 }

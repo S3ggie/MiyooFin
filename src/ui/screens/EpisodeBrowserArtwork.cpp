@@ -10,11 +10,13 @@
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 #include "../Theme.hpp"
+#include "../UiKit.hpp"
+#include "EpisodeBrowserLayout.hpp"
 #include <cstdio>
 
 namespace miyoofin {
 
-static constexpr int THUMB_X = 326, THUMB_Y = 38, THUMB_W = 288, THUMB_H = 162;
+
 
 void EpisodeBrowserScreen::clearSelectedEpisodeArtwork()
 {
@@ -122,38 +124,10 @@ EpisodeBrowserScreen::prepareArtworkSurface(const DecodedImage& image)
     if (image.empty())
         return prepared;
 
-    const float imgAspect = (float)image.width / (float)image.height;
-    const float boxAspect = (float)THUMB_W / (float)THUMB_H;
-    int drawW, drawH;
-    if (imgAspect > boxAspect) {
-        drawW = THUMB_W;
-        drawH = (int)(THUMB_W / imgAspect + 0.5f);
-        if (drawH > THUMB_H)
-            drawH = THUMB_H;
-    } else {
-        drawH = THUMB_H;
-        drawW = (int)(THUMB_H * imgAspect + 0.5f);
-        if (drawW > THUMB_W)
-            drawW = THUMB_W;
-    }
-
-    SDL_Surface* source =
-        SDL_CreateRGBSurfaceFrom((void*)image.pixels.data(), image.width, image.height, 32,
-                                 image.width * 4, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    SDL_Surface* destination =
-        SDL_CreateRGBSurface(0, drawW, drawH, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (source && destination) {
-        SDL_Rect sourceRect = {0, 0, image.width, image.height};
-        SDL_Rect destinationRect = {0, 0, drawW, drawH};
-        SDL_BlitScaled(source, &sourceRect, destination, &destinationRect);
-        prepared.surface = destination;
-        prepared.x = THUMB_X + (THUMB_W - drawW) / 2;
-        prepared.y = THUMB_Y + (THUMB_H - drawH) / 2;
-    } else if (destination) {
-        SDL_FreeSurface(destination);
-    }
-    if (source)
-        SDL_FreeSurface(source);
+    // Exactly the thumbnail box: covered or ambient-filled, never letterboxed.
+    prepared.surface = ui::artworkSurface(image, EB_THUMB_W, EB_THUMB_H);
+    prepared.x = EB_THUMB_X;
+    prepared.y = EB_THUMB_Y;
     return prepared;
 }
 

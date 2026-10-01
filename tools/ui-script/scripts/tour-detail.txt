@@ -1,0 +1,18 @@
+# Drill-down tour: movie details, then a series' seasons and episode list.
+WAIT_LOG [HomeScreen] Library loaded 30000
+KEY NextTab 80 500
+KEY Right 80 500
+KEY Confirm 80 800
+SETTLE 2500
+SCREENSHOT movie-details
+KEY Back 80 800
+KEY NextTab 80 500
+KEY Right 80 500
+KEY Confirm 80 800
+WAIT_LOG [SeriesScreen] enter series= 15000
+SETTLE 2500
+SCREENSHOT series-seasons
+KEY Confirm 80 800
+SETTLE 2500
+SCREENSHOT episodes
+QUIT

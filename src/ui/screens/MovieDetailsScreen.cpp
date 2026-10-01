@@ -33,7 +33,7 @@ static constexpr int POSTER_H = 240;
 // Right panel
 static constexpr int RIGHT_X = 215;
 static constexpr int RIGHT_TOP_Y = 48;
-static constexpr int META_WRAP = 34;
+static constexpr int META_WRAP = 46;
 
 // Action buttons
 static constexpr int BTN_W = 80;
@@ -110,6 +110,11 @@ void MovieDetailsScreen::leave()
         m_gridArtworkSurface = nullptr;
     }
     m_gridArtwork.reset();
+    if (m_posterCard) {
+        SDL_FreeSurface(m_posterCard);
+        m_posterCard = nullptr;
+        m_posterCardSource = nullptr;
+    }
 }
 
 // -------------------------------------------------------------------

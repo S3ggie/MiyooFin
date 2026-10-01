@@ -65,6 +65,8 @@ class MovieDetailsScreen : public Screen
     SDL_Surface* m_movieArtworkSurface = nullptr;
     std::shared_ptr<const DecodedImage> m_gridArtwork;
     SDL_Surface* m_gridArtworkSurface = nullptr;
+    SDL_Surface* m_posterCard = nullptr;              // render cache: cover-fit poster
+    const DecodedImage* m_posterCardSource = nullptr; // image m_posterCard was built from
     std::thread m_prepareThread;
     std::mutex m_prepareMutex;
     DecodedImage m_preparedArtwork;

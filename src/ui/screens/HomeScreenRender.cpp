@@ -22,10 +22,6 @@ namespace {
 
 static constexpr std::int64_t SYNC_FRESH_WALL_MS = 15LL * 60 * 1000;
 static constexpr std::int64_t HIERARCHY_RECONCILE_MS = 24LL * 60 * 60 * 1000;
-static constexpr int POSTER_MAX_CONCURRENT = 4;
-static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
-static constexpr int SEASON_POSTER_W = 74;
-static constexpr int SEASON_POSTER_H = 111;
 
 namespace d = design;
 

@@ -75,13 +75,13 @@ static void testSeasonPosterScheduling(){
     std::string old=ImageCache::cacheDir(); ImageCache::setCacheDir("/tmp/miyoofin-season-poster-test/");
     MediaItem season=cacheItem("season-poster"); season.type="season"; MediaItem duplicate=season, episode=cacheItem("episode-thumb"); episode.type="episode";
     auto jobs=HomeScreen::collectSeasonPosterJobs({season,duplicate});
-    CHECK(jobs.size()==(size_t)1 && jobs[0].width==74 && jobs[0].height==111 && jobs[0].itemId==season.id);
-    unsigned char bytes[1]={0}; CHECK(ImageCache::writeToCache(season.id,ImageType::Primary,season.imageTags["Primary"],74,111,bytes,1));
+    CHECK(jobs.size()==(size_t)1 && jobs[0].width==128 && jobs[0].height==192 && jobs[0].itemId==season.id);
+    unsigned char bytes[1]={0}; CHECK(ImageCache::writeToCache(season.id,ImageType::Primary,season.imageTags["Primary"],128,192,bytes,1));
     CHECK(HomeScreen::collectSeasonPosterJobs({season}).empty());
     // The global hierarchy prefetch accepts only seasons; episode thumbnails
     // stay exclusively in EpisodeBrowserScreen's visible/on-demand queue.
     CHECK(HomeScreen::collectSeasonPosterJobs({episode}).empty());
-    ImageCache::removeCached(season.id,ImageType::Primary,season.imageTags["Primary"],74,111); ImageCache::setCacheDir(old);
+    ImageCache::removeCached(season.id,ImageType::Primary,season.imageTags["Primary"],128,192); ImageCache::setCacheDir(old);
 }
 static void testOfflineLibraryProjection(){
     LibrarySnapshot l; MediaItem movie=cacheItem("movie"),partial=cacheItem("partial"),show=cacheItem("show"),anime=cacheItem("anime"),season=cacheItem("s1"),empty=cacheItem("s2"),ep1=cacheItem("e1"),ep3=cacheItem("e3"),remote=cacheItem("remote");

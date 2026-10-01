@@ -17,87 +17,44 @@ void HomeScreen::refreshDownloads()
 
 bool HomeScreen::handleDownloadsAction(Action action)
 {
-    const auto& rows = m_downloadHierarchy.visible;
+    HomeDownloadsState& dl = m_downloadsState;
+    const auto& rows = dl.hierarchy.visible;
+    // Discards the missing playback-journal entry when this press confirms it.
+    auto pressJournalDiscard = [this, &dl]() {
+        const std::string id = dl.pressJournalDiscard();
+        if (id.empty())
+            return;
+        const std::string path = OfflinePlaybackJournal::path(
+            "cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
+        OfflinePlaybackJournal::discardMissing(path, id, nullptr);
+        refreshDownloads();
+    };
     if (action == Action::Up || action == Action::Down) {
-        m_downloadSelected += action == Action::Up ? -1 : 1;
-        m_downloadSelected =
-            clampDownloadSelection(m_downloadSelected, static_cast<int>(rows.size()));
-        m_downloadScroll = clampDownloadScroll(m_downloadSelected, static_cast<int>(rows.size()),
-                                               m_downloadScroll, 5);
-        m_downloadSelectedId = rows.empty() ? "" : rows[m_downloadSelected].id;
-        m_downloadConfirmId.clear();
-        m_downloadConfirmItemIds.clear();
+        dl.moveSelection(action == Action::Up ? -1 : 1);
         return true;
     }
     if (rows.empty()) {
-        if (action == Action::Search && !m_missingJournalEntries.empty()) {
-            const std::string& id = m_missingJournalEntries.front().itemId;
-            if (m_journalDiscardConfirmId == id) {
-                const std::string path = OfflinePlaybackJournal::path(
-                    "cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-                OfflinePlaybackJournal::discardMissing(path, id, nullptr);
-                m_journalDiscardConfirmId.clear();
-                refreshDownloads();
-            } else {
-                m_journalDiscardConfirmId = id;
-            }
+        if (action == Action::Search && !dl.missingJournal.empty()) {
+            pressJournalDiscard();
             return true;
         }
         return action == Action::Confirm || action == Action::ActionsMenu;
     }
-    const DownloadHierarchyRow& row = rows[m_downloadSelected];
-    if (action == Action::Back && !m_downloadConfirmId.empty()) {
-        m_downloadConfirmId.clear();
-        m_downloadConfirmItemIds.clear();
+    const DownloadHierarchyRow& row = rows[dl.selected];
+    if (action == Action::Back && !dl.confirmId.empty()) {
+        dl.clearConfirm();
         return true;
     }
-    if ((row.kind == DownloadHierarchyRowKind::Series ||
-         row.kind == DownloadHierarchyRowKind::Season) &&
-        action == Action::Confirm) {
-        if (row.expanded)
-            m_downloadExpanded.erase(row.id);
-        else
-            m_downloadExpanded.insert(row.id);
-        m_downloadHierarchy = buildDownloadHierarchy(m_downloadSnapshot, m_downloadExpanded);
-        m_downloadSelected =
-            downloadHierarchySelection(m_downloadHierarchy.visible, row.id, m_downloadSelected);
-        m_downloadScroll = clampDownloadScroll(m_downloadSelected,
-                                               static_cast<int>(m_downloadHierarchy.visible.size()),
-                                               m_downloadScroll, 5);
-        m_downloadSelectedId = row.id;
-        m_downloadConfirmId.clear();
-        m_downloadConfirmItemIds.clear();
+    if (action == Action::Confirm && dl.toggleSelectedParent())
         return true;
-    }
     // Y belongs to Downloads even when the selected row has no removal
     // operation (such as Series/Season parents or malformed leaves).  Letting
     // it fall through would trigger Home's global logout action.
     if (action == Action::ActionsMenu && downloadHierarchyConsumesActionsMenu(row)) {
-        if (row.item && downloadCanRemove(*row.item)) {
-            const DownloadItem& item = *row.item;
-            if (m_downloadConfirmId == row.id) {
-                m_downloads->erase(item.itemId, nullptr);
-                m_downloadConfirmId.clear();
-                m_downloadConfirmItemIds.clear();
-            } else {
-                m_downloadConfirmId = row.id;
-                m_downloadConfirmItemIds = {item.itemId};
-            }
-        } else if (downloadHierarchyIsBulkRemovalParent(row)) {
-            if (downloadHierarchyBulkRemovalConfirmed(m_downloadConfirmId, row)) {
-                // DownloadManager::erase cancels an active transfer before it
-                // removes its local manifest/segments and store entry.
-                for (const std::string& itemId : m_downloadConfirmItemIds)
-                    m_downloads->erase(itemId, nullptr);
-                m_downloadConfirmId.clear();
-                m_downloadConfirmItemIds.clear();
-            } else {
-                m_downloadConfirmItemIds =
-                    downloadHierarchyBulkRemovalItemIds(row, m_downloadSnapshot);
-                if (!m_downloadConfirmItemIds.empty())
-                    m_downloadConfirmId = row.id;
-            }
-        }
+        // DownloadManager::erase cancels an active transfer before it removes
+        // its local manifest/segments and store entry.
+        for (const std::string& itemId : dl.pressRemoval())
+            m_downloads->erase(itemId, nullptr);
         return true;
     }
     if (!row.item)
@@ -107,17 +64,8 @@ bool HomeScreen::handleDownloadsAction(Action action)
         m_downloads->redownload(item.itemId);
         return true;
     }
-    if (action == Action::Search && !m_missingJournalEntries.empty()) {
-        const std::string& id = m_missingJournalEntries.front().itemId;
-        if (m_journalDiscardConfirmId == id) {
-            const std::string path = OfflinePlaybackJournal::path(
-                "cache", LibraryCache::scopeKey(m_session.serverUrl, m_session.userId));
-            OfflinePlaybackJournal::discardMissing(path, id, nullptr);
-            m_journalDiscardConfirmId.clear();
-            refreshDownloads();
-        } else {
-            m_journalDiscardConfirmId = id;
-        }
+    if (action == Action::Search && !dl.missingJournal.empty()) {
+        pressJournalDiscard();
         return true;
     }
     if (action != Action::Confirm)

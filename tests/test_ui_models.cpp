@@ -12,6 +12,9 @@ int main()
     testShowsSyncProgress();
     testHomeSyncStatusStrings();
     testHomeSettingsModel();
+    testHomeDownloadsStateExpandCollapse();
+    testHomeDownloadsStateRemovalAndBulkConfirm();
+    testHomeDownloadsStateJournalDiscard();
     testHomeTabsProjection();
     testHomeTabRowUpdates();
     testHomeRowIndexByLabel();

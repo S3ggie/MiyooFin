@@ -15,6 +15,7 @@
 #include "../../net/JellyfinLibraryEvents.hpp"
 #include <memory>
 #include "../HomeSyncState.hpp"
+#include "../HomeDownloadsState.hpp"
 #include "../HomeSettingsModel.hpp"
 #include "../ArtworkLayout.hpp"
 #include "../ShowsBrowser.hpp"
@@ -322,14 +323,7 @@ class HomeScreen : public Screen
 
     // Downloads is rendered only from this copied manager snapshot.  It is
     // refreshed in update(), never while rendering or handling input.
-    DownloadSnapshot m_downloadSnapshot;
-    int m_downloadSelected = 0, m_downloadScroll = 0;
-    std::string m_downloadSelectedId, m_downloadConfirmId;
-    std::vector<std::string> m_downloadConfirmItemIds;
-    std::set<std::string> m_downloadExpanded;
-    DownloadHierarchy m_downloadHierarchy;
-    std::vector<OfflinePlaybackEntry> m_missingJournalEntries;
-    std::string m_journalDiscardConfirmId;
+    HomeDownloadsState m_downloadsState;
 
     // Background fetch ownership lives in HomeLibraryController.  Home keeps
     // only the SDL-side application bookkeeping.

@@ -770,17 +770,17 @@ void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
     BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
     char summary[128];
     std::snprintf(summary, sizeof(summary), "Free %s | Local %s | Queue %s",
-                  formatBytes(m_downloadSnapshot.freeBytes).c_str(),
-                  formatBytes(m_downloadSnapshot.localBytes).c_str(),
-                  formatBytes(m_downloadSnapshot.reservedBytes).c_str());
+                  formatBytes(m_downloadsState.snapshot.freeBytes).c_str(),
+                  formatBytes(m_downloadsState.snapshot.localBytes).c_str(),
+                  formatBytes(m_downloadsState.snapshot.reservedBytes).c_str());
     BitmapFont::drawString(fb, 8, 32, summary, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
                            24, 24, 32);
     BitmapFont::fillRect(fb, 8, 49, 624, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
-    const auto& rows = m_downloadHierarchy.visible;
+    const auto& rows = m_downloadsState.hierarchy.visible;
     if (rows.empty()) {
         BitmapFont::drawString(fb, 8, 210, "No downloads", Theme::TEXT_R, Theme::TEXT_G,
                                Theme::TEXT_B, 24, 24, 32);
-        if (!m_missingJournalEntries.empty())
+        if (!m_downloadsState.missingJournal.empty())
             BitmapFont::drawString(fb, 8, 230, "Missing offline progress: X=Discard",
                                    Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, 24,
                                    24, 32);
@@ -789,13 +789,13 @@ void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
     bool moviesLabel = false;
     bool showsLabel = false;
     for (int visible = 0; visible < 5; ++visible) {
-        int index = m_downloadScroll + visible;
+        int index = m_downloadsState.scroll + visible;
         if (index >= static_cast<int>(rows.size()))
             break;
         const DownloadHierarchyRow& row = rows[index];
         const DownloadItem* item = row.item;
         int y = 58 + visible * 76;
-        bool selected = index == m_downloadSelected;
+        bool selected = index == m_downloadsState.selected;
         const bool movie = row.kind == DownloadHierarchyRowKind::Movie;
         if (movie && !moviesLabel) {
             BitmapFont::drawString(fb, 8, y, "Movies", Theme::ACCENT_R, Theme::ACCENT_G,
@@ -911,7 +911,7 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
             return;
         }
         if (activeTabNamed("Downloads")) {
-            if (!m_journalDiscardConfirmId.empty()) {
+            if (!m_downloadsState.journalDiscardConfirmId.empty()) {
                 BitmapFont::drawString(fb, 8, y + 2, "Press X again to discard missing progress",
                                        Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B,
                                        Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
@@ -919,13 +919,14 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
                 return;
             }
             const DownloadHierarchyRow* selectedRow =
-                m_downloadSelected >= 0 &&
-                        m_downloadSelected < static_cast<int>(m_downloadHierarchy.visible.size())
-                    ? &m_downloadHierarchy.visible[m_downloadSelected]
+                m_downloadsState.selected >= 0 &&
+                        m_downloadsState.selected <
+                            static_cast<int>(m_downloadsState.hierarchy.visible.size())
+                    ? &m_downloadsState.hierarchy.visible[m_downloadsState.selected]
                     : nullptr;
             const DownloadItem* selectedItem = selectedRow ? selectedRow->item : nullptr;
-            if (!m_downloadConfirmId.empty() && selectedRow &&
-                m_downloadConfirmId == selectedRow->id) {
+            if (!m_downloadsState.confirmId.empty() && selectedRow &&
+                m_downloadsState.confirmId == selectedRow->id) {
                 char confirm[96];
                 if (selectedItem) {
                     const DownloadItem& item = *selectedItem;
@@ -937,7 +938,7 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
                                   selectedRow->kind == DownloadHierarchyRowKind::Season
                                       ? "Season"
                                       : "entire Series",
-                                  (unsigned)m_downloadConfirmItemIds.size());
+                                  (unsigned)m_downloadsState.confirmItemIds.size());
                 }
                 BitmapFont::drawString(fb, 8, y + 2, confirm, Theme::HIGHLIGHT_R,
                                        Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, Theme::BG_R * 2 / 3,
@@ -956,7 +957,7 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
                           update
                               ? "A=Play  X=Update  Y=Delete  B=Back"
                               : (parent ? "A=%s  Y=Delete all  B=Back"
-                                        : (!m_missingJournalEntries.empty()
+                                        : (!m_downloadsState.missingJournal.empty()
                                                ? "A=%s  X=Discard missing progress  Y=Cancel/Delete"
                                                : "A=%s  Y=Cancel/Delete  B=Back")),
                           primary[0] ? primary : "Select");

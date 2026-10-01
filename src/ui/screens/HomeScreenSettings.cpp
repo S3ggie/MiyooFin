@@ -69,8 +69,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                 {{"Last API Route", lastApiRouteValue()},
                  {"Account", m_userName.empty() ? "Unknown" : m_userName},
                  {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
-                 {"DOWNLOADS", "Local " + formatBytes(m_downloadSnapshot.localBytes) + " | Free " +
-                                   formatBytes(m_downloadSnapshot.freeBytes)},
+                 {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
+                                   " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
                  {"DIAGNOSTICS", "UI Stall Logger Enabled"}});
     // UPDATES row — directly above ABOUT.
     {

@@ -513,3 +513,117 @@ static void testCollectBoundedSeriesIds()
 
     std::printf("[test] Bounded series ID collection from rails OK\n");
 }
+
+// --- HomeDownloadsState: Downloads-tab selection, expansion and confirmation.
+
+static DownloadItem homeDlMovie(const std::string &id)
+{
+    DownloadItem item;
+    item.itemId = id;
+    item.itemType = "movie";
+    item.title = "Movie " + id;
+    item.state = DownloadState::Complete;
+    return item;
+}
+
+static DownloadItem homeDlEpisode(const std::string &id, int number)
+{
+    DownloadItem item;
+    item.itemId = id;
+    item.itemType = "episode";
+    item.title = "Episode " + id;
+    item.seriesId = "a";
+    item.seriesName = "Alpha Show";
+    item.seasonId = "a1";
+    item.seasonName = "Season 1";
+    item.seasonNumber = 1;
+    item.episodeNumber = number;
+    item.state = DownloadState::Complete;
+    return item;
+}
+
+static DownloadSnapshot homeDlSnapshot()
+{
+    DownloadSnapshot snapshot;
+    snapshot.items = {homeDlMovie("m1"), homeDlEpisode("e1", 1), homeDlEpisode("e2", 2)};
+    return snapshot;
+}
+
+// Regression: expanding a parent rebuilt the hierarchy while still reading a
+// reference into the old rows (heap-use-after-free under ASan).
+static void testHomeDownloadsStateExpandCollapse()
+{
+    std::printf("[test] HomeDownloadsState expand/collapse keeps selection\n");
+    HomeDownloadsState state;
+    state.publish(homeDlSnapshot(), {});
+    CHECK(state.hierarchy.visible.size() == (size_t)2); // movie + collapsed series
+    CHECK(!state.toggleSelectedParent());               // movie row is not a parent
+    state.moveSelection(1);
+    CHECK(state.selectedId == "series:a");
+    CHECK(state.toggleSelectedParent());
+    CHECK(state.selectedId == "series:a");
+    CHECK(state.selectedRow() && state.selectedRow()->id == "series:a" &&
+          state.selectedRow()->expanded);
+    CHECK(state.hierarchy.visible.size() > (size_t)2);
+    CHECK(state.toggleSelectedParent());
+    CHECK(state.hierarchy.visible.size() == (size_t)2);
+    CHECK(state.selectedRow() && !state.selectedRow()->expanded);
+    std::printf("[test] HomeDownloadsState expand/collapse keeps selection OK\n");
+}
+
+static void testHomeDownloadsStateRemovalAndBulkConfirm()
+{
+    std::printf("[test] HomeDownloadsState two-press removal\n");
+    HomeDownloadsState state;
+    state.publish(homeDlSnapshot(), {});
+    // Leaf: first press arms, second returns the id to erase.
+    CHECK(state.pressRemoval().empty());
+    CHECK(state.confirmId == state.selectedId && state.confirmItemIds.size() == (size_t)1);
+    const std::vector<std::string> erased = state.pressRemoval();
+    CHECK(erased.size() == (size_t)1 && erased[0] == "m1");
+    CHECK(state.confirmId.empty() && state.confirmItemIds.empty());
+    // Moving the selection drops a pending confirmation.
+    CHECK(state.pressRemoval().empty());
+    state.moveSelection(1);
+    CHECK(state.confirmId.empty());
+    // Bulk parent: arms with every episode, then returns them.
+    CHECK(state.selectedId == "series:a");
+    CHECK(state.pressRemoval().empty());
+    CHECK(state.confirmId == "series:a" && state.confirmItemIds.size() == (size_t)2);
+    const std::vector<std::string> bulk = state.pressRemoval();
+    CHECK(bulk.size() == (size_t)2);
+    CHECK(state.confirmId.empty() && state.confirmItemIds.empty());
+    // A refresh that moves the selection drops a stale confirmation.
+    state.moveSelection(-1);
+    CHECK(state.pressRemoval().empty() && !state.confirmId.empty());
+    DownloadSnapshot withoutMovie;
+    withoutMovie.items = {homeDlEpisode("e1", 1), homeDlEpisode("e2", 2)};
+    state.publish(std::move(withoutMovie), {});
+    CHECK(state.confirmId.empty());
+    // Clamp stays safe when everything is gone.
+    state.publish(DownloadSnapshot{}, {});
+    CHECK(state.selectedRow() == nullptr && state.selectedId.empty());
+    CHECK(state.pressRemoval().empty());
+    state.moveSelection(1);
+    CHECK(state.selected == 0);
+    std::printf("[test] HomeDownloadsState two-press removal OK\n");
+}
+
+static void testHomeDownloadsStateJournalDiscard()
+{
+    std::printf("[test] HomeDownloadsState journal discard confirm\n");
+    HomeDownloadsState state;
+    CHECK(state.pressJournalDiscard().empty()); // nothing missing
+    OfflinePlaybackEntry entry;
+    entry.itemId = "j1";
+    state.publish(homeDlSnapshot(), {entry});
+    CHECK(state.pressJournalDiscard().empty());
+    CHECK(state.journalDiscardConfirmId == "j1");
+    CHECK(state.pressJournalDiscard() == "j1");
+    CHECK(state.journalDiscardConfirmId.empty());
+    // A pending confirmation is dropped when the entry is no longer first.
+    CHECK(state.pressJournalDiscard().empty());
+    state.publish(homeDlSnapshot(), {});
+    CHECK(state.journalDiscardConfirmId.empty());
+    std::printf("[test] HomeDownloadsState journal discard confirm OK\n");
+}

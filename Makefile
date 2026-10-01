@@ -265,7 +265,7 @@ test-sanitize:
 # because it needs an instrumented rebuild and a TSan-capable host toolchain.
 TSAN_GROUPS := library_coordinator library_hierarchy library_query catalog \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync \
-               home_library_controller home_artwork_controller downloads worker_slot
+               home_library_controller home_artwork_controller downloads worker_slot ui_models
 TSAN_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TSAN_GROUPS))
 TSAN_RUNNER := tests/test_tsan_runner.sh
 TSAN_RUNNER_TARGET := $(TEST_DIR)/test_tsan_runner

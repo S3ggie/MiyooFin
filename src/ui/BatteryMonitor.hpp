@@ -1,25 +1,44 @@
 #ifndef MIYOOFIN_BATTERY_MONITOR_HPP
 #define MIYOOFIN_BATTERY_MONITOR_HPP
 
+#include "WorkerSlot.hpp"
+
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace miyoofin {
 
-// UI-thread battery level for the Home header icon. OnionOS's batmon daemon
-// publishes the percentage in /tmp/percBat (the Mini Plus has no standard
-// power_supply node); this reads that tiny tmpfs file at most every
-// kRefreshMs. Where the file does not exist (desktop builds) the level stays
-// unknown (-1) and the icon is drawn empty rather than pretending to be full.
+// UI-thread battery state for the Home header icon.
+//
+// Level: OnionOS's batmon daemon publishes the percentage in /tmp/percBat (the
+// Mini Plus has no standard power_supply node); that tiny tmpfs file is read at
+// most every kRefreshMs. Where it does not exist (desktop builds) the level
+// stays unknown (-1) and the icon is drawn empty rather than pretending to be
+// full.
+//
+// Charging: the only source on the Mini Plus is the power chip query
+// /customer/app/axp_test (JSON with a "charging" field), which needs root; the
+// app runs as root under Onion. It runs on a WorkerSlot every kChargingRefreshMs
+// via fork/exec with a hard timeout and kill, so a stuck chip query can never
+// block the UI thread or app exit. When it is unavailable (not found, not
+// root) charging stays false and nothing is drawn.
 class BatteryMonitor
 {
   public:
     static constexpr unsigned kRefreshMs = 30000;
+    static constexpr unsigned kChargingRefreshMs = 10000;
 
-    explicit BatteryMonitor(std::string path = "/tmp/percBat") : m_path(std::move(path)) {}
+    explicit BatteryMonitor(std::string percentPath = "/tmp/percBat",
+                            std::string axpPath = "/customer/app/axp_test",
+                            unsigned probeTimeoutMs = 2000)
+        : m_path(std::move(percentPath)), m_axpPath(std::move(axpPath)),
+          m_probeTimeoutMs(probeTimeoutMs)
+    {}
+    ~BatteryMonitor();
 
-    // Call every frame with the elapsed time; reads on the first call and then
-    // once per kRefreshMs.
+    // Call every frame with the elapsed time. Reads the level on the first call
+    // and then once per kRefreshMs; starts/reaps the charging probe.
     void update(unsigned dtMs);
 
     // 0..100, or -1 when unknown.
@@ -28,9 +47,19 @@ class BatteryMonitor
         return m_percent;
     }
 
+    // True only when the power chip reported that the battery is charging.
+    bool charging() const
+    {
+        return m_charging == 1;
+    }
+
     // "48\n" -> 48. Leading whitespace is skipped; anything that is not a
     // whole number in 0..100 is invalid (-1).
     static int parsePercent(const std::string& content);
+
+    // Extracts "charging":N from axp_test output: 1 or 0, or -1 when the key is
+    // missing or the value is not 0/1 (for example an I2C error without root).
+    static int parseCharging(const std::string& output);
 
     // Width of the fill inside an icon `innerWidth` pixels wide: 0 when unknown
     // or empty, at least 1 pixel for any positive level, innerWidth when full.
@@ -44,10 +73,25 @@ class BatteryMonitor
     static Color levelColor(int percent);
 
   private:
+    // Worker body: runs the probe program (bounded by m_probeTimeoutMs, killed
+    // on timeout or cancellation) and stores its stdout.
+    void runProbe(const CancelToken& cancel);
+
     std::string m_path;
+    std::string m_axpPath;
+    unsigned m_probeTimeoutMs;
     int m_percent = -1;
+    int m_charging = -1; // -1 unknown, 0 no, 1 yes
     unsigned m_sinceReadMs = 0;
     bool m_hasRead = false;
+    unsigned m_sinceProbeMs = 0;
+    bool m_neverProbed = true;
+    bool m_probeUnavailable = false;
+    int m_loggedCharging = -2; // last value logged, to log only changes
+    // Written by the worker, read by the UI thread only after reap().
+    std::string m_probeOutput;
+    bool m_probeExecFailed = false;
+    WorkerSlot m_probe; // last member: destroyed (joined) before the fields above
 };
 
 } // namespace miyoofin

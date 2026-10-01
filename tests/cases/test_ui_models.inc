@@ -864,3 +864,131 @@ static void testBatteryMonitorReadsAndThrottles()
     CHECK(monitor.percent() == -1);
     std::printf("[test] BatteryMonitor reads and throttles OK\n");
 }
+
+// --- BatteryMonitor charging: axp_test parsing and the bounded probe --------
+
+static void testBatteryParseCharging()
+{
+    std::printf("[test] BatteryMonitor::parseCharging\n");
+    CHECK(BatteryMonitor::parseCharging("{\"battery\":48, \"voltage\":3900, \"charging\":1}") == 1);
+    CHECK(BatteryMonitor::parseCharging("{\"battery\":48, \"voltage\":3900, \"charging\":0}\n") ==
+          0);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\" : 1 }") == 1);
+    // Anything else is unknown: error text (no root), missing key, bad values.
+    CHECK(BatteryMonitor::parseCharging("error during I2C_RDWR ioctl with error code -1") == -1);
+    CHECK(BatteryMonitor::parseCharging("") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"battery\":48}") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":2}") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":10}") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":") == -1);
+    CHECK(BatteryMonitor::parseCharging("{\"charging\":x}") == -1);
+    std::printf("[test] BatteryMonitor::parseCharging OK\n");
+}
+
+// Writes an executable fake axp_test and returns its path.
+static std::string writeFakeAxp(const std::string& dir, const std::string& body)
+{
+    const std::string path = dir + "/axp_test";
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    CHECK(f != nullptr);
+    if (f) {
+        std::fputs("#!/bin/sh\n", f);
+        std::fputs(body.c_str(), f);
+        std::fclose(f);
+        ::chmod(path.c_str(), 0755);
+    }
+    return path;
+}
+
+// Drives update() until `done` holds or ~3s pass (the probe runs on a worker).
+template <typename Done>
+static bool pumpBattery(BatteryMonitor& monitor, unsigned stepMs, Done done)
+{
+    for (int i = 0; i < 300 && !done(); ++i) {
+        monitor.update(stepMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return done();
+}
+
+static void testBatteryChargingProbe()
+{
+    std::printf("[test] BatteryMonitor charging probe\n");
+    const std::string dir = "/tmp/miyoofin-axp-test-" + std::to_string(::getpid());
+    ::mkdir(dir.c_str(), 0755);
+    const std::string missingPercent = dir + "/nope";
+
+    // Charging: the real fork/exec path reads the fake's JSON.
+    std::string axp =
+        writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":1}'\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
+        CHECK(!monitor.charging()); // nothing probed yet
+        CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
+    }
+    // Not charging, and it follows a change on the next probe interval.
+    axp = writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":1}'\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
+        CHECK(pumpBattery(monitor, 16, [&] { return monitor.charging(); }));
+        writeFakeAxp(dir, "echo '{\"battery\":50, \"voltage\":4100, \"charging\":0}'\n");
+        CHECK(pumpBattery(monitor, BatteryMonitor::kChargingRefreshMs,
+                          [&] { return !monitor.charging(); }));
+    }
+    // Error output without root: unknown, so no bolt.
+    axp = writeFakeAxp(dir, "echo 'error during I2C_RDWR ioctl with error code -1'\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
+        for (int i = 0; i < 40; ++i) {
+            monitor.update(16);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(!monitor.charging());
+    }
+    // A probe that cannot be executed (exit 127) is given up on: it runs once,
+    // however many intervals pass.
+    const std::string counter = dir + "/count";
+    axp = writeFakeAxp(dir, "echo x >> " + counter + "\nexit 127\n");
+    {
+        BatteryMonitor monitor(missingPercent, axp, 1500);
+        for (int i = 0; i < 6; ++i) {
+            monitor.update(BatteryMonitor::kChargingRefreshMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::ifstream in(counter);
+        std::string line;
+        int runs = 0;
+        while (std::getline(in, line))
+            ++runs;
+        CHECK(runs == 1);
+        CHECK(!monitor.charging());
+    }
+    // A missing program is also just "not charging".
+    {
+        BatteryMonitor monitor(missingPercent, dir + "/does-not-exist", 1500);
+        for (int i = 0; i < 20; ++i) {
+            monitor.update(16);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(!monitor.charging());
+    }
+    // A hung program is killed at the timeout and never blocks teardown.
+    axp = writeFakeAxp(dir, "sleep 30\n");
+    {
+        const auto start = std::chrono::steady_clock::now();
+        {
+            BatteryMonitor monitor(missingPercent, axp, 300);
+            monitor.update(16);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            CHECK(!monitor.charging());
+        } // destructor cancels and joins the probe
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - start)
+                                   .count();
+        CHECK(elapsedMs < 2000);
+    }
+    std::remove((dir + "/axp_test").c_str());
+    std::remove(counter.c_str());
+    ::rmdir(dir.c_str());
+    std::printf("[test] BatteryMonitor charging probe OK\n");
+}

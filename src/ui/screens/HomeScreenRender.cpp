@@ -136,8 +136,9 @@ static void drawWifiIcon(SDL_Surface* fb, int x, int y)
 }
 
 // Outline plus a fill that follows the battery level (percent < 0 = unknown:
-// drawn empty rather than pretending to be full).
-static void drawBatteryIcon(SDL_Surface* fb, int x, int y, int percent)
+// drawn empty rather than pretending to be full). A white lightning bolt is
+// drawn over the fill while charging.
+static void drawBatteryIcon(SDL_Surface* fb, int x, int y, int percent, bool charging)
 {
     BitmapFont::drawRect(fb, x, y, 22, 11, 190, 200, 215);
     BitmapFont::fillRect(fb, x + 22, y + 3, 2, 5, 190, 200, 215, 255);
@@ -145,6 +146,14 @@ static void drawBatteryIcon(SDL_Surface* fb, int x, int y, int percent)
     if (fill > 0) {
         const BatteryMonitor::Color c = BatteryMonitor::levelColor(percent);
         BitmapFont::fillRect(fb, x + 2, y + 2, fill, 7, c.r, c.g, c.b, 255);
+    }
+    if (charging) {
+        // 5x7 bolt centred in the 18x7 inner area (columns per row, left to right).
+        static const int kBolt[7][2] = {{2, 3}, {1, 2}, {0, 3}, {1, 4}, {2, 3}, {1, 2}, {0, 0}};
+        const int bx = x + 2 + 6;
+        for (int row = 0; row < 7; ++row)
+            BitmapFont::fillRect(fb, bx + kBolt[row][0], y + 2 + row,
+                                 kBolt[row][1] - kBolt[row][0] + 1, 1, 255, 255, 255, 255);
     }
 }
 
@@ -322,7 +331,7 @@ void HomeScreen::drawTabBar(SDL_Surface* fb)
     if (home) {
         // Status cluster (Wi-Fi, battery, clock, gear) pinned to the top right.
         drawWifiIcon(fb, 514, 22);
-        drawBatteryIcon(fb, 540, 24, m_battery.percent());
+        drawBatteryIcon(fb, 540, 24, m_battery.percent(), m_battery.charging());
         std::time_t now = std::time(nullptr);
         std::tm local{};
 #if defined(_WIN32)

@@ -23,6 +23,8 @@ int main()
     testBatteryParsePercent();
     testBatteryIconMath();
     testBatteryMonitorReadsAndThrottles();
+    testBatteryParseCharging();
+    testBatteryChargingProbe();
     testHomeTabsProjection();
     testHomeTabRowUpdates();
     testHomeRowIndexByLabel();

@@ -3,9 +3,9 @@
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
 #include "../ArtworkPresentation.hpp"
-#include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../ArtworkLayout.hpp"
+#include "../UiKit.hpp"
 #include "../../data/MovieTitle.hpp"
 #include "../ShowsBrowser.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
@@ -18,93 +18,114 @@
 
 namespace miyoofin {
 
-// Layout constants
-static constexpr int TAB_Y = 0;
-static constexpr int TAB_H = 24;    // compact header used by non-Home tabs
-static constexpr int HEADER_H = 64; // Home-only large wordmark + status cluster
-static constexpr int BOTTOM_H = 24;
-static constexpr int ROWS_Y = 70; // first Home rail heading, below the header
-static constexpr int ROW_LABEL_H = 16;
-static constexpr int ROW_LABEL_GAP = 4;
-static constexpr int ROW_CAPTION_H = 34; // per-card title + subtitle lines
-static constexpr int ROW_STRIP_H = HOME_RAIL_STRIP_H;
-static constexpr int ROW_PITCH = 194; // two rails land above the bottom bar
-static constexpr int VISIBLE_ROWS = 2;
+namespace {
+
+static constexpr std::int64_t SYNC_FRESH_WALL_MS = 15LL * 60 * 1000;
+static constexpr std::int64_t HIERARCHY_RECONCILE_MS = 24LL * 60 * 60 * 1000;
 static constexpr int POSTER_MAX_CONCURRENT = 4;
 static constexpr size_t POSTER_MAX_BYTES = 256 * 1024;
 static constexpr int SEASON_POSTER_W = 74;
 static constexpr int SEASON_POSTER_H = 111;
-static constexpr int MOVIE_GRID_COLUMNS = 8;
-static constexpr int MOVIE_GRID_ROWS = 3;
-static constexpr int SHOWS_RAIL_W = 36, SHOWS_PREVIEW_H = 105, SHOWS_GRID_TOP = 153;
-static constexpr int SHOWS_HALF_W = 302, SHOWS_LEFT_X = 36, SHOWS_RIGHT_X = 338;
-static constexpr std::int64_t SYNC_FRESH_WALL_MS = 15LL * 60 * 1000;
-static constexpr std::int64_t HIERARCHY_RECONCILE_MS = 24LL * 60 * 60 * 1000;
 
-// Phase 2 Home presentation style.  Near-black navy canvas, electric-blue
-// focus glow, blue accent pill and black artwork placeholders.  Kept
-// presentation-local so no other screen or domain model is affected.
-static constexpr Uint8 HOME_BG_R = 7, HOME_BG_G = 9, HOME_BG_B = 18;
-static constexpr Uint8 HEADER_BG_R = 4, HEADER_BG_G = 6, HEADER_BG_B = 14;
-static constexpr Uint8 BOTTOM_BG_R = 4, BOTTOM_BG_G = 5, BOTTOM_BG_B = 10;
-static constexpr Uint8 FOCUS_R = 60, FOCUS_G = 150, FOCUS_B = 255;
-static constexpr Uint8 FOCUS_GLOW_R = 24, FOCUS_GLOW_G = 70, FOCUS_GLOW_B = 150;
-static constexpr Uint8 CARD_BORDER_R = 70, CARD_BORDER_G = 76, CARD_BORDER_B = 92;
-static constexpr Uint8 MUTED_TEXT_R = 175, MUTED_TEXT_G = 180, MUTED_TEXT_B = 195;
-static constexpr int HEADER_BRAND_X = 16; // compact (non-Home) brand mark
+namespace d = design;
 
-// Two-tone wordmark geometry.
-static constexpr int LOGO_X = 12;
-static constexpr int LOGO_Y = 8;
-static constexpr int LOGO_SCALE = 2;
+// Home rails: heading row, gap to the cards, caption block, gap between rails.
+constexpr int RAIL_TOP = d::kHeaderH + 12;
+constexpr int RAIL_HEADING_H = 24;
+constexpr int RAIL_CAPTION_GAP = 6;
+constexpr int RAIL_CAPTION_H = 32;
+constexpr int RAIL_GAP = 14;
+constexpr int VISIBLE_RAILS = 2;
 
-/// Rounded-rectangle fill built from rects only; the uncovered corner
-/// squares read as rounded corners against the darker header.
-static void fillRoundedRect(SDL_Surface* fb, int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b,
-                            int radius)
+// Movies / Shows grids: a slim alphabet rail on the left, an info bar for the
+// selected title, then 64x96 poster cards (columns and rows match navigation).
+constexpr int MOVIE_GRID_COLUMNS = 8;
+constexpr int MOVIE_GRID_ROWS = 3;
+constexpr int GRID_CARD_W = 64;
+constexpr int GRID_CARD_H = 96;
+constexpr int GRID_GAP = 8;
+constexpr int ALPHA_X = 8;
+constexpr int ALPHA_W = 28;
+constexpr int BROWSE_X = 44;                       // content left of the alphabet rail
+constexpr int BROWSE_W = d::kScreenW - BROWSE_X - 8; // 588
+constexpr int INFO_Y = d::kHeaderH + 8;
+constexpr int INFO_H = 56;
+constexpr int GRID_TOP = INFO_Y + INFO_H + 8;
+constexpr int SHOWS_HALF_W = 288;
+constexpr int SHOWS_LABEL_Y = GRID_TOP;
+constexpr int SHOWS_GRID_TOP = GRID_TOP + 22;
+constexpr int SHOWS_ROW_PITCH = GRID_CARD_H + 8;
+
+// Downloads list.
+constexpr int DL_SUMMARY_Y = d::kHeaderH + 8;
+constexpr int DL_SUMMARY_H = 44;
+constexpr int DL_LIST_TOP = DL_SUMMARY_Y + DL_SUMMARY_H + 8;
+constexpr int DL_ROW_H = 60;
+constexpr int DL_ROW_PITCH = 68;
+
+// Footer text for the connection state next to "<user> ...".
+void linkPresentation(const std::string& user, LinkStatus status, std::string& text,
+                      ui::LinkState& state)
 {
-    if (radius <= 0 || w <= 2 * radius || h <= 2 * radius) {
-        BitmapFont::fillRect(fb, x, y, w, h, r, g, b, 255);
-        return;
+    const std::string who = user.empty() ? std::string("Server") : user;
+    switch (status) {
+    case LinkStatus::Connected:
+        text = who + " connected";
+        state = ui::LinkState::Connected;
+        break;
+    case LinkStatus::Offline:
+        text = who + " offline";
+        state = ui::LinkState::Offline;
+        break;
+    case LinkStatus::SessionExpired:
+        text = who + " signed out";
+        state = ui::LinkState::Checking;
+        break;
+    case LinkStatus::OfflineMode:
+        text = who + " offline mode";
+        state = ui::LinkState::Checking;
+        break;
+    case LinkStatus::Checking:
+    default:
+        text = who + " connecting...";
+        state = ui::LinkState::Checking;
+        break;
     }
-    BitmapFont::fillRect(fb, x + radius, y, w - 2 * radius, h, r, g, b, 255);
-    BitmapFont::fillRect(fb, x, y + radius, w, h - 2 * radius, r, g, b, 255);
 }
 
-static void drawFocusGlow(SDL_Surface* fb, int x, int y, int w, int h)
+// Small circular "watched" badge in the top-right corner of a card.
+void drawWatchedBadge(SDL_Surface* fb, int x, int y, int w)
 {
-    // Layered frames approximate a soft electric-blue glow using solid rects.
-    BitmapFont::drawRect(fb, x - 4, y - 4, w + 8, h + 8, FOCUS_GLOW_R, FOCUS_GLOW_G, FOCUS_GLOW_B);
-    BitmapFont::drawRect(fb, x - 3, y - 3, w + 6, h + 6, 34, 95, 180);
-    BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, FOCUS_R, FOCUS_G, FOCUS_B);
-    BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, 90, 175, 255);
-    BitmapFont::drawRect(fb, x, y, w, h, 170, 220, 255);
+    const int size = 16;
+    const int bx = x + w - size - 5;
+    const int by = y + 5;
+    ui::roundFill(fb, bx, by, size, size, size / 2, d::kSuccess);
+    ui::iconCheck(fb, bx + 4, by + 4, 9, d::kCanvas);
 }
 
-/// Continue Watching progress bar drawn inside the lower edge of a card.
-static void drawContinueWatchingProgress(SDL_Surface* fb, int x, int y, int w, int h,
-                                         const MediaItem& item)
+// Scrim + progress bar along the lower edge of a card with watch progress.
+void drawProgressOverlay(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item)
 {
-    constexpr int BAR_H = 4;
-    constexpr int INSET = 6;
-    const int bx = x + INSET;
-    const int bw = std::max(1, w - 2 * INSET);
-    const int by = y + h - INSET - BAR_H;
-    const bool hasProgress = item.played || item.progress > 0.0f || item.playbackPositionTicks > 0;
-    BitmapFont::fillRect(fb, bx, by, bw, BAR_H, 52, 58, 72, 255);
-    if (!hasProgress)
+    const bool hasProgress = item.progress > 0.0f || item.playbackPositionTicks > 0;
+    if (item.played || !hasProgress)
         return;
-    const int pct = item.played ? 100 : playbackPercent(item);
-    const int fillW = bw * std::max(0, std::min(100, pct)) / 100;
-    if (fillW > 0)
-        BitmapFont::fillRect(fb, bx, by, fillW, BAR_H, FOCUS_R, FOCUS_G, FOCUS_B, 255);
+    const int pct = std::max(1, std::min(100, playbackPercent(item)));
+    ui::bottomScrim(fb, x, y, w, h, 26, 200);
+    ui::progressBar(fb, x + 8, y + h - 12, w - 16, 4, pct, d::kAccent);
 }
 
-/// Per-card title (white) and subtitle (light blue) beneath a Home rail card.
-/// For episodes the series name is the title and the episode title is the
-/// subtitle; otherwise the item title is followed by its year.
-static void drawCardCaption(SDL_Surface* fb, int x, int y, int w, const MediaItem& item,
-                            bool focused)
+// Heading with a short accent bar, used for rails and grid sections.
+void drawSectionHeading(SDL_Surface* fb, int x, int y, const std::string& label, bool focused,
+                        const std::string& count = std::string())
+{
+    ui::fill(fb, x, y + 2, 3, 12, focused ? d::kAccent : d::kAccentDim);
+    const int w = ui::text(fb, x + 10, y, label, focused ? d::kText : d::kTextSecondary);
+    if (!count.empty())
+        ui::text(fb, x + 10 + w + 8, y, count, d::kTextMuted);
+}
+
+// Two-line caption under a card.
+void drawCardCaption(SDL_Surface* fb, int x, int y, int w, const MediaItem& item, bool focused)
 {
     std::string title = item.title;
     std::string subtitle;
@@ -114,117 +135,91 @@ static void drawCardCaption(SDL_Surface* fb, int x, int y, int w, const MediaIte
     } else if (item.year > 0) {
         subtitle = std::to_string(item.year);
     }
-    const int maxGlyphs = std::max(1, (w - 2) / BitmapFont::GLYPH_W);
-    const std::string shownTitle = BitmapFont::truncateUtf8(title, maxGlyphs);
-    BitmapFont::drawString(fb, x, y, shownTitle.c_str(), focused ? 255 : 228, focused ? 255 : 232,
-                           focused ? 255 : 242, HOME_BG_R, HOME_BG_G, HOME_BG_B);
-    if (!subtitle.empty()) {
-        const std::string shownSub = BitmapFont::truncateUtf8(subtitle, maxGlyphs);
-        BitmapFont::drawString(fb, x, y + BitmapFont::GLYPH_H, shownSub.c_str(), 130, 180, 240,
-                               HOME_BG_R, HOME_BG_G, HOME_BG_B);
-    }
+    ui::textClamped(fb, x, y, w, title, focused ? d::kText : d::kTextSecondary);
+    if (!subtitle.empty())
+        ui::textClamped(fb, x, y + BitmapFont::GLYPH_H, w, subtitle,
+                        focused ? d::kAccentHi : d::kTextMuted);
 }
 
-// --- Header status icons (rects/text only) --------------------------------
-
-static void drawWifiIcon(SDL_Surface* fb, int x, int y)
+// The details of the selected movie/show: a title and a row of chips.
+void drawInfoBar(SDL_Surface* fb, const MediaItem* item, bool show)
 {
-    BitmapFont::fillRect(fb, x, y + 9, 16, 2, 195, 205, 222, 255);
-    BitmapFont::fillRect(fb, x + 2, y + 5, 12, 2, 195, 205, 222, 255);
-    BitmapFont::fillRect(fb, x + 4, y + 1, 8, 2, 195, 205, 222, 255);
-    BitmapFont::fillRect(fb, x + 7, y + 9, 3, 3, 90, 205, 120, 255);
-}
-
-// Outline plus a fill that follows the battery level (percent < 0 = unknown:
-// drawn empty rather than pretending to be full). A white lightning bolt is
-// drawn over the fill while charging.
-static void drawBatteryIcon(SDL_Surface* fb, int x, int y, int percent, bool charging)
-{
-    BitmapFont::drawRect(fb, x, y, 22, 11, 190, 200, 215);
-    BitmapFont::fillRect(fb, x + 22, y + 3, 2, 5, 190, 200, 215, 255);
-    const int fill = BatteryMonitor::fillWidth(percent, 18);
-    if (fill > 0) {
-        const BatteryMonitor::Color c = BatteryMonitor::levelColor(percent);
-        BitmapFont::fillRect(fb, x + 2, y + 2, fill, 7, c.r, c.g, c.b, 255);
-    }
-    if (charging) {
-        // 5x7 bolt centred in the 18x7 inner area (columns per row, left to right).
-        static const int kBolt[7][2] = {{2, 3}, {1, 2}, {0, 3}, {1, 4}, {2, 3}, {1, 2}, {0, 0}};
-        const int bx = x + 2 + 6;
-        for (int row = 0; row < 7; ++row)
-            BitmapFont::fillRect(fb, bx + kBolt[row][0], y + 2 + row,
-                                 kBolt[row][1] - kBolt[row][0] + 1, 1, 255, 255, 255, 255);
-    }
-}
-
-static void drawGearIcon(SDL_Surface* fb, int x, int y)
-{
-    const Uint8 r = 190, g = 198, b = 215;
-    BitmapFont::fillRect(fb, x + 2, y - 2, 4, 4, r, g, b, 255);
-    BitmapFont::fillRect(fb, x + 2, y + 12, 4, 4, r, g, b, 255);
-    BitmapFont::fillRect(fb, x - 2, y + 2, 4, 4, r, g, b, 255);
-    BitmapFont::fillRect(fb, x + 12, y + 2, 4, 4, r, g, b, 255);
-    BitmapFont::fillRect(fb, x, y + 2, 14, 10, r, g, b, 255);
-    BitmapFont::fillRect(fb, x + 2, y, 10, 14, r, g, b, 255);
-    BitmapFont::fillRect(fb, x + 5, y + 5, 4, 4, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B, 255);
-}
-
-// --- Bottom status bar ----------------------------------------------------
-
-static void drawDpadIcon(SDL_Surface* fb, int x, int y)
-{
-    const Uint8 r = 150, g = 156, b = 172;
-    BitmapFont::fillRect(fb, x + 6, y, 6, 18, r, g, b, 255);
-    BitmapFont::fillRect(fb, x, y + 6, 18, 6, r, g, b, 255);
-}
-
-static void drawButtonBadge(SDL_Surface* fb, int x, int y, char ch, Uint8 r, Uint8 g, Uint8 b)
-{
-    fillRoundedRect(fb, x, y, 14, 14, r, g, b, 3);
-    char s[2] = {ch, '\0'};
-    BitmapFont::drawString(fb, x + 3, y - 1, s, 255, 255, 255, r, g, b);
-}
-
-static void drawHomeStatusBar(SDL_Surface* fb, int y)
-{
-    BitmapFont::fillRect(fb, 0, y, 640, BOTTOM_H, BOTTOM_BG_R, BOTTOM_BG_G, BOTTOM_BG_B, 255);
-    BitmapFont::fillRect(fb, 0, y, 640, 1, 34, 60, 100, 255);
-    const int textY = y + 4;
-    drawDpadIcon(fb, 10, y + 3);
-    BitmapFont::drawString(fb, 32, textY, "Navigate", 200, 205, 215, BOTTOM_BG_R, BOTTOM_BG_G,
-                           BOTTOM_BG_B);
-    drawButtonBadge(fb, 110, y + 5, 'A', 45, 120, 235);
-    BitmapFont::drawString(fb, 128, textY, "Select", 200, 205, 215, BOTTOM_BG_R, BOTTOM_BG_G,
-                           BOTTOM_BG_B);
-    drawButtonBadge(fb, 196, y + 5, 'B', 205, 70, 80);
-    BitmapFont::drawString(fb, 214, textY, "Back", 200, 205, 215, BOTTOM_BG_R, BOTTOM_BG_G,
-                           BOTTOM_BG_B);
-
-    const char* status = "Jellyfin Connected";
-    const int sx = 640 - 12 - (int)::strlen(status) * BitmapFont::GLYPH_W;
-    BitmapFont::fillRect(fb, sx - 12, y + 8, 7, 7, 60, 200, 110, 255);
-    BitmapFont::drawString(fb, sx, textY, status, 200, 210, 220, BOTTOM_BG_R, BOTTOM_BG_G,
-                           BOTTOM_BG_B);
-}
-
-static void blitDecoded(SDL_Surface* fb, const DecodedImage& img, int x, int y, int w, int h)
-{
-    if (img.empty())
+    ui::panel(fb, BROWSE_X, INFO_Y, BROWSE_W, INFO_H);
+    if (!item) {
+        ui::text(fb, BROWSE_X + 14, INFO_Y + (INFO_H - 16) / 2, "Nothing selected",
+                 d::kTextMuted);
         return;
-    const float ia = (float)img.width / img.height;
-    const float ba = (float)w / h;
-    const int dw = ia > ba ? w : (int)(h * ia + .5f);
-    const int dh = ia > ba ? (int)(w / ia + .5f) : h;
-    SDL_Surface* s =
-        SDL_CreateRGBSurfaceFrom((void*)img.pixels.data(), img.width, img.height, 32, img.width * 4,
-                                 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (s) {
-        SDL_Rect src = {0, 0, img.width, img.height};
-        SDL_Rect dst = {x + (w - dw) / 2, y + (h - dh) / 2, dw, dh};
-        SDL_BlitScaled(s, &src, fb, &dst);
-        SDL_FreeSurface(s);
+    }
+    ui::textClamped(fb, BROWSE_X + 14, INFO_Y + 8, BROWSE_W - 28, item->title, d::kText);
+    int x = BROWSE_X + 14;
+    const int y = INFO_Y + 29;
+    if (item->year > 0)
+        x += ui::chip(fb, x, y, std::to_string(item->year), d::kRaised, d::kTextSecondary) + 6;
+    const int mins = show ? 0 : ticksToMinutes(item->runTimeTicks);
+    if (mins > 0) {
+        char runtime[24];
+        std::snprintf(runtime, sizeof(runtime), "%dh %dm", mins / 60, mins % 60);
+        x += ui::chip(fb, x, y, runtime, d::kRaised, d::kTextSecondary) + 6;
+    }
+    if (item->rating > 0) {
+        char rating[16];
+        std::snprintf(rating, sizeof(rating), "%.1f", static_cast<double>(item->rating));
+        x += ui::chip(fb, x, y, rating, d::kAccentSoft, d::kAccentHi) + 6;
+    }
+    if (!item->genre.empty())
+        x += ui::chip(fb, x, y, item->genre, d::kRaised, d::kTextSecondary) + 6;
+    if (item->played) {
+        ui::chip(fb, x, y, "Watched", ui::mix(d::kCanvas, d::kSuccess, 22), d::kSuccess);
+    } else if (item->progress > 0) {
+        char state[24];
+        std::snprintf(state, sizeof(state), "%d%% watched", static_cast<int>(item->progress * 100.0f + 0.5f));
+        ui::chip(fb, x, y, state, d::kAccentSoft, d::kAccentHi);
     }
 }
+
+// Slim A-Z rail. `focus` is the focused letter when the rail itself has focus
+// (otherwise -1); `active` is the letter currently filtering the grid.
+void drawAlphabetRail(SDL_Surface* fb, int focus, int active)
+{
+    ui::panel(fb, ALPHA_X, INFO_Y, ALPHA_W, 480 - d::kFooterH - 8 - INFO_Y);
+    const int pitch = 15;
+    const int top = INFO_Y + 5;
+    for (int i = 0; i < 26; ++i) {
+        const int y = top + i * pitch;
+        const bool focused = i == focus;
+        const bool isActive = i == active;
+        if (focused)
+            ui::roundFill(fb, ALPHA_X + 3, y, ALPHA_W - 6, pitch, 3, d::kAccent);
+        if (isActive && !focused)
+            ui::fill(fb, ALPHA_X + 2, y + 3, 2, pitch - 6, d::kAccentHi);
+        const char letter[2] = {static_cast<char>('A' + i), '\0'};
+        ui::text(fb, ALPHA_X + (ALPHA_W - 8) / 2, y - 1, letter,
+                 focused ? d::Rgb{255, 255, 255} : (isActive ? d::kAccentHi : d::kTextMuted));
+    }
+}
+
+// Centered empty-state / loading panel.
+void drawCenteredNote(SDL_Surface* fb, const std::string& title, const std::string& detail,
+                      d::Rgb titleColor)
+{
+    const int w = 360;
+    const int h = detail.empty() ? 64 : 92;
+    const int x = (d::kScreenW - w) / 2;
+    const int y = (d::kHeaderH + (d::kScreenH - d::kFooterH - d::kHeaderH - h)) / 2;
+    ui::panel(fb, x, y, w, h);
+    ui::text(fb, x + (w - ui::textWidth(ui::fit(title, w - 24))) / 2, y + 18,
+             ui::fit(title, w - 24), titleColor);
+    if (!detail.empty()) {
+        const auto lines = ui::wrap(detail, w - 32, 2);
+        int ly = y + 44;
+        for (const std::string& line : lines) {
+            ui::text(fb, x + (w - ui::textWidth(line)) / 2, ly, line, d::kTextSecondary);
+            ly += 18;
+        }
+    }
+}
+
+} // namespace
 
 void HomeScreen::render(SDL_Surface* fb)
 {
@@ -232,6 +227,7 @@ void HomeScreen::render(SDL_Surface* fb)
         m_firstInteractiveFrameLogged = true;
         uiDiagnostics().log("[HomeScreen] startup stage=first_interactive_frame");
     }
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
     drawTabBar(fb);
 
     if (m_loadState == LoadState::Loading) {
@@ -276,93 +272,21 @@ void HomeScreen::render(SDL_Surface* fb)
                                    : tab.name == "Shows" ? "No shows on this server"
                                                          : "No content");
         } else {
-            BitmapFont::fillRect(fb, 0, HEADER_H, 640, 480 - HEADER_H - BOTTOM_H, HOME_BG_R,
-                                 HOME_BG_G, HOME_BG_B, 255);
             drawRowList(fb);
         }
     }
     drawBottomHints(fb);
 }
+
 void HomeScreen::drawTabBar(SDL_Surface* fb)
 {
-    // The tall branded header belongs to Home only.  Movies, Shows,
-    // Downloads and Settings keep the legacy 24px compact header so their
-    // existing y=25 content geometry is not overlapped.
-    const bool home = activeTabNamed("Home");
-    const int headerH = home ? HEADER_H : TAB_H;
-    BitmapFont::fillRect(fb, 0, TAB_Y, 640, headerH, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B, 255);
-
-    int tabTextY = TAB_Y + (headerH - BitmapFont::GLYPH_H) / 2;
-    if (home) {
-        // Large two-tone wordmark with the tagline beneath it.
-        BitmapFont::drawStringScaled(fb, LOGO_X, LOGO_Y, "Miyoo", LOGO_SCALE, 238, 244, 255,
-                                     HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-        BitmapFont::drawStringScaled(fb, LOGO_X + 5 * BitmapFont::GLYPH_W * LOGO_SCALE, LOGO_Y,
-                                     "Fin", LOGO_SCALE, 70, 150, 255, HEADER_BG_R, HEADER_BG_G,
-                                     HEADER_BG_B);
-        BitmapFont::drawString(fb, LOGO_X + 1, LOGO_Y + LOGO_SCALE * BitmapFont::GLYPH_H + 2,
-                               "Your Media. Anywhere.", 130, 175, 232, HEADER_BG_R, HEADER_BG_G,
-                               HEADER_BG_B);
-        tabTextY = 16;
-    } else {
-        // Compact brand mark for the non-Home tabs.
-        BitmapFont::drawString(fb, HEADER_BRAND_X, tabTextY, "MiyooFin", FOCUS_R, FOCUS_G, FOCUS_B,
-                               HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-    }
-
-    // Compact nav centered across the header; the active tab sits in a
-    // bright blue rounded pill.  Shared by every tab so the centered
-    // headerTabsStartX() hit regions stay valid.
-    int x = headerTabsStartX(m_tabs);
-    for (int i = 0; i < (int)m_tabs.size(); ++i) {
-        const std::string& name = m_tabs[i].name;
-        const int textW = (int)name.size() * BitmapFont::GLYPH_W;
-        if (i == m_activeTab) {
-            fillRoundedRect(fb, x - 6, tabTextY - 3, textW + 12, BitmapFont::GLYPH_H + 6, 42, 118,
-                            232, 4);
-            BitmapFont::drawString(fb, x, tabTextY, name.c_str(), 255, 255, 255, 42, 118, 232);
-        } else {
-            BitmapFont::drawString(fb, x, tabTextY, name.c_str(), MUTED_TEXT_R, MUTED_TEXT_G,
-                                   MUTED_TEXT_B, HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-        }
-        x += textW + 16;
-    }
-
-    if (home) {
-        // Status cluster (Wi-Fi, battery, clock, gear) pinned to the top right.
-        drawWifiIcon(fb, 514, 22);
-        drawBatteryIcon(fb, 540, 24, m_battery.percent(), m_battery.charging());
-        std::time_t now = std::time(nullptr);
-        std::tm local{};
-#if defined(_WIN32)
-        localtime_s(&local, &now);
-#else
-        localtime_r(&now, &local);
-#endif
-        char clock[8];
-        std::snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
-        BitmapFont::drawString(fb, 570, tabTextY, clock, 235, 240, 255, HEADER_BG_R, HEADER_BG_G,
-                               HEADER_BG_B);
-        drawGearIcon(fb, 618, 21);
-    } else {
-        // Legacy right-aligned sync status and login label in the compact bar.
-        std::string status = syncStatusText();
-        std::string login = "Logged in as: " + m_userName;
-        const int maxChars = 24;
-        if ((int)login.size() > maxChars)
-            login = login.substr(0, maxChars - 3) + "...";
-        int loginX = 640 - 8 - (int)login.size() * BitmapFont::GLYPH_W;
-        if (loginX > x + 4)
-            BitmapFont::drawString(fb, loginX, tabTextY, login.c_str(), Theme::TEXT_R,
-                                   Theme::TEXT_G, Theme::TEXT_B, HEADER_BG_R, HEADER_BG_G,
-                                   HEADER_BG_B);
-        int statusX = loginX - 8 - (int)status.size() * BitmapFont::GLYPH_W;
-        if (!status.empty() && statusX > x + 4)
-            BitmapFont::drawString(fb, statusX, tabTextY, status.c_str(), FOCUS_R, FOCUS_G, FOCUS_B,
-                                   HEADER_BG_R, HEADER_BG_G, HEADER_BG_B);
-    }
-
-    BitmapFont::fillRect(fb, 0, headerH - 1, 640, 1, FOCUS_GLOW_R, FOCUS_GLOW_G, FOCUS_GLOW_B, 255);
+    ui::HeaderSpec spec;
+    for (const TabData& tab : m_tabs)
+        spec.tabs.push_back(tab.name);
+    spec.activeTab = m_activeTab;
+    spec.batteryPercent = m_battery.percent();
+    spec.charging = m_battery.charging();
+    ui::header(fb, spec);
 }
 
 std::string HomeScreen::syncStatusText() const
@@ -395,52 +319,43 @@ std::string HomeScreen::syncStatusText() const
         activeTabNamed("Shows"));
 }
 
+
 void HomeScreen::drawRowList(SDL_Surface* fb)
 {
     const auto& rows = currentTab().rows;
     if (rows.empty())
         return;
-    for (int ri = 0; ri < VISIBLE_ROWS; ++ri) {
-        int rowIdx = m_rowScroll + ri;
-        if (rowIdx >= (int)rows.size())
+    int railY = RAIL_TOP;
+    for (int ri = 0; ri < VISIBLE_RAILS; ++ri) {
+        const int rowIdx = m_rowScroll + ri;
+        if (rowIdx >= static_cast<int>(rows.size()))
             break;
         const MediaRow& row = rows[rowIdx];
         const bool rowFocused = rowIdx == m_activeRow;
-        const bool continueWatching = row.label == "Continue Watching";
-        const int rowY = ROWS_Y + ri * ROW_PITCH;
-        const int stripTop = rowY + ROW_LABEL_H + ROW_LABEL_GAP;
-        const int captionY = stripTop + ROW_STRIP_H + ROW_LABEL_GAP;
+        const bool landscape = homeRailIsLandscape(row.label);
+        const ArtworkBox box = homeRailCardSize(landscape);
 
-        // Rail heading and right-aligned "View All" affordance.
-        BitmapFont::drawString(fb, HOME_RAIL_MARGIN, rowY, row.label.c_str(),
-                               rowFocused ? FOCUS_R : 235, rowFocused ? FOCUS_G : 240,
-                               rowFocused ? FOCUS_B : 255, HOME_BG_R, HOME_BG_G, HOME_BG_B);
-        static const char* kViewAll = "View All >";
-        const int viewAllX = 640 - HOME_RAIL_MARGIN - (int)::strlen(kViewAll) * BitmapFont::GLYPH_W;
-        BitmapFont::drawString(fb, viewAllX, rowY, kViewAll, 120, 175, 240, HOME_BG_R, HOME_BG_G,
-                               HOME_BG_B);
+        drawSectionHeading(fb, HOME_RAIL_MARGIN, railY, row.label, rowFocused);
+        const int cardsY = railY + RAIL_HEADING_H;
+        const int captionY = cardsY + box.h + RAIL_CAPTION_GAP;
 
-        // Cards with per-item sizing and pixel-scroll offset.
+        // Cards with a pixel-scroll offset on the focused rail.
         int cardAccumX = HOME_RAIL_MARGIN;
-        for (int ci = 0; ci < (int)row.items.size(); ++ci) {
+        for (int ci = 0; ci < static_cast<int>(row.items.size()); ++ci) {
             const MediaItem& item = row.items[ci];
-            ArtworkBox sz = homeRailCardSize(item);
-            int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
-            if (screenX + sz.w < HOME_RAIL_MARGIN) {
-                // Fully off-screen left
-                cardAccumX += sz.w + HOME_RAIL_GAP;
-                continue;
-            }
-            if (screenX > 640 - HOME_RAIL_MARGIN)
+            const int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
+            cardAccumX += box.w + HOME_RAIL_GAP;
+            if (screenX + box.w < 0)
+                continue; // scrolled off the left edge
+            if (screenX > d::kScreenW)
                 break;
             const bool sel = rowFocused && ci == m_activeCard;
-            int cardScreenY = stripTop + (ROW_STRIP_H - sz.h) / 2;
-            drawCard(fb, screenX, cardScreenY, sz.w, sz.h, item, sel, CardPresentation::Home);
-            if (continueWatching)
-                drawContinueWatchingProgress(fb, screenX, cardScreenY, sz.w, sz.h, item);
-            drawCardCaption(fb, screenX, captionY, sz.w, item, sel);
-            cardAccumX += sz.w + HOME_RAIL_GAP;
+            drawCard(fb, screenX, cardsY, box.w, box.h, item, sel, CardPresentation::Home);
+            if (landscape)
+                drawProgressOverlay(fb, screenX, cardsY, box.w, box.h, item);
+            drawCardCaption(fb, screenX, captionY, box.w, item, sel);
         }
+        railY = captionY + RAIL_CAPTION_H + RAIL_GAP;
     }
 }
 
@@ -449,596 +364,388 @@ void HomeScreen::drawMovieGrid(SDL_Surface* fb)
     const MediaRow* row = currentRow();
     if (!row)
         return;
-    const int top = 134, gap = 6;
-    for (int i = 0; i < (int)row->items.size(); ++i) {
-        int gr = i / MOVIE_GRID_COLUMNS, gc = i % MOVIE_GRID_COLUMNS;
+    const int gridW = MOVIE_GRID_COLUMNS * GRID_CARD_W + (MOVIE_GRID_COLUMNS - 1) * GRID_GAP;
+    const int left = BROWSE_X + (BROWSE_W - gridW) / 2;
+    for (int i = 0; i < static_cast<int>(row->items.size()); ++i) {
+        const int gr = i / MOVIE_GRID_COLUMNS, gc = i % MOVIE_GRID_COLUMNS;
         if (gr < m_rowScroll || gr >= m_rowScroll + MOVIE_GRID_ROWS)
             continue;
-        int x = 42 + gc * (64 + gap), y = top + (gr - m_rowScroll) * (96 + gap);
-        drawCard(fb, x, y, 64, 96, row->items[i], !m_movieRailFocused && i == m_activeCard);
+        drawCard(fb, left + gc * (GRID_CARD_W + GRID_GAP),
+                 GRID_TOP + (gr - m_rowScroll) * (GRID_CARD_H + GRID_GAP), GRID_CARD_W,
+                 GRID_CARD_H, row->items[i], !m_movieRailFocused && i == m_activeCard);
     }
     if (row->items.empty() && m_movieActiveLetter >= 0) {
         char message[48];
         std::snprintf(message, sizeof(message), "No movies starting with %c",
                       'A' + m_movieActiveLetter);
-        BitmapFont::drawString(fb, 48, 210, message, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        drawCenteredNote(fb, message, "Pick another letter, or press A on the letter again.",
+                         d::kTextSecondary);
     }
 }
 
 void HomeScreen::drawMovieAlphabetRail(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, 25, 36, 437, 24, 24, 32, 255);
-    BitmapFont::fillRect(fb, 35, 25, 1, 437, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
-    for (int i = 0; i < 26; ++i) {
-        int y = 27 + i * 16;
-        bool focused = m_movieRailFocused && i == m_movieAlphabetFocus;
-        bool active = i == m_movieActiveLetter;
-        if (focused)
-            BitmapFont::fillRect(fb, 2, y - 1, 31, BitmapFont::GLYPH_H + 2, Theme::ACCENT_R,
-                                 Theme::ACCENT_G, Theme::ACCENT_B, 120);
-        char letter[2] = {static_cast<char>('A' + i), '\0'};
-        BitmapFont::drawString(fb, 14, y, letter,
-                               active    ? Theme::HIGHLIGHT_R
-                               : focused ? Theme::BG_R
-                                         : Theme::TEXT_R,
-                               active    ? Theme::HIGHLIGHT_G
-                               : focused ? Theme::BG_G
-                                         : Theme::TEXT_G,
-                               active    ? Theme::HIGHLIGHT_B
-                               : focused ? Theme::BG_B
-                                         : Theme::TEXT_B,
-                               focused ? Theme::ACCENT_R : 24, focused ? Theme::ACCENT_G : 24,
-                               focused ? Theme::ACCENT_B : 32);
-        if (active && !focused)
-            BitmapFont::fillRect(fb, 4, y + BitmapFont::GLYPH_H + 1, 27, 1, Theme::HIGHLIGHT_R,
-                                 Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, 255);
-    }
+    drawAlphabetRail(fb, m_movieRailFocused ? m_movieAlphabetFocus : -1, m_movieActiveLetter);
 }
 
 void HomeScreen::drawMoviePreview(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 36, 25, 604, 105, 24, 24, 32, 255);
-    BitmapFont::fillRect(fb, 36, 129, 604, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                         70);
-    const MediaItem* item = currentItem();
-    if (!item)
-        return;
-    int px = 42, py = 29;
-    const SDL_Color color = presentationArtworkColor(*item);
-    BitmapFont::fillRect(fb, px, py, 64, 96, color.r, color.g, color.b, color.a);
-    if (!m_selectedArtwork.empty()) {
-        char cacheKey[512];
-        std::snprintf(cacheKey, sizeof(cacheKey), "%s:%dx%d", m_selectedArtworkId.c_str(), 64, 96);
-        std::string ck(cacheKey);
-        auto cached = m_rowArtworkCache.cardSurfaces.find(ck);
-        if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
-            SDL_Surface* cs = cached->second;
-            SDL_Rect dst = {px + (64 - cs->w) / 2, py + (96 - cs->h) / 2, cs->w, cs->h};
-            SDL_BlitSurface(cs, nullptr, fb, &dst);
-        } else {
-            SDL_Surface* image = SDL_CreateRGBSurfaceFrom(
-                (void*)m_selectedArtwork.pixels.data(), m_selectedArtwork.width,
-                m_selectedArtwork.height, 32, m_selectedArtwork.width * 4, 0x000000FF, 0x0000FF00,
-                0x00FF0000, 0xFF000000);
-            if (image) {
-                SDL_Rect src = {0, 0, m_selectedArtwork.width, m_selectedArtwork.height},
-                         dst = {px, py, 64, 96};
-                SDL_BlitScaled(image, &src, fb, &dst);
-                // Do NOT cache a surface wrapping m_selectedArtwork — it is
-                // transient and may be freed before the cached surface is
-                // evicted, causing a use-after-free.
-                SDL_FreeSurface(image);
-            }
-        }
-    }
-    BitmapFont::drawRect(fb, px, py, 64, 96, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
-    int x = 114, y = 33;
-    std::string truncatedTitle = BitmapFont::truncateUtf8(item->title, 65);
-    BitmapFont::drawString(fb, x, y, truncatedTitle.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, 24, 24, 32);
-    char meta[96] = {};
-    int n = 0;
-    if (item->year > 0)
-        n += std::snprintf(meta + n, sizeof(meta) - n, "%d", item->year);
-    int mins = ticksToMinutes(item->runTimeTicks);
-    if (mins > 0)
-        n += std::snprintf(meta + n, sizeof(meta) - n, "%s%dh %dm", n ? " * " : "", mins / 60,
-                           mins % 60);
-    if (item->rating > 0)
-        std::snprintf(meta + n, sizeof(meta) - n, "%s%.1f", n ? " * " : "", (double)item->rating);
-    BitmapFont::drawString(fb, x, y + 18, meta, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, 24, 24,
-                           32);
-    char state[96];
-    std::snprintf(state, sizeof(state), "%s%s", item->genre.c_str(),
-                  item->played         ? (item->genre.empty() ? "Watched" : " * Watched")
-                  : item->progress > 0 ? ""
-                                       : "");
-    if (item->progress > 0 && !item->played)
-        std::snprintf(state, sizeof(state), "%s%s%d%% watched", item->genre.c_str(),
-                      item->genre.empty() ? "" : " * ", (int)(item->progress * 100.0f + 0.5f));
-    BitmapFont::drawString(fb, x, y + 36, state, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, 24,
-                           24, 32);
+    drawInfoBar(fb, currentItem(), false);
 }
 
 void HomeScreen::drawShowsAlphabetRail(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, 25, SHOWS_RAIL_W, 437, 24, 24, 32, 255);
-    BitmapFont::fillRect(fb, 35, 25, 1, 437, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
-    for (int i = 0; i < 26; ++i) {
-        int y = 27 + i * 16;
-        bool focused = m_showsFocus == ShowsFocus::AlphabetRail && i == m_showsAlphabetFocus;
-        bool active = i == m_showsActiveLetter;
-        if (focused)
-            BitmapFont::fillRect(fb, 2, y - 1, 31, BitmapFont::GLYPH_H + 2, Theme::ACCENT_R,
-                                 Theme::ACCENT_G, Theme::ACCENT_B, 120);
-        char c[2] = {char('A' + i), 0};
-        BitmapFont::drawString(fb, 14, y, c,
-                               active    ? Theme::HIGHLIGHT_R
-                               : focused ? Theme::BG_R
-                                         : Theme::TEXT_R,
-                               active    ? Theme::HIGHLIGHT_G
-                               : focused ? Theme::BG_G
-                                         : Theme::TEXT_G,
-                               active    ? Theme::HIGHLIGHT_B
-                               : focused ? Theme::BG_B
-                                         : Theme::TEXT_B,
-                               focused ? Theme::ACCENT_R : 24, focused ? Theme::ACCENT_G : 24,
-                               focused ? Theme::ACCENT_B : 32);
-    }
+    drawAlphabetRail(fb, m_showsFocus == ShowsFocus::AlphabetRail ? m_showsAlphabetFocus : -1,
+                     m_showsActiveLetter);
 }
 
 void HomeScreen::drawShowsPreview(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 36, 25, 604, SHOWS_PREVIEW_H, 24, 24, 32, 255);
-    BitmapFont::fillRect(fb, 36, 129, 604, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                         70);
-    const MediaItem* item = showsSelectedItem();
-    if (!item)
-        return;
-    int px = 42;
-    int py = 29;
-    const SDL_Color tint = presentationArtworkColor(*item);
-    BitmapFont::fillRect(fb, px, py, 64, 96, tint.r, tint.g, tint.b, tint.a);
-    std::string key = rowArtworkKey(*item);
-    auto it = m_rowArtworkCache.entries.find(key);
-    const DecodedImage* imgPtr = nullptr;
-    bool fromRowArtwork = false;
-    if (it != m_rowArtworkCache.entries.end() && it->second.status == RowArtworkStatus::Loaded &&
-        it->second.image) {
-        imgPtr = it->second.image.get();
-        fromRowArtwork = true;
-    } else if (!m_selectedArtwork.empty()) {
-        imgPtr = &m_selectedArtwork;
-    }
-    if (imgPtr && !imgPtr->empty()) {
-        char ckBuf[512];
-        std::snprintf(ckBuf, sizeof(ckBuf), "%s:64x96",
-                      key.empty() ? m_selectedArtworkId.c_str() : key.c_str());
-        std::string ck(ckBuf);
-        auto cached = m_rowArtworkCache.cardSurfaces.find(ck);
-        if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
-            SDL_Surface* cs = cached->second;
-            SDL_Rect dst = {px + (64 - cs->w) / 2, py + (96 - cs->h) / 2, cs->w, cs->h};
-            SDL_BlitSurface(cs, nullptr, fb, &dst);
-        } else {
-            blitDecoded(fb, *imgPtr, px, py, 64, 96);
-            if (!key.empty() && fromRowArtwork)
-                prepareCardSurface(ck, *imgPtr, 64, 96);
-        }
-    }
-    BitmapFont::drawRect(fb, px, py, 64, 96, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B);
-    BitmapFont::drawString(fb, 114, 33, item->title.c_str(), Theme::ACCENT_R, Theme::ACCENT_G,
-                           Theme::ACCENT_B, 24, 24, 32);
-    char meta[96] = {};
-    int n = 0;
-    if (item->year)
-        n += std::snprintf(meta + n, sizeof(meta) - n, "%d", item->year);
-    if (item->rating > 0)
-        std::snprintf(meta + n, sizeof(meta) - n, "%s%.1f", n ? " * " : "", (double)item->rating);
-    BitmapFont::drawString(fb, 114, 51, meta, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, 24, 24,
-                           32);
-    char state[96];
-    std::snprintf(state, sizeof(state), "%s%s", item->genre.c_str(),
-                  item->played         ? " * Watched"
-                  : item->progress > 0 ? " * In progress"
-                                       : "");
-    BitmapFont::drawString(fb, 114, 69, state, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B, 24, 24,
-                           32);
+    drawInfoBar(fb, showsSelectedItem(), true);
 }
 
 void HomeScreen::drawShowsGrid(SDL_Surface* fb)
 {
-    BitmapFont::drawString(fb, 44, 137, "SHOWS", Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    BitmapFont::drawString(fb, 346, 137, "ANIME", Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
-    BitmapFont::fillRect(fb, 337, 135, 1, 327, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                         100);
+    const int leftX = BROWSE_X;
+    const int rightX = BROWSE_X + SHOWS_HALF_W + 12;
+    drawSectionHeading(fb, leftX, SHOWS_LABEL_Y, "Shows", m_showsFocus == ShowsFocus::ShowsGrid,
+                       std::to_string(m_filteredShows.size()));
+    drawSectionHeading(fb, rightX, SHOWS_LABEL_Y, "Anime", m_showsFocus == ShowsFocus::AnimeGrid,
+                       std::to_string(m_filteredAnime.size()));
+    ui::fill(fb, BROWSE_X + SHOWS_HALF_W + 5, SHOWS_LABEL_Y, 1,
+             480 - d::kFooterH - 8 - SHOWS_LABEL_Y, d::kDivider);
+
     auto draw = [&](const std::vector<MediaItem>& items, int scroll, int selected, bool focused,
                     int base) {
-        for (int i = 0; i < (int)items.size(); ++i) {
-            int row = i / 4;
+        const int gridW = 4 * GRID_CARD_W + 3 * GRID_GAP;
+        const int left = base + (SHOWS_HALF_W - gridW) / 2;
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            const int row = i / 4;
             if (row < scroll || row >= scroll + 3)
                 continue;
-            drawCard(fb, base + 14 + (i % 4) * 70, SHOWS_GRID_TOP + (row - scroll) * 102, 64, 96,
+            drawCard(fb, left + (i % 4) * (GRID_CARD_W + GRID_GAP),
+                     SHOWS_GRID_TOP + (row - scroll) * SHOWS_ROW_PITCH, GRID_CARD_W, GRID_CARD_H,
                      items[i], focused && i == selected);
         }
     };
     draw(m_filteredShows, m_showScroll, m_showSelected, m_showsFocus == ShowsFocus::ShowsGrid,
-         SHOWS_LEFT_X);
+         leftX);
     draw(m_filteredAnime, m_animeScroll, m_animeSelected, m_showsFocus == ShowsFocus::AnimeGrid,
-         SHOWS_RIGHT_X);
+         rightX);
     if (m_filteredShows.empty() && m_filteredAnime.empty()) {
         char b[64];
         if (m_showsActiveLetter >= 0)
-            std::snprintf(b, sizeof(b), "No shows or anime starting with %c",
-                          'A' + m_showsActiveLetter);
+            std::snprintf(b, sizeof(b), "No shows starting with %c", 'A' + m_showsActiveLetter);
         else
             std::snprintf(b, sizeof(b), "No shows on this server");
-        BitmapFont::drawString(fb, 48, 230, b, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R, Theme::BG_G, Theme::BG_B);
+        drawCenteredNote(fb, b, m_showsActiveLetter >= 0 ? "Pick another letter." : "", d::kTextSecondary);
     }
 }
 
 void HomeScreen::drawCard(SDL_Surface* fb, int x, int y, int w, int h, const MediaItem& item,
                           bool selected, CardPresentation presentation)
 {
-    const bool home = presentation == CardPresentation::Home;
-    if (home) {
-        // Black placeholder rectangle; artwork is blitted over it when loaded.
-        BitmapFont::fillRect(fb, x, y, w, h, 0, 0, 0, 255);
-    } else {
-        const SDL_Color tint = presentationArtworkColor(item);
-        BitmapFont::fillRect(fb, x, y, w, h, tint.r, tint.g, tint.b, tint.a);
-    }
+    (void)presentation; // Home rails and grids share one card design now
+    const int radius = w >= 100 ? 5 : 4;
 
-    // B5d2b: render loaded row artwork over the placeholder
-    {
-        std::string key = rowArtworkKey(item);
-        if (!key.empty()) {
-            auto it = m_rowArtworkCache.entries.find(key);
-            if (it != m_rowArtworkCache.entries.end() &&
-                it->second.status == RowArtworkStatus::Loaded && it->second.image &&
-                !it->second.image->empty()) {
-                const DecodedImage& img = *it->second.image;
-                // Check pre-scaled card surface cache
-                char cacheKeyBuf[512];
-                std::snprintf(cacheKeyBuf, sizeof(cacheKeyBuf), "%s:%dx%d", key.c_str(), w, h);
-                std::string cacheKey(cacheKeyBuf);
-                auto cached = m_rowArtworkCache.cardSurfaces.find(cacheKey);
-                if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
-                    // Cache hit — plain blit, no create/scale/free
-                    SDL_Surface* cs = cached->second;
-                    int drawX = x + (w - cs->w) / 2;
-                    int drawY = y + (h - cs->h) / 2;
-                    SDL_Rect dstRect = {drawX, drawY, cs->w, cs->h};
-                    SDL_BlitSurface(cs, nullptr, fb, &dstRect);
-                } else {
-                    // Cache miss — scale and blit, then cache for next frame
-                    int imgW = img.width;
-                    int imgH = img.height;
-                    float imgAspect = (float)imgW / (float)imgH;
-                    float boxAspect = (float)w / (float)h;
-                    int drawW, drawH;
-                    if (imgAspect > boxAspect) {
-                        drawW = w;
-                        drawH = (int)(w / imgAspect + 0.5f);
-                        if (drawH > h)
-                            drawH = h;
-                    } else {
-                        drawH = h;
-                        drawW = (int)(h * imgAspect + 0.5f);
-                        if (drawW > w)
-                            drawW = w;
-                    }
-                    int drawX = x + (w - drawW) / 2;
-                    int drawY = y + (h - drawH) / 2;
-
-                    SDL_Surface* imgSurface =
-                        SDL_CreateRGBSurfaceFrom((void*)img.pixels.data(), imgW, imgH, 32, imgW * 4,
-                                                 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-                    if (imgSurface) {
-                        SDL_Rect srcRect = {0, 0, imgW, imgH};
-                        SDL_Rect dstRect = {drawX, drawY, drawW, drawH};
-                        SDL_BlitScaled(imgSurface, &srcRect, fb, &dstRect);
-                        // Cache the pre-scaled surface for subsequent frames
-                        prepareCardSurface(cacheKey, img, w, h);
-                        SDL_FreeSurface(imgSurface);
-                    }
-                }
+    bool drawn = false;
+    const std::string key = rowArtworkKey(item);
+    if (!key.empty()) {
+        auto it = m_rowArtworkCache.entries.find(key);
+        if (it != m_rowArtworkCache.entries.end() &&
+            it->second.status == RowArtworkStatus::Loaded && it->second.image &&
+            !it->second.image->empty()) {
+            char cacheKeyBuf[512];
+            std::snprintf(cacheKeyBuf, sizeof(cacheKeyBuf), "%s:%dx%d", key.c_str(), w, h);
+            const std::string cacheKey(cacheKeyBuf);
+            auto cached = m_rowArtworkCache.cardSurfaces.find(cacheKey);
+            if (cached == m_rowArtworkCache.cardSurfaces.end() || !cached->second) {
+                prepareCardSurface(cacheKey, *it->second.image, w, h);
+                cached = m_rowArtworkCache.cardSurfaces.find(cacheKey);
+            }
+            if (cached != m_rowArtworkCache.cardSurfaces.end() && cached->second) {
+                SDL_Rect dst = {x, y, cached->second->w, cached->second->h};
+                SDL_BlitSurface(cached->second, nullptr, fb, &dst);
+                drawn = true;
             }
         }
     }
+    if (!drawn)
+        ui::placeholderTile(fb, x, y, w, h, item.title, radius);
+    ui::roundCorners(fb, x, y, w, h, radius, d::kCanvas);
 
-    // In-card black strip keeps every grid card's title readable.  Home cards
-    // draw their title/subtitle beneath the card instead.
-    if (!home) {
-        int ty = y + h - BitmapFont::GLYPH_H - 2;
-        BitmapFont::fillRect(fb, x, ty, w, BitmapFont::GLYPH_H + 2, 0, 0, 0, 160);
-        int mcc = (w - 4) / BitmapFont::GLYPH_W;
-        std::string truncated = BitmapFont::truncateUtf8(item.title, mcc);
-        BitmapFont::drawString(fb, x + 2, ty + 1, truncated.c_str(), 255, 255, 255, 0, 0, 0);
-    }
-    if (selected) {
-        if (home) {
-            drawFocusGlow(fb, x, y, w, h);
-        } else {
-            // Movies/Shows grid selection is intentionally unchanged.
-            BitmapFont::drawRect(fb, x - 2, y - 2, w + 4, h + 4, 255, 220, 40);
-            BitmapFont::drawRect(fb, x - 1, y - 1, w + 2, h + 2, 255, 255, 120);
-        }
-    } else {
-        BitmapFont::drawRect(fb, x, y, w, h, home ? CARD_BORDER_R : Theme::TEXT_R,
-                             home ? CARD_BORDER_G : Theme::TEXT_G,
-                             home ? CARD_BORDER_B : Theme::TEXT_B);
-    }
+    if (item.played)
+        drawWatchedBadge(fb, x, y, w);
+    else if (w < 100)
+        drawProgressOverlay(fb, x, y, w, h, item); // grid cards; rails draw their own
+
+    if (selected)
+        ui::focusRing(fb, x, y, w, h, radius);
+    else
+        ui::roundOutline(fb, x, y, w, h, radius, d::kBorder);
 }
 
 void HomeScreen::drawPlaceholderTab(SDL_Surface* fb, const char* message)
 {
-    BitmapFont::drawString(fb, 8, 200, message, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    drawCenteredNote(fb, message, "", d::kTextSecondary);
 }
 
 void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
-    char summary[128];
-    std::snprintf(summary, sizeof(summary), "Free %s | Local %s | Queue %s",
-                  formatBytes(m_downloadsState.snapshot.freeBytes).c_str(),
-                  formatBytes(m_downloadsState.snapshot.localBytes).c_str(),
-                  formatBytes(m_downloadsState.snapshot.reservedBytes).c_str());
-    BitmapFont::drawString(fb, 8, 32, summary, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           24, 24, 32);
-    BitmapFont::fillRect(fb, 8, 49, 624, 1, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 90);
+    const DownloadSnapshot& snap = m_downloadsState.snapshot;
+
+    // Storage summary: three figures in one panel.
+    ui::panel(fb, d::kMargin, DL_SUMMARY_Y, d::kScreenW - 2 * d::kMargin, DL_SUMMARY_H);
+    struct Stat
+    {
+        const char* label;
+        std::string value;
+        d::Rgb color;
+    };
+    const Stat stats[3] = {{"FREE", formatBytes(snap.freeBytes), d::kText},
+                           {"DOWNLOADED", formatBytes(snap.localBytes), d::kText},
+                           {"QUEUED", formatBytes(snap.reservedBytes),
+                            snap.reservedBytes > 0 ? d::kAccentHi : d::kTextSecondary}};
+    const int colW = (d::kScreenW - 2 * d::kMargin) / 3;
+    for (int i = 0; i < 3; ++i) {
+        const int cx = d::kMargin + 14 + i * colW;
+        ui::text(fb, cx, DL_SUMMARY_Y + 6, stats[i].label, d::kTextMuted);
+        ui::text(fb, cx, DL_SUMMARY_Y + 24, stats[i].value, stats[i].color);
+        if (i > 0)
+            ui::fill(fb, d::kMargin + i * colW, DL_SUMMARY_Y + 8, 1, DL_SUMMARY_H - 16,
+                     d::kDivider);
+    }
+
     const auto& rows = m_downloadsState.hierarchy.visible;
     if (rows.empty()) {
-        BitmapFont::drawString(fb, 8, 210, "No downloads", Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, 24, 24, 32);
-        if (!m_downloadsState.missingJournal.empty())
-            BitmapFont::drawString(fb, 8, 230, "Missing offline progress: X=Discard",
-                                   Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, 24,
-                                   24, 32);
+        drawCenteredNote(fb, "No downloads yet",
+                         "Open a movie or episode and choose Download to watch it offline.",
+                         d::kTextSecondary);
+        if (!m_downloadsState.missingJournal.empty()) {
+            ui::panel(fb, d::kMargin, d::kScreenH - d::kFooterH - 52,
+                      d::kScreenW - 2 * d::kMargin, 40, ui::mix(d::kPanel, d::kWarning, 14),
+                      d::kWarning);
+            ui::text(fb, d::kMargin + 14, d::kScreenH - d::kFooterH - 40,
+                     "Missing offline progress: press X to discard", d::kWarning);
+        }
         return;
     }
-    bool moviesLabel = false;
-    bool showsLabel = false;
-    for (int visible = 0; visible < 5; ++visible) {
-        int index = m_downloadsState.scroll + visible;
+
+    for (int visible = 0; visible < HomeDownloadsState::kVisibleRows; ++visible) {
+        const int index = m_downloadsState.scroll + visible;
         if (index >= static_cast<int>(rows.size()))
             break;
         const DownloadHierarchyRow& row = rows[index];
         const DownloadItem* item = row.item;
-        int y = 58 + visible * 76;
-        bool selected = index == m_downloadsState.selected;
-        const bool movie = row.kind == DownloadHierarchyRowKind::Movie;
-        if (movie && !moviesLabel) {
-            BitmapFont::drawString(fb, 8, y, "Movies", Theme::ACCENT_R, Theme::ACCENT_G,
-                                   Theme::ACCENT_B, 24, 24, 32);
-            y += 11;
-            moviesLabel = true;
-        }
-        if (!movie && !showsLabel) {
-            BitmapFont::drawString(fb, 8, y, "Shows", Theme::ACCENT_R, Theme::ACCENT_G,
-                                   Theme::ACCENT_B, 24, 24, 32);
-            y += 11;
-            showsLabel = true;
-        }
+        const bool selected = index == m_downloadsState.selected;
+        const int indent = row.indent * 14;
+        const int rx = d::kMargin + indent;
+        const int rw = d::kScreenW - 2 * d::kMargin - indent;
+        const int ry = DL_LIST_TOP + visible * DL_ROW_PITCH;
+
         if (selected)
-            BitmapFont::fillRect(fb, 6 + row.indent * 14, y - 2, 628 - row.indent * 14, 58,
-                                 Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B, 80);
-        const int x = 12 + row.indent * 14;
+            ui::focusRing(fb, rx, ry, rw, DL_ROW_H);
+        ui::roundFill(fb, rx, ry, rw, DL_ROW_H, d::kRadius, selected ? d::kRaised : d::kPanel);
+        ui::roundOutline(fb, rx, ry, rw, DL_ROW_H, d::kRadius, selected ? d::kAccent : d::kBorder);
+
+        // Kind chip, then the title.
+        const bool parent = row.kind == DownloadHierarchyRowKind::Series ||
+                            row.kind == DownloadHierarchyRowKind::Season;
+        const char* kindLabel = row.kind == DownloadHierarchyRowKind::Movie    ? "MOVIE"
+                                : row.kind == DownloadHierarchyRowKind::Series ? "SERIES"
+                                : row.kind == DownloadHierarchyRowKind::Season ? "SEASON"
+                                                                               : "EP";
+        int tx = rx + 12;
+        tx += ui::chip(fb, tx, ry + 8, kindLabel, d::kAccentSoft, d::kAccentHi) + 8;
+
+        // State chip on the right.
+        std::string stateText;
+        d::Rgb stateBg = d::kRaised, stateFg = d::kTextSecondary;
+        int percent = 0;
+        if (item) {
+            percent = static_cast<int>(downloadPercent(*item));
+            stateText = downloadStateLabel(item->state);
+            switch (item->state) {
+            case DownloadState::Complete:
+                stateBg = ui::mix(d::kCanvas, d::kSuccess, 22);
+                stateFg = d::kSuccess;
+                break;
+            case DownloadState::Downloading:
+                stateBg = d::kAccentSoft;
+                stateFg = d::kAccentHi;
+                stateText += " " + std::to_string(percent) + "%";
+                break;
+            case DownloadState::Failed:
+            case DownloadState::Unauthorized:
+                stateBg = ui::mix(d::kCanvas, d::kDanger, 24);
+                stateFg = d::kDanger;
+                break;
+            case DownloadState::UpdateAvailable:
+            case DownloadState::WaitingForNetwork:
+                stateBg = ui::mix(d::kCanvas, d::kWarning, 22);
+                stateFg = d::kWarning;
+                break;
+            default:
+                break;
+            }
+        } else {
+            percent = row.aggregate.progressKnown ? row.aggregate.progress : 0;
+            stateText = std::to_string(row.aggregate.episodes) +
+                        (row.aggregate.episodes == 1 ? " episode" : " episodes");
+            if (row.aggregate.active)
+                stateText += " " + std::to_string(row.aggregate.progress) + "%";
+        }
+        const int chipW = ui::textWidth(stateText) + 12;
+        ui::chip(fb, rx + rw - chipW - 12, ry + 8, stateText, stateBg, stateFg);
+
         std::string title = row.title;
-        if (row.kind == DownloadHierarchyRowKind::Series ||
-            row.kind == DownloadHierarchyRowKind::Season)
+        if (parent)
             title += row.expanded ? "  v" : "  >";
-        if (title.size() > 68 - (size_t)row.indent * 2)
-            title.resize(68 - (size_t)row.indent * 2);
-        BitmapFont::drawString(fb, x, y, title.c_str(), selected ? Theme::ACCENT_R : Theme::TEXT_R,
-                               selected ? Theme::ACCENT_G : Theme::TEXT_G,
-                               selected ? Theme::ACCENT_B : Theme::TEXT_B, 24, 24, 32);
+        ui::textClamped(fb, tx, ry + 10, rx + rw - chipW - 24 - tx, title,
+                        selected ? d::kText : d::kTextSecondary);
+
+        // Detail line.
         std::string detail;
         if (!item) {
-            detail = std::to_string(row.aggregate.episodes) + " episodes";
-            if (row.aggregate.active)
-                detail += " | " + std::to_string(row.aggregate.progress) + "%";
-            else if (row.aggregate.complete)
-                detail += " | " + std::to_string(row.aggregate.complete) + " complete";
-            if (row.aggregate.bytesKnown)
-                detail += " | " + formatBytes(row.aggregate.bytes) + "/" +
+            if (row.aggregate.complete)
+                detail = std::to_string(row.aggregate.complete) + " complete";
+            if (row.aggregate.bytesKnown) {
+                if (!detail.empty())
+                    detail += "  ";
+                detail += formatBytes(row.aggregate.bytes) + " / " +
                           formatBytes(row.aggregate.totalBytes);
+            }
         } else {
             const bool completedHls = item->hlsStorage && downloadHierarchyComplete(*item);
             const std::string sizeLabel = (item->hlsStorage && !completedHls ? "~" : "") +
                                           formatBytes(displayDownloadBytes(*item));
             if (item->itemType == "episode")
-                detail = episodeDownloadLabel(*item);
+                detail = episodeDownloadLabel(*item) + "  " + sizeLabel;
             else
-                detail = std::string(downloadStateLabel(item->state)) + " | " + sizeLabel;
+                detail = sizeLabel;
             if (item->state == DownloadState::Downloading) {
-                const std::uint64_t total = predictedDownloadTotalBytes(*item);
-                const bool approxTotal = item->hlsStorage && !completedHls;
                 char active[96];
-                std::snprintf(active, sizeof(active), "Downloading %u%% | %s / %s%s | %s/s",
-                              downloadPercent(*item), formatBytes(item->downloadedBytes).c_str(),
-                              approxTotal ? "~" : "", formatBytes(total).c_str(),
+                std::snprintf(active, sizeof(active), "%s  %s/s", sizeLabel.c_str(),
                               formatBytes(item->recentBytesPerSec).c_str());
                 detail = active;
-            } else if (item->itemType == "episode") {
-                detail += " | " + std::string(downloadStateLabel(item->state)) + " | " + sizeLabel;
             }
             if (!item->lastError.empty() && (item->state == DownloadState::Failed ||
                                              item->state == DownloadState::WaitingForNetwork ||
                                              item->state == DownloadState::Unauthorized))
-                detail = std::string(downloadStateLabel(item->state)) + " | " + item->lastError;
+                detail = item->lastError;
         }
-        if (detail.size() > 74)
-            detail.resize(74);
-        BitmapFont::drawString(fb, x, y + 18, detail.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, 24, 24, 32);
-        BitmapFont::fillRect(fb, x, y + 39, 600 - row.indent * 14, 3, 48, 48, 58, 255);
-        int fill =
-            static_cast<int>((600 - row.indent * 14) *
-                             (item ? downloadPercent(*item)
-                                   : (row.aggregate.progressKnown ? row.aggregate.progress : 0)) /
-                             100);
-        if (fill)
-            BitmapFont::fillRect(fb, x, y + 39, fill, 3, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                                 Theme::HIGHLIGHT_B, 255);
+        ui::textClamped(fb, rx + 12, ry + 30, rw - 24, detail, d::kTextMuted);
+        const bool done = item && item->state == DownloadState::Complete;
+        ui::progressBar(fb, rx + 12, ry + DL_ROW_H - 10, rw - 24, 4, percent,
+                        done ? d::kSuccess : d::kAccent);
     }
 }
 
 void HomeScreen::drawBottomHints(SDL_Surface* fb)
 {
-    int y = 480 - BOTTOM_H;
-    BitmapFont::fillRect(fb, 0, y, 640, BOTTOM_H, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                         Theme::BG_B * 2 / 3, 255);
+    ui::FooterSpec spec;
+    using ui::Key;
+    std::string link;
+    linkPresentation(m_userName, m_link ? m_link->status() : LinkStatus::Checking, link,
+                     spec.link);
+    spec.rightText = link;
+    spec.note = syncStatusText();
 
     if (m_loadState == LoadState::Loading) {
-        BitmapFont::drawString(fb, 8, y + 2, "Y=Logout", Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                               Theme::BG_B * 2 / 3);
+        spec.hints = {{Key::Y, "Log out"}};
     } else if (m_loadState == LoadState::Error) {
-        BitmapFont::drawString(fb, 8, y + 2, "A=Retry  Y=Logout", Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                               Theme::BG_B * 2 / 3);
+        spec.hints = {{Key::A, "Retry"}, {Key::Y, "Log out"}};
     } else if (m_logoutArmed && !m_logoutRequested) {
-        int secs = (m_logoutTimer + 999) / 1000;
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Press Y again to confirm logout (%d)", secs);
-        BitmapFont::drawString(fb, 8, y + 2, buf, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                               Theme::HIGHLIGHT_B, Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                               Theme::BG_B * 2 / 3);
-    } else {
-        if (activeTabNamed("Home")) {
-            drawHomeStatusBar(fb, y);
-            return;
+        std::snprintf(buf, sizeof(buf), "Press Y again to confirm logout (%d)",
+                      static_cast<int>((m_logoutTimer + 999) / 1000));
+        spec.message = buf;
+        spec.messageColor = d::kDanger;
+    } else if (activeTabNamed("Settings")) {
+        if (m_settingsState.confirmation == SettingsConfirmation::ChangeServer) {
+            spec.message = "Press A again to change server";
+            spec.messageColor = d::kWarning;
+        } else if (m_settingsState.confirmation == SettingsConfirmation::Logout) {
+            spec.message = "Press A again to log out";
+            spec.messageColor = d::kDanger;
+        } else {
+            spec.hints = {{Key::Dpad, "Scroll"}, {Key::A, "Change"}, {Key::B, "Back"},
+                          {Key::LR, "Tabs"}};
         }
-        const char* hints = "A=Select  B=Back  L/R=Tabs  Y=Logout";
-        if (activeTabNamed("Settings")) {
-            const char* hint = "Up/Down=Scroll  B=Back  L/R=Tabs";
-            if (m_settingsState.confirmation == SettingsConfirmation::ChangeServer)
-                hint = "A again: Change Server";
-            else if (m_settingsState.confirmation == SettingsConfirmation::Logout)
-                hint = "A again: Log Out";
-            BitmapFont::drawString(fb, 8, y + 2, hint, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                                   Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
-            return;
-        }
-        if (activeTabNamed("Downloads")) {
-            if (!m_downloadsState.journalDiscardConfirmId.empty()) {
-                BitmapFont::drawString(fb, 8, y + 2, "Press X again to discard missing progress",
-                                       Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B,
-                                       Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3,
-                                       Theme::BG_B * 2 / 3);
-                return;
+    } else if (activeTabNamed("Downloads")) {
+        const DownloadHierarchyRow* selectedRow =
+            m_downloadsState.selected >= 0 &&
+                    m_downloadsState.selected <
+                        static_cast<int>(m_downloadsState.hierarchy.visible.size())
+                ? &m_downloadsState.hierarchy.visible[m_downloadsState.selected]
+                : nullptr;
+        const DownloadItem* selectedItem = selectedRow ? selectedRow->item : nullptr;
+        if (!m_downloadsState.journalDiscardConfirmId.empty()) {
+            spec.message = "Press X again to discard missing progress";
+            spec.messageColor = d::kWarning;
+        } else if (!m_downloadsState.confirmId.empty() && selectedRow &&
+                   m_downloadsState.confirmId == selectedRow->id) {
+            char confirm[96];
+            if (selectedItem) {
+                std::snprintf(confirm, sizeof(confirm), "Press Y again to %s %s",
+                              downloadRemoveIsDelete(*selectedItem) ? "delete" : "cancel",
+                              formatBytes(displayDownloadBytes(*selectedItem)).c_str());
+            } else {
+                std::snprintf(confirm, sizeof(confirm), "Press Y again to delete %s (%u local)",
+                              selectedRow->kind == DownloadHierarchyRowKind::Season
+                                  ? "Season"
+                                  : "entire Series",
+                              static_cast<unsigned>(m_downloadsState.confirmItemIds.size()));
             }
-            const DownloadHierarchyRow* selectedRow =
-                m_downloadsState.selected >= 0 &&
-                        m_downloadsState.selected <
-                            static_cast<int>(m_downloadsState.hierarchy.visible.size())
-                    ? &m_downloadsState.hierarchy.visible[m_downloadsState.selected]
-                    : nullptr;
-            const DownloadItem* selectedItem = selectedRow ? selectedRow->item : nullptr;
-            if (!m_downloadsState.confirmId.empty() && selectedRow &&
-                m_downloadsState.confirmId == selectedRow->id) {
-                char confirm[96];
-                if (selectedItem) {
-                    const DownloadItem& item = *selectedItem;
-                    std::snprintf(confirm, sizeof(confirm), "Press Y again to %s %s",
-                                  downloadRemoveIsDelete(item) ? "delete" : "cancel",
-                                  formatBytes(displayDownloadBytes(item)).c_str());
-                } else {
-                    std::snprintf(confirm, sizeof(confirm), "Press Y again to delete %s (%u local)",
-                                  selectedRow->kind == DownloadHierarchyRowKind::Season
-                                      ? "Season"
-                                      : "entire Series",
-                                  (unsigned)m_downloadsState.confirmItemIds.size());
-                }
-                BitmapFont::drawString(fb, 8, y + 2, confirm, Theme::HIGHLIGHT_R,
-                                       Theme::HIGHLIGHT_G, Theme::HIGHLIGHT_B, Theme::BG_R * 2 / 3,
-                                       Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
-                return;
-            }
-            const char* primary = "";
+            spec.message = confirm;
+            spec.messageColor = d::kDanger;
+        } else {
+            std::string primary = "Select";
             if (selectedItem)
                 primary = downloadPrimaryControlLabel(downloadPrimaryControl(selectedItem->state));
-            bool update = selectedItem && selectedItem->state == DownloadState::UpdateAvailable;
             if (selectedRow && !selectedItem)
                 primary = selectedRow->expanded ? "Collapse" : "Expand";
-            const bool parent = selectedRow && !selectedItem;
-            char downloadHints[96];
-            std::snprintf(downloadHints, sizeof(downloadHints),
-                          update
-                              ? "A=Play  X=Update  Y=Delete  B=Back"
-                              : (parent ? "A=%s  Y=Delete all  B=Back"
-                                        : (!m_downloadsState.missingJournal.empty()
-                                               ? "A=%s  X=Discard missing progress  Y=Cancel/Delete"
-                                               : "A=%s  Y=Cancel/Delete  B=Back")),
-                          primary[0] ? primary : "Select");
-            hints = downloadHints;
-            BitmapFont::drawString(fb, 8, y + 2, hints, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                                   Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
-            return;
+            spec.hints = {{Key::Dpad, "Move"}, {Key::A, primary}};
+            if (selectedItem && selectedItem->state == DownloadState::UpdateAvailable)
+                spec.hints.push_back({Key::X, "Update"});
+            else if (!m_downloadsState.missingJournal.empty())
+                spec.hints.push_back({Key::X, "Discard"});
+            spec.hints.push_back({Key::Y, selectedRow && !selectedItem ? "Delete all" : "Delete"});
+            spec.hints.push_back({Key::B, "Back"});
         }
-        if (activeTabNamed("Movies")) {
-            hints = m_movieRailFocused ? "A=Filter  Right=Movies  B=Back"
-                                       : "A=Select  Left@edge=Alphabet  L/R=Tabs";
-        } else if (activeTabNamed("Shows")) {
-            hints = m_showsFocus == ShowsFocus::AlphabetRail
-                        ? "A=Filter  Right=Shows  B=Back"
-                        : "A=Select  Left/Right=Move  Edge=Alphabet";
-        }
-        BitmapFont::drawString(fb, 8, y + 2, hints, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                               Theme::BG_R * 2 / 3, Theme::BG_G * 2 / 3, Theme::BG_B * 2 / 3);
+    } else if (activeTabNamed("Movies")) {
+        spec.hints = m_movieRailFocused
+                         ? std::vector<ui::Hint>{{Key::Dpad, "Move"}, {Key::A, "Filter"},
+                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}}
+                         : std::vector<ui::Hint>{{Key::Dpad, "Browse"}, {Key::A, "Open"},
+                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}};
+    } else if (activeTabNamed("Shows")) {
+        spec.hints = m_showsFocus == ShowsFocus::AlphabetRail
+                         ? std::vector<ui::Hint>{{Key::Dpad, "Move"}, {Key::A, "Filter"},
+                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}}
+                         : std::vector<ui::Hint>{{Key::Dpad, "Browse"}, {Key::A, "Open"},
+                                                 {Key::B, "Back"}, {Key::LR, "Tabs"}};
+    } else {
+        spec.hints = {{Key::Dpad, "Navigate"}, {Key::A, "Select"}, {Key::B, "Back"},
+                      {Key::LR, "Tabs"}};
     }
+    ui::footer(fb, spec);
 }
 
 void HomeScreen::drawLoadingState(SDL_Surface* fb)
 {
-    char userBuf[64];
-    std::snprintf(userBuf, sizeof(userBuf), "Logged in as %s", m_userName.c_str());
-    int ux = (fb->w - (int)::strlen(userBuf) * BitmapFont::GLYPH_W) / 2;
-    int uy = fb->h / 3;
-    BitmapFont::drawString(fb, ux, uy, userBuf, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
-    static int dotPhase = 0;
-    dotPhase = (dotPhase + 1) % 60;
-    int dots = dotPhase / 15;
-    char buf[32] = "Loading library";
-    for (int i = 0; i < dots; ++i)
-        std::strcat(buf, ".");
-    int mx = (fb->w - (int)::strlen(buf) * BitmapFont::GLYPH_W) / 2;
-    int my = uy + BitmapFont::GLYPH_H + 16;
-    BitmapFont::drawString(fb, mx, my, buf, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    const int phase = static_cast<int>((SDL_GetTicks() / 350) % 4);
+    std::string title = "Loading your library";
+    title.append(static_cast<std::size_t>(phase), '.');
+    // Keep the title from jumping as the dots animate: pad to a fixed width.
+    const std::string padded = title + std::string(static_cast<std::size_t>(3 - phase), ' ');
+    drawCenteredNote(fb, padded, m_userName.empty() ? std::string() : "Signed in as " + m_userName,
+                     d::kText);
 }
 
 void HomeScreen::drawErrorState(SDL_Surface* fb)
 {
-    const char* header = "Failed to load library";
-    int hx = (fb->w - (int)::strlen(header) * BitmapFont::GLYPH_W) / 2;
-    int hy = fb->h / 3;
-    BitmapFont::drawString(fb, hx, hy, header, Theme::HIGHLIGHT_R, Theme::HIGHLIGHT_G,
-                           Theme::HIGHLIGHT_B, Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
-    char errBuf[128];
-    std::snprintf(errBuf, sizeof(errBuf), "%s", m_fetchError.c_str());
-    int maxChars = (640 - 16) / BitmapFont::GLYPH_W;
-    if ((int)::strlen(errBuf) > maxChars)
-        errBuf[maxChars] = '\0';
-    int ex = (fb->w - (int)::strlen(errBuf) * BitmapFont::GLYPH_W) / 2;
-    int ey = hy + BitmapFont::GLYPH_H + 8;
-    BitmapFont::drawString(fb, ex, ey, errBuf, Theme::TEXT_R, Theme::TEXT_G, Theme::TEXT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
-
-    const char* hint = "Press A to retry";
-    int hix = (fb->w - (int)::strlen(hint) * BitmapFont::GLYPH_W) / 2;
-    int hiy = ey + BitmapFont::GLYPH_H + 16;
-    BitmapFont::drawString(fb, hix, hiy, hint, Theme::ACCENT_R, Theme::ACCENT_G, Theme::ACCENT_B,
-                           Theme::BG_R, Theme::BG_G, Theme::BG_B);
+    drawCenteredNote(fb, "Could not load your library", m_fetchError, d::kDanger);
 }
 
 } // namespace miyoofin

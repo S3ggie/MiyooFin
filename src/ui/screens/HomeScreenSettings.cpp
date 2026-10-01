@@ -1,3 +1,6 @@
+#include "../UiKit.hpp"
+#include <cctype>
+#include <algorithm>
 #include "HomeScreen.hpp"
 #include "../BitmapFont.hpp"
 #include "../Theme.hpp"
@@ -53,7 +56,6 @@ HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Sessi
 
 void HomeScreen::drawSettingsTab(SDL_Surface* fb)
 {
-    BitmapFont::fillRect(fb, 0, 25, 640, 437, 24, 24, 32, 255);
     const auto syncStatus = m_libraryCoordinator ? m_libraryCoordinator->status()
                                                  : library::LibraryCoordinator::Status{};
     struct SettingRow
@@ -82,26 +84,40 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
     }
     rows.insert(rows.end(),
                 {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR}, {"ACCOUNT", "Log Out"}});
-    static constexpr int ROW_H = 68;
-    static constexpr int TOP = 34;
+    namespace d = design;
+    constexpr int ROW_H = 58, PITCH = 66, TOP = d::kHeaderH + 10, W = d::kScreenW - 2 * d::kMargin - 8;
+    const int total = static_cast<int>(rows.size());
     for (int visible = 0; visible < HomeSettingsState::kVisibleRows; ++visible) {
         const int index = m_settingsState.scroll + visible;
-        if (index >= static_cast<int>(rows.size()))
+        if (index >= total)
             break;
-        const int y = TOP + visible * ROW_H;
+        const int y = TOP + visible * PITCH;
         const bool selected = index == m_settingsState.selected;
         if (selected)
-            BitmapFont::fillRect(fb, 8, y - 2, 624, ROW_H - 4, Theme::ACCENT_R, Theme::ACCENT_G,
-                                 Theme::ACCENT_B, 70);
-        BitmapFont::drawString(fb, 16, y, rows[index].section.c_str(), Theme::ACCENT_R,
-                               Theme::ACCENT_G, Theme::ACCENT_B, 24, 24, 32);
-        std::string value = rows[index].value;
-        static constexpr size_t MAX_CHARS = 72;
-        if (value.size() > MAX_CHARS)
-            value = value.substr(0, MAX_CHARS - 3) + "...";
-        BitmapFont::drawString(fb, 16, y + 20, value.c_str(), Theme::TEXT_R, Theme::TEXT_G,
-                               Theme::TEXT_B, 24, 24, 32);
-        BitmapFont::fillRect(fb, 16, y + ROW_H - 8, 608, 1, 48, 48, 58, 255);
+            ui::focusRing(fb, d::kMargin, y, W, ROW_H);
+        ui::roundFill(fb, d::kMargin, y, W, ROW_H, d::kRadius, selected ? d::kRaised : d::kPanel);
+        ui::roundOutline(fb, d::kMargin, y, W, ROW_H, d::kRadius,
+                         selected ? d::kAccent : d::kBorder);
+        std::string label = rows[index].section;
+        for (char& c : label)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        ui::text(fb, d::kMargin + 14, y + 10, label, selected ? d::kAccentHi : d::kTextMuted);
+        const std::string& raw = rows[index].value;
+        d::Rgb color = selected ? d::kText : d::kTextSecondary;
+        if (label == "OFFLINE MODE")
+            color = raw == "ON" ? d::kWarning : d::kSuccess;
+        else if (label == "ACCOUNT" && raw == "Log Out")
+            color = d::kDanger;
+        ui::textClamped(fb, d::kMargin + 14, y + 30, W - 28, raw, color);
+    }
+    // Scroll position along the right edge.
+    if (total > HomeSettingsState::kVisibleRows) {
+        const int trackH = HomeSettingsState::kVisibleRows * PITCH - 8;
+        const int thumbH = std::max(16, trackH * HomeSettingsState::kVisibleRows / total);
+        const int maxScroll = total - HomeSettingsState::kVisibleRows;
+        const int thumbY = TOP + (trackH - thumbH) * m_settingsState.scroll / std::max(1, maxScroll);
+        ui::fill(fb, d::kScreenW - 10, TOP, 3, trackH, d::kDivider);
+        ui::roundFill(fb, d::kScreenW - 10, thumbY, 3, thumbH, 1, d::kAccentDim);
     }
 }
 

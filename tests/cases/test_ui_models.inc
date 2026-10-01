@@ -298,12 +298,12 @@ static void testHomeArtworkPlan()
     std::printf("[test] Home artwork key and poster planning\n");
     MediaItem movie = makeHomeItem("movie-1", "Movie", "movie");
     movie.imageTags["Primary"] = "tag-a";
-    CHECK_EQ(homeArtworkKey(movie), "movie-1:Primary:tag-a:64x96");
+    CHECK_EQ(homeArtworkKey(movie), "movie-1:Primary:tag-a:128x192");
 
     MediaItem episode = makeHomeItem("ep-1", "Episode", "episode");
     episode.imageTags["Thumb"] = "thumb-a";
     episode.imageTags["Primary"] = "primary-a";
-    CHECK_EQ(homeArtworkKey(episode), "ep-1:Thumb:thumb-a:128x72");
+    CHECK_EQ(homeArtworkKey(episode), "ep-1:Thumb:thumb-a:192x108");
 
     MediaItem noArt = makeHomeItem("none-1", "None", "movie");
     CHECK_EQ(homeArtworkKey(noArt), "");
@@ -700,11 +700,11 @@ static void testHomeArtworkCacheCardSurfaces()
     std::printf("[test] HomeArtworkCache card surfaces\n");
     HomeArtworkCache cache;
     const std::set<std::string> none;
-    // 100x50 image into a 64x96 box: width-limited aspect fit -> 64x32.
+    // A wide 100x50 image is placed in a box of exactly 64x96 (never letterboxed).
     cache.prepareCardSurface("item:poster:64x96", homeArtworkImage(100, 50), 64, 96);
     CHECK(cache.cardSurfaces.count("item:poster:64x96") == 1);
     SDL_Surface* card = cache.cardSurfaces["item:poster:64x96"];
-    CHECK(card != nullptr && card->w == 64 && card->h == 32);
+    CHECK(card != nullptr && card->w == 64 && card->h == 96);
     // Invalid input creates nothing.
     cache.prepareCardSurface("bad", DecodedImage{}, 64, 96);
     cache.prepareCardSurface("bad", homeArtworkImage(2, 2), 0, 96);
@@ -1023,4 +1023,132 @@ static void testBatteryChargingProbe()
     std::remove(counter.c_str());
     ::rmdir(dir.c_str());
     std::printf("[test] BatteryMonitor charging probe OK\n");
+}
+
+// --- ConnectionMonitor: polling link status behind "<user> connected" -------
+
+// Drives update() with small real-time sleeps until `done` holds (~3s max).
+template <typename Done>
+static bool pumpLink(ConnectionMonitor& monitor, unsigned stepMs, Done done)
+{
+    for (int i = 0; i < 300 && !done(); ++i) {
+        monitor.update(stepMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    return done();
+}
+
+static void testConnectionMonitorStatesAndHysteresis()
+{
+    std::printf("[test] ConnectionMonitor states and hysteresis\n");
+    std::atomic<int> mode{0}; // 0 connected, 1 offline, 2 session expired
+    std::atomic<int> calls{0};
+    auto probe = [&](const CancelToken&) {
+        ++calls;
+        return mode.load() == 0   ? LinkStatus::Connected
+               : mode.load() == 1 ? LinkStatus::Offline
+                                  : LinkStatus::SessionExpired;
+    };
+    ConnectionMonitor monitor(probe, 1000, 1000);
+    CHECK(monitor.status() == LinkStatus::Checking); // nothing probed yet
+    // First probe succeeds: connected.
+    CHECK(pumpLink(monitor, 1000, [&] { return monitor.status() == LinkStatus::Connected; }));
+    // One failed probe after a good one keeps "connected" (no flicker)...
+    mode = 1;
+    const int before = calls.load();
+    CHECK(pumpLink(monitor, 1000, [&] { return calls.load() >= before + 1; }));
+    for (int i = 0; i < 5; ++i) { // let that single failed result be reaped
+        monitor.update(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(monitor.status() == LinkStatus::Connected);
+    // ...the second failure in a row is offline.
+    CHECK(pumpLink(monitor, 1000, [&] { return monitor.status() == LinkStatus::Offline; }));
+    // Recovery is immediate.
+    mode = 0;
+    CHECK(pumpLink(monitor, 1000, [&] { return monitor.status() == LinkStatus::Connected; }));
+    // A rejected session is definitive and shows at once.
+    mode = 2;
+    CHECK(pumpLink(monitor, 1000, [&] { return monitor.status() == LinkStatus::SessionExpired; }));
+    std::printf("[test] ConnectionMonitor states and hysteresis OK\n");
+}
+
+static void testConnectionMonitorFirstFailureIsOffline()
+{
+    std::printf("[test] ConnectionMonitor first failure\n");
+    ConnectionMonitor monitor([](const CancelToken&) { return LinkStatus::Offline; }, 1000, 1000);
+    // Before any success there is nothing to keep "connected": offline at once.
+    CHECK(pumpLink(monitor, 1000, [&] { return monitor.status() == LinkStatus::Offline; }));
+    std::printf("[test] ConnectionMonitor first failure OK\n");
+}
+
+static void testConnectionMonitorIntervalsPokeAndOfflineMode()
+{
+    std::printf("[test] ConnectionMonitor intervals, poke and offline mode\n");
+    std::atomic<int> calls{0};
+    ConnectionMonitor monitor(
+        [&](const CancelToken&) {
+            ++calls;
+            return LinkStatus::Connected;
+        },
+        500, 500);
+    CHECK(pumpLink(monitor, 16,
+                   [&] { return calls.load() == 1 && monitor.status() == LinkStatus::Connected; }));
+    // Within the interval no further probe starts.
+    for (int i = 0; i < 10; ++i) {
+        monitor.update(30);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(calls.load() == 1);
+    // pokeNow() probes without waiting for the interval.
+    monitor.pokeNow();
+    CHECK(pumpLink(monitor, 16, [&] { return calls.load() >= 2; }));
+    // Offline mode reports OfflineMode and stops probing.
+    monitor.setOfflineMode(true);
+    CHECK(monitor.status() == LinkStatus::OfflineMode);
+    for (int i = 0; i < 5; ++i) { // let an in-flight probe finish
+        monitor.update(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const int frozen = calls.load();
+    for (int i = 0; i < 20; ++i) {
+        monitor.update(1000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(calls.load() == frozen);
+    CHECK(monitor.status() == LinkStatus::OfflineMode);
+    // Leaving offline mode re-checks immediately.
+    monitor.setOfflineMode(false);
+    CHECK(monitor.status() == LinkStatus::Checking);
+    CHECK(pumpLink(monitor, 16, [&] { return monitor.status() == LinkStatus::Connected; }));
+    CHECK(calls.load() > frozen);
+    std::printf("[test] ConnectionMonitor intervals, poke and offline mode OK\n");
+}
+
+static void testConnectionMonitorDestructorCancelsBlockedProbe()
+{
+    std::printf("[test] ConnectionMonitor destructor cancels a blocked probe\n");
+    std::atomic<bool> started{false};
+    const auto begin = std::chrono::steady_clock::now();
+    {
+        ConnectionMonitor monitor(
+            [&](const CancelToken& cancel) {
+                started = true;
+                // A hung request that only ends when it is cancelled.
+                for (int i = 0; i < 3000 && !cancel->load(); ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                return LinkStatus::Offline;
+            },
+            1000, 1000);
+        for (int i = 0; i < 200 && !started.load(); ++i) {
+            monitor.update(1000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(started.load());
+    } // destructor must cancel and join without waiting out the 3s probe
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - begin)
+                        .count();
+    CHECK(ms < 1500);
+    std::printf("[test] ConnectionMonitor destructor cancels a blocked probe OK\n");
 }

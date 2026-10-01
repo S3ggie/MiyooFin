@@ -32,6 +32,15 @@ class BitmapFont
     static void drawStringScaled(SDL_Surface* surface, int x, int y, const char* text, int scale,
                                  Uint8 fgR, Uint8 fgG, Uint8 fgB, Uint8 bgR, Uint8 bgG, Uint8 bgB);
 
+    /// Draw text with a TRANSPARENT background (only the glyph pixels are
+    /// written), so it can sit on panels, gradients and image strips. Each font
+    /// pixel is enlarged by `scale`. Returns the drawn width in pixels.
+    static int drawStringTransparent(SDL_Surface* surface, int x, int y, const char* text,
+                                     int scale, Uint8 r, Uint8 g, Uint8 b);
+
+    /// Number of glyphs `text` renders as (UTF-8 aware, like drawString).
+    static int glyphCount(const std::string& text);
+
     /// Map a Unicode code point to an ASCII glyph for the bitmap font.
     /// Returns 0 for characters that have no sensible ASCII equivalent.
     static unsigned int mapCodePoint(unsigned int cp);

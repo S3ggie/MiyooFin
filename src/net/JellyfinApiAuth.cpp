@@ -160,7 +160,8 @@ bool JellyfinApi::validateToken(const std::string& baseUrl, const std::string& a
 TokenValidation JellyfinApi::validateTokenStatus(const std::string& baseUrl,
                                                  const std::string& accessToken,
                                                  const std::string& userId,
-                                                 const std::string& deviceId, std::string& error)
+                                                 const std::string& deviceId, std::string& error,
+                                                 const std::atomic<bool>* cancelled)
 {
     HttpClient client;
     client.setTimeoutSec(5);
@@ -181,7 +182,7 @@ TokenValidation JellyfinApi::validateTokenStatus(const std::string& baseUrl,
 
     HttpResponse response;
     TelemetryRequestScope request(RequestKind::TokenValidation);
-    if (!client.perform("GET", url, headers, {}, response, error)) {
+    if (!client.perform("GET", url, headers, {}, response, error, cancelled)) {
         if (error.empty())
             error = "Could not reach server";
         return TokenValidation::Unavailable;

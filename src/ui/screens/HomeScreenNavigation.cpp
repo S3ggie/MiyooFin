@@ -389,7 +389,9 @@ void HomeScreen::clampNavigation()
         m_rowScroll = m_activeRow;
     if (m_activeRow >= m_rowScroll + VISIBLE_ROWS)
         m_rowScroll = m_activeRow - VISIBLE_ROWS + 1;
-    m_cardScroll = clampHomeCardScroll(items, m_activeCard, m_cardScroll, 640);
+    m_cardScroll = clampHomeCardScroll(
+        static_cast<int>(items.size()), m_activeCard, m_cardScroll, 640,
+        homeRailCardSize(homeRailIsLandscape(rows[m_activeRow].label)).w);
 }
 
 bool HomeScreen::handlePointerClick(int x, int y)
@@ -458,6 +460,7 @@ bool HomeScreen::handleAction(Action action)
                 m_session.manualOfflineMode = !m_session.manualOfflineMode;
                 if (m_libraryCoordinator)
                     m_libraryCoordinator->setManualOfflineMode(m_session.manualOfflineMode);
+                m_link->setOfflineMode(m_session.manualOfflineMode);
                 const bool sessionSaved = m_session.save();
                 std::printf("[HomeScreen] manual_offline_mode=%s saved=%s\n",
                             m_session.manualOfflineMode ? "ON" : "OFF",

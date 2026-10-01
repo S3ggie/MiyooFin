@@ -1,0 +1,18 @@
+# Tour: visit every Home tab and capture each one, for visual review of the
+# shared chrome (header/footer) and each page's layout.
+WAIT_LOG [HomeScreen] Library loaded 30000
+SETTLE 1500
+SCREENSHOT home
+KEY NextTab 80 500
+SETTLE 1500
+SCREENSHOT movies
+KEY NextTab 80 500
+SETTLE 1500
+SCREENSHOT shows
+KEY NextTab 80 500
+SETTLE 1500
+SCREENSHOT downloads
+KEY NextTab 80 500
+SETTLE 1500
+SCREENSHOT settings
+QUIT

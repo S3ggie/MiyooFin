@@ -1,5 +1,7 @@
 #include "HomeArtworkCache.hpp"
 
+#include "UiKit.hpp"
+
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -75,41 +77,10 @@ void HomeArtworkCache::prepareCardSurface(const std::string& cacheKey, const Dec
             SDL_FreeSurface(it->second);
         cardSurfaces.erase(it);
     }
-    // Compute aspect-fit destination dimensions
-    const float imgAspect = static_cast<float>(img.width) / static_cast<float>(img.height);
-    const float boxAspect = static_cast<float>(boxW) / static_cast<float>(boxH);
-    int dw, dh;
-    if (imgAspect > boxAspect) {
-        dw = boxW;
-        dh = static_cast<int>(boxW / imgAspect + 0.5f);
-        if (dh > boxH)
-            dh = boxH;
-    } else {
-        dh = boxH;
-        dw = static_cast<int>(boxH * imgAspect + 0.5f);
-        if (dw > boxW)
-            dw = boxW;
-    }
-    // Create a temporary surface wrapping the decoded pixels for blitting.
-    SDL_Surface* src = SDL_CreateRGBSurfaceFrom(const_cast<unsigned char*>(img.pixels.data()),
-                                                img.width, img.height, 32, img.width * 4,
-                                                0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (!src)
-        return;
-    // Always blit into an owned surface.  The source pixels belong to a
-    // DecodedImage behind a shared_ptr that store() may replace at any time;
-    // wrapping the source directly (the old 1:1 path) created a
-    // use-after-free when the old entry was destroyed, producing TV-static
-    // garbage and duplicate artwork on neighboring cards.
-    SDL_Surface* owned =
-        SDL_CreateRGBSurface(0, dw, dh, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (owned) {
-        SDL_Rect srcR = {0, 0, img.width, img.height};
-        SDL_Rect dstR = {0, 0, dw, dh};
-        SDL_BlitScaled(src, &srcR, owned, &dstR);
+    // Owned, exactly boxW x boxH, never letterboxed (cover or ambient fill).
+    // It copies the pixels, so the shared DecodedImage may be replaced freely.
+    if (SDL_Surface* owned = ui::artworkSurface(img, boxW, boxH))
         cardSurfaces[cacheKey] = owned;
-    }
-    SDL_FreeSurface(src);
 }
 
 void HomeArtworkCache::clearCardSurfaces()

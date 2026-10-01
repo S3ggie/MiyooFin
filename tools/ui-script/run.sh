@@ -154,6 +154,11 @@ case "$NAME" in
         SHOT="$OUT/shots/home.bmp"
         CHECKS="rendered,rails"
         ;;
+    tour)
+        want='[HomeScreen] Library loaded'
+        SHOT="$OUT/shots/home.bmp"
+        CHECKS="rendered"
+        ;;
     movies)
         want='[HomeScreen] Library loaded'
         SHOT="$OUT/shots/movies.bmp"

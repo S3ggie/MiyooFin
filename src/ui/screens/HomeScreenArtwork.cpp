@@ -208,8 +208,8 @@ std::set<std::string> HomeScreen::protectedRowArtworkKeys() const
         if (rowIdx >= (int)rows.size())
             break;
         int cardX = HOME_RAIL_MARGIN;
+        const ArtworkBox box = homeRailCardSize(homeRailIsLandscape(rows[rowIdx].label));
         for (const auto& item : rows[rowIdx].items) {
-            const ArtworkBox box = homeRailCardSize(item);
             const int screenX = cardX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + box.w >= HOME_RAIL_MARGIN && screenX <= 640 - HOME_RAIL_MARGIN)
                 add(item);
@@ -303,8 +303,8 @@ void HomeScreen::tryLoadOneRowArtwork()
             break;
         const MediaRow& row = rows[rowIdx];
         int cardAccumX = HOME_RAIL_MARGIN;
+        const ArtworkBox sz = homeRailCardSize(homeRailIsLandscape(row.label));
         for (int ci = 0; ci < (int)row.items.size(); ++ci) {
-            ArtworkBox sz = homeRailCardSize(row.items[ci]);
             int screenX = cardAccumX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
             if (screenX + sz.w < HOME_RAIL_MARGIN) {
                 cardAccumX += sz.w + HOME_RAIL_GAP;

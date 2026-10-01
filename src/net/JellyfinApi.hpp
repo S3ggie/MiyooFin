@@ -115,10 +115,12 @@ class JellyfinApi
     static bool validateToken(const std::string& baseUrl, const std::string& accessToken,
                               const std::string& userId, const std::string& deviceId,
                               std::string& error);
+    /// `cancelled` (optional) aborts an in-flight request promptly.
     static TokenValidation validateTokenStatus(const std::string& baseUrl,
                                                const std::string& accessToken,
                                                const std::string& userId,
-                                               const std::string& deviceId, std::string& error);
+                                               const std::string& deviceId, std::string& error,
+                                               const std::atomic<bool>* cancelled = nullptr);
 
     /// Background-only helpers used by OfflinePlaybackJournal sync.
     static PlaybackSyncStatus

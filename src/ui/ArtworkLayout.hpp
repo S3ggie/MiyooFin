@@ -31,10 +31,18 @@ struct DisplayArtwork
     }
 };
 
+// Artwork is requested (and cached) at roughly twice the size it is shown at
+// and box-filtered down, so cards stay crisp: episode thumbnails are 16:9 and
+// everything else is a 2:3 poster.
+inline constexpr int ARTWORK_POSTER_W = 128;
+inline constexpr int ARTWORK_POSTER_H = 192;
+inline constexpr int ARTWORK_THUMB_W = 192;
+inline constexpr int ARTWORK_THUMB_H = 108;
+
 inline DisplayArtwork displayArtworkForItem(const MediaItem& item)
 {
-    const int w = item.type == "episode" ? 128 : 64;
-    const int h = item.type == "episode" ? 72 : 96;
+    const int w = item.type == "episode" ? ARTWORK_THUMB_W : ARTWORK_POSTER_W;
+    const int h = item.type == "episode" ? ARTWORK_THUMB_H : ARTWORK_POSTER_H;
     if (item.type == "episode") {
         auto thumb = item.imageTags.find("Thumb");
         if (thumb != item.imageTags.end() && !thumb->second.empty())
@@ -213,47 +221,37 @@ inline int clampCardScroll(const std::vector<MediaItem>& items, int activeCard, 
     return scroll;
 }
 
-/// Home rail card geometry for the redesigned Home presentation.  Portrait
-/// cards sized so five episode cards and six poster cards fill the 640px
-/// framebuffer width.  Presentation only: artwork request dimensions
-/// (displayArtworkForItem) are unchanged, so decoded art is aspect-fitted
-/// into these boxes.
-inline ArtworkBox homeRailCardSize(const MediaItem& item)
+/// Home rail card geometry. Card SHAPE follows the content of the rail:
+/// Continue Watching shows episode thumbnails (16:9), so it gets landscape
+/// cards, four across with the fifth peeking in; poster rails (Recently Added,
+/// ...) get 2:3 portrait cards, five across with the sixth peeking in. The peek
+/// tells you the rail scrolls.
+inline constexpr int HOME_RAIL_MARGIN = 16;
+inline constexpr int HOME_RAIL_GAP = 8;
+inline bool homeRailIsLandscape(const std::string& rowLabel)
 {
-    if (item.type == "episode")
-        return {120, 128};
-    return {99, 120};
+    return rowLabel == "Continue Watching";
+}
+inline ArtworkBox homeRailCardSize(bool landscape)
+{
+    return landscape ? ArtworkBox{144, 81} : ArtworkBox{115, 172};
 }
 
-inline constexpr int HOME_RAIL_STRIP_H = 128;
-inline constexpr int HOME_RAIL_MARGIN = 8;
-inline constexpr int HOME_RAIL_GAP = 6;
-
-/// Clamp horizontal pixel scroll for a Home rail using the redesigned card
-/// geometry.  Mirrors clampCardScroll() but with homeRailCardSize() widths.
-inline int clampHomeCardScroll(const std::vector<MediaItem>& items, int activeCard, int curScroll,
-                               int viewWidth)
+/// Horizontal scroll that keeps card `activeCard` fully inside
+/// [HOME_RAIL_MARGIN, viewWidth - HOME_RAIL_MARGIN] for a rail of equal-width
+/// cards; never negative, so the first card rests at the left margin.
+inline int clampHomeCardScroll(int itemCount, int activeCard, int curScroll, int viewWidth,
+                               int cardWidth)
 {
-    if (items.empty() || activeCard < 0 || activeCard >= (int)items.size())
+    if (itemCount <= 0 || activeCard < 0 || activeCard >= itemCount)
         return 0;
-
+    const int cardX = HOME_RAIL_MARGIN + activeCard * (cardWidth + HOME_RAIL_GAP);
     int scroll = curScroll;
-    int cardX = HOME_RAIL_MARGIN;
-    for (int ci = 0; ci < (int)items.size(); ++ci) {
-        int w = homeRailCardSize(items[ci]).w;
-        if (ci == activeCard) {
-            // card left edge must not be left of viewport
-            if (cardX - scroll < 0)
-                scroll = cardX;
-            // card right edge must not be right of viewport
-            if (cardX + w - scroll > viewWidth)
-                scroll = cardX + w - viewWidth;
-        }
-        cardX += w + HOME_RAIL_GAP;
-    }
-    if (scroll < 0)
-        scroll = 0;
-    return scroll;
+    if (cardX - scroll < HOME_RAIL_MARGIN)
+        scroll = cardX - HOME_RAIL_MARGIN;
+    if (cardX + cardWidth - scroll > viewWidth - HOME_RAIL_MARGIN)
+        scroll = cardX + cardWidth - (viewWidth - HOME_RAIL_MARGIN);
+    return scroll < 0 ? 0 : scroll;
 }
 
 /// Build the row-artwork identity key for a media item (B5d2a).

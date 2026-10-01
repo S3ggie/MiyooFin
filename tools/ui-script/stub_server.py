@@ -26,9 +26,31 @@ the Miyoo via a reverse SSH tunnel (device-127.0.0.1 -> host-127.0.0.1)
 instead of a LAN bind — loopback-only, never exposed otherwise.
 """
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
+
+FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+N_POSTERS = 12  # fixtures/poster-N.jpg (portrait 2:3)
+N_THUMBS = 6    # fixtures/thumb-N.jpg  (landscape 16:9)
+
+
+def _slot(item_id, modulo):
+    """Stable fixture slot for an id (not Python's randomised hash())."""
+    h = 2166136261
+    for ch in item_id.encode():
+        h = ((h ^ ch) * 16777619) & 0xFFFFFFFF
+    return h % modulo
+
+
+def with_art(item, thumb=False):
+    """Adds the ImageTags the app needs to request artwork for `item`."""
+    tags = {"Primary": "p%d" % _slot(item["Id"], N_POSTERS)}
+    if thumb:
+        tags["Thumb"] = "t%d" % _slot(item["Id"], N_THUMBS)
+    item["ImageTags"] = tags
+    return item
 
 UID = "user-stub"
 
@@ -128,6 +150,78 @@ EPISODES = [
      "IndexNumber": 1, "UserData": {"Played": False}},
 ]
 
+MORE_MOVIES = [
+    ("Midnight Harbor", 2023, 7.9, "Thriller", 7200), ("The Glass Orchard", 2022, 6.8, "Drama", 6300),
+    ("Paper Moons", 2021, 8.3, "Romance", 5700), ("Iron Lantern", 2024, 7.1, "Action", 8100),
+    ("Quiet Satellites", 2019, 8.0, "Sci-Fi", 7800), ("Salt & Ember", 2020, 6.5, "Drama", 6600),
+    ("Northbound", 2018, 7.4, "Adventure", 7500), ("Velvet Static", 2022, 7.7, "Mystery", 6900),
+    ("Hollow Crown Hill", 2017, 6.9, "Fantasy", 8400), ("A Long Way Down", 2016, 7.2, "Drama", 6000),
+    ("Neon Cathedral", 2024, 8.4, "Sci-Fi", 7200), ("The Last Lighthouse", 2015, 7.6, "Adventure", 5400),
+    ("Brass Kingdom", 2023, 6.4, "Comedy", 5100), ("Wolves of Winter Street", 2021, 7.0, "Crime", 7000),
+    ("Echo Valley", 2020, 7.8, "Western", 7700), ("Marigold", 2019, 8.1, "Romance", 5900),
+    ("Deep Field", 2025, 8.6, "Sci-Fi", 8800), ("The Cartographer", 2014, 7.3, "Mystery", 6400),
+    ("Sunday Static", 2022, 6.6, "Comedy", 5200), ("Ghost Light", 2018, 7.5, "Horror", 6100),
+    ("Tin Soldier Blues", 2017, 6.7, "War", 7400), ("Orbit of Seven", 2024, 8.2, "Sci-Fi", 8000),
+]
+for _i, (_name, _year, _rating, _genre, _secs) in enumerate(MORE_MOVIES, start=3):
+    MOVIES.append({"Id": "movie-%d" % _i, "Name": _name, "Type": "Movie",
+                   "Overview": "%s is a %s from %d for the UI harness." % (_name, _genre.lower(), _year),
+                   "ProductionYear": _year, "CommunityRating": _rating, "Genres": [_genre],
+                   "RunTimeTicks": _secs * 10000000, "UserData": {"Played": _i % 5 == 0}})
+for _m in MOVIES:
+    with_art(_m)
+for _m in LATEST:
+    with_art(_m)
+
+MORE_SERIES = [("Harbor Lights", 2022, 8.4, "Drama"), ("The Long Room", 2021, 7.9, "Mystery"),
+               ("Copper Falls", 2019, 8.7, "Crime"), ("Starboard", 2023, 7.2, "Sci-Fi"),
+               ("Second Spring", 2020, 7.5, "Comedy"), ("Dead Reckoning", 2018, 8.1, "Adventure"),
+               ("Kettle & Crow", 2024, 7.0, "Fantasy")]
+for _name, _year, _rating, _genre in MORE_SERIES:
+    SERIES.append({"Id": "series-" + _name.lower().replace(" ", "-").replace("&", "and"), "Name": _name,
+                   "Type": "Series", "Overview": "%s: a %s series for the UI harness." % (_name, _genre.lower()),
+                   "ProductionYear": _year, "CommunityRating": _rating, "Genres": [_genre],
+                   "UserData": {"Played": False}})
+for _s in SERIES:
+    with_art(_s)
+for _e in RESUME:
+    with_art(_e, thumb=True)
+for _e in EPISODES:
+    with_art(_e, thumb=True)
+# Mixed content on the Continue Watching rail: two movies with progress.
+RESUME.insert(1, with_art({"Id": "movie-9", "Name": "Northbound", "Type": "Movie",
+                           "ProductionYear": 2018, "RunTimeTicks": 75000000000,
+                           "UserData": {"Played": False, "PlaybackPositionTicks": 30000000000}}))
+RESUME.append(with_art({"Id": "movie-17", "Name": "Deep Field", "Type": "Movie",
+                        "ProductionYear": 2025, "RunTimeTicks": 88000000000,
+                        "UserData": {"Played": False, "PlaybackPositionTicks": 12000000000}}))
+LATEST[:] = LATEST + [m for m in MOVIES if m["Id"] in ("movie-7", "movie-8", "movie-11", "movie-13")]
+
+
+def seasons_for(series_id):
+    if series_id == "series-testville":
+        return SEASONS
+    name = next((s["Name"] for s in SERIES if s["Id"] == series_id), "Series")
+    return [with_art({"Id": "season-%s-%d" % (series_id, n), "Name": "Season %d" % n, "Type": "Season",
+                      "SeriesId": series_id, "SeriesName": name, "IndexNumber": n,
+                      "UserData": {"Played": False}}) for n in (1, 2, 3)]
+
+
+def episodes_for(series_id):
+    if series_id == "series-testville":
+        return EPISODES
+    name = next((s["Name"] for s in SERIES if s["Id"] == series_id), "Series")
+    out = []
+    for season in (1, 2, 3):
+        for ep in range(1, 7):
+            out.append(with_art({"Id": "ep-%s-s%de%d" % (series_id, season, ep), "Name": "Episode %d" % ep,
+                                 "Type": "Episode", "SeriesId": series_id, "SeriesName": name,
+                                 "SeasonId": "season-%s-%d" % (series_id, season),
+                                 "ParentIndexNumber": season, "IndexNumber": ep,
+                                 "RunTimeTicks": 27000000000, "UserData": {"Played": ep < 3}}, thumb=True))
+    return out
+
+
 VIEWS = [
     {"Id": "view-movies", "Name": "Movies", "CollectionType": "movies"},
     {"Id": "view-shows", "Name": "TV Shows", "CollectionType": "tvshows"},
@@ -193,9 +287,22 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, page([]))
         elif path.startswith("/Shows/") and path.endswith("/Seasons"):
-            self._send(200, page(SEASONS))
+            self._send(200, page(seasons_for(path.split("/")[2])))
         elif path.startswith("/Shows/") and path.endswith("/Episodes"):
-            self._send(200, page(EPISODES))
+            self._send(200, page(episodes_for(path.split("/")[2])))
+        elif path.startswith("/Items/") and "/Images/" in path:
+            # Fixture artwork: portrait posters for Primary, landscape for Thumb.
+            parts = path.split("/")
+            kind = parts[4] if len(parts) > 4 else "Primary"
+            thumb = kind in ("Thumb", "Backdrop")
+            name = "thumb-%d.jpg" % _slot(parts[2], N_THUMBS) if thumb else "poster-%d.jpg" % _slot(parts[2], N_POSTERS)
+            with open(os.path.join(FIXTURE_DIR, name), "rb") as handle:
+                body = handle.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self._send(404, {"error": "stub has no such endpoint"})
 

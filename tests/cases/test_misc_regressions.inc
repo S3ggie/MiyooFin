@@ -259,9 +259,9 @@ static void testBoundedPagePosterPlanning()
     CHECK(jobs.size()==3);
     CHECK(jobs[0].itemId=="anime-page" && jobs[1].itemId=="movie-page"
           && jobs[2].itemId=="show-page");
-    CHECK(jobs[0].width==64 && jobs[0].height==96
-          && jobs[1].width==64 && jobs[1].height==96
-          && jobs[2].width==64 && jobs[2].height==96);
+    CHECK(jobs[0].width==128 && jobs[0].height==192
+          && jobs[1].width==128 && jobs[1].height==192
+          && jobs[2].width==128 && jobs[2].height==192);
     MediaItem theBatman=titledMovie("the-batman", "The Batman");
     theBatman.imageTags["Primary"]="the-batman-tag";
     MediaItem alien=titledMovie("alien", "Alien");
@@ -288,8 +288,8 @@ static void testHomeRailPosterPlanning()
     const auto jobs=planHomeRailPosterJobs({cw}, {recent, duplicate, missing});
     CHECK(jobs.size()==2);
     CHECK(jobs[0].itemId=="cw-poster" && jobs[1].itemId=="recent-poster");
-    CHECK(jobs[0].width==64 && jobs[0].height==96
-          && jobs[1].width==64 && jobs[1].height==96);
+    CHECK(jobs[0].width==128 && jobs[0].height==192
+          && jobs[1].width==128 && jobs[1].height==192);
     std::printf("[test] Home rail poster planning OK\n");
 }
 

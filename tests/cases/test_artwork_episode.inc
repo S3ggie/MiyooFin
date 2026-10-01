@@ -384,42 +384,50 @@ static void testMixedWidthPositions()
     std::printf("[test] B5d1: mixed-width X positions OK\n");
 }
 
-// Home redesign: rail card geometry fills the 640px width with five episode
-// cards and six poster cards across, and the matching clamp keeps the focused
-// card visible.  Presentation-only: the shared artworkBoxSize is untouched.
+// Home rails: card shape follows the content. Continue Watching is landscape
+// (episode thumbnails, 16:9), poster rails are 2:3 portrait. Four landscape and
+// five portrait cards fill the width, and the next card peeks in to show that
+// the rail scrolls. The clamp keeps the focused card inside the margins.
 static void testHomeRailGeometry()
 {
-    std::printf("[test] Home rail geometry: 5 episodes / 6 posters across\n");
-    MediaItem episode; episode.type = "episode";
-    MediaItem movie;   movie.type = "movie";
-    MediaItem show;    show.type = "show";
+    std::printf("[test] Home rail geometry: landscape and portrait rails\n");
+    CHECK(homeRailIsLandscape("Continue Watching"));
+    CHECK(!homeRailIsLandscape("Recently Added"));
+    CHECK(!homeRailIsLandscape(""));
 
-    const ArtworkBox e = homeRailCardSize(episode);
-    CHECK(e.w == 120);
-    CHECK(e.h == 128);
-    CHECK(HOME_RAIL_STRIP_H == 128);
-    const ArtworkBox p = homeRailCardSize(movie);
-    CHECK(p.w == 99);
-    CHECK(p.h == 120);
-    CHECK(homeRailCardSize(show).w == 99);
+    const ArtworkBox land = homeRailCardSize(true);
+    const ArtworkBox port = homeRailCardSize(false);
+    CHECK(land.w == 144 && land.h == 81); // 16:9
+    CHECK(port.w == 115 && port.h == 172); // 2:3
+    CHECK(land.w * 9 == land.h * 16 + (land.w * 9 - land.h * 16)); // sanity
+    CHECK(std::abs(land.w * 9 - land.h * 16) <= 9);
+    CHECK(std::abs(port.w * 3 - port.h * 2) <= 3);
 
-    // Five episode cards + gaps end exactly at the right margin.
-    const int episodeRight = HOME_RAIL_MARGIN + 5 * e.w + 4 * HOME_RAIL_GAP;
-    CHECK(episodeRight == 640 - HOME_RAIL_MARGIN);
-    // Six poster cards + gaps end exactly at the right margin.
-    const int posterRight = HOME_RAIL_MARGIN + 6 * p.w + 5 * HOME_RAIL_GAP;
-    CHECK(posterRight == 640 - HOME_RAIL_MARGIN);
+    // Four landscape cards end inside the right margin; the fifth peeks in.
+    const int fourRight = HOME_RAIL_MARGIN + 4 * land.w + 3 * HOME_RAIL_GAP;
+    CHECK(fourRight <= 640 - HOME_RAIL_MARGIN);
+    CHECK(HOME_RAIL_MARGIN + 4 * (land.w + HOME_RAIL_GAP) < 640);
+    // Five portrait cards end inside the right margin; the sixth peeks in.
+    const int fiveRight = HOME_RAIL_MARGIN + 5 * port.w + 4 * HOME_RAIL_GAP;
+    CHECK(fiveRight <= 640 - HOME_RAIL_MARGIN);
+    CHECK(HOME_RAIL_MARGIN + 5 * (port.w + HOME_RAIL_GAP) < 640);
 
     // Out-of-range/empty input clamps to zero.
-    CHECK(clampHomeCardScroll({}, 0, 30, 640) == 0);
-    std::vector<MediaItem> ten(10, movie);
-    CHECK(clampHomeCardScroll(ten, -1, 5, 640) == 0);
-
-    // Card 9 of ten posters: virtual X = 8 + 9*(99+6) = 953, right = 1052,
-    // so the needed scroll is 1052 - 640 = 412.
-    CHECK(clampHomeCardScroll(ten, 9, 0, 640) == 412);
-    // Returning to card 0 scrolls back so its left edge sits at the margin.
-    CHECK(clampHomeCardScroll(ten, 0, 412, 640) == HOME_RAIL_MARGIN);
+    CHECK(clampHomeCardScroll(0, 0, 30, 640, port.w) == 0);
+    CHECK(clampHomeCardScroll(10, -1, 5, 640, port.w) == 0);
+    CHECK(clampHomeCardScroll(10, 10, 5, 640, port.w) == 0);
+    // The first five posters are fully visible without scrolling.
+    for (int card = 0; card < 5; ++card)
+        CHECK(clampHomeCardScroll(10, card, 0, 640, port.w) == 0);
+    // Card 5 would run past the right margin: scroll just enough.
+    const int card5X = HOME_RAIL_MARGIN + 5 * (port.w + HOME_RAIL_GAP);
+    CHECK(clampHomeCardScroll(10, 5, 0, 640, port.w) ==
+          card5X + port.w - (640 - HOME_RAIL_MARGIN));
+    // Returning to card 0 scrolls back to the origin.
+    CHECK(clampHomeCardScroll(10, 0, 412, 640, port.w) == 0);
+    // A scrolled card whose left edge is inside the margins is left alone.
+    const int scrolled = clampHomeCardScroll(10, 9, 0, 640, port.w);
+    CHECK(clampHomeCardScroll(10, 8, scrolled, 640, port.w) <= scrolled);
     std::printf("[test] Home rail geometry OK\n");
 }
 
@@ -520,10 +528,10 @@ static std::vector<std::string> pickCandidates(
     return candidates;
 }
 
-// B5d2a: Movie row artwork uses Primary at 64x96
+// B5d2a: Movie row artwork uses Primary at 128x192 (2x the shown size)
 static void testMovieRowKeyPrimary()
 {
-    std::printf("[test] B5d2a: movie row key -> Primary 64x96\n");
+    std::printf("[test] B5d2a: movie row key -> Primary 128x192\n");
     MediaItem m;
     m.id = "m1"; m.type = "movie";
     m.imageTags["Primary"] = "tagA";
@@ -531,24 +539,24 @@ static void testMovieRowKeyPrimary()
     CHECK(!key.empty());
     CHECK(key.find("Primary") != std::string::npos);
     CHECK(key.find("Thumb") == std::string::npos);
-    CHECK(key.find("64x96") != std::string::npos);
-    CHECK(key == "m1:Primary:tagA:64x96");
-    std::printf("[test] B5d2a: movie row key -> Primary 64x96 OK\n");
+    CHECK(key.find("128x192") != std::string::npos);
+    CHECK(key == "m1:Primary:tagA:128x192");
+    std::printf("[test] B5d2a: movie row key -> Primary 128x192 OK\n");
 }
 
-// B5d2a: Episode row artwork uses Primary at 128x72
+// B5d2a: Episode row artwork uses Primary at 192x108 (2x the shown size)
 static void testEpisodeRowKeyPrimary()
 {
-    std::printf("[test] B5d2a: episode row key -> Primary 128x72\n");
+    std::printf("[test] B5d2a: episode row key -> Primary 192x108\n");
     MediaItem e;
     e.id = "e1"; e.type = "episode";
     e.imageTags["Primary"] = "tagB";
     std::string key = buildRowArtworkKey(e);
     CHECK(!key.empty());
     CHECK(key.find("Primary") != std::string::npos);
-    CHECK(key.find("128x72") != std::string::npos);
-    CHECK(key == "e1:Primary:tagB:128x72");
-    std::printf("[test] B5d2a: episode row key -> Primary 128x72 OK\n");
+    CHECK(key.find("192x108") != std::string::npos);
+    CHECK(key == "e1:Primary:tagB:192x108");
+    std::printf("[test] B5d2a: episode row key -> Primary 192x108 OK\n");
 }
 
 // B5d2a: No Primary tag → empty key (skip that item)
@@ -604,9 +612,9 @@ static void testAllVisibleCandidatesScheduledPerCycle()
     sm[candidates[3]] = RowArtworkStatus::Failed;
     candidates = pickCandidates(items, sm);
     CHECK(candidates.size() == items.size() - 2);
-    CHECK(candidates[0] == "item-0:Primary:t0:64x96");
-    CHECK(candidates[1] == "item-2:Primary:t2:64x96");
-    CHECK(candidates[2] == "item-4:Primary:t4:64x96");
+    CHECK(candidates[0] == "item-0:Primary:t0:128x192");
+    CHECK(candidates[1] == "item-2:Primary:t2:128x192");
+    CHECK(candidates[2] == "item-4:Primary:t4:128x192");
 
     std::printf("[test] B5d2a: all visible candidates per cycle OK\n");
 }
@@ -984,7 +992,7 @@ static void testDecodeRetryBoundBelowLimit()
     std::map<std::string, RowArtworkStatus> artwork;
     std::map<std::string, int> attempts;
     const int limit = HomeScreen::kMaxDecodeAttempts;
-    const std::string key = "item:Primary:tag:64x96";
+    const std::string key = "item:Primary:tag:128x192";
 
     // Simulate failed decode attempts below the limit.
     for (int i = 0; i < limit - 1; ++i) {
@@ -1004,7 +1012,7 @@ static void testDecodeRetryBoundAtLimit()
     std::map<std::string, RowArtworkEntry> artwork;
     std::map<std::string, int> attempts;
     const int limit = HomeScreen::kMaxDecodeAttempts;
-    const std::string key = "item:Primary:tag:64x96";
+    const std::string key = "item:Primary:tag:128x192";
 
     // Simulate failed decode attempts up to the limit.
     for (int i = 0; i < limit; ++i) ++attempts[key];
@@ -1028,7 +1036,7 @@ static void testDecodeRetryBoundSuccessResets()
 {
     std::printf("[test] decode retry bound: success resets counter\n");
     std::map<std::string, int> attempts;
-    const std::string key = "item:Primary:tag:64x96";
+    const std::string key = "item:Primary:tag:128x192";
 
     // Two failures.
     attempts[key] = 2;

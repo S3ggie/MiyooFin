@@ -1,5 +1,7 @@
 #include "HomeScreen.hpp"
 #include "../../net/RouteStatus.hpp"
+#include "../../net/RouteRequest.hpp"
+#include "../../net/JellyfinApi.hpp"
 #include "../../diagnostics/UiDiagnostics.hpp"
 #include "../../update/AppDir.hpp"
 #include <cstdio>
@@ -16,6 +18,22 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
 {
     if (m_libraryCoordinator)
         m_libraryCoordinator->setManualOfflineMode(session.manualOfflineMode);
+    m_link = std::make_unique<ConnectionMonitor>([session](const CancelToken& cancel) {
+        std::string error;
+        TokenValidation result = TokenValidation::Unavailable;
+        RouteRequest(session).run(
+            [&](const std::string& base) {
+                result = JellyfinApi::validateTokenStatus(base, session.accessToken,
+                                                          session.userId, session.deviceId, error,
+                                                          cancel.get());
+                return result == TokenValidation::Valid;
+            },
+            error);
+        return result == TokenValidation::Valid          ? LinkStatus::Connected
+               : result == TokenValidation::Unauthorized ? LinkStatus::SessionExpired
+                                                         : LinkStatus::Offline;
+    });
+    m_link->setOfflineMode(session.manualOfflineMode);
     m_libraryFetch = std::make_unique<HomeLibraryController>(
         m_session, m_libraryQuery.get(), m_libraryCoordinator.get(), m_downloads.get());
     m_artworkController = std::make_unique<HomeArtworkController>(m_session);
@@ -293,6 +311,7 @@ void HomeScreen::update(Uint32 dt)
         m_downloadRefreshTimer = 0;
     }
     m_battery.update(dt);
+    m_link->update(dt);
     if (m_loadState == LoadState::Ready &&
         (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
         refreshDownloads();

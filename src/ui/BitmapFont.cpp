@@ -405,6 +405,82 @@ void BitmapFont::drawStringScaled(SDL_Surface* surface, int x, int y, const char
     }
 }
 
+// Decodes the next UTF-8 code point of `p` (advancing it) and returns the
+// glyph drawString would render for it. Mirrors drawString's decoding.
+static unsigned char nextGlyph(const unsigned char*& p)
+{
+    const unsigned char ch = *p;
+    unsigned int cp = 0;
+    int extraBytes = 0;
+    if (ch < 0x80) {
+        cp = ch;
+    } else if ((ch & 0xE0) == 0xC0) {
+        cp = ch & 0x1F;
+        extraBytes = 1;
+    } else if ((ch & 0xF0) == 0xE0) {
+        cp = ch & 0x0F;
+        extraBytes = 2;
+    } else if ((ch & 0xF8) == 0xF0) {
+        cp = ch & 0x07;
+        extraBytes = 3;
+    }
+    for (int i = 0; i < extraBytes; ++i) {
+        ++p;
+        const unsigned char nb = *p;
+        if ((nb & 0xC0) == 0x80) {
+            cp = (cp << 6) | (nb & 0x3F);
+        } else {
+            cp = 0;
+            break;
+        }
+    }
+    ++p;
+    const unsigned int mapped = mapCodePointImpl(cp);
+    return (mapped >= 32 && mapped <= 126) ? static_cast<unsigned char>(mapped) : '?';
+}
+
+int BitmapFont::glyphCount(const std::string& text)
+{
+    int count = 0;
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(text.c_str());
+    while (*p) {
+        nextGlyph(p);
+        ++count;
+    }
+    return count;
+}
+
+int BitmapFont::drawStringTransparent(SDL_Surface* surface, int x, int y, const char* text,
+                                      int scale, Uint8 r, Uint8 g, Uint8 b)
+{
+    if (!surface || !text || scale <= 0)
+        return 0;
+    int cursorX = x;
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
+    while (*p) {
+        const unsigned char ch = nextGlyph(p);
+        const uint8_t* glyph = glyphData(ch);
+        for (int row = 0; row < GLYPH_H; ++row) {
+            const uint8_t bits = glyph[row];
+            int col = 0;
+            while (col < GLYPH_W) {
+                if (!(bits & (0x80 >> col))) {
+                    ++col;
+                    continue;
+                }
+                int run = 1; // merge horizontally adjacent set pixels into one fill
+                while (col + run < GLYPH_W && (bits & (0x80 >> (col + run))))
+                    ++run;
+                fillRect(surface, cursorX + col * scale, y + row * scale, run * scale, scale, r, g,
+                         b, 255);
+                col += run;
+            }
+        }
+        cursorX += GLYPH_W * scale;
+    }
+    return cursorX - x;
+}
+
 void BitmapFont::drawRect(SDL_Surface* surface, int x, int y, int w, int h, Uint8 r, Uint8 g,
                           Uint8 b)
 {

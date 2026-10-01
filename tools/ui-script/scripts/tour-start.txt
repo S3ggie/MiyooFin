@@ -1,6 +1,5 @@
 # Start-up tour: the connect splash, then the server-address screen (reached by
 # backing out of Login), for visual review of the splash and keyboard pages.
-SETTLE 300
 SCREENSHOT connect
 WAIT_LOG [LoginScreen] enter 30000
 SETTLE 500

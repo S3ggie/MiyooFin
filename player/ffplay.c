@@ -63,6 +63,7 @@
 #include <SDL_thread.h>
 
 #include "cmdutils.h"
+#include "menu_guard.h"
 
 #include <assert.h>
 
@@ -974,6 +975,7 @@ static double skip_until = -1.0;
 static int64_t skip_started_us;
 static int osd_next;                 /* a next episode is queued: offer it near the end */
 static int next_requested, next_cancelled, next_prompt_active;
+static MenuGuard menu_guard;
 static int osd_local;                /* downloaded playback: the stream cannot be reopened with other parameters */
 static int osd_stretch;               /* START: fill the whole display, ignoring aspect ratio */
 /* track menu state (SELECT); built and handled further down */
@@ -1476,6 +1478,11 @@ static void osd_poll_commands(void)
             e.key.state = SDL_PRESSED;
             e.key.keysym.sym = (SDLKey)sym;
             SDL_PushEvent(&e);
+            if (sym == SDLK_ESCAPE) { /* a tap: the quit is decided on release */
+                e.type = SDL_KEYUP;
+                e.key.state = SDL_RELEASED;
+                SDL_PushEvent(&e);
+            }
         }
     }
     fclose(f);
@@ -4279,7 +4286,18 @@ static void event_loop(VideoState *cur_stream)
         double x;
         refresh_loop_wait_event(cur_stream, &event);
         switch (event.type) {
+        case SDL_KEYUP:
+            /* MENU quits only as a plain tap: MENU + volume is the brightness combo. */
+            if (event.key.keysym.sym == SDLK_ESCAPE &&
+                menu_guard_up(&menu_guard, menu_guard_read_backlight(MENU_GUARD_BACKLIGHT)))
+                do_exit(cur_stream);
+            break;
         case SDL_KEYDOWN:
+            if (event.key.keysym.sym == SDLK_ESCAPE) {
+                menu_guard_down(&menu_guard, menu_guard_read_backlight(MENU_GUARD_BACKLIGHT));
+                break;
+            }
+            menu_guard_other_key(&menu_guard);
             if (exit_on_keydown) {
                 do_exit(cur_stream);
                 break;
@@ -4304,7 +4322,6 @@ static void event_loop(VideoState *cur_stream)
             }
             cur_stream->force_refresh = cur_stream->paused ? 1 : cur_stream->force_refresh;
             switch (event.key.keysym.sym) {
-            case SDLK_ESCAPE:
             case SDLK_q:
                 do_exit(cur_stream);
                 break;

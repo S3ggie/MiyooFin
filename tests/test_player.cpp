@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 
+#include "../player/menu_guard.h"
 #include "../player/osd.h"
 #include "../player/subs.h"
 
@@ -238,6 +239,25 @@ static void testBlendArgbIsRotatedAndClipped()
     std::printf("[test] ARGB blit onto YUV OK\n");
 }
 
+static void testMenuGuard()
+{
+    std::printf("[test] menu tap vs brightness combo\n");
+    MenuGuard g = {};
+    menu_guard_down(&g, 5);
+    CHECK(menu_guard_up(&g, 5) == 1); // plain tap exits
+    menu_guard_down(&g, 5);
+    menu_guard_other_key(&g); // MENU + volume key
+    CHECK(menu_guard_up(&g, 5) == 0);
+    menu_guard_down(&g, 5);
+    CHECK(menu_guard_up(&g, 6) == 0); // backlight moved even though no key was seen
+    menu_guard_down(&g, -1);
+    CHECK(menu_guard_up(&g, 9) == 1); // unreadable backlight: key tracking only
+    menu_guard_other_key(&g);         // a key with MENU not held is ignored
+    CHECK(menu_guard_up(&g, 9) == 0); // release without a press
+    CHECK(menu_guard_read_backlight("/nonexistent/backlight") == -1);
+    std::printf("[test] menu tap vs brightness combo OK\n");
+}
+
 static void testLanguagePreferences()
 {
     std::printf("[test] remembered language preferences\n");
@@ -283,5 +303,6 @@ int main()
     testTrackFileParsing();
     testBlendArgbIsRotatedAndClipped();
     testLanguagePreferences();
+    testMenuGuard();
     return miyoofin_test::finish("player");
 }

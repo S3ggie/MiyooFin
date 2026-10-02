@@ -321,7 +321,7 @@ $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
-$(TEST_DIR)/test_player: player/osd.h player/osd_font.h player/subs.h
+$(TEST_DIR)/test_player: player/osd.h player/osd_font.h player/subs.h player/menu_guard.h
 $(TEST_DIR)/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
 $(TEST_DIR)/test_api_core: tests/cases/test_api_core.inc
 $(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc

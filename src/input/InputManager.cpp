@@ -103,6 +103,24 @@ std::vector<Action> InputManager::poll()
             SDL_Scancode sc = ev.key.keysym.scancode;
             const int repeatIndex = dpadStateIndex(sc, m_desktopInput);
 
+            // MENU is also the brightness combo key (MENU + volume): exit only on a
+            // plain tap, decided when it is released.
+            if (!m_desktopInput && sc == 41) {
+                if (down) {
+                    if (ev.key.repeat == 0)
+                        menu_guard_down(&m_menuGuard,
+                                        menu_guard_read_backlight(MENU_GUARD_BACKLIGHT));
+                } else if (menu_guard_up(&m_menuGuard,
+                                         menu_guard_read_backlight(MENU_GUARD_BACKLIGHT))) {
+                    actions.push_back(Action::Exit);
+                    action = Action::Exit;
+                }
+                addRawEvent(ev.type, down, kc, sc, 0, action);
+                break;
+            }
+            if (down)
+                menu_guard_other_key(&m_menuGuard);
+
             if (repeatIndex >= 0) {
                 action = dpadAction(sc, m_desktopInput);
                 if (down) {
@@ -146,9 +164,6 @@ std::vector<Action> InputManager::poll()
                     case 228:
                         action = Action::Menu;
                         break; // SELECT
-                    case 41:
-                        action = Action::Exit;
-                        break; // MENU
                     case 8:
                         action = Action::PrevTab;
                         break; // L

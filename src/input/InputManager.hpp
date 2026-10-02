@@ -1,6 +1,7 @@
 #ifndef MIYOOFIN_INPUT_MANAGER_HPP
 #define MIYOOFIN_INPUT_MANAGER_HPP
 
+#include "../../player/menu_guard.h"
 #include <SDL2/SDL.h>
 #include <array>
 #include <vector>
@@ -111,6 +112,7 @@ class InputManager
     int m_joystickIndex; // -1 if none opened
     bool m_desktopInput = false;
     std::array<DpadRepeatState, 4> m_dpadRepeatStates;
+    MenuGuard m_menuGuard{};
 
     static int dpadStateIndex(SDL_Scancode scancode, bool desktopInput);
     static Action dpadAction(SDL_Scancode scancode, bool desktopInput);

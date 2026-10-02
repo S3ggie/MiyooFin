@@ -22,6 +22,7 @@ int main()
     testPlaybackResultDelay();
     testOfflinePlaybackJournal();
     testPlaybackRequestRecordsDuration();
+    testPlaybackRequestNextEpisode();
     testExternalPlaybackFlagInitial();
     testExternalPlaybackFlagSetConsume();
     testExternalPlaybackFlagMultipleSet();

@@ -657,3 +657,20 @@ static void testPlaybackRequestRecordsDuration()
     std::remove(path.c_str());
     std::printf("[test] playback request duration_ticks OK\n");
 }
+
+static void testPlaybackRequestNextEpisode()
+{
+    std::printf("[test] playback request next episode\n");
+    const std::string path = "/tmp/miyoofin-next-" + std::to_string((long long)getpid());
+    std::string err;
+    CHECK(PlaybackRequest::writeWithSourceTo(path, "ep1", "episode", 0, "jellyfin", "", err));
+    CHECK(PlaybackRequest::appendNextEpisode(path, "ep2", 12000000000LL));
+    std::ifstream in(path);
+    const std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(body.find("item_id=ep1\n") != std::string::npos);
+    CHECK(body.find("next_item_id=ep2\n") != std::string::npos);
+    CHECK(body.find("next_duration_ticks=12000000000\n") != std::string::npos);
+    CHECK(!PlaybackRequest::appendNextEpisode(path, "bad id;rm", 5)); // unsafe ids are refused
+    std::remove(path.c_str());
+    std::printf("[test] playback request next episode OK\n");
+}

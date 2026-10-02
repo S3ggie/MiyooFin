@@ -3,11 +3,13 @@
 #include "../src/music/MusicApi.hpp"
 #include "../src/music/MusicCache.hpp"
 #include "../src/music/MusicParse.hpp"
+#include "../src/music/MusicLibrary.hpp"
 #include "../src/music/MusicQueue.hpp"
 #include "../src/music/MusicTracks.hpp"
 #include "../src/music/PlaysJournal.hpp"
 #include "../src/ui/MusicUiState.hpp"
 #include "../src/app/AppMode.hpp"
+#include "../src/ui/screens/MusicScreen.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -440,6 +442,95 @@ void testPlaysJournal()
     std::printf("[test] plays journal OK\n");
 }
 
+void testLibraryOfflineUsesCache()
+{
+    std::printf("[test] library answers from the cache when offline\n");
+    char tmpl[] = "/tmp/miyoofin-music-lib-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    ListingRequest request;
+    request.kind = Listing::Albums;
+    request.limit = 60;
+    MusicCache cache(dir + "/lists");
+    CHECK(cache.saveAlbums(request.key(), {{"a1", "Cached", "Ar", "ar1", "t", 2001, 9, 5}}, 77));
+    {
+        miyoofin::Session session;
+        session.manualOfflineMode = true;
+        MusicLibrary library(session, dir);
+        const std::uint64_t ticket = library.requestList(request);
+        std::vector<ListResult> results;
+        for (int i = 0; i < 250 && (results.empty() || !results.back().final); ++i) {
+            for (ListResult& r : library.takeLists())
+                results.push_back(std::move(r));
+            usleep(20000);
+        }
+        CHECK(results.size() == 2 && results[0].ticket == ticket);
+        CHECK(results[0].fromCache && !results[0].final && results[0].albums.items.size() == 1 &&
+              results[0].albums.items[0].title == "Cached" && results[0].albums.total == 77);
+        CHECK(results[1].final && !results[1].ok && results[1].error == "Offline");
+        // Nothing cached: just the failure, so the screen can say "couldn't load".
+        ListingRequest other;
+        other.kind = Listing::Songs;
+        library.requestList(other);
+        results.clear();
+        for (int i = 0; i < 250 && results.empty(); ++i) {
+            for (ListResult& r : library.takeLists())
+                results.push_back(std::move(r));
+            usleep(20000);
+        }
+        CHECK(results.size() == 1 && results[0].final && !results[0].ok);
+        // Cancelling drops queued work and anything in flight.
+        library.cancelLists();
+        usleep(100000);
+        CHECK(library.takeLists().empty());
+        // Cover art offline without a cached copy reports a miss instead of hanging.
+        library.requestCover("item", "tag", 128);
+        std::vector<CoverResult> covers;
+        for (int i = 0; i < 250 && covers.empty(); ++i) {
+            covers = library.takeCovers();
+            usleep(20000);
+        }
+        CHECK(covers.size() == 1 && !covers[0].ok &&
+              covers[0].key == MusicLibrary::coverKey("item", "tag", 128));
+        // clearCaches empties the listing cache on a worker.
+        library.clearCaches();
+        for (int i = 0; i < 250; ++i) {
+            std::vector<Album> got;
+            int total = 0;
+            if (!cache.loadAlbums(request.key(), got, total))
+                break;
+            usleep(20000);
+        }
+        std::vector<Album> got;
+        int total = 0;
+        CHECK(!cache.loadAlbums(request.key(), got, total));
+    }
+    std::system(("rm -rf " + dir).c_str());
+    std::printf("[test] library answers from the cache when offline OK\n");
+}
+
+void testScreenRequests()
+{
+    std::printf("[test] music screen requests\n");
+    using namespace miyoofin;
+    CHECK(MusicScreen::tabNames() ==
+          (std::vector<std::string>{"Home", "Library", "Playlists", "Downloads", "Settings"}));
+    MusicFrame f;
+    f.kind = MusicPaneKind::Albums;
+    f.letter = 'K';
+    ListingRequest r = MusicScreen::requestFor(f, 120);
+    CHECK(r.kind == Listing::Albums && r.start == 120 && r.letter == 'K' && r.limit == 60);
+    f.kind = MusicPaneKind::AlbumTracks;
+    f.id = "al9";
+    r = MusicScreen::requestFor(f, 0);
+    CHECK(r.kind == Listing::AlbumTracks && r.parentId == "al9" && r.limit >= 100);
+    f.kind = MusicPaneKind::PlaylistTracks;
+    r = MusicScreen::requestFor(f, 100);
+    CHECK(r.kind == Listing::PlaylistTracks && r.start == 100);
+    f.kind = MusicPaneKind::ArtistAlbums;
+    CHECK(MusicScreen::requestFor(f, 0).kind == Listing::ArtistAlbums);
+    std::printf("[test] music screen requests OK\n");
+}
+
 } // namespace
 
 int main()
@@ -452,5 +543,7 @@ int main()
     testUiState();
     testQueuePersistence();
     testPlaysJournal();
+    testLibraryOfflineUsesCache();
+    testScreenRequests();
     return miyoofin_test::finish("music");
 }

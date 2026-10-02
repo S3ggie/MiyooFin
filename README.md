@@ -24,6 +24,11 @@ Built with C++17, SDL2, libcurl, and json-c.
   stays in sync.
 - **Offline mode** — switch it on and the UI lists only what you have downloaded
   (the Home tab disappears); browsing and playback keep working with no network.
+- **MiyooFin Music** — a second mode (Settings → MiyooFin Music) with its own
+  purple look: browse artists, albums, songs and playlists, a play queue with
+  shuffle/repeat, gapless playback in a separate audio engine while you keep
+  browsing, album-art Now Playing, offline album/playlist downloads, and plays
+  reported back to Jellyfin. See [docs/music.md](docs/music.md).
 - **Over-the-air updates** — check for and install new versions from the Settings
   screen (0.2.0 and later), with SHA-256 verification and rollback on failure.
 - **Small** — the client is about 1.7 MB; the release download is ~3.4 MB.

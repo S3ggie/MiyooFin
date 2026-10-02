@@ -353,15 +353,18 @@ void MusicDownloads::workerLoop()
                 if (!m_deleteQueue.empty()) {
                     const std::string doomed = m_deleteQueue.back();
                     m_deleteQueue.pop_back();
-                    auto it = m_tracks.find(doomed);
-                    if (it != m_tracks.end() && !referencedLocked(doomed)) {
-                        m_tracks.erase(it);
+                    if (m_tracks.count(doomed) && !referencedLocked(doomed)) {
+                        // Files first, then the entry: once the track is gone from the index
+                        // its file is gone too.
                         lock.unlock();
                         std::remove(trackPath(doomed).c_str());
                         std::remove((trackPath(doomed) + ".part").c_str());
                         lock.lock();
-                        saveLocked();
-                        bumpLocked();
+                        if (!referencedLocked(doomed)) {
+                            m_tracks.erase(doomed);
+                            saveLocked();
+                            bumpLocked();
+                        }
                     }
                     continue;
                 }

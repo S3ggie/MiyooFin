@@ -222,8 +222,8 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
             rightEdge -= 20;
         }
         const bool playing = row.kind == MusicRow::Kind::Track && m_player &&
-                             m_player->view().track.id == row.track.id &&
-                             m_player->view().state != music::PlayState::Idle;
+                             m_playerView.track.id == row.track.id &&
+                             m_playerView.state != music::PlayState::Idle;
         const d::Rgb titleColor = playing ? d::kAccentHi : (selected ? d::kText : d::kText);
         if (row.subtitle.empty()) {
             ui::textClamped(fb, textX, y + 12, rightEdge - textX, row.title, titleColor);
@@ -256,7 +256,7 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
 
 void MusicScreen::renderMiniPlayer(SDL_Surface* fb, int top)
 {
-    const music::PlayerView v = m_player->view();
+    const music::PlayerView& v = m_playerView;
     ui::fill(fb, 0, top, d::kScreenW, kMiniH, d::kPanel);
     ui::fill(fb, 0, top, d::kScreenW, 1, d::kBorder);
     drawCover(fb, v.track.artId(), v.track.artTag(), d::kMargin, top + 4, 44, 128, v.track.title);
@@ -290,7 +290,7 @@ void MusicScreen::renderMiniPlayer(SDL_Surface* fb, int top)
 void MusicScreen::renderNowPlaying(SDL_Surface* fb)
 {
     ui::fill(fb, 0, d::kHeaderH, d::kScreenW, d::kScreenH - d::kHeaderH - d::kFooterH, d::kCanvas);
-    const music::PlayerView v = m_player->view();
+    const music::PlayerView& v = m_playerView;
     const int top = d::kHeaderH + 14;
     if (!m_queueView) {
         drawCover(fb, v.track.artId(), v.track.artTag(), 24, top, 216, 256, v.track.title);

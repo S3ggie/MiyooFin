@@ -299,7 +299,7 @@ int MusicScreen::detailHeaderHeight(const MusicPane& pane) const
 
 bool MusicScreen::miniPlayerVisible() const
 {
-    return m_player && m_player->view().state != music::PlayState::Idle;
+    return m_playerView.state != music::PlayState::Idle;
 }
 
 int MusicScreen::contentBottom() const
@@ -491,6 +491,8 @@ void MusicScreen::update(Uint32 dt)
 {
     m_clock += dt;
     ++m_frame;
+    if (m_player)
+        m_playerView = m_player->view();
     m_battery.update(dt);
 
     for (const music::ListResult& r : m_library->takeLists()) {
@@ -530,7 +532,7 @@ constexpr const char* kResumeId = "__resume__";
 // "Continue listening": the first row of Home while a saved queue is waiting.
 void MusicScreen::syncResumeRow(MusicPane& pane)
 {
-    const music::PlayerView v = m_player ? m_player->view() : music::PlayerView{};
+    const music::PlayerView& v = m_playerView;
     const bool want = v.resumable;
     const bool have = !pane.rows.empty() && pane.rows.front().id == kResumeId;
     if (!want) {
@@ -558,7 +560,6 @@ void MusicScreen::syncResumeRow(MusicPane& pane)
             pane.frame.selected = 0;
         clampPane(pane);
     }
-    pane.requested = true;
 }
 
 std::string formatMegabytes(std::uint64_t bytes)

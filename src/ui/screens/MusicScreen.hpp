@@ -228,6 +228,7 @@ class MusicScreen : public Screen
     std::set<std::string> m_coverRequested;
     std::set<std::string> m_coverMissing;
 
+    music::PlayerView m_playerView; // one snapshot per frame (view() copies strings)
     bool m_stateDirty = false;
     Uint32 m_stateSavedAt = 0;
     Uint32 m_clock = 0;

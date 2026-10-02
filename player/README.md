@@ -16,3 +16,10 @@ It links the device's own libraries at run time (`/mnt/SDCARD/.tmp_update/lib/pa
 Licensing: `ffplay.c`/`cmdutils.c` are LGPL-2.1+ (see `COPYING.LGPLv2.1`); the device's
 FFmpeg is built `--enable-gpl`, so treat the combined player as GPLv2+
 (`COPYING.GPLv2`) and ship this directory's source with releases.
+
+## miyoofin-audio
+
+`audio.c` is the MiyooFin Music engine: a small audio-only program (no display, no network)
+that plays local files gaplessly and is controlled over stdin/stdout. It links the same
+device FFmpeg/SDL libraries and is built by `Makefile.player` together with the player; the same
+licensing note applies. See `docs/music.md`.

@@ -59,6 +59,15 @@ unless explicitly requested.
 
 MiyooFin targets the Miyoo Mini Plus running OnionOS.
 
+### MiyooFin Music
+
+Music is a mode of the same app (see `docs/music.md`). It lives in `src/music/` and
+`src/ui/screens/MusicScreen*`, owns its own caches and download manager, and must not use
+`CatalogDb`, `LibraryCoordinator` or the video `DownloadManager`. The audio engine
+(`player/audio.c`) plays local files only and is started by the app (it needs root), never over SSH.
+Never block the UI thread in the music code either: fetches, reports, queue saves and cache
+clearing run on `MusicPlayer`/`MusicLibrary`/`MusicDownloads` workers.
+
 ### Current library and UI ownership boundaries
 
 * `LibraryCoordinator` is the singular production authority for `LibrarySync`,

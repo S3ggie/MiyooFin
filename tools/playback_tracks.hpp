@@ -14,14 +14,14 @@
 
 struct PlaybackTrack
 {
-    int index = -1;       // Jellyfin's global stream index (used verbatim in URLs)
-    char type = 0;        // 'a' audio, 's' subtitle
+    int index = -1; // Jellyfin's global stream index (used verbatim in URLs)
+    char type = 0;  // 'a' audio, 's' subtitle
     std::string codec;
-    std::string lang;     // ISO code, may be empty
-    std::string title;    // display title, may be empty
+    std::string lang;  // ISO code, may be empty
+    std::string title; // display title, may be empty
     bool isDefault = false;
     bool forced = false;
-    bool text = false;    // subtitle only: fetchable as SRT (not PGS/DVD bitmaps)
+    bool text = false; // subtitle only: fetchable as SRT (not PGS/DVD bitmaps)
 };
 
 struct PlaybackTracks

@@ -106,6 +106,10 @@ class HomeArtworkController
     /// poster that was missing at decode time has since been downloaded.
     void resetDecodeAttempts(const std::string& identityKey);
 
+    /// Identity keys of posters the download workers finished since the last
+    /// call (UI thread drains this; no filesystem access needed).
+    std::vector<std::string> takeArrivedPosterKeys();
+
     void queuePosterJobs(std::vector<HomePosterJob> jobs, bool highPriority = false);
     void setLowPriorityDeferred(bool deferred);
 
@@ -143,7 +147,7 @@ class HomeArtworkController
 
     void posterWorker();
     void decodeWorker();
-    void publishPosterCompletion(const HomePosterJob& job);
+    void publishPosterCompletion(const HomePosterJob& job, bool arrived);
     void publishDecodeResult(DecodeJob job, std::vector<unsigned char> bytes, DecodedImage image);
 
     Session m_session;
@@ -154,6 +158,7 @@ class HomeArtworkController
     std::deque<HomePosterJob> m_highPriorityPosterJobs;
     std::deque<HomePosterJob> m_lowPriorityPosterJobs;
     std::set<std::string> m_artworkProgressKeys;
+    std::vector<std::string> m_arrivedPosterKeys; // guarded by m_posterMutex
     bool m_lowPriorityDeferred = false;
     bool m_stopPosterWorker = false;
 

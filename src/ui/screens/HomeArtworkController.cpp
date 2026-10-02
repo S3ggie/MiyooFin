@@ -51,6 +51,14 @@ void HomeArtworkController::setLowPriorityDeferred(bool deferred)
     m_posterWake.notify_all();
 }
 
+std::vector<std::string> HomeArtworkController::takeArrivedPosterKeys()
+{
+    std::lock_guard<std::mutex> lock(m_posterMutex);
+    std::vector<std::string> keys;
+    keys.swap(m_arrivedPosterKeys);
+    return keys;
+}
+
 void HomeArtworkController::resetDecodeAttempts(const std::string& identityKey)
 {
     std::lock_guard<std::mutex> lock(m_decodeMutex);
@@ -255,11 +263,14 @@ void HomeArtworkController::joinAllWorkers()
     m_workersJoined.store(true);
 }
 
-void HomeArtworkController::publishPosterCompletion(const HomePosterJob& job)
+void HomeArtworkController::publishPosterCompletion(const HomePosterJob& job, bool arrived)
 {
     m_artworkCompleted.fetch_add(1);
     std::lock_guard<std::mutex> lock(m_posterMutex);
     m_artworkProgressKeys.erase(posterJobKey(job));
+    if (arrived && m_arrivedPosterKeys.size() < 4096)
+        m_arrivedPosterKeys.push_back(
+            identityKey({job.itemId, job.imageType, job.imageTag, job.width, job.height}));
     if (m_artworkCompleted.load() >= m_artworkTotal.load() && m_highPriorityPosterJobs.empty() &&
         m_lowPriorityPosterJobs.empty())
         m_artworkActive.store(false);
@@ -324,7 +335,7 @@ void HomeArtworkController::posterWorker()
             performanceTelemetry().addWorkerCompleted(WorkerId::HomePoster);
         else
             performanceTelemetry().addWorkerFailed(WorkerId::HomePoster);
-        publishPosterCompletion(job);
+        publishPosterCompletion(job, complete);
         performanceTelemetry().setWorkerActive(WorkerId::HomePoster, false);
     }
 }

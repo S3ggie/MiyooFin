@@ -98,36 +98,16 @@ void HomeScreen::evictRowArtworkIfNeeded()
     m_rowArtworkCache.evictIfNeeded(protectedRowArtworkKeys());
 }
 
-void HomeScreen::reviveArrivedArtwork(unsigned dtMs)
+void HomeScreen::reviveArrivedArtwork(unsigned)
 {
-    constexpr unsigned kPeriodMs = 1000;
-    constexpr int kChecksPerPass = 64;
-    m_reviveMs += dtMs;
-    if (m_reviveMs < kPeriodMs || !m_artworkController)
+    if (!m_artworkController)
         return;
-    m_reviveMs = 0;
-    auto it = m_rowArtworkCache.entries.upper_bound(m_reviveCursor);
-    for (int checked = 0; checked < kChecksPerPass; ++checked) {
-        if (it == m_rowArtworkCache.entries.end()) {
-            m_reviveCursor.clear();
-            return;
-        }
-        m_reviveCursor = it->first;
-        if (it->second.status != RowArtworkStatus::Failed) {
-            ++it;
+    for (const std::string& key : m_artworkController->takeArrivedPosterKeys()) {
+        auto it = m_rowArtworkCache.entries.find(key);
+        if (it == m_rowArtworkCache.entries.end() || it->second.status != RowArtworkStatus::Failed)
             continue;
-        }
-        std::string itemId, tag;
-        ImageType type = ImageType::Primary;
-        int w = 0, h = 0;
-        const bool arrived = parseArtworkIdentityKey(it->first, itemId, type, tag, w, h) &&
-                             ImageCache::isCached(itemId, type, tag, w, h);
-        if (arrived) {
-            m_artworkController->resetDecodeAttempts(it->first);
-            it = m_rowArtworkCache.entries.erase(it);
-        } else {
-            ++it;
-        }
+        m_artworkController->resetDecodeAttempts(key);
+        m_rowArtworkCache.entries.erase(it);
     }
 }
 

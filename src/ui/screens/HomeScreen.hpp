@@ -471,8 +471,6 @@ class HomeScreen : public Screen
     /// A poster that was not downloaded yet when its decode attempts ran out is
     /// tombstoned as Failed; once the file lands, make it eligible again.
     void reviveArrivedArtwork(unsigned dtMs);
-    unsigned m_reviveMs = 0;
-    std::string m_reviveCursor;
     std::set<std::string> protectedRowArtworkKeys() const;
     void touchRowArtwork(const std::string& key);
     void storeDecodedRowArtwork(const std::string& key, DecodedImage image);

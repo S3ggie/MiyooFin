@@ -409,6 +409,8 @@ check-miyoo-libs:
 # -------------------------------------------------------------------
 DOCKER_TAG := miyoofin-toolchain
 DOCKER_USER := $(shell id -u):$(shell id -g)
+# Docker builds run outside any cgroup scope we start, so cap them here (shared host).
+DOCKER_LIMITS ?= --memory=6g --memory-swap=6g --cpus=6
 # Parallel jobs for the cross build inside the container (override: make onionos JOBS=2).
 JOBS ?= $(shell nproc 2>/dev/null || echo 2)
 ARM_TARGET := output/build-arm/miyoofin
@@ -416,7 +418,7 @@ ARM_TARGET := output/build-arm/miyoofin
 .PHONY: onionos
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
-	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
+	docker run --rm $(DOCKER_LIMITS) --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
 	    make -f Makefile.cross -j$(JOBS) PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter player benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
@@ -444,7 +446,7 @@ verify-arm:
 	@file $(ARM_TARGET) | grep -qi 'x86-64' && { echo "FAIL: Binary is x86-64!"; exit 1; } || echo "OK: Not x86-64."
 	@file $(ARM_TARGET) | grep -qi 'ARM' && echo "OK: Binary is ARM." || { echo "FAIL: Not ARM!"; exit 1; }
 	@echo "--- checking GLIBC version requirements ---"
-	@docker run --rm -v $(PWD):/build miyoofin-toolchain \
+	@docker run --rm $(DOCKER_LIMITS) -v $(PWD):/build miyoofin-toolchain \
 	    sh -c 'for f in $(ARM_TARGET) /usr/arm-linux-gnueabihf/lib/libSDL2-2.0.so.0.18.2 /usr/arm-linux-gnueabihf/lib/libstdc++.so.6 /usr/arm-linux-gnueabihf/lib/libgcc_s.so.1; do \
 	        maxver=$$(arm-linux-gnueabihf-objdump -T "$$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*" | sort -u -V | tail -1); \
 	        echo "  $$(basename $$f): max $$maxver"; \

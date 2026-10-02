@@ -98,6 +98,9 @@ src/
     DownloadManagerTransfer.cpp  HLS transfer worker and segment progress
     DownloadReconcile.*          Reconcile policy
   playback/                      Playback request, offline journal, offline library projection
+  music/                         MiyooFin Music domain: Jellyfin music API/parse/cache, play queue,
+                                 audio-engine supervisor (MusicPlayer), offline MusicDownloads,
+                                 plays journal (see docs/music.md)
 include/miyoofin/                 Public identity/version headers
 tests/test_*.cpp                  Focused test-binary wrappers and aggregate runner
 tests/cases/*.inc                 Test cases shared by focused wrappers
@@ -147,7 +150,7 @@ remaining `*ForTest` helpers are small guarded definitions inside their owning m
 
 Module includes flow low-to-high: `data/` is a leaf and `diagnostics/` is a leaf apart from one
 exception (`input/Action.hpp`, for recorded input actions); `net/`, `catalog/`,
-`cache/`, `download/`, `library/`, and `playback/` build on them; `app/` and `ui/` consume the rest.
+`cache/`, `download/`, `library/`, `playback/`, and `music/` build on them; `app/` and `ui/` consume the rest.
 `tools/check-module-boundaries.sh` holds the allowed-dependency table (with its per-file exceptions
 and the SDL/curl/sqlite header rules) and fails CI on any other direct include edge;
 `tests/test_module_boundaries.sh` tests the checker. Transitive use is not checked.

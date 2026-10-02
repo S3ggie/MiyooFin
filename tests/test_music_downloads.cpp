@@ -153,15 +153,13 @@ void testPersistence()
     rig.start();
     CHECK(rig.dl->hasTrack("a") && rig.dl->hasTrack("b") && rig.dl->hasCollection("al1"));
     CHECK(rig.dl->tracksOf("al1").size() == 2);
-    // A file deleted behind our back is noticed and fetched again.
+    // A file deleted behind our back is noticed at startup and fetched again, only that one.
     const int before = rig.fetches;
     std::remove(rig.dl->pathFor("a").c_str());
     rig.dl.reset();
     rig.start();
-    CHECK(!rig.dl->hasTrack("a") && rig.dl->hasTrack("b"));
-    rig.dl->enqueue(collection("al1"), tracks({"a", "b"}));
     CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("a"); }));
-    CHECK(rig.fetches == before + 1);
+    CHECK(rig.dl->hasTrack("b") && rig.fetches == before + 1);
     std::printf("[test] music downloads: survives a restart OK\n");
 }
 

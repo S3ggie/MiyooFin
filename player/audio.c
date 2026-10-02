@@ -29,6 +29,8 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <poll.h>
+#include <signal.h>
+#include <sys/prctl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -426,6 +428,18 @@ int main(int argc, char **argv)
     Uint32 last_pos_ms = 0;
     (void)argc;
     (void)argv;
+
+    /* Hygiene for a child of the UI app: no inherited descriptors (display, input devices,
+     * sockets), and never outlive the app, whatever way it dies. */
+    {
+        int fd;
+        for (fd = 3; fd < 1024; fd++)
+            close(fd);
+    }
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    if (getppid() == 1)
+        return 0; /* the app already went away */
+    signal(SIGPIPE, SIG_IGN);
 
     av_register_all();
     avformat_network_init();

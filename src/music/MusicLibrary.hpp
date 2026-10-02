@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -58,7 +59,8 @@ class MusicLibrary
     void requestCover(const std::string& itemId, const std::string& tag, int size);
     /// Deletes cached listings, covers and streamed tracks (downloads are elsewhere) on a
     /// worker thread.
-    void clearCaches();
+    /// `keep` lists streamed-track files that must survive (the playing and the queued next one).
+    void clearCaches(std::set<std::string> keep = {});
     void setOffline(bool offline)
     {
         m_offline.store(offline);
@@ -97,6 +99,7 @@ class MusicLibrary
     std::atomic<std::uint64_t> m_generation{1};
     std::atomic<bool> m_cancelCurrentList{false};
     std::atomic<bool> m_clearRequested{false};
+    std::set<std::string> m_clearKeep; // guarded by m_mutex
     std::string m_streamDir;
 
     std::mutex m_mutex;

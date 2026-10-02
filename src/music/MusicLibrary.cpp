@@ -90,8 +90,12 @@ std::uint64_t MusicLibrary::requestList(const ListingRequest& request)
     return ticket;
 }
 
-void MusicLibrary::clearCaches()
+void MusicLibrary::clearCaches(std::set<std::string> keep)
 {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_clearKeep = std::move(keep);
+    }
     m_clearRequested.store(true);
     m_wake.notify_all();
 }
@@ -258,10 +262,11 @@ void MusicLibrary::coverLoop()
             if (m_stop.load())
                 return;
             if (m_clearRequested.exchange(false)) {
+                const std::set<std::string> keep = m_clearKeep;
                 lock.unlock();
                 pruneCache(m_coverDir, 0, "");
                 pruneCache(m_cache.dir(), 0, "");
-                pruneOlderThan(m_streamDir, 120); // not the track playing or queued right now
+                clearCacheDir(m_streamDir, keep); // not the track playing or queued next
                 continue;
             }
             job = m_coverJobs.back(); // newest first: what the user is looking at now

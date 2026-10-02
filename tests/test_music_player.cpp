@@ -177,6 +177,29 @@ void testControls()
     std::printf("[test] player pause, skip and previous OK\n");
 }
 
+void testJumpReportsTheTrackThatWasPlaying()
+{
+    std::printf("[test] jumping reports the song that stopped\n");
+    Rig rig({"FAKE_LEN_MS=60000"});
+    rig.player->playTracks(tracks({"a", "b", "c"}), 0, false);
+    CHECK(rig.until([&] { return rig.saw("start:a"); }));
+    rig.player->jumpTo(2); // A -> C (the queue view)
+    CHECK(rig.until([&] { return rig.saw("start:c"); }));
+    CHECK(rig.until([&] { return rig.saw("stop:a"); }));
+    CHECK(!rig.saw("stop:c")); // C had just started; it must not be reported as stopped
+    rig.player->next();        // C is last: nothing follows, the queue is kept
+    rig.player->jumpTo(0);
+    CHECK(rig.until([&] { return rig.saw("start:a"); }));
+    int stopsOfA = 0, stopsOfC = 0;
+    CHECK(rig.until([&] { return rig.saw("stop:c"); }));
+    for (const auto& e : rig.rec.snapshot()) {
+        stopsOfA += e == "stop:a";
+        stopsOfC += e == "stop:c";
+    }
+    CHECK(stopsOfC == 1 && stopsOfA >= 1);
+    std::printf("[test] jumping reports the song that stopped OK\n");
+}
+
 void testSkipsUnplayable()
 {
     std::printf("[test] player skips an unplayable track\n");
@@ -305,6 +328,7 @@ int main()
     testParseEvents();
     testPlaysQueueGapless();
     testControls();
+    testJumpReportsTheTrackThatWasPlaying();
     testSkipsUnplayable();
     testEngineCrashRecovery();
     testShutdownReapsEngine();

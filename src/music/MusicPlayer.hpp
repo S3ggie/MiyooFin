@@ -126,6 +126,9 @@ class MusicPlayer
     /// Per-frame housekeeping: engine events, fetch results, supervision, reporting.
     void poll();
 
+    /// Files the engine has open or has been told to open next (a cache clean-up must keep them).
+    std::vector<std::string> inUsePaths() const;
+
     PlayerView view() const;
     const MusicQueue& queue() const
     {

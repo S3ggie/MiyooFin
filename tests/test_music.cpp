@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <utime.h>
 #include <unistd.h>
 
 using namespace miyoofin::music;
@@ -271,6 +272,34 @@ void testQueue()
     empty.playNext(track("only"));
     CHECK(empty.current()->id == "only");
     std::printf("[test] music queue OK\n");
+}
+
+void testCacheClearKeepsWhatIsInUse()
+{
+    std::printf("[test] cache clear protects files in use\n");
+    char tmpl[] = "/tmp/miyoofin-music-clear-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    auto write = [&](const std::string& name) {
+        FILE* f = std::fopen((dir + "/" + name).c_str(), "wb");
+        std::fputs("ID3", f);
+        std::fclose(f);
+        return dir + "/" + name;
+    };
+    const std::string playing = write("playing-192.mp3"), queued = write("queued-192.mp3");
+    const std::string old = write("old-192.mp3"), fetching = write("next-192.mp3.part");
+    // Age is irrelevant: even a file untouched for ages stays when the player holds it.
+    struct utimbuf aged = {1000, 1000};
+    utime(playing.c_str(), &aged);
+    utime(queued.c_str(), &aged);
+    utime(old.c_str(), &aged);
+    clearCacheDir(dir, {playing, queued});
+    CHECK(access(playing.c_str(), F_OK) == 0 && access(queued.c_str(), F_OK) == 0);
+    CHECK(access(old.c_str(), F_OK) != 0);      // anything else goes, new or old
+    CHECK(access(fetching.c_str(), F_OK) == 0); // a download in flight is left to finish
+    clearCacheDir(dir, {});
+    CHECK(access(playing.c_str(), F_OK) != 0 && access(fetching.c_str(), F_OK) == 0);
+    std::system(("rm -rf " + dir).c_str());
+    std::printf("[test] cache clear protects files in use OK\n");
 }
 
 void testTrackSource()
@@ -566,6 +595,7 @@ int main()
     testCache();
     testQueue();
     testTrackSource();
+    testCacheClearKeepsWhatIsInUse();
     testUiState();
     testQueuePersistence();
     testPlaysJournal();

@@ -692,11 +692,23 @@ void MusicPlayer::previous()
 
 void MusicPlayer::jumpTo(int position)
 {
-    if (!m_queue.jumpTo(position))
+    if (position < 0 || position >= m_queue.size())
         return;
+    // Report the song that is stopping before the queue moves on to the new one.
     if (m_started)
         report(ReportKind::Stopped, false);
+    m_queue.jumpTo(position);
     startCurrent(0);
+}
+
+std::vector<std::string> MusicPlayer::inUsePaths() const
+{
+    std::vector<std::string> paths;
+    if (!m_loadedPath.empty())
+        paths.push_back(m_loadedPath);
+    if (!m_preloadPath.empty())
+        paths.push_back(m_preloadPath);
+    return paths;
 }
 
 void MusicPlayer::setShuffle(bool on)

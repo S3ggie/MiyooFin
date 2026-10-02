@@ -100,17 +100,18 @@ void pruneCache(const std::string& dir, std::uint64_t limitBytes, const std::str
     }
 }
 
-void pruneOlderThan(const std::string& dir, int seconds)
+void clearCacheDir(const std::string& dir, const std::set<std::string>& keep)
 {
-    const time_t cutoff = time(nullptr) - seconds;
     if (DIR* d = opendir(dir.c_str())) {
         while (dirent* e = readdir(d)) {
             const std::string name = e->d_name;
             if (name == "." || name == "..")
                 continue;
             const std::string path = dir + "/" + name;
+            const bool partial = name.size() > 5 && name.compare(name.size() - 5, 5, ".part") == 0;
             struct stat st;
-            if (stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_mtime < cutoff)
+            if (!partial && !keep.count(path) && stat(path.c_str(), &st) == 0 &&
+                S_ISREG(st.st_mode))
                 unlink(path.c_str());
         }
         closedir(d);

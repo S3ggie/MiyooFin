@@ -1330,7 +1330,12 @@ void MusicScreen::settingsAction(int index)
         }
         m_cacheClearArmed = false;
         // Remove cached tracks, covers and lists (downloads are untouched).
-        m_library->clearCaches(); // done on a worker thread
+        // On a worker thread; the track playing and the one queued next are left alone.
+        std::set<std::string> keep;
+        if (m_player)
+            for (const std::string& path : m_player->inUsePaths())
+                keep.insert(path);
+        m_library->clearCaches(std::move(keep));
         m_toast = "Music cache cleared";
         m_toastUntil = m_clock + 2000;
     }

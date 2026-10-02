@@ -11,9 +11,9 @@ struct Language
     const char* code;
     const char* label;
 };
-constexpr Language kLanguages[] = {{"", "Server default"}, {"eng", "English"},  {"jpn", "Japanese"},
-                                   {"spa", "Spanish"},     {"fra", "French"},   {"deu", "German"},
-                                   {"ita", "Italian"},     {"kor", "Korean"},   {"zho", "Chinese"},
+constexpr Language kLanguages[] = {{"", "Server default"}, {"eng", "English"}, {"jpn", "Japanese"},
+                                   {"spa", "Spanish"},     {"fra", "French"},  {"deu", "German"},
+                                   {"ita", "Italian"},     {"kor", "Korean"},  {"zho", "Chinese"},
                                    {"por", "Portuguese"},  {"rus", "Russian"}};
 constexpr const char* kPrefsFile = "download-prefs.txt";
 std::string g_audioLang;
@@ -31,7 +31,8 @@ void loadDownloadPrefs()
     while (std::fgets(line, sizeof(line), f)) {
         if (std::strncmp(line, "audio_lang=", 11) == 0) {
             g_audioLang = line + 11;
-            while (!g_audioLang.empty() && (g_audioLang.back() == '\n' || g_audioLang.back() == '\r'))
+            while (!g_audioLang.empty() &&
+                   (g_audioLang.back() == '\n' || g_audioLang.back() == '\r'))
                 g_audioLang.pop_back();
             if (g_audioLang.size() > 7)
                 g_audioLang.clear();

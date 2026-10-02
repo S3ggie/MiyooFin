@@ -10,8 +10,8 @@ namespace miyoofin {
 /// download is queued. Empty = whatever the server picks. Persisted in ./download-prefs.txt.
 ///
 /// The value is cached in memory: enqueueing runs on the UI thread and must not touch storage.
-void loadDownloadPrefs();                  // reads the file once (call at startup)
-const std::string& downloadAudioLang();    // cached; "" = server default
+void loadDownloadPrefs();                           // reads the file once (call at startup)
+const std::string& downloadAudioLang();             // cached; "" = server default
 void setDownloadAudioLang(const std::string& lang); // updates the cache and the file
 
 /// Settings-row cycling and display.

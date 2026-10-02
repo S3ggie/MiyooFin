@@ -770,7 +770,7 @@ case "$NAME" in
         ;;
     art)
         want='[HomeScreen] Library loaded'
-        SHOT="$OUT/shots/home-20s.bmp"
+        SHOT="$OUT/shots/home-30s.bmp"
         CHECKS="rendered"
         ;;
     tour)

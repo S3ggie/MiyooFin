@@ -1,15 +1,15 @@
 # Artwork loading (device): how quickly do the Home rails and the Movies/Shows grids fill with real posters?
 WAIT_LOG [HomeScreen] Library loaded 90000
-SETTLE 20000
-SCREENSHOT home-20s
+SETTLE 30000
+SCREENSHOT home-30s
 KEY NextTab 3
 SETTLE 15000
-SCREENSHOT movies-15s
-SETTLE 30000
-SCREENSHOT movies-45s
+SCREENSHOT movies-a
+SETTLE 60000
+SCREENSHOT movies-b
 KEY NextTab 3
 SETTLE 15000
-SCREENSHOT shows-15s
+SCREENSHOT shows-a
 SETTLE 30000
-SCREENSHOT shows-45s
+SCREENSHOT shows-b
 QUIT

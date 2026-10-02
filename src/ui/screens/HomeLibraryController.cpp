@@ -340,6 +340,28 @@ void finalizeFetch(FetchContext& ctx, const HomeRailPhase& rail, bool catalogRef
     HomeLibraryController::Presentation& pending = *ctx.pending;
     if (catalogRefreshFailed && pending.error.empty())
         pending.error = "Library refresh failed";
+    // Plan artwork for the WHOLE catalog, not just the pages a cold walk happened
+    // to touch: a warm start skips the walk entirely, which used to leave every
+    // poster that was not on screen undownloaded until the user scrolled to it.
+    // Already-cached posters complete instantly on the poster workers.
+    if (!catalogRefreshFailed && ctx.query) {
+        constexpr std::size_t kPageSize = 500;
+        constexpr int kMaxPages = 200;
+        for (const bool shows : {false, true}) {
+            library::LibraryPageCursor after;
+            for (int page = 0; page < kMaxPages && !ctx.cancellation->load(); ++page) {
+                auto result = (shows ? ctx.query->shows(-1, kPageSize, after, ctx.cancellation)
+                                     : ctx.query->movies(-1, kPageSize, after, ctx.cancellation))
+                                  .get();
+                if (!result.success || result.cancelled || result.superseded)
+                    break;
+                ctx.addArtwork(pending, planMediaPagePosterJobs(result.items), false);
+                if (!result.hasMore || !result.next.valid)
+                    break;
+                after = result.next;
+            }
+        }
+    }
     const bool artworkPlanningComplete = !catalogRefreshFailed && !ctx.cancellation->load();
     ctx.artworkPlanningComplete->store(artworkPlanningComplete);
     ctx.metadataActive->store(false);

@@ -62,8 +62,12 @@ MusicLibrary::MusicLibrary(Session session, std::string cacheRoot, std::string s
 
 MusicLibrary::~MusicLibrary()
 {
-    m_stop.store(true);
-    m_cancelCurrentList.store(true);
+    {
+        // Under the mutex, so a worker between its predicate check and its wait cannot miss it.
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stop.store(true);
+        m_cancelCurrentList.store(true);
+    }
     m_wake.notify_all();
     m_listThread.join();
     m_coverThread.join();
@@ -113,8 +117,15 @@ void MusicLibrary::requestCover(const std::string& itemId, const std::string& ta
             if (j.itemId == itemId && j.tag == tag && j.size == size)
                 return;
         m_coverJobs.push_back({itemId, tag, size});
-        while (m_coverJobs.size() > kMaxQueuedCovers)
-            m_coverJobs.pop_front(); // the user has scrolled on; the oldest is stale
+        while (m_coverJobs.size() > kMaxQueuedCovers) {
+            // The user has scrolled on; the oldest is stale. Say so, so it can be asked again.
+            CoverResult dropped;
+            dropped.key = coverKey(m_coverJobs.front().itemId, m_coverJobs.front().tag,
+                                   m_coverJobs.front().size);
+            dropped.dropped = true;
+            m_coverResults.push_back(std::move(dropped));
+            m_coverJobs.pop_front();
+        }
     }
     m_wake.notify_all();
 }
@@ -179,6 +190,9 @@ void MusicLibrary::runList(const ListJob& job)
         error = "Offline";
     } else {
         m_cancelCurrentList.store(false);
+        // A cancel (or shutdown) that landed while this job was being picked up must win.
+        if (m_stop.load() || job.generation != m_generation.load())
+            return;
         ok = onRoute(m_session, error, [&](const Connection& c) {
             const std::atomic<bool>* cancelled = &m_cancelCurrentList;
             if (tracksKind)
@@ -247,7 +261,7 @@ void MusicLibrary::coverLoop()
                 lock.unlock();
                 pruneCache(m_coverDir, 0, "");
                 pruneCache(m_cache.dir(), 0, "");
-                pruneCache(m_streamDir, 0, "");
+                pruneOlderThan(m_streamDir, 120); // not the track playing or queued right now
                 continue;
             }
             job = m_coverJobs.back(); // newest first: what the user is looking at now

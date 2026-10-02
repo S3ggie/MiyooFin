@@ -75,8 +75,11 @@ MusicDownloads::MusicDownloads(std::string dir, Hooks hooks)
 
 MusicDownloads::~MusicDownloads()
 {
-    m_stop.store(true);
-    m_cancelCurrent.store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex); // so the worker cannot miss the wake-up
+        m_stop.store(true);
+        m_cancelCurrent.store(true);
+    }
     m_wake.notify_all();
     m_thread.join();
 }
@@ -283,10 +286,20 @@ void MusicDownloads::enqueue(DownloadCollection collection, const std::vector<Tr
         auto existing =
             std::find_if(m_collections.begin(), m_collections.end(),
                          [&](const DownloadCollection& c) { return c.id == collection.id; });
-        if (existing != m_collections.end())
+        std::vector<std::string> dropped;
+        if (existing != m_collections.end()) {
+            for (const std::string& old : existing->trackIds)
+                if (std::find(collection.trackIds.begin(), collection.trackIds.end(), old) ==
+                    collection.trackIds.end())
+                    dropped.push_back(old);
             *existing = collection;
-        else
+        } else {
             m_collections.push_back(collection);
+        }
+        // Tracks this album/playlist no longer lists (and nothing else uses) are deleted.
+        for (const std::string& id : dropped)
+            if (!referencedLocked(id))
+                m_deleteQueue.push_back(id);
         saveLocked();
         bumpLocked();
     }

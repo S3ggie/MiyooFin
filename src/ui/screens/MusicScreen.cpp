@@ -739,6 +739,8 @@ void MusicScreen::takeCovers()
 {
     for (music::CoverResult& r : m_library->takeCovers()) {
         m_coverRequested.erase(r.key);
+        if (r.dropped)
+            continue; // never fetched: it is asked for again while it is on screen
         if (!r.ok) {
             m_coverMissing.insert(r.key);
             continue;
@@ -817,15 +819,7 @@ void MusicScreen::cycleLetter(int delta)
     pane.rows.clear();
     pane.hasMore = false;
     pane.loadedOnce = false;
-    m_library->cancelLists(); // answers for the previous letter are stale now
-    for (TabRuntime& tab : m_tabs) {
-        for (MusicPane& p : tab.roots)
-            if (&p != &pane)
-                p.ticket = p.ticket2 = 0, p.requested = p.requested && p.loadedOnce;
-        for (MusicPane& p : tab.drill)
-            if (&p != &pane)
-                p.ticket = p.ticket2 = 0, p.requested = p.requested && p.loadedOnce;
-    }
+    // Answers for the previous letter find no matching ticket and are simply ignored.
     requestPane(pane, false);
     markDirty();
 }
@@ -947,7 +941,7 @@ void MusicScreen::playCollection(const MusicRow& row, PendingKind kind)
 {
     music::ListingRequest r;
     r.parentId = row.id;
-    r.limit = 300;
+    r.limit = 500;
     if (row.kind == MusicRow::Kind::Album)
         r.kind = music::Listing::AlbumTracks;
     else if (row.kind == MusicRow::Kind::Playlist)
@@ -962,7 +956,9 @@ void MusicScreen::playCollection(const MusicRow& row, PendingKind kind)
 
 void MusicScreen::applyPending(const music::ListResult& r, const Pending& pending)
 {
-    if (r.tracks.items.empty()) {
+    // A cached answer is trimmed to its first rows: act on it only when it is complete.
+    const bool complete = !r.fromCache || static_cast<int>(r.tracks.items.size()) >= r.tracks.total;
+    if (r.tracks.items.empty() || !complete) {
         if (r.final) {
             m_pending.erase(r.ticket);
             m_toast = r.ok ? "Nothing to play" : "Couldn't load: " + r.error;
@@ -1140,6 +1136,19 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
         break;
     case kMenuDownloadPage: {
         const MusicPane& pane = activePane();
+        if (pane.hasMore) {
+            // Only part of the list is loaded: fetch all of it first.
+            MusicRow whole;
+            whole.kind = pane.frame.kind == MusicPaneKind::PlaylistTracks ? MusicRow::Kind::Playlist
+                                                                          : MusicRow::Kind::Album;
+            whole.id = pane.frame.id;
+            whole.title = pane.frame.title;
+            whole.artId = pane.frame.artId;
+            whole.artTag = pane.frame.artTag;
+            whole.album.artist = pane.frame.subtitle;
+            playCollection(whole, PendingKind::Download);
+            break;
+        }
         std::vector<music::Track> tracks;
         for (const MusicRow& r : pane.rows)
             if (r.kind == MusicRow::Kind::Track)

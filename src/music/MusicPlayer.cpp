@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -23,6 +24,8 @@ constexpr std::int64_t kProgressMs = 10000;
 constexpr std::int64_t kCrashWindowMs = 60000;
 constexpr int kMaxCrashes = 3;
 constexpr std::int64_t kSaveMs = 5000;
+constexpr std::int64_t kOpenMs = 25000;         // engine given this long to start a track
+constexpr std::int64_t kPositionSaveMs = 15000; // how often the resume position is refreshed
 
 std::int64_t steadyMs()
 {
@@ -271,7 +274,10 @@ void MusicPlayer::superviseEngine()
         return;
     int status = 0;
     bool dead = waitpid(m_pid, &status, WNOHANG) == m_pid;
-    if (!dead && m_started && m_state != PlayState::Idle && now() - m_lastEventMs > kHangMs) {
+    const bool openingStuck = !m_started && !m_loadedPath.empty() && m_state != PlayState::Idle &&
+                              now() - m_loadSentMs > kOpenMs;
+    if (!dead && ((m_started && m_state != PlayState::Idle && now() - m_lastEventMs > kHangMs) ||
+                  openingStuck)) {
         kill(m_pid, SIGKILL);
         waitpid(m_pid, &status, 0);
         dead = true;
@@ -291,6 +297,7 @@ void MusicPlayer::superviseEngine()
         finishPlayback(false);
         return;
     }
+    m_pauseAfterStart = m_state == PlayState::Paused;
     startCurrent(m_position); // respawns lazily and resumes where it was
 }
 
@@ -348,6 +355,12 @@ void MusicPlayer::invalidatePreload()
 {
     if (m_state == PlayState::Idle)
         return;
+    if (m_started && !m_preloadPath.empty() && m_duration > 0 && m_duration - m_position < 10.0) {
+        // The next track may already be decoded into the audio buffer; only a reload drops it.
+        seekTo(m_position);
+        maybePreloadNext();
+        return;
+    }
     if (m_preloadRequested || !m_preloadPath.empty())
         sendLine("nonext");
     m_preloadPath.clear();
@@ -388,7 +401,12 @@ void MusicPlayer::applyFetchResult(const FetchResult& r)
         failCurrent(r.resolved.error.empty() ? "Can't play " + r.track.title : r.resolved.error);
         return;
     }
+    if (!ensureEngine()) {
+        failCurrent(m_message.empty() ? "Audio engine missing" : m_message);
+        return;
+    }
     m_loadedPath = r.resolved.path;
+    m_loadSentMs = now();
     char start[32];
     std::snprintf(start, sizeof(start), "%.1f", m_pendingStart);
     sendLine(std::string("load ") + start + " " + m_loadedPath);
@@ -474,12 +492,21 @@ void MusicPlayer::handleEvent(const EngineEvent& e)
     case T::Started:
         if (m_state == PlayState::Idle || e.path != m_loadedPath)
             break;
-        m_started = true;
-        m_failures = 0;
-        m_lastProgressMs = now();
-        if (m_state == PlayState::Loading)
-            setState(PlayState::Playing);
-        report(ReportKind::Start, false);
+        {
+            const bool first = !m_started; // a seek reload re-announces the same play
+            m_started = true;
+            m_failures = 0;
+            m_lastProgressMs = now();
+            if (m_state == PlayState::Loading)
+                setState(PlayState::Playing);
+            if (m_pauseAfterStart) { // the engine was restarted while paused
+                m_pauseAfterStart = false;
+                sendLine("pause");
+                setState(PlayState::Paused);
+            }
+            if (first)
+                report(ReportKind::Start, false);
+        }
         maybePreloadNext();
         markQueueDirty();
         break;
@@ -550,6 +577,8 @@ void MusicPlayer::poll()
         m_lastProgressMs = now();
         report(ReportKind::Progress, false);
     }
+    if (m_state == PlayState::Playing && m_started && now() - m_lastSaveMs >= kPositionSaveMs)
+        markQueueDirty(); // so a crash or power loss resumes near here, not at the start
     if (m_queueDirty && m_state != PlayState::Idle && now() - m_lastSaveMs >= kSaveMs)
         saveQueueNow();
 }
@@ -561,8 +590,12 @@ void MusicPlayer::playTracks(std::vector<Track> tracks, int startIndex, bool shu
     if (tracks.empty())
         return;
     finishPlayback(true);
-    if (shuffle)
+    if (shuffle) {
         m_queue.setShuffle(true);
+        // "Shuffle" means any track may come first, not always the first of the list.
+        std::mt19937 rng{std::random_device{}()};
+        startIndex = static_cast<int>(rng() % tracks.size());
+    }
     m_queue.set(std::move(tracks), startIndex);
     m_queueFinished = false;
     m_failures = 0;
@@ -606,11 +639,28 @@ void MusicPlayer::seekBy(int seconds)
         target = 0;
     if (m_duration > 0 && target > m_duration - 1)
         target = std::max(0.0, m_duration - 1);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.1f", target);
-    sendLine(std::string("seek ") + buf);
-    m_position = target;
+    seekTo(target);
     report(ReportKind::Progress, m_state == PlayState::Paused);
+}
+
+void MusicPlayer::seekTo(double seconds)
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.1f", seconds);
+    // In the last seconds the engine has already decoded past this track's end (and may have
+    // opened the next one), so an in-place seek could land in the wrong track: reload the
+    // current file at the new spot instead and queue the next one again.
+    const bool nearEnd = m_duration > 0 && m_duration - m_position < 10.0;
+    if (!m_preloadPath.empty() || nearEnd) {
+        m_preloadPath.clear();
+        m_preloadRequested = false;
+        sendLine(std::string("load ") + buf + " " + m_loadedPath);
+        if (m_state == PlayState::Paused)
+            sendLine("pause");
+    } else {
+        sendLine(std::string("seek ") + buf);
+    }
+    m_position = seconds;
 }
 
 void MusicPlayer::next()
@@ -631,8 +681,7 @@ void MusicPlayer::previous()
     if (m_queue.empty())
         return;
     if (m_started && m_position > 3.0) { // well into the track: restart it
-        sendLine("seek 0");
-        m_position = 0;
+        seekTo(0);
         return;
     }
     if (m_started)
@@ -789,6 +838,8 @@ void MusicPlayer::reportLoop()
                 return; // stopping and drained
             job = std::move(m_reportJobs.front());
             m_reportJobs.pop_front();
+            if (m_stopWorkers && job.kind == ReportKind::Progress)
+                continue; // shutting down: only the Start/Stopped bookkeeping is worth the wait
             // Progress reports pile up while the network is slow; only the newest matters.
             while (job.kind == ReportKind::Progress && !m_reportJobs.empty() &&
                    m_reportJobs.front().kind == ReportKind::Progress &&

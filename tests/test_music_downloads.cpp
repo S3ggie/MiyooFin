@@ -143,6 +143,19 @@ void testSharedTracksAndRemoval()
     std::printf("[test] music downloads: shared tracks and removal OK\n");
 }
 
+void testCollectionShrinks()
+{
+    std::printf("[test] music downloads: a collection that shrinks drops its files\n");
+    Rig rig;
+    rig.dl->enqueue(collection("al1"), tracks({"a", "b", "c"}));
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("c"); }));
+    const std::string pathC = rig.dl->pathFor("c");
+    rig.dl->enqueue(collection("al1"), tracks({"a", "b"})); // the album lost a track
+    CHECK(rig.until([&] { return !rig.dl->hasTrack("c"); }));
+    CHECK(!exists(pathC) && rig.dl->tracksOf("al1").size() == 2 && rig.dl->totalBytes() == 6000);
+    std::printf("[test] music downloads: a collection that shrinks drops its files OK\n");
+}
+
 void testPersistence()
 {
     std::printf("[test] music downloads: survives a restart\n");
@@ -220,6 +233,7 @@ int main()
 {
     testDownloadsAlbum();
     testSharedTracksAndRemoval();
+    testCollectionShrinks();
     testPersistence();
     testRetryAndFailure();
     testOfflineAndSpace();

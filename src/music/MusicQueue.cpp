@@ -43,7 +43,8 @@ const Track* MusicQueue::peekNext() const
         return current();
     if (m_pos + 1 < size())
         return at(m_pos + 1);
-    return m_repeat == Repeat::All ? at(0) : nullptr;
+    // Wrapping with shuffle on reshuffles first, so the next track is not known yet.
+    return m_repeat == Repeat::All && !m_shuffle ? at(0) : nullptr;
 }
 
 void MusicQueue::reshuffleKeepingCurrent()
@@ -280,7 +281,14 @@ bool MusicQueue::removeAt(int position)
 {
     if (position < 0 || position >= size() || position == m_pos)
         return false;
+    // Drop the track itself too, so the source list and the play order never disagree
+    // (toggling shuffle rebuilds one from the other).
+    const int index = m_order[position];
     m_order.erase(m_order.begin() + position);
+    m_tracks.erase(m_tracks.begin() + index);
+    for (int& i : m_order)
+        if (i > index)
+            --i;
     if (position < m_pos)
         --m_pos;
     return true;

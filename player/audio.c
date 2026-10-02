@@ -79,11 +79,13 @@ static void emit(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void emit(const char *fmt, ...)
 {
     va_list ap;
+    flockfile(stdout); /* the decoder and control threads both report */
     va_start(ap, fmt);
     vprintf(fmt, ap);
     va_end(ap);
     putchar('\n');
     fflush(stdout);
+    funlockfile(stdout);
 }
 
 /* ---- audio callback: drain the ring, silence on underrun --------------------------------- */

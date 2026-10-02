@@ -319,6 +319,7 @@ void App::logout()
     printf("[App] Logging out\n");
     if (m_music)
         m_music->stop();
+    std::atomic_store(&m_musicSession, std::shared_ptr<Session>()); // music workers: signed out
     if (m_libraryCoordinator) {
         m_libraryCoordinator->stop();
     }

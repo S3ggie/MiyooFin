@@ -36,6 +36,7 @@ struct CoverResult
     std::string key; // MusicLibrary::coverKey
     DecodedImage image;
     bool ok = false;
+    bool dropped = false; // never fetched (queue overflow): ask again if it is still needed
 };
 
 /// Everything the music screens read from the server, off the UI thread: listings (two

@@ -37,6 +37,10 @@ bool looksLikeAudioFile(const std::string& path, std::string& error);
 /// Deletes the oldest files in `dir` until it is under `limitBytes`, never touching `keep`.
 void pruneCache(const std::string& dir, std::uint64_t limitBytes, const std::string& keep);
 
+/// Deletes files in `dir` not modified in the last `seconds` (a cache clean-up that leaves what
+/// is in use alone).
+void pruneOlderThan(const std::string& dir, int seconds);
+
 /// Production hooks for a session: fetch via the Jellyfin routes, report via the Sessions API.
 TrackSourceConfig makeServerSource(const Session& session, std::string cacheDir,
                                    AudioQuality quality);

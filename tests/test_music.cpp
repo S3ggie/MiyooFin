@@ -241,6 +241,32 @@ void testQueue()
     CHECK(e.removeAt(2) && ids(e) == "t0,n,t2,z");
     e.jumpTo(2);
     CHECK(e.removeAt(0) && e.current()->id == "t2" && e.position() == 1);
+    // Removing entries and toggling shuffle never leaves the order pointing past the tracks.
+    MusicQueue r;
+    r.seed(5);
+    r.set(tracks(6), 3);
+    r.setShuffle(true);
+    CHECK(r.removeAt(2) && r.removeAt(r.size() - 1) && r.size() == 4);
+    for (int i = 0; i < 6; ++i) {
+        r.setShuffle(i % 2 == 1);
+        CHECK(r.size() == 4 && r.current() != nullptr && r.position() >= 0 && r.position() < 4);
+        std::vector<std::string> seen;
+        for (int k = 0; k < r.size(); ++k)
+            seen.push_back(r.at(k)->id);
+        std::sort(seen.begin(), seen.end());
+        CHECK(std::unique(seen.begin(), seen.end()) == seen.end()); // no track twice, none revived
+    }
+    // With shuffle on, the next pass is reshuffled, so nothing can be preloaded across the wrap.
+    MusicQueue w;
+    w.setShuffle(true);
+    w.setRepeat(Repeat::All);
+    w.set(tracks(3), 0);
+    w.jumpTo(w.size() - 1);
+    CHECK(w.peekNext() == nullptr);
+    w.setShuffle(false);
+    w.jumpTo(w.size() - 1);
+    CHECK(w.peekNext() != nullptr && w.peekNext()->id == w.at(0)->id);
+
     MusicQueue empty;
     empty.playNext(track("only"));
     CHECK(empty.current()->id == "only");

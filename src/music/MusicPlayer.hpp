@@ -168,6 +168,7 @@ class MusicPlayer
     };
 
     void startCurrent(double startSec);
+    void seekTo(double seconds);
     void requestFetch(const Track& track, bool forNext);
     void maybePreloadNext();
     void sendLine(const std::string& line);
@@ -216,7 +217,8 @@ class MusicPlayer
     std::int64_t m_lastProgressMs = 0;
     bool m_awake = false;
     double m_pendingStart = 0;
-    bool m_queueDirty = false, m_queueFinished = false;
+    bool m_queueDirty = false, m_queueFinished = false, m_pauseAfterStart = false;
+    std::int64_t m_loadSentMs = 0;
     std::int64_t m_lastSaveMs = 0;
     bool m_hasPendingSave = false;
     std::string m_pendingSave;

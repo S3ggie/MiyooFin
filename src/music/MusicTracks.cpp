@@ -1,6 +1,7 @@
 #include "MusicTracks.hpp"
 #include "../net/Session.hpp"
 #include <algorithm>
+#include <ctime>
 #include <cerrno>
 #include <cstdio>
 #include <dirent.h>
@@ -96,6 +97,23 @@ void pruneCache(const std::string& dir, std::uint64_t limitBytes, const std::str
             continue;
         if (unlink(e.path.c_str()) == 0)
             total -= e.size;
+    }
+}
+
+void pruneOlderThan(const std::string& dir, int seconds)
+{
+    const time_t cutoff = time(nullptr) - seconds;
+    if (DIR* d = opendir(dir.c_str())) {
+        while (dirent* e = readdir(d)) {
+            const std::string name = e->d_name;
+            if (name == "." || name == "..")
+                continue;
+            const std::string path = dir + "/" + name;
+            struct stat st;
+            if (stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_mtime < cutoff)
+                unlink(path.c_str());
+        }
+        closedir(d);
     }
 }
 

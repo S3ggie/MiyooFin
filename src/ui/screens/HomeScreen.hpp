@@ -95,6 +95,13 @@ class HomeScreen : public Screen
     {
         return m_changeServerRequested;
     }
+    /// True once when the user asked to enter MiyooFin Music (App swaps the root screen).
+    bool takeMusicModeRequest()
+    {
+        const bool requested = m_musicModeRequested;
+        m_musicModeRequested = false;
+        return requested;
+    }
     bool takeLocalAddressRequest()
     {
         const bool requested = m_localAddressRequested;
@@ -299,6 +306,7 @@ class HomeScreen : public Screen
     using SettingsConfirmation = HomeSettingsConfirmation;
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
+    bool m_musicModeRequested = false;
     bool m_publicAddressRequested = false;
 
     // Update manager

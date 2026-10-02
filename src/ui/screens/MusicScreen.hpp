@@ -1,0 +1,225 @@
+#ifndef MIYOOFIN_MUSIC_SCREEN_HPP
+#define MIYOOFIN_MUSIC_SCREEN_HPP
+
+#include "../../app/Screen.hpp"
+#include "../../download/DownloadManager.hpp"
+#include "../../music/MusicLibrary.hpp"
+#include "../../music/MusicPlayer.hpp"
+#include "../../music/MusicSettings.hpp"
+#include "../../net/Session.hpp"
+#include "../BatteryMonitor.hpp"
+#include "../MusicUiState.hpp"
+#include <SDL2/SDL.h>
+#include <deque>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace miyoofin {
+
+/// One line in a Music list: a heading, a track, an album, an artist, a playlist or a
+/// settings entry. Rows are built from server pages and carry what the actions need.
+struct MusicRow
+{
+    enum class Kind
+    {
+        Heading,
+        Track,
+        Album,
+        Artist,
+        Playlist,
+        Action
+    } kind = Kind::Heading;
+    std::string id, title, subtitle, right;
+    std::string artId, artTag; // cover (empty = none)
+    music::Track track;
+    music::Album album;
+    music::Artist artist;
+    music::Playlist playlist;
+    bool selectable() const
+    {
+        return kind != Kind::Heading;
+    }
+};
+
+/// A page of rows with its cursor. The cursor part (MusicFrame) is what gets persisted.
+struct MusicPane
+{
+    MusicFrame frame;
+    std::vector<MusicRow> rows;
+    std::uint64_t ticket = 0, ticket2 = 0; // outstanding listing requests (Home has two)
+    bool requested = false, failed = false, loadedOnce = false, hasMore = false;
+    int total = 0;
+    std::string error;
+    // Home is assembled from two listings.
+    std::vector<music::Album> homeAlbums;
+    std::vector<music::Track> homeTracks;
+};
+
+/// MiyooFin Music: the root screen of the music mode. Five tabs under an always-visible
+/// header, a mini-player strip while something plays, and a full Now Playing view. All
+/// network and disk work happens on MusicLibrary/MusicPlayer workers.
+class MusicScreen : public Screen
+{
+  public:
+    MusicScreen(const Session& session, std::shared_ptr<DownloadManager> downloads,
+                music::MusicPlayer* player, music::MusicSettings* settings);
+    ~MusicScreen() override;
+
+    void enter() override;
+    void leave() override;
+    bool handleAction(Action action) override;
+    void update(Uint32 dt) override;
+    void render(SDL_Surface* fb) override;
+    const char* diagnosticName() const override
+    {
+        return "MusicScreen";
+    }
+    bool deferDestruction() const override
+    {
+        return true;
+    }
+
+    /// True once when the user asked to go back to MiyooFin (App swaps the root screen).
+    bool takeVideoModeRequest()
+    {
+        const bool requested = m_videoModeRequested;
+        m_videoModeRequested = false;
+        return requested;
+    }
+    /// Writes the page state now (App calls this before leaving the mode).
+    void saveState();
+
+    // ---- exposed for tests ----
+    static std::vector<std::string> tabNames();
+    static music::ListingRequest requestFor(const MusicFrame& frame, int start);
+
+  private:
+    enum class View
+    {
+        Browse,
+        NowPlaying
+    };
+    enum class PendingKind
+    {
+        PlayAll,
+        ShuffleAll,
+        PlayNext,
+        Append
+    };
+    struct Pending
+    {
+        PendingKind kind;
+        int startIndex = 0;
+    };
+    struct MenuItem
+    {
+        std::string label;
+        int action;
+    };
+    struct Menu
+    {
+        bool open = false;
+        int selected = 0;
+        std::vector<MenuItem> items;
+        MusicRow row; // what the menu acts on
+    };
+
+    // tabs and panes
+    MusicPane& activePane();
+    const MusicPane& activePane() const;
+    std::vector<MusicPane>& rootsOf(int tab);
+    MusicPane makePane(const MusicFrame& frame) const;
+    void buildFromState(const MusicUiState& state);
+    MusicUiState snapshotState() const;
+    void setTab(int tab);
+    void openFrame(const MusicFrame& frame);
+    void popFrame();
+    void requestPane(MusicPane& pane, bool nextPage);
+    void applyListResult(const music::ListResult& result);
+    void rebuildRows(MusicPane& pane);
+    void restoreSelection(MusicPane& pane, const std::string& selectedId);
+    void clampPane(MusicPane& pane);
+    void refreshSettingsRows(MusicPane& pane);
+    void markDirty()
+    {
+        m_stateDirty = true;
+    }
+
+    // actions
+    bool handleBrowse(Action action);
+    bool handleNowPlaying(Action action);
+    bool handleMenu(Action action);
+    void activateRow(const MusicRow& row);
+    void openMenu(const MusicRow& row);
+    void runMenuAction(int action, const MusicRow& row);
+    void playFromPane(int rowIndex);
+    void playCollection(const MusicRow& row, PendingKind kind);
+    void applyPending(const music::ListResult& result, const Pending& pending);
+    void cycleLetter(int delta);
+    void settingsAction(int index);
+
+    // covers
+    void requestVisibleCovers();
+    SDL_Surface* cover(const std::string& id, const std::string& tag, int size, bool request);
+    void takeCovers();
+    void trimCovers();
+
+    // rendering
+    void renderBrowse(SDL_Surface* fb);
+    void renderPane(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
+    void renderSubBar(SDL_Surface* fb);
+    void renderDetailHeader(SDL_Surface* fb, const MusicPane& pane, int top);
+    void renderMiniPlayer(SDL_Surface* fb, int top);
+    void renderNowPlaying(SDL_Surface* fb);
+    void renderMenu(SDL_Surface* fb);
+    void renderFooter(SDL_Surface* fb, bool miniPlayerShown);
+    void drawCover(SDL_Surface* fb, const std::string& id, const std::string& tag, int x, int y,
+                   int size, int requestSize, const std::string& label);
+    bool miniPlayerVisible() const;
+    int contentBottom() const;
+    int visibleRows(const MusicPane& pane) const;
+    int detailHeaderHeight(const MusicPane& pane) const;
+
+    Session m_session;
+    std::shared_ptr<DownloadManager> m_downloads;
+    music::MusicPlayer* m_player;
+    music::MusicSettings* m_settings;
+    std::unique_ptr<music::MusicLibrary> m_library;
+    BatteryMonitor m_battery;
+
+    int m_activeTab = 0;
+    struct TabRuntime
+    {
+        std::vector<MusicPane> roots;
+        int section = 0;
+        std::vector<MusicPane> drill;
+    };
+    std::vector<TabRuntime> m_tabs;
+    View m_view = View::Browse;
+    bool m_queueView = false; // Now Playing shows the queue instead of the art
+    int m_queueSelected = 0;
+    Menu m_menu;
+    std::map<std::uint64_t, Pending> m_pending;
+    bool m_videoModeRequested = false;
+    bool m_cacheClearArmed = false;
+    std::string m_toast;
+    Uint32 m_toastUntil = 0;
+
+    // cover surfaces: "id:tag:size" -> surface, bounded LRU
+    std::map<std::string, SDL_Surface*> m_covers;
+    std::deque<std::string> m_coverOrder;
+    std::set<std::string> m_coverRequested;
+    std::set<std::string> m_coverMissing;
+
+    bool m_stateDirty = false;
+    Uint32 m_stateSavedAt = 0;
+    Uint32 m_clock = 0;
+    std::uint64_t m_frame = 0;
+};
+
+} // namespace miyoofin
+
+#endif

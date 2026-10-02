@@ -455,17 +455,19 @@ void header(SDL_Surface* fb, const HeaderSpec& spec)
 
     if (!spec.tabs.empty()) {
         int x = kTabsLeft;
+        const int pad = spec.tabPad >= 0 ? spec.tabPad : kTabPad;
+        const int gap = spec.tabGap >= 0 ? spec.tabGap : kTabGap;
         for (std::size_t i = 0; i < spec.tabs.size(); ++i) {
             const std::string& name = spec.tabs[i];
-            const int w = textWidth(name) + 2 * kTabPad;
+            const int w = textWidth(name) + 2 * pad;
             const bool active = static_cast<int>(i) == spec.activeTab;
             if (active) {
                 roundFill(fb, x, kTabTop, w, kTabHeight, 5, kAccent);
-                text(fb, x + kTabPad, kTabTop + 4, name, Rgb{255, 255, 255});
+                text(fb, x + pad, kTabTop + 4, name, Rgb{255, 255, 255});
             } else {
-                text(fb, x + kTabPad, kTabTop + 4, name, kTextSecondary);
+                text(fb, x + pad, kTabTop + 4, name, kTextSecondary);
             }
-            x += w + kTabGap;
+            x += w + gap;
         }
     } else if (!spec.title.empty()) {
         textClamped(fb, contentLeft, (kHeaderH - 16) / 2, statusLeft - contentLeft, spec.title,

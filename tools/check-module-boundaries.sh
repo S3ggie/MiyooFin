@@ -46,10 +46,11 @@ ALLOWED = {
     "download": {"net", "cache", "diagnostics", "library"},
     "library": {"catalog", "net", "cache", "diagnostics", "download"},
     "playback": {"cache", "download"},
+    "music": {"net", "cache", "download", "image", "diagnostics"},
     "update": {"net"},
-    "ui": {"net", "library", "download", "cache", "playback", "update",
+    "ui": {"net", "library", "download", "cache", "playback", "update", "music",
            "diagnostics", "image", "input", "app"},
-    "app": {"ui", "net", "library", "download", "cache", "playback", "update",
+    "app": {"ui", "net", "library", "download", "cache", "playback", "update", "music",
             "diagnostics", "image", "input", "catalog"},
     "main": {"app", "update", "diagnostics"},
 }

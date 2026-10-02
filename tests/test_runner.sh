@@ -28,6 +28,8 @@ test_library_hierarchy
 test_library_query
 test_worker_slot
 test_player
+test_music
+test_music_player
 '
 pids=
 

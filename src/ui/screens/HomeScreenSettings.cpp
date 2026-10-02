@@ -72,7 +72,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                  {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
                  {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
-                 {"DIAGNOSTICS", "UI Stall Logger Enabled"}});
+                 {"DIAGNOSTICS", "UI Stall Logger Enabled"},
+                 {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});
     // UPDATES row — directly above ABOUT.
     {
         std::string updateValue = updateStatusText(m_updateSnapshot);

@@ -135,7 +135,7 @@ OUT_DIRS    := $(BUILD_DIR)/app $(BUILD_DIR)/data $(BUILD_DIR)/input \
                $(BUILD_DIR)/diagnostics \
                $(BUILD_DIR)/ui $(BUILD_DIR)/ui/screens \
                $(BUILD_DIR)/playback \
-               $(BUILD_DIR)/update
+               $(BUILD_DIR)/update $(BUILD_DIR)/music
 
 TARGET      := $(BUILD_DIR)/miyoofin
 
@@ -221,7 +221,7 @@ MODULE_BOUNDARIES_TEST := tests/test_module_boundaries.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player
+               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -462,6 +462,7 @@ CA_BUNDLE := cacert.pem
 ARM_BRIDGE := output/build-arm/miyoofin-https-bridge
 ARM_REPORTER := output/build-arm/miyoofin-playback-reporter
 ARM_PLAYER := output/build-arm/miyoofin-player
+ARM_AUDIO := output/build-arm/miyoofin-audio
 
 .PHONY: package check-ca-bundle update-ca-bundle
 check-ca-bundle: $(CA_BUNDLE)
@@ -484,6 +485,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	@cp distributions/onionos/playback_runner.sh $(PACKAGE_DIR)/
 	@cp $(ARM_REPORTER) $(PACKAGE_DIR)/
 	@cp $(ARM_PLAYER) $(PACKAGE_DIR)/
+	@cp $(ARM_AUDIO) $(PACKAGE_DIR)/
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
@@ -504,6 +506,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-https-bridge && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-playback-reporter && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-player && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-audio && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/lib/libSDL2-2.0.so.0.18.2 && \
 	    echo "  Packaged binaries stripped successfully"'
 	@echo "  Verifying package binary architecture..."

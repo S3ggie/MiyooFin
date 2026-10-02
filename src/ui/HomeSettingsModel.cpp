@@ -24,7 +24,7 @@ std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& sessi
 
 int homeSettingsRowCount(const Session& session)
 {
-    return 1 + (int)homeSettingsAddressRows(session).size() + 8;
+    return 1 + (int)homeSettingsAddressRows(session).size() + 9;
 }
 
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
@@ -37,6 +37,8 @@ HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
     const int count = homeSettingsRowCount(session);
     if (row == count - 3)
         return HomeSettingsRowAction::CheckForUpdates;
+    if (row == count - 4)
+        return HomeSettingsRowAction::MusicMode;
     return row == count - 1 ? HomeSettingsRowAction::Logout : HomeSettingsRowAction::None;
 }
 

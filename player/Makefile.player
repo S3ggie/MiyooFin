@@ -16,8 +16,15 @@ LDFLAGS := -L$(DEPS)/lib -Wl,-rpath-link,$(DEPS)/lib \
 LIBS := -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavresample -lpostproc -lavutil \
         -lSDL -lSDL_ttf -lm -lpthread
 
+AUDIO_TARGET := output/build-arm/miyoofin-audio
+AUDIO_SRCS := player/audio.c
+AUDIO_LIBS := -lavformat -lavcodec -lswresample -lavutil -lSDL -lm -lpthread
+
 .PHONY: all
-all: $(TARGET)
+all: $(TARGET) $(AUDIO_TARGET)
+# miyoofin-audio: the MiyooFin Music engine (plays local files; no display, no network).
+$(AUDIO_TARGET): $(AUDIO_SRCS) | output/build-arm
+	$(CC) $(CFLAGS) $(AUDIO_SRCS) -o $@ $(LDFLAGS) $(AUDIO_LIBS)
 $(TARGET): $(SRCS) player/config.h player/osd.h player/osd_font.h player/subs.h | output/build-arm
 	$(CC) $(CFLAGS) $(SRCS) -o $@ $(LDFLAGS) $(LIBS)
 output/build-arm:

@@ -285,6 +285,12 @@ class JellyfinApi
                                                      const std::string& key);
     static MediaItem jsonToMediaItem(const std::string& obj);
 
+    /// Extract a raw JSON value (string, number, bool, null, object, array).
+    static std::string jsonRawValue(const std::string& json, const std::string& key);
+
+    /// Split comma-separated elements from an array body string.
+    static std::vector<std::string> splitJsonArrayContent(const std::string& content);
+
     // ---- Auth header helper (public for HomeScreen artwork loading) --------
 
     /// Build standard X-Emby auth headers.
@@ -298,12 +304,6 @@ class JellyfinApi
     static std::string jsonEscape(const std::string& s);
     static AuthError classifyAuthError(long httpStatus, const std::string& body,
                                        std::string& message);
-
-    /// Extract a raw JSON value (string, number, bool, null, object, array).
-    static std::string jsonRawValue(const std::string& json, const std::string& key);
-
-    /// Split comma-separated elements from an array body string.
-    static std::vector<std::string> splitJsonArrayContent(const std::string& content);
 };
 
 } // namespace miyoofin

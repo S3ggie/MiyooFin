@@ -15,6 +15,9 @@
 #include "../net/Session.hpp"
 #include "../download/DownloadManager.hpp"
 #include "../library/LibraryCoordinator.hpp"
+#include "../music/MusicPlayer.hpp"
+#include "../music/MusicSettings.hpp"
+#include "AppMode.hpp"
 
 namespace miyoofin {
 
@@ -86,6 +89,15 @@ class App
     std::string m_deviceId;  // persistent device identifier
     Session m_session;       // saved session (token + user)
     std::shared_ptr<DownloadManager> m_downloadManager;
+
+    // MiyooFin Music: the mode the app is in, the audio player (alive for the whole run),
+    // and the session copy its worker threads read.
+    AppMode m_mode = AppMode::Video;
+    music::MusicSettings m_musicSettings;
+    std::unique_ptr<music::MusicPlayer> m_music;
+    std::shared_ptr<Session> m_musicSession;
+    void ensureMusicPlayer();
+    void switchMode(AppMode mode);
     std::thread m_savedValidationThread;
     std::atomic<int> m_savedValidation{0}; // 0 pending, 1 unavailable, 2 unauthorized, 3 valid
     std::string m_savedSessionServerId;

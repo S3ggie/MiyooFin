@@ -11,6 +11,8 @@
 #include "../ui/BitmapFont.hpp"
 #include "../ui/screens/StartupScreen.hpp"
 #include "../ui/screens/HomeScreen.hpp"
+#include "../ui/screens/MusicScreen.hpp"
+#include "../ui/Design.hpp"
 #include "../ui/screens/ServerEntryScreen.hpp"
 #include "../ui/screens/ConnectScreen.hpp"
 #include "../ui/screens/LoginScreen.hpp"
@@ -112,6 +114,7 @@ App::App()
 
 App::~App()
 {
+    m_music.reset(); // stops the audio engine and its workers
     uiDiagnostics().setSuspended(true);
     uiDiagnostics().stop();
     if (m_savedValidationThread.joinable())
@@ -158,6 +161,8 @@ bool App::init()
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    m_mode = loadAppMode();
+    design::usePalette(m_mode == AppMode::Music);
     const char* desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
     const char* diagnosticsPath = std::getenv("MIYOOFIN_UI_DIAGNOSTICS");
     if (desktopInput && desktopInput[0] != '\0' && desktopInput[0] != '0' && diagnosticsPath &&
@@ -486,6 +491,9 @@ int App::run()
             }
         }
 
+        if (m_music)
+            m_music->poll(); // engine events, fetch results, supervision (never blocks)
+
         // --- Check if a screen requested external playback ---
         ScreenStack::ExternalPlaybackSource playbackSource =
             ScreenStack::ExternalPlaybackSource::Unknown;
@@ -615,8 +623,13 @@ int App::run()
                         }
                         // Login failed — screen stays with error message
                     }
+                } else if (auto* musicScreen = dynamic_cast<MusicScreen*>(top)) {
+                    if (musicScreen->takeVideoModeRequest())
+                        switchMode(AppMode::Video);
                 } else if (auto* home = dynamic_cast<HomeScreen*>(top)) {
-                    if (home->updateExitRequested()) {
+                    if (home->takeMusicModeRequest()) {
+                        switchMode(AppMode::Music);
+                    } else if (home->updateExitRequested()) {
                         home->cancelAsyncWork();
                         m_running = false;
                     } else if (home->takeLocalAddressRequest()) {

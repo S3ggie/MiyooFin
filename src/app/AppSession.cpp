@@ -1,5 +1,9 @@
 #include "App.hpp"
 #include "../ui/screens/HomeScreen.hpp"
+#include "../ui/screens/MusicScreen.hpp"
+#include "../ui/Design.hpp"
+#include "../music/MusicTracks.hpp"
+#include <unistd.h>
 #include "../ui/screens/LoginScreen.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
@@ -100,7 +104,9 @@ void App::configureCatalogScopeForSession()
         // and releases the sequence if Home is torn down before it completes; a
         // stale controller from a previous generation holds a different token
         // and cannot clear this owner's reservation/handoff.
-        m_libraryCoordinator->reserveStartupSequence();
+        // Only the video mode runs that sequence; in music mode live work simply proceeds.
+        if (m_mode == AppMode::Video)
+            m_libraryCoordinator->reserveStartupSequence();
         m_libraryCoordinator->start();
         if (m_downloadManager)
             m_downloadManager->setLibraryServices(m_libraryCoordinator->query(),
@@ -138,9 +144,83 @@ void App::goToHome()
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
+    if (m_mode == AppMode::Music) {
+        ensureMusicPlayer();
+        std::atomic_store(&m_musicSession, std::make_shared<Session>(m_session));
+        m_stack.push(std::make_unique<MusicScreen>(m_session, m_downloadManager, m_music.get(),
+                                                   &m_musicSettings));
+        return;
+    }
     m_stack.push(std::make_unique<HomeScreen>(
         m_session, m_downloadManager,
         m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr, m_libraryCoordinator));
+}
+
+void App::ensureMusicPlayer()
+{
+    if (m_music)
+        return;
+    music::PlayerOptions options;
+    char cwd[1024];
+    const std::string dir = getcwd(cwd, sizeof(cwd)) ? std::string(cwd) : std::string(".");
+    options.enginePath = dir + "/miyoofin-audio";
+    options.engineLog = dir + "/music-engine.log";
+    // The audio path that ffplay proved on this device: OSS emulation through padsp, and
+    // none of the SDL driver overrides the launcher exports for the SDL2 UI.
+    options.engineEnv = {"LD_PRELOAD=/mnt/SDCARD/miyoo/lib/libpadsp.so"};
+    options.engineUnsetEnv = {"SDL_AUDIODRIVER", "SDL_VIDEODRIVER", "LD_PRELOAD"};
+    m_musicSettings.load("music-settings.txt");
+
+    music::PlayerHooks hooks;
+    hooks.resolve = [this](const music::Track& track, const std::atomic<bool>& cancelled) {
+        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+        music::ResolvedTrack out;
+        if (!session) {
+            out.error = "Not signed in";
+            return out;
+        }
+        return music::resolveTrack(
+            music::makeServerSource(*session, "music-cache/stream",
+                                    {music::MusicSettings::sanitize(m_musicSettings.streamKbps)}),
+            track, cancelled);
+    };
+    hooks.report = [this](music::ReportKind kind, const music::Track& track, std::int64_t ticks,
+                          bool paused, const std::string& playSessionId) {
+        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+        if (!session)
+            return;
+        std::string error;
+        music::onRoute(*session, error, [&](const music::Connection& c) {
+            return music::reportPlayback(c, kind, track.id, ticks, paused, playSessionId, error);
+        });
+    };
+    hooks.setAwake = [](bool awake) {
+        // Onion's idle sleep checks this file, exactly as it does during video playback.
+        if (awake) {
+            if (FILE* f = std::fopen("/tmp/stay_awake", "w"))
+                std::fclose(f);
+        } else {
+            std::remove("/tmp/stay_awake");
+        }
+    };
+    m_music = std::make_unique<music::MusicPlayer>(std::move(options), std::move(hooks));
+}
+
+void App::switchMode(AppMode mode)
+{
+    if (mode == m_mode)
+        return;
+    printf("[App] Switching to %s mode\n", mode == AppMode::Music ? "music" : "video");
+    if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
+        home->cancelAsyncWork();
+    if (mode == AppMode::Video && m_music)
+        m_music->stop(); // playback does not follow you into the video app
+    m_mode = mode;
+    saveAppMode(m_mode);
+    design::usePalette(m_mode == AppMode::Music);
+    if (m_mode == AppMode::Video)
+        configureCatalogScopeForSession(); // fresh coordinator with Home's startup reservation
+    goToHome();
 }
 
 void App::goToLogin(const std::string& initialMessage)
@@ -153,6 +233,8 @@ void App::goToLogin(const std::string& initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
+    if (m_music)
+        m_music->stop();
     if (m_libraryCoordinator) {
         m_libraryCoordinator->stop();
     }

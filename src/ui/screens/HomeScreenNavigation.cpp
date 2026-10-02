@@ -485,6 +485,9 @@ bool HomeScreen::handleAction(Action action)
                     m_offlineModeFetchPending = true;
                 return true;
             }
+            case SettingsRowAction::MusicMode:
+                m_musicModeRequested = true;
+                return true;
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;
                 return true;

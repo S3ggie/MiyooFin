@@ -1,0 +1,1079 @@
+#include "MusicScreen.hpp"
+#include "../../music/MusicApi.hpp"
+#include "../UiKit.hpp"
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <sstream>
+
+namespace miyoofin {
+
+namespace {
+
+constexpr const char* kStateFile = "music-ui-state.txt";
+constexpr const char* kSettingsFile = "music-settings.txt";
+constexpr const char* kCacheRoot = "music-cache";
+constexpr int kRowHeight = 44;
+constexpr int kPrefetchRows = 12;
+constexpr Uint32 kStateSaveMs = 2000;
+constexpr std::size_t kMaxCovers = 80;
+
+constexpr int kMenuPlay = 1, kMenuShuffle = 2, kMenuPlayNext = 3, kMenuAppend = 4, kMenuGoAlbum = 5,
+              kMenuGoArtist = 6;
+
+std::string readText(const std::string& path)
+{
+    std::ifstream in(path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+bool writeText(const std::string& path, const std::string& text)
+{
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        out << text;
+        if (!out.good())
+            return false;
+    }
+    return std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+std::string minutes(std::int64_t ticks)
+{
+    const int m = static_cast<int>(ticks / 10000000 / 60);
+    return std::to_string(m) + " min";
+}
+
+MusicRow headingRow(const std::string& text)
+{
+    MusicRow r;
+    r.kind = MusicRow::Kind::Heading;
+    r.title = text;
+    return r;
+}
+
+MusicRow trackRow(const music::Track& t, bool numbered)
+{
+    MusicRow r;
+    r.kind = MusicRow::Kind::Track;
+    r.id = t.id;
+    r.track = t;
+    r.title = (numbered && t.trackNumber > 0 ? std::to_string(t.trackNumber) + ". " : "") + t.title;
+    r.subtitle = t.artist;
+    if (!t.album.empty() && !numbered)
+        r.subtitle += (r.subtitle.empty() ? "" : " - ") + t.album;
+    r.right = music::formatDuration(t.durationSeconds());
+    r.artId = t.artId();
+    r.artTag = t.artTag();
+    return r;
+}
+
+MusicRow albumRow(const music::Album& a)
+{
+    MusicRow r;
+    r.kind = MusicRow::Kind::Album;
+    r.id = a.id;
+    r.album = a;
+    r.title = a.title;
+    r.subtitle = a.artist;
+    if (a.year > 0)
+        r.right = std::to_string(a.year);
+    r.artId = a.id;
+    r.artTag = a.imageTag;
+    return r;
+}
+
+MusicRow artistRow(const music::Artist& a)
+{
+    MusicRow r;
+    r.kind = MusicRow::Kind::Artist;
+    r.id = a.id;
+    r.artist = a;
+    r.title = a.name;
+    r.artId = a.id;
+    r.artTag = a.imageTag;
+    return r;
+}
+
+MusicRow playlistRow(const music::Playlist& p)
+{
+    MusicRow r;
+    r.kind = MusicRow::Kind::Playlist;
+    r.id = p.id;
+    r.playlist = p;
+    r.title = p.title;
+    r.subtitle = std::to_string(p.trackCount) + (p.trackCount == 1 ? " track" : " tracks");
+    r.right = p.runTimeTicks > 0 ? minutes(p.runTimeTicks) : "";
+    r.artId = p.id;
+    r.artTag = p.imageTag;
+    return r;
+}
+
+bool isAlphabetical(MusicPaneKind k)
+{
+    return k == MusicPaneKind::Artists || k == MusicPaneKind::Albums || k == MusicPaneKind::Songs;
+}
+
+} // namespace
+
+std::vector<std::string> MusicScreen::tabNames()
+{
+    return {"Home", "Library", "Playlists", "Downloads", "Settings"};
+}
+
+music::ListingRequest MusicScreen::requestFor(const MusicFrame& frame, int start)
+{
+    music::ListingRequest r;
+    r.start = start;
+    r.letter = frame.letter;
+    switch (frame.kind) {
+    case MusicPaneKind::Artists:
+        r.kind = music::Listing::Artists;
+        r.limit = 60;
+        break;
+    case MusicPaneKind::Albums:
+        r.kind = music::Listing::Albums;
+        r.limit = 60;
+        break;
+    case MusicPaneKind::Songs:
+        r.kind = music::Listing::Songs;
+        r.limit = 60;
+        break;
+    case MusicPaneKind::Playlists:
+        r.kind = music::Listing::Playlists;
+        r.limit = 100;
+        break;
+    case MusicPaneKind::ArtistAlbums:
+        r.kind = music::Listing::ArtistAlbums;
+        r.parentId = frame.id;
+        r.limit = 100;
+        break;
+    case MusicPaneKind::AlbumTracks:
+        r.kind = music::Listing::AlbumTracks;
+        r.parentId = frame.id;
+        r.limit = 300;
+        break;
+    case MusicPaneKind::PlaylistTracks:
+        r.kind = music::Listing::PlaylistTracks;
+        r.parentId = frame.id;
+        r.limit = 100;
+        break;
+    default:
+        break;
+    }
+    return r;
+}
+
+// ---- construction
+// ---------------------------------------------------------------------------------
+
+MusicScreen::MusicScreen(const Session& session, std::shared_ptr<DownloadManager> downloads,
+                         music::MusicPlayer* player, music::MusicSettings* settings)
+    : m_session(session), m_downloads(std::move(downloads)), m_player(player), m_settings(settings),
+      m_library(std::make_unique<music::MusicLibrary>(session, kCacheRoot))
+{
+    MusicUiState state = MusicUiState::defaults();
+    MusicUiState saved;
+    if (MusicUiState::parse(readText(kStateFile), saved))
+        state = saved;
+    buildFromState(state);
+}
+
+MusicScreen::~MusicScreen()
+{
+    for (auto& entry : m_covers)
+        SDL_FreeSurface(entry.second);
+}
+
+void MusicScreen::enter() {}
+
+void MusicScreen::leave()
+{
+    saveState();
+    m_library->cancelLists();
+}
+
+MusicPane MusicScreen::makePane(const MusicFrame& frame) const
+{
+    MusicPane p;
+    p.frame = frame;
+    return p;
+}
+
+void MusicScreen::buildFromState(const MusicUiState& state)
+{
+    m_tabs.assign(kMusicTabCount, TabRuntime{});
+    for (int t = 0; t < kMusicTabCount; ++t) {
+        for (const MusicFrame& f : state.tabs[t].roots)
+            m_tabs[t].roots.push_back(makePane(f));
+        m_tabs[t].section = state.tabs[t].section;
+        for (const MusicFrame& f : state.tabs[t].drill)
+            m_tabs[t].drill.push_back(makePane(f));
+    }
+    m_activeTab = state.activeTab;
+}
+
+MusicUiState MusicScreen::snapshotState() const
+{
+    MusicUiState s = MusicUiState::defaults();
+    s.activeTab = m_activeTab;
+    for (int t = 0; t < kMusicTabCount; ++t) {
+        s.tabs[t].roots.clear();
+        for (const MusicPane& p : m_tabs[t].roots)
+            s.tabs[t].roots.push_back(p.frame);
+        s.tabs[t].section = m_tabs[t].section;
+        for (const MusicPane& p : m_tabs[t].drill)
+            s.tabs[t].drill.push_back(p.frame);
+    }
+    return s;
+}
+
+void MusicScreen::saveState()
+{
+    writeText(kStateFile, snapshotState().serialize());
+    m_stateDirty = false;
+    m_stateSavedAt = m_clock;
+}
+
+// ---- panes
+// ----------------------------------------------------------------------------------------
+
+std::vector<MusicPane>& MusicScreen::rootsOf(int tab)
+{
+    return m_tabs[tab].roots;
+}
+
+MusicPane& MusicScreen::activePane()
+{
+    TabRuntime& tab = m_tabs[m_activeTab];
+    if (!tab.drill.empty())
+        return tab.drill.back();
+    return tab.roots[std::min<int>(tab.section, static_cast<int>(tab.roots.size()) - 1)];
+}
+
+const MusicPane& MusicScreen::activePane() const
+{
+    return const_cast<MusicScreen*>(this)->activePane();
+}
+
+void MusicScreen::setTab(int tab)
+{
+    m_activeTab = (tab + kMusicTabCount) % kMusicTabCount;
+    m_menu.open = false;
+    markDirty();
+}
+
+void MusicScreen::openFrame(const MusicFrame& frame)
+{
+    m_tabs[m_activeTab].drill.push_back(makePane(frame));
+    markDirty();
+}
+
+void MusicScreen::popFrame()
+{
+    TabRuntime& tab = m_tabs[m_activeTab];
+    if (tab.drill.empty())
+        return;
+    tab.drill.pop_back();
+    markDirty();
+}
+
+int MusicScreen::detailHeaderHeight(const MusicPane& pane) const
+{
+    switch (pane.frame.kind) {
+    case MusicPaneKind::AlbumTracks:
+    case MusicPaneKind::PlaylistTracks:
+    case MusicPaneKind::ArtistAlbums:
+        return 108;
+    default:
+        return 0;
+    }
+}
+
+bool MusicScreen::miniPlayerVisible() const
+{
+    return m_player && m_player->view().state != music::PlayState::Idle;
+}
+
+int MusicScreen::contentBottom() const
+{
+    return miniPlayerVisible() ? 404 : 456;
+}
+
+int MusicScreen::visibleRows(const MusicPane& pane) const
+{
+    const int top = 76 + detailHeaderHeight(pane);
+    return std::max(1, (contentBottom() - top) / kRowHeight);
+}
+
+void MusicScreen::requestPane(MusicPane& pane, bool nextPage)
+{
+    pane.requested = true;
+    pane.failed = false;
+    switch (pane.frame.kind) {
+    case MusicPaneKind::Home: {
+        music::ListingRequest recent;
+        recent.kind = music::Listing::RecentAlbums;
+        recent.limit = 12;
+        pane.ticket = m_library->requestList(recent);
+        music::ListingRequest played;
+        played.kind = music::Listing::RecentlyPlayed;
+        played.limit = 15;
+        pane.ticket2 = m_library->requestList(played);
+        break;
+    }
+    case MusicPaneKind::Downloads:
+    case MusicPaneKind::Settings:
+        break;
+    default:
+        pane.ticket = m_library->requestList(
+            requestFor(pane.frame, nextPage ? static_cast<int>(pane.rows.size()) : 0));
+        break;
+    }
+}
+
+void MusicScreen::clampPane(MusicPane& pane)
+{
+    const int count = static_cast<int>(pane.rows.size());
+    MusicFrame& f = pane.frame;
+    if (count == 0) {
+        f.selected = f.scroll = 0;
+        return;
+    }
+    f.selected = std::max(0, std::min(f.selected, count - 1));
+    // Land on a selectable row.
+    while (f.selected < count - 1 && !pane.rows[f.selected].selectable())
+        ++f.selected;
+    while (f.selected > 0 && !pane.rows[f.selected].selectable())
+        --f.selected;
+    const int visible = visibleRows(pane);
+    if (f.selected < f.scroll)
+        f.scroll = f.selected;
+    if (f.selected >= f.scroll + visible)
+        f.scroll = f.selected - visible + 1;
+    // Show a heading above the first row when the cursor is at the top.
+    if (f.selected > 0 && f.scroll == f.selected &&
+        pane.rows[f.selected - 1].kind == MusicRow::Kind::Heading)
+        f.scroll = f.selected - 1;
+    f.scroll = std::max(0, std::min(f.scroll, std::max(0, count - 1)));
+}
+
+void MusicScreen::restoreSelection(MusicPane& pane, const std::string& selectedId)
+{
+    if (!selectedId.empty()) {
+        for (std::size_t i = 0; i < pane.rows.size(); ++i)
+            if (pane.rows[i].selectable() && pane.rows[i].id == selectedId) {
+                pane.frame.selected = static_cast<int>(i);
+                break;
+            }
+    }
+    clampPane(pane);
+}
+
+void MusicScreen::rebuildRows(MusicPane& pane)
+{
+    // Only Home is assembled from several listings.
+    if (pane.frame.kind != MusicPaneKind::Home)
+        return;
+    const std::string selectedId = pane.frame.selectedId;
+    pane.rows.clear();
+    if (!pane.homeAlbums.empty()) {
+        pane.rows.push_back(headingRow("Recently added"));
+        for (const music::Album& a : pane.homeAlbums)
+            pane.rows.push_back(albumRow(a));
+    }
+    if (!pane.homeTracks.empty()) {
+        pane.rows.push_back(headingRow("Recently played"));
+        for (const music::Track& t : pane.homeTracks)
+            pane.rows.push_back(trackRow(t, false));
+    }
+    restoreSelection(pane, selectedId);
+}
+
+void MusicScreen::applyListResult(const music::ListResult& r)
+{
+    MusicPane* pane = nullptr;
+    bool second = false;
+    for (TabRuntime& tab : m_tabs) {
+        auto check = [&](MusicPane& p) {
+            if (p.ticket == r.ticket) {
+                pane = &p;
+                second = false;
+            } else if (p.ticket2 == r.ticket && r.ticket != 0) {
+                pane = &p;
+                second = true;
+            }
+        };
+        for (MusicPane& p : tab.roots)
+            check(p);
+        for (MusicPane& p : tab.drill)
+            check(p);
+    }
+    if (!pane)
+        return;
+    if (r.final) {
+        (second ? pane->ticket2 : pane->ticket) = 0;
+    }
+    pane->loadedOnce = pane->loadedOnce || r.ok || r.fromCache;
+    if (r.final && !r.ok) {
+        pane->failed = pane->rows.empty() && !pane->loadedOnce;
+        pane->error = r.error;
+        if (!pane->rows.empty() || pane->loadedOnce)
+            return; // keep what we have on screen
+        return;
+    }
+    if (pane->frame.kind == MusicPaneKind::Home) {
+        if (second)
+            pane->homeTracks = r.tracks.items;
+        else
+            pane->homeAlbums = r.albums.items;
+        rebuildRows(*pane);
+        return;
+    }
+
+    const std::string selectedId = pane->frame.selectedId;
+    const bool first = r.request.start == 0;
+    if (first)
+        pane->rows.clear();
+    const bool numbered = pane->frame.kind == MusicPaneKind::AlbumTracks;
+    int pageTotal = 0;
+    std::size_t loaded = 0;
+    switch (r.request.kind) {
+    case music::Listing::Artists:
+        for (const music::Artist& a : r.artists.items)
+            pane->rows.push_back(artistRow(a));
+        pageTotal = r.artists.total;
+        loaded = r.artists.items.size();
+        break;
+    case music::Listing::Albums:
+    case music::Listing::RecentAlbums:
+    case music::Listing::ArtistAlbums:
+        for (const music::Album& a : r.albums.items)
+            pane->rows.push_back(albumRow(a));
+        pageTotal = r.albums.total;
+        loaded = r.albums.items.size();
+        break;
+    case music::Listing::Playlists:
+        for (const music::Playlist& p : r.playlists.items)
+            pane->rows.push_back(playlistRow(p));
+        pageTotal = r.playlists.total;
+        loaded = r.playlists.items.size();
+        break;
+    default:
+        for (const music::Track& t : r.tracks.items)
+            pane->rows.push_back(trackRow(t, numbered));
+        pageTotal = r.tracks.total;
+        loaded = r.tracks.items.size();
+        break;
+    }
+    pane->total = pageTotal;
+    pane->hasMore = !r.fromCache && static_cast<int>(pane->rows.size()) < pageTotal && loaded > 0;
+    if (r.fromCache)
+        pane->hasMore = false; // the network page decides
+    restoreSelection(*pane, first ? selectedId : std::string());
+    if (first && pane->frame.selectedId.empty())
+        pane->frame.selected = std::min(pane->frame.selected, static_cast<int>(pane->rows.size()));
+    clampPane(*pane);
+}
+
+// ---- frame update
+// ---------------------------------------------------------------------------------
+
+void MusicScreen::update(Uint32 dt)
+{
+    m_clock += dt;
+    ++m_frame;
+    m_battery.update(dt);
+
+    for (const music::ListResult& r : m_library->takeLists()) {
+        auto pending = m_pending.find(r.ticket);
+        if (pending != m_pending.end()) {
+            applyPending(r, pending->second);
+            continue;
+        }
+        applyListResult(r);
+    }
+    takeCovers();
+
+    MusicPane& pane = activePane();
+    if (pane.frame.kind == MusicPaneKind::Settings)
+        refreshSettingsRows(pane);
+    if (!pane.requested)
+        requestPane(pane, false);
+    // The next page loads before the cursor reaches the end of what we have.
+    if (pane.hasMore && pane.ticket == 0 && !pane.failed &&
+        pane.frame.selected + kPrefetchRows >= static_cast<int>(pane.rows.size()))
+        requestPane(pane, true);
+    requestVisibleCovers();
+
+    if (m_stateDirty && m_clock - m_stateSavedAt >= kStateSaveMs)
+        saveState();
+    if (!m_toast.empty() && m_clock > m_toastUntil)
+        m_toast.clear();
+}
+
+void MusicScreen::refreshSettingsRows(MusicPane& pane)
+{
+    auto action = [](const std::string& title, const std::string& subtitle,
+                     const std::string& right) {
+        MusicRow r;
+        r.kind = MusicRow::Kind::Action;
+        r.id = title;
+        r.title = title;
+        r.subtitle = subtitle;
+        r.right = right;
+        return r;
+    };
+    const int stream = m_settings ? m_settings->streamKbps.load() : 192;
+    const int download = m_settings ? m_settings->downloadKbps.load() : 192;
+    pane.rows = {
+        action("Enter MiyooFin", "Press A to enter MiyooFin", ""),
+        action("Streaming quality", "Used when playing from the server",
+               std::to_string(stream) + " kbps"),
+        action("Download quality", "Used for offline music", std::to_string(download) + " kbps"),
+        action("Clear music cache", "Streamed tracks and covers (downloads stay)",
+               m_cacheClearArmed ? "Press A again" : ""),
+        action("Server", m_session.serverUrl, ""),
+        action("Account", m_session.userName, m_session.manualOfflineMode ? "Offline mode" : "")};
+    pane.requested = true;
+    pane.loadedOnce = true;
+    clampPane(pane);
+}
+
+// ---- covers
+// ---------------------------------------------------------------------------------------
+
+SDL_Surface* MusicScreen::cover(const std::string& id, const std::string& tag, int size,
+                                bool request)
+{
+    if (id.empty())
+        return nullptr;
+    const std::string key = music::MusicLibrary::coverKey(id, tag, size);
+    auto it = m_covers.find(key);
+    if (it != m_covers.end()) {
+        // Most recently used goes to the back.
+        auto pos = std::find(m_coverOrder.begin(), m_coverOrder.end(), key);
+        if (pos != m_coverOrder.end() && pos + 1 != m_coverOrder.end()) {
+            m_coverOrder.erase(pos);
+            m_coverOrder.push_back(key);
+        }
+        return it->second;
+    }
+    if (request && !m_coverRequested.count(key) && !m_coverMissing.count(key)) {
+        m_coverRequested.insert(key);
+        m_library->requestCover(id, tag, size);
+    }
+    return nullptr;
+}
+
+void MusicScreen::takeCovers()
+{
+    for (music::CoverResult& r : m_library->takeCovers()) {
+        m_coverRequested.erase(r.key);
+        if (!r.ok) {
+            m_coverMissing.insert(r.key);
+            continue;
+        }
+        SDL_Surface* surface =
+            SDL_CreateRGBSurfaceWithFormatFrom(r.image.pixels.data(), r.image.width, r.image.height,
+                                               32, r.image.width * 4, SDL_PIXELFORMAT_RGBA32);
+        if (!surface)
+            continue;
+        SDL_Surface* copy = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(surface);
+        if (!copy)
+            continue;
+        auto old = m_covers.find(r.key);
+        if (old != m_covers.end()) {
+            SDL_FreeSurface(old->second);
+            old->second = copy;
+        } else {
+            m_covers[r.key] = copy;
+            m_coverOrder.push_back(r.key);
+        }
+    }
+    trimCovers();
+}
+
+void MusicScreen::trimCovers()
+{
+    while (m_covers.size() > kMaxCovers && !m_coverOrder.empty()) {
+        const std::string key = m_coverOrder.front();
+        m_coverOrder.pop_front();
+        auto it = m_covers.find(key);
+        if (it != m_covers.end()) {
+            SDL_FreeSurface(it->second);
+            m_covers.erase(it);
+        }
+    }
+}
+
+void MusicScreen::requestVisibleCovers()
+{
+    if (m_view != View::Browse)
+        return;
+    const MusicPane& pane = activePane();
+    const int visible = visibleRows(pane);
+    for (int i = pane.frame.scroll;
+         i < pane.frame.scroll + visible + 1 && i < static_cast<int>(pane.rows.size()); ++i)
+        cover(pane.rows[i].artId, pane.rows[i].artTag, 128, true);
+    if (detailHeaderHeight(pane) > 0)
+        cover(pane.frame.artId, pane.frame.artTag, 128, true);
+}
+
+// ---- input
+// ----------------------------------------------------------------------------------------
+
+bool MusicScreen::handleAction(Action action)
+{
+    if (m_menu.open)
+        return handleMenu(action);
+    if (m_view == View::NowPlaying)
+        return handleNowPlaying(action);
+    return handleBrowse(action);
+}
+
+void MusicScreen::cycleLetter(int delta)
+{
+    MusicPane& pane = activePane();
+    if (!isAlphabetical(pane.frame.kind))
+        return;
+    // Order: everything, A..Z, #.
+    int index =
+        pane.frame.letter == 0 ? 0 : (pane.frame.letter == '#' ? 27 : pane.frame.letter - 'A' + 1);
+    index = (index + delta + 28) % 28;
+    pane.frame.letter = index == 0 ? 0 : (index == 27 ? '#' : static_cast<char>('A' + index - 1));
+    pane.frame.selected = pane.frame.scroll = 0;
+    pane.frame.selectedId.clear();
+    pane.rows.clear();
+    pane.hasMore = false;
+    pane.loadedOnce = false;
+    m_library->cancelLists(); // answers for the previous letter are stale now
+    for (TabRuntime& tab : m_tabs) {
+        for (MusicPane& p : tab.roots)
+            if (&p != &pane)
+                p.ticket = p.ticket2 = 0, p.requested = p.requested && p.loadedOnce;
+        for (MusicPane& p : tab.drill)
+            if (&p != &pane)
+                p.ticket = p.ticket2 = 0, p.requested = p.requested && p.loadedOnce;
+    }
+    requestPane(pane, false);
+    markDirty();
+}
+
+bool MusicScreen::handleBrowse(Action action)
+{
+    MusicPane& pane = activePane();
+    const int count = static_cast<int>(pane.rows.size());
+    switch (action) {
+    case Action::PrevTab:
+        setTab(m_activeTab - 1);
+        return true;
+    case Action::NextTab:
+        setTab(m_activeTab + 1);
+        return true;
+    case Action::Settings: // START
+        if (miniPlayerVisible()) {
+            m_view = View::NowPlaying;
+            m_queueView = false;
+        }
+        return true;
+    case Action::Menu: // SELECT
+        if (miniPlayerVisible()) {
+            m_view = View::NowPlaying;
+            m_queueView = true;
+            m_queueSelected = std::max(0, m_player->queue().position());
+        }
+        return true;
+    case Action::Search: // X
+        if (m_player)
+            m_player->togglePause();
+        return true;
+    case Action::Up:
+    case Action::Down: {
+        if (count == 0)
+            return true;
+        int i = pane.frame.selected + (action == Action::Up ? -1 : 1);
+        while (i >= 0 && i < count && !pane.rows[i].selectable())
+            i += action == Action::Up ? -1 : 1;
+        if (i >= 0 && i < count) {
+            pane.frame.selected = i;
+            pane.frame.selectedId = pane.rows[i].id;
+            clampPane(pane);
+            markDirty();
+        }
+        return true;
+    }
+    case Action::Left:
+        if (isAlphabetical(pane.frame.kind))
+            cycleLetter(-1);
+        return true;
+    case Action::Right:
+        if (isAlphabetical(pane.frame.kind))
+            cycleLetter(1);
+        return true;
+    case Action::PrevPage:
+    case Action::NextPage: {
+        TabRuntime& tab = m_tabs[m_activeTab];
+        const int delta = action == Action::PrevPage ? -1 : 1;
+        if (tab.drill.empty() && tab.roots.size() > 1) {
+            tab.section = (tab.section + delta + static_cast<int>(tab.roots.size())) %
+                          static_cast<int>(tab.roots.size());
+            markDirty();
+            return true;
+        }
+        if (count > 0) {
+            const int page = visibleRows(pane);
+            pane.frame.selected =
+                std::max(0, std::min(count - 1, pane.frame.selected + delta * page));
+            while (pane.frame.selected < count - 1 && !pane.rows[pane.frame.selected].selectable())
+                ++pane.frame.selected;
+            pane.frame.selectedId = pane.rows[pane.frame.selected].id;
+            clampPane(pane);
+            markDirty();
+        }
+        return true;
+    }
+    case Action::Confirm:
+        if (pane.frame.kind == MusicPaneKind::Settings) {
+            settingsAction(pane.frame.selected);
+        } else if (pane.frame.selected >= 0 && pane.frame.selected < count) {
+            activateRow(pane.rows[pane.frame.selected]);
+        }
+        return true;
+    case Action::ActionsMenu: // Y
+        if (pane.frame.selected >= 0 && pane.frame.selected < count)
+            openMenu(pane.rows[pane.frame.selected]);
+        return true;
+    case Action::Back:
+        popFrame();
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MusicScreen::playFromPane(int rowIndex)
+{
+    MusicPane& pane = activePane();
+    std::vector<music::Track> tracks;
+    int start = 0;
+    for (int i = 0; i < static_cast<int>(pane.rows.size()); ++i) {
+        if (pane.rows[i].kind != MusicRow::Kind::Track)
+            continue;
+        if (i == rowIndex)
+            start = static_cast<int>(tracks.size());
+        tracks.push_back(pane.rows[i].track);
+    }
+    if (tracks.empty() || !m_player)
+        return;
+    m_player->playTracks(std::move(tracks), start, false);
+}
+
+void MusicScreen::playCollection(const MusicRow& row, PendingKind kind)
+{
+    music::ListingRequest r;
+    r.parentId = row.id;
+    r.limit = 300;
+    if (row.kind == MusicRow::Kind::Album)
+        r.kind = music::Listing::AlbumTracks;
+    else if (row.kind == MusicRow::Kind::Playlist)
+        r.kind = music::Listing::PlaylistTracks;
+    else
+        return;
+    m_pending[m_library->requestList(r)] = {kind, 0};
+    m_toast = "Loading...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::applyPending(const music::ListResult& r, const Pending& pending)
+{
+    if (r.tracks.items.empty()) {
+        if (r.final) {
+            m_pending.erase(r.ticket);
+            m_toast = r.ok ? "Nothing to play" : "Couldn't load: " + r.error;
+            m_toastUntil = m_clock + 2500;
+        }
+        return;
+    }
+    m_pending.erase(r.ticket); // a cached answer is good enough to act on
+    if (!m_player)
+        return;
+    switch (pending.kind) {
+    case PendingKind::PlayAll:
+        m_player->playTracks(r.tracks.items, 0, false);
+        break;
+    case PendingKind::ShuffleAll:
+        m_player->playTracks(r.tracks.items, 0, true);
+        break;
+    case PendingKind::PlayNext: {
+        if (!m_player->active()) {
+            m_player->playTracks(r.tracks.items, 0, false);
+            break;
+        }
+        for (auto it = r.tracks.items.rbegin(); it != r.tracks.items.rend(); ++it)
+            m_player->playNext(*it);
+        m_toast = "Playing next";
+        m_toastUntil = m_clock + 1500;
+        break;
+    }
+    case PendingKind::Append:
+        if (!m_player->active()) {
+            m_player->playTracks(r.tracks.items, 0, false);
+            break;
+        }
+        for (const music::Track& t : r.tracks.items)
+            m_player->append(t);
+        m_toast = "Added to queue";
+        m_toastUntil = m_clock + 1500;
+        break;
+    }
+}
+
+void MusicScreen::activateRow(const MusicRow& row)
+{
+    MusicFrame f;
+    f.id = row.id;
+    f.title = row.title;
+    f.artId = row.artId;
+    f.artTag = row.artTag;
+    switch (row.kind) {
+    case MusicRow::Kind::Track:
+        playFromPane(activePane().frame.selected);
+        break;
+    case MusicRow::Kind::Album:
+        f.kind = MusicPaneKind::AlbumTracks;
+        f.subtitle = row.album.artist;
+        openFrame(f);
+        break;
+    case MusicRow::Kind::Artist:
+        f.kind = MusicPaneKind::ArtistAlbums;
+        openFrame(f);
+        break;
+    case MusicRow::Kind::Playlist:
+        f.kind = MusicPaneKind::PlaylistTracks;
+        f.subtitle = row.subtitle;
+        openFrame(f);
+        break;
+    default:
+        break;
+    }
+}
+
+void MusicScreen::openMenu(const MusicRow& row)
+{
+    m_menu = Menu{};
+    m_menu.row = row;
+    switch (row.kind) {
+    case MusicRow::Kind::Track:
+        m_menu.items = {{"Play next", kMenuPlayNext}, {"Add to queue", kMenuAppend}};
+        if (!row.track.albumId.empty())
+            m_menu.items.push_back({"Go to album", kMenuGoAlbum});
+        if (!row.track.artistId.empty())
+            m_menu.items.push_back({"Go to artist", kMenuGoArtist});
+        break;
+    case MusicRow::Kind::Album:
+    case MusicRow::Kind::Playlist:
+        m_menu.items = {{"Play", kMenuPlay},
+                        {"Shuffle", kMenuShuffle},
+                        {"Play next", kMenuPlayNext},
+                        {"Add to queue", kMenuAppend}};
+        break;
+    default:
+        return;
+    }
+    m_menu.open = true;
+}
+
+void MusicScreen::runMenuAction(int action, const MusicRow& row)
+{
+    const bool track = row.kind == MusicRow::Kind::Track;
+    switch (action) {
+    case kMenuPlay:
+        playCollection(row, PendingKind::PlayAll);
+        break;
+    case kMenuShuffle:
+        playCollection(row, PendingKind::ShuffleAll);
+        break;
+    case kMenuPlayNext:
+        if (track && m_player) {
+            if (m_player->active()) {
+                m_player->playNext(row.track);
+                m_toast = "Playing next";
+            } else {
+                m_player->playTracks({row.track}, 0, false);
+            }
+            m_toastUntil = m_clock + 1500;
+        } else {
+            playCollection(row, PendingKind::PlayNext);
+        }
+        break;
+    case kMenuAppend:
+        if (track && m_player) {
+            if (m_player->active()) {
+                m_player->append(row.track);
+                m_toast = "Added to queue";
+            } else {
+                m_player->playTracks({row.track}, 0, false);
+            }
+            m_toastUntil = m_clock + 1500;
+        } else {
+            playCollection(row, PendingKind::Append);
+        }
+        break;
+    case kMenuGoAlbum: {
+        MusicFrame f;
+        f.kind = MusicPaneKind::AlbumTracks;
+        f.id = row.track.albumId;
+        f.title = row.track.album;
+        f.subtitle = row.track.albumArtist;
+        f.artId = row.track.albumId;
+        f.artTag = row.track.albumImageTag;
+        openFrame(f);
+        break;
+    }
+    case kMenuGoArtist: {
+        MusicFrame f;
+        f.kind = MusicPaneKind::ArtistAlbums;
+        f.id = row.track.artistId;
+        f.title = row.track.artist;
+        f.artId = row.track.artistId;
+        openFrame(f);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+bool MusicScreen::handleMenu(Action action)
+{
+    switch (action) {
+    case Action::Up:
+        m_menu.selected = (m_menu.selected + static_cast<int>(m_menu.items.size()) - 1) %
+                          static_cast<int>(m_menu.items.size());
+        return true;
+    case Action::Down:
+        m_menu.selected = (m_menu.selected + 1) % static_cast<int>(m_menu.items.size());
+        return true;
+    case Action::Confirm: {
+        const MenuItem item = m_menu.items[m_menu.selected];
+        const MusicRow row = m_menu.row;
+        m_menu.open = false;
+        runMenuAction(item.action, row);
+        return true;
+    }
+    case Action::Back:
+    case Action::ActionsMenu:
+        m_menu.open = false;
+        return true;
+    default:
+        return true; // the menu owns the keys while it is up
+    }
+}
+
+bool MusicScreen::handleNowPlaying(Action action)
+{
+    if (!m_player || !miniPlayerVisible()) {
+        m_view = View::Browse;
+        return true;
+    }
+    const int queueSize = m_player->queue().size();
+    switch (action) {
+    case Action::Back:
+        if (m_queueView)
+            m_queueView = false;
+        else
+            m_view = View::Browse;
+        return true;
+    case Action::Settings: // START
+        m_view = View::Browse;
+        return true;
+    case Action::Menu: // SELECT
+        m_queueView = !m_queueView;
+        m_queueSelected = std::max(0, m_player->queue().position());
+        return true;
+    case Action::Confirm:
+        if (m_queueView)
+            m_player->jumpTo(m_queueSelected);
+        else
+            m_player->togglePause();
+        return true;
+    case Action::Up:
+        if (m_queueView && m_queueSelected > 0)
+            --m_queueSelected;
+        return true;
+    case Action::Down:
+        if (m_queueView && m_queueSelected + 1 < queueSize)
+            ++m_queueSelected;
+        return true;
+    case Action::Left:
+        if (!m_queueView)
+            m_player->seekBy(-10);
+        return true;
+    case Action::Right:
+        if (!m_queueView)
+            m_player->seekBy(10);
+        return true;
+    case Action::PrevPage:
+        m_player->previous();
+        return true;
+    case Action::NextPage:
+        m_player->next();
+        return true;
+    case Action::PrevTab:
+        m_player->previous();
+        return true;
+    case Action::NextTab:
+        m_player->next();
+        return true;
+    case Action::Search: // X
+        m_player->setShuffle(!m_player->queue().shuffle());
+        return true;
+    case Action::ActionsMenu: // Y
+        if (m_queueView) {
+            if (m_player->removeAt(m_queueSelected))
+                m_queueSelected =
+                    std::min(m_queueSelected, std::max(0, m_player->queue().size() - 1));
+        } else {
+            m_player->cycleRepeat();
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+void MusicScreen::settingsAction(int index)
+{
+    if (index == 0) {
+        m_videoModeRequested = true;
+    } else if (index == 1 && m_settings) {
+        m_settings->streamKbps.store(music::MusicSettings::nextKbps(m_settings->streamKbps.load()));
+        m_settings->save(kSettingsFile);
+    } else if (index == 2 && m_settings) {
+        m_settings->downloadKbps.store(
+            music::MusicSettings::nextKbps(m_settings->downloadKbps.load()));
+        m_settings->save(kSettingsFile);
+    } else if (index == 3) {
+        if (!m_cacheClearArmed) {
+            m_cacheClearArmed = true;
+            m_toast = "Press A again to clear the music cache";
+            m_toastUntil = m_clock + 3000;
+            return;
+        }
+        m_cacheClearArmed = false;
+        // Remove cached tracks, covers and lists (downloads are untouched).
+        const int rc =
+            std::system("rm -rf music-cache/stream music-cache/covers music-cache/lists");
+        (void)rc;
+        m_toast = "Music cache cleared";
+        m_toastUntil = m_clock + 2000;
+    }
+}
+
+} // namespace miyoofin

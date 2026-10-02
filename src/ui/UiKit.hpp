@@ -109,7 +109,8 @@ struct HeaderSpec
     std::string title; // breadcrumb/title when there are no tabs
     int batteryPercent = -1;
     bool charging = false;
-    bool showStatus = true; // battery + clock cluster
+    bool showStatus = true;       // battery + clock cluster
+    int tabPad = -1, tabGap = -1; // pill padding / gap override (-1 = the shared defaults)
 };
 // Header strip (design::kHeaderH tall): wordmark, tabs or title, status cluster.
 void header(SDL_Surface* fb, const HeaderSpec& spec);

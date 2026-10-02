@@ -200,8 +200,10 @@ void App::syncPlaybackJournal()
 void App::handleExternalPlayback()
 {
     printf("[App] Starting external playback handoff\n");
+    if (m_music)
+        m_music->shutdown(2000); // two processes must never fight over the audio device
 
-    // 1. Suspend SDL/video/input
+        // 1. Suspend SDL/video/input
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
     PerformanceTelemetry& telemetry = performanceTelemetry();
     TelemetryTimer suspendTimer;

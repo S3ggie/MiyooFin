@@ -119,9 +119,9 @@ deploy)
     cd "$ROOT"
     case "$what" in all) targets="all bridge reporter player" ;; app) targets="all" ;; *) targets="$what" ;; esac
     sg docker -c "docker run --rm --user $(id -u):$(id -g) -v $PWD:/build miyoofin-toolchain make -f Makefile.cross -j8 PERF_TELEMETRY=1 RELEASE=1 $targets" 2>&1 | grep -E " error|Error" || true
-    for f in miyoofin miyoofin-https-bridge miyoofin-playback-reporter miyoofin-player; do
+    for f in miyoofin miyoofin-https-bridge miyoofin-playback-reporter miyoofin-player miyoofin-audio; do
         case "$what:$f" in
-            all:*|app:miyoofin|bridge:miyoofin-https-bridge|reporter:miyoofin-playback-reporter|player:miyoofin-player) ;;
+            all:*|app:miyoofin|bridge:miyoofin-https-bridge|reporter:miyoofin-playback-reporter|player:miyoofin-player|player:miyoofin-audio) ;;
             *) continue ;;
         esac
         scp -q -P 2222 -i "$KEY" -o BatchMode=yes "output/build-arm/$f" "onion@$HOST:$APP/$f.new"

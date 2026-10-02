@@ -5,7 +5,6 @@
 #include "miyoofin/playback_tracks.hpp"
 
 #include <cstdio>
-#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -79,22 +78,6 @@ bool fetchSubtitleSidecars(const Session& session, const std::string& itemDir,
         return false;
     // Written last: its presence means the sidecars are complete.
     return writeAtomic(tracksPath, playback_format_tracks(saved));
-}
-
-void removeSubtitleSidecars(const std::string& itemDir)
-{
-    std::remove((itemDir + "/playback-tracks.txt").c_str());
-    std::remove((itemDir + "/playback-tracks.txt.tmp").c_str());
-    const std::string dir = itemDir + "/subs";
-    if (DIR* d = opendir(dir.c_str())) {
-        while (const dirent* e = readdir(d)) {
-            const std::string name = e->d_name;
-            if (name != "." && name != "..")
-                std::remove((dir + "/" + name).c_str());
-        }
-        closedir(d);
-    }
-    ::rmdir(dir.c_str());
 }
 
 } // namespace miyoofin

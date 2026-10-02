@@ -2,6 +2,7 @@
 #define MIYOOFIN_DOWNLOAD_SUBTITLES_HPP
 
 #include "../net/Session.hpp"
+#include "DownloadStore.hpp"
 #include <string>
 
 namespace miyoofin {
@@ -14,9 +15,6 @@ namespace miyoofin {
 /// call from a background thread only. Returns true when sidecars are present.
 bool fetchSubtitleSidecars(const Session& session, const std::string& itemDir,
                            const std::string& itemId, const std::string& mediaSourceId);
-
-/// Removes the sidecar files created above (used when a download is deleted).
-void removeSubtitleSidecars(const std::string& itemDir);
 
 } // namespace miyoofin
 

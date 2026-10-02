@@ -1,5 +1,4 @@
 #include "DownloadStore.hpp"
-#include "DownloadSubtitles.hpp"
 #include "../cache/LibraryCache.hpp"
 #include <atomic>
 #include <cstdio>
@@ -12,6 +11,23 @@
 #include <set>
 
 namespace miyoofin {
+
+/// Removes the subtitle sidecar files saved beside a download.
+void removeSubtitleSidecars(const std::string& itemDir)
+{
+    std::remove((itemDir + "/playback-tracks.txt").c_str());
+    std::remove((itemDir + "/playback-tracks.txt.tmp").c_str());
+    const std::string dir = itemDir + "/subs";
+    if (DIR* d = opendir(dir.c_str())) {
+        while (const dirent* e = readdir(d)) {
+            const std::string name = e->d_name;
+            if (name != "." && name != "..")
+                std::remove((dir + "/" + name).c_str());
+        }
+        closedir(d);
+    }
+    ::rmdir(dir.c_str());
+}
 namespace {
 bool safeId(const std::string& s)
 {

@@ -6,6 +6,9 @@
 #include <vector>
 
 namespace miyoofin {
+/// Deletes <itemDir>/playback-tracks.txt and <itemDir>/subs/ (offline subtitle sidecars).
+void removeSubtitleSidecars(const std::string& itemDir);
+
 class DownloadStore
 {
   public:

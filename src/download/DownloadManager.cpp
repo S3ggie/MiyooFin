@@ -1,4 +1,5 @@
 #include "DownloadManager.hpp"
+#include "DownloadPrefs.hpp"
 #include "DownloadSupport.hpp"
 #include "../library/LibraryCoordinator.hpp"
 #include "../diagnostics/PerformanceTelemetry.hpp"
@@ -213,6 +214,8 @@ void DownloadManager::enqueue(const std::vector<DownloadItem>& incoming)
             if (i.chunkSize == 0)
                 i.chunkSize = DOWNLOAD_CHUNK_SIZE;
             i.hlsStorage = true;
+            if (i.audioLang.empty())
+                i.audioLang = downloadAudioLang(); // cached in memory: no storage on the UI thread
             i.hlsProfile = HLS_PROFILE_NAME;
             estimateHlsBytes(i.runtimeTicks, i.expectedSize);
             i.recentBytesPerSec = 0;

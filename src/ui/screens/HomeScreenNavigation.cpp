@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "../../download/DownloadPrefs.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
@@ -484,6 +485,9 @@ bool HomeScreen::handleAction(Action action)
                     m_offlineModeFetchPending = true;
                 return true;
             }
+            case SettingsRowAction::DownloadAudio:
+                setDownloadAudioLang(nextDownloadAudioLang(downloadAudioLang()));
+                return true;
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;
                 return true;

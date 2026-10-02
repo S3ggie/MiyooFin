@@ -117,6 +117,8 @@ struct DownloadItem
 {
     std::string itemId, itemType, title, seriesId, seriesName, seasonId, seasonName;
     std::string mediaSourceId, container, sourceEtag, videoCodec, audioCodec, lastError;
+    /// ISO language of the audio track this download asks the server for ("" = server default).
+    std::string audioLang;
     // Last server source observed for a preserved local copy.  These remain
     // separate from the local source metadata used for chunk validation.
     std::string availableMediaSourceId, availableSourceEtag;

@@ -1,5 +1,6 @@
 #include "DownloadManager.hpp"
 #include "DownloadSubtitles.hpp"
+#include "miyoofin/playback_tracks.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../net/TlsConfig.hpp"
@@ -335,11 +336,28 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     std::vector<std::string> urls;
     std::string error;
     JellyfinApi::HlsFailure failure;
+    // The chosen download audio language becomes this item's stream index (each episode
+    // numbers its tracks differently). A missing language, or any lookup failure, simply
+    // keeps the server's default track.
+    int audioIndex = -1;
+    if (!item.audioLang.empty()) {
+        std::string tracksBody, tracksError;
+        PlaybackTracks tracks;
+        if (RouteRequest(session).run(
+                [&](const std::string& base) {
+                    return JellyfinApi::getItemJson(base, session.accessToken, session.userId,
+                                                    session.deviceId, item.itemId, tracksBody,
+                                                    tracksError);
+                },
+                tracksError) &&
+            playback_parse_tracks(tracksBody, tracks))
+            audioIndex = playback_pick_audio_index(tracks, item.audioLang);
+    }
     if (!RouteRequest(session).run(
             [&](const std::string& base) {
                 return JellyfinApi::getHlsSegmentUrls(base, session.accessToken, session.deviceId,
                                                       item.itemId, item.mediaSourceId, urls, error,
-                                                      &failure);
+                                                      &failure, audioIndex);
             },
             error)) {
         std::lock_guard<std::mutex> l(m_mutex);

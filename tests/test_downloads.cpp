@@ -1,5 +1,6 @@
 #include "test_support.hpp"
 #include "../src/download/DownloadSubtitles.hpp"
+#include "../src/download/DownloadPrefs.hpp"
 #include <sys/stat.h>
 
 static std::string readFixture(const std::string& path)
@@ -22,6 +23,7 @@ int main()
 {
     testDownloadInterruptStates();
     testSubtitleSidecars();
+    testDownloadAudioChoice();
     testHlsDownloadStore();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();

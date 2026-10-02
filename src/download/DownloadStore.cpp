@@ -190,6 +190,7 @@ std::string serialize(const DownloadItem& i)
     put(b, "video", i.videoCodec);
     put(b, "audio", i.audioCodec);
     put(b, "error", i.lastError);
+    put(b, "audio_lang", i.audioLang);
     pu(b, "size", i.expectedSize);
     pu(b, "available_size", i.availableSize);
     pu(b, "chunk", i.chunkSize);
@@ -236,6 +237,7 @@ bool parse(const std::string& b, DownloadItem& i)
     i.videoCodec = get(b, "video");
     i.audioCodec = get(b, "audio");
     i.lastError = get(b, "error");
+    i.audioLang = get(b, "audio_lang");
     std::uint64_t x = 0;
     if (!num(get(b, "size"), i.expectedSize) || !num(get(b, "chunk"), i.chunkSize) ||
         !num(get(b, "downloaded"), i.downloadedBytes) || !num(get(b, "state"), x) ||

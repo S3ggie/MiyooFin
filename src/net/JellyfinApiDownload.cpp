@@ -89,7 +89,8 @@ bool JellyfinApi::getDownloadMediaSources(const std::string& baseUrl,
 }
 
 std::string JellyfinApi::buildHlsMasterUrl(const std::string& b, const std::string& i,
-                                           const std::string& m, const std::string& p)
+                                           const std::string& m, const std::string& p,
+                                           int audioStreamIndex)
 {
     return b + "/Videos/" + i +
            "/master.m3u8?Static=false&VideoCodec=h264&AudioCodec=aac&MaxWidth=" +
@@ -99,7 +100,8 @@ std::string JellyfinApi::buildHlsMasterUrl(const std::string& b, const std::stri
            "&AudioBitRate=" + std::to_string(HLS_AUDIO_BITRATE) +
            "&AudioChannels=2&MaxAudioChannels=2&AllowVideoStreamCopy=false&AllowAudioStreamCopy="
            "false&EnableAutoStreamCopy=false&Context=Streaming&SubtitleStreamIndex=-1" +
-           (m.empty() ? "" : "&MediaSourceId=" + m) + (p.empty() ? "" : "&PlaySessionId=" + p);
+           (m.empty() ? "" : "&MediaSourceId=" + m) + (p.empty() ? "" : "&PlaySessionId=" + p) +
+           (audioStreamIndex >= 0 ? "&AudioStreamIndex=" + std::to_string(audioStreamIndex) : "");
 }
 JellyfinApi::HlsFailure JellyfinApi::classifyHlsFailure(long status, int transportCode)
 {
@@ -114,7 +116,7 @@ JellyfinApi::HlsFailure JellyfinApi::classifyHlsFailure(long status, int transpo
 bool JellyfinApi::getHlsSegmentUrls(const std::string& b, const std::string& t,
                                     const std::string& d, const std::string& i,
                                     const std::string& m, std::vector<std::string>& out,
-                                    std::string& e, HlsFailure* failure)
+                                    std::string& e, HlsFailure* failure, int audioStreamIndex)
 {
     if (failure)
         *failure = HlsFailure::None;
@@ -134,7 +136,7 @@ bool JellyfinApi::getHlsSegmentUrls(const std::string& b, const std::string& t,
             e = std::string(stage) + " request failed";
         return false;
     };
-    std::string u = buildHlsMasterUrl(b, i, m);
+    std::string u = buildHlsMasterUrl(b, i, m, "", audioStreamIndex);
     std::printf("[Download] HLS master request...\n");
     {
         TelemetryRequestScope request(RequestKind::HlsMaster);

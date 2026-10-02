@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "../../download/DownloadPrefs.hpp"
 #include "../../net/RouteStatus.hpp"
 #include "../../net/RouteRequest.hpp"
 #include "../../net/JellyfinApi.hpp"
@@ -18,6 +19,7 @@ HomeScreen::HomeScreen(const Session& session, std::shared_ptr<DownloadManager> 
 {
     if (m_libraryCoordinator)
         m_libraryCoordinator->setManualOfflineMode(session.manualOfflineMode);
+    loadDownloadPrefs();
     m_link = std::make_unique<ConnectionMonitor>([session](const CancelToken& cancel) {
         std::string error;
         TokenValidation result = TokenValidation::Unavailable;

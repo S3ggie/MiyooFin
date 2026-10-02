@@ -739,6 +739,22 @@ static void testParseTracks()
     PlaybackTracks none;
     CHECK(!playback_parse_tracks("{\"Name\":\"x\"}", none));
     CHECK(!playback_parse_tracks("{\"MediaSources\":[{\"Id\":\"\"}]}", none));
+    // Download audio choice: language -> stream index, skipping commentary.
+    CHECK(playback_pick_audio_index(t, "eng") == 1);
+    CHECK(playback_pick_audio_index(t, "jpn") == 2);
+    CHECK(playback_pick_audio_index(t, "fra") == -1);
+    PlaybackTracks commentary;
+    PlaybackTrack c1, c2;
+    c1.type = 'a';
+    c1.index = 7;
+    c1.lang = "eng";
+    c1.title = "Commentary - English";
+    c2.type = 'a';
+    c2.index = 8;
+    c2.lang = "eng";
+    c2.title = "English - AAC";
+    commentary.tracks = {c1, c2};
+    CHECK(playback_pick_audio_index(commentary, "eng") == 8);
     std::printf("[test] playback track list parsing OK\n");
 }
 

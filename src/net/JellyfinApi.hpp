@@ -230,7 +230,8 @@ class JellyfinApi
                                         std::string& error);
     static std::string buildHlsMasterUrl(const std::string& baseUrl, const std::string& itemId,
                                          const std::string& mediaSourceId,
-                                         const std::string& playSessionId = "");
+                                         const std::string& playSessionId = "",
+                                         int audioStreamIndex = -1);
     enum class HlsFailure
     {
         None,
@@ -259,7 +260,7 @@ class JellyfinApi
                                   const std::string& deviceId, const std::string& itemId,
                                   const std::string& mediaSourceId,
                                   std::vector<std::string>& segments, std::string& error,
-                                  HlsFailure* failure = nullptr);
+                                  HlsFailure* failure = nullptr, int audioStreamIndex = -1);
 
     // ---- URL helpers (public for testing) ----------------------------------
 

@@ -166,6 +166,21 @@ inline bool playback_parse_tracks(const std::string& body, PlaybackTracks& out)
     return !out.mediaSourceId.empty();
 }
 
+// Jellyfin stream index of the audio track for ISO language `lang` ("jpn"), or -1 when there is
+// none. Commentary tracks are skipped; the first remaining match wins.
+inline int playback_pick_audio_index(const PlaybackTracks& tracks, const std::string& lang)
+{
+    for (const PlaybackTrack& t : tracks.tracks) {
+        if (t.type != 'a' || t.lang != lang)
+            continue;
+        if (t.title.find("Commentary") != std::string::npos ||
+            t.title.find("commentary") != std::string::npos)
+            continue;
+        return t.index;
+    }
+    return -1;
+}
+
 // One line per track: type|index|text|default|forced|lang|title. Fields never
 // contain '|' or newlines.
 inline std::string playback_format_tracks(const PlaybackTracks& tracks)

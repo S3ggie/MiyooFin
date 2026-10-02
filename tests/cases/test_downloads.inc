@@ -1195,3 +1195,36 @@ static void testSubtitleSidecars()
     ::rmdir(dir.c_str());
     std::printf("[test] download subtitle sidecars OK\n");
 }
+
+static void testDownloadAudioChoice()
+{
+    std::printf("[test] download audio choice\n");
+    using namespace miyoofin;
+    // Cycling visits every language once and wraps back to the server default.
+    std::string lang = "";
+    int steps = 0;
+    do {
+        lang = nextDownloadAudioLang(lang);
+        ++steps;
+    } while (!lang.empty() && steps < 50);
+    CHECK(steps == 11 && lang.empty());
+    CHECK(nextDownloadAudioLang("eng") == "jpn");
+    CHECK(nextDownloadAudioLang("zzz") == ""); // unknown value starts over
+    CHECK(downloadAudioLabel("") == "Server default" && downloadAudioLabel("jpn") == "Japanese" &&
+          downloadAudioLabel("xyz") == "xyz");
+    // The request asks the server for that exact stream; the default URL is unchanged.
+    const std::string plain = JellyfinApi::buildHlsMasterUrl("http://h", "i", "m");
+    const std::string jp = JellyfinApi::buildHlsMasterUrl("http://h", "i", "m", "", 5);
+    CHECK(plain.find("AudioStreamIndex") == std::string::npos);
+    CHECK(jp.size() > plain.size() && jp.find("&AudioStreamIndex=5") == jp.size() - 19);
+    // The choice is part of the persisted download.
+    DownloadItem item;
+    item.itemId = "audio-item";
+    item.audioLang = "jpn";
+    DownloadStore store("/tmp/miyoofin-audio-lang-test");
+    CHECK(store.saveManifest("scope", item));
+    DownloadItem back;
+    CHECK(store.loadManifest("scope", "audio-item", back, nullptr) && back.audioLang == "jpn");
+    store.removeItem("scope", "audio-item", nullptr);
+    std::printf("[test] download audio choice OK\n");
+}

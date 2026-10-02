@@ -351,7 +351,18 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         trap - EXIT
         exit 1
     }
-    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \
+    # miyoofin-player is our fork of this same ffplay (same libraries, same
+    # arguments).  Stock ffplay stays the fallback: used when the fork is
+    # missing, when MIYOOFIN_PLAYER=stock, or when the fork fails to start.
+    PLAYER_KIND=stock
+    PLAYER_BIN=./bin/ffplay
+    if [ "${MIYOOFIN_PLAYER:-fork}" != stock ] && [ -x "$APP_DIR/miyoofin-player" ]; then
+        PLAYER_KIND=fork
+        PLAYER_BIN="$APP_DIR/miyoofin-player"
+    fi
+    playback_log "player_kind=$PLAYER_KIND"
+    PLAYER_STARTED=$(date +%s)
+    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" "$PLAYER_BIN" \
         -stats \
         -autoexit \
         -fs \
@@ -379,6 +390,25 @@ wait "$FFPLAY_PID"
 FFPLAY_EXIT=$?
 playback_log "FFplay exited with code $FFPLAY_EXIT pid=$FFPLAY_PID (reaped)"
 FFPLAY_PID=""
+
+# A fork that dies within seconds (missing library, crash on start) must not
+# cost the user their video: run the stock player once with the same arguments.
+if [ "$PLAYBACK_MODE" = onion ] && [ "$PLAYER_KIND" = fork ] && [ "$FFPLAY_EXIT" -ne 0 ] \
+    && [ $(( $(date +%s) - PLAYER_STARTED )) -lt 4 ]; then
+    playback_log "player_fallback fork_exit=$FFPLAY_EXIT -> stock ffplay"
+    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" ./bin/ffplay \
+        -stats \
+        -autoexit \
+        -fs \
+        -vf "hflip,vflip,split=2[main][tap];[tap]select=isnan(prev_selected_t)+gte(t-prev_selected_t\,5)+lte(t-prev_selected_t\,-5),showinfo,nullsink;[main]null" \
+        -i "$PLAY_URL" \
+        >> "$APP_DIR/playback-ffplay.log" 2>&1 &
+    FFPLAY_PID=$!
+    wait "$FFPLAY_PID"
+    FFPLAY_EXIT=$?
+    playback_log "FFplay (stock fallback) exited with code $FFPLAY_EXIT pid=$FFPLAY_PID (reaped)"
+    FFPLAY_PID=""
+fi
 
 # -------------------------------------------------------------------
 # Signal FFplay exit to reporter

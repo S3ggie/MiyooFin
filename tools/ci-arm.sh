@@ -17,6 +17,6 @@ fi
 
 mkdir -p output/build-arm
 docker run --rm --user "$(id -u):$(id -g)" -v "$repo_root:/build" miyoofin-toolchain \
-    make -f Makefile.cross -j"${MIYOOFIN_JOBS:-$(nproc 2>/dev/null || echo 2)}" PERF_TELEMETRY="${PERF_TELEMETRY:-1}" RELEASE="${RELEASE:-1}" all bridge reporter
+    make -f Makefile.cross -j"${MIYOOFIN_JOBS:-$(nproc 2>/dev/null || echo 2)}" PERF_TELEMETRY="${PERF_TELEMETRY:-1}" RELEASE="${RELEASE:-1}" all bridge reporter player
 
 make verify-arm

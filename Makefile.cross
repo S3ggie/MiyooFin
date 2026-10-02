@@ -159,6 +159,13 @@ $(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_
 	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 
+# miyoofin-player: fork of FFmpeg 2.4.14 ffplay (see player/). The link-only
+# FFmpeg/SDL copies are built once into output/player-deps and reused.
+.PHONY: player
+player:
+	sh player/deps/build-deps.sh
+	$(MAKE) -f player/Makefile.player
+
 .PHONY: clean
 clean:
 	@rm -rf output/build-arm

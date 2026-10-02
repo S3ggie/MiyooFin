@@ -237,6 +237,12 @@ jobs:
           # make verify-arm and the cross build below expect this local tag.
           docker tag "$IMAGE" miyoofin-toolchain:latest
 
+      - name: Cache link-only player dependencies
+        uses: actions/cache@v4
+        with:
+          path: output/player-deps
+          key: player-deps-${{ hashFiles('player/deps/build-deps.sh') }}
+
       - name: Cross-build ARM binaries and verify
         # The shared script intentionally uses Makefile.cross directly rather
         # than `make onionos`, preserving CI's no-device-blobs semantics.

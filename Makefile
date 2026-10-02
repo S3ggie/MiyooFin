@@ -409,7 +409,7 @@ ARM_TARGET := output/build-arm/miyoofin
 onionos: check-miyoo-libs $(DOCKER_TAG)
 	@mkdir -p output/build-arm
 	docker run --rm --user $(DOCKER_USER) -v $(PWD):/build $(DOCKER_TAG) \
-	    make -f Makefile.cross -j$(JOBS) PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter benchmark
+	    make -f Makefile.cross -j$(JOBS) PERF_TELEMETRY=$(PERF_TELEMETRY) RELEASE=$(RELEASE) all bridge reporter player benchmark
 	@echo "  [ONIONOS] $(ARM_TARGET)"
 
 # Build the Docker toolchain image
@@ -454,6 +454,7 @@ PACKAGE_DIR := output/package/MiyooFin
 CA_BUNDLE := cacert.pem
 ARM_BRIDGE := output/build-arm/miyoofin-https-bridge
 ARM_REPORTER := output/build-arm/miyoofin-playback-reporter
+ARM_PLAYER := output/build-arm/miyoofin-player
 
 .PHONY: package check-ca-bundle update-ca-bundle
 check-ca-bundle: $(CA_BUNDLE)
@@ -475,6 +476,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	@cp distributions/onionos/launch.sh $(PACKAGE_DIR)/
 	@cp distributions/onionos/playback_runner.sh $(PACKAGE_DIR)/
 	@cp $(ARM_REPORTER) $(PACKAGE_DIR)/
+	@cp $(ARM_PLAYER) $(PACKAGE_DIR)/
 	@cp distributions/onionos/config.json $(PACKAGE_DIR)/
 	@cp assets/icon.png $(PACKAGE_DIR)/icon.png 2>/dev/null || true
 	@cp assets/placeholder.png $(PACKAGE_DIR)/assets/placeholder.png 2>/dev/null || true
@@ -494,6 +496,7 @@ package: onionos check-ca-bundle check-miyoo-libs
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-https-bridge && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-playback-reporter && \
+	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/miyoofin-player && \
 	    arm-linux-gnueabihf-strip --strip-unneeded /pkg/lib/libSDL2-2.0.so.0.18.2 && \
 	    echo "  Packaged binaries stripped successfully"'
 	@echo "  Verifying package binary architecture..."

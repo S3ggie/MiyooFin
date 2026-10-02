@@ -1,0 +1,24 @@
+# Cross-build of miyoofin-player (fork of FFmpeg 2.4.14 ffplay). Run inside the
+# miyoofin-toolchain container after player/deps/build-deps.sh has populated
+# output/player-deps/prefix (link-only FFmpeg/SDL/SDL_ttf/freetype).
+CROSS_PREFIX ?= arm-linux-gnueabihf-
+CC := $(CROSS_PREFIX)gcc
+DEPS := output/player-deps/prefix
+TARGET := output/build-arm/miyoofin-player
+SRCS := player/ffplay.c player/cmdutils.c
+CFLAGS := -std=gnu99 -O2 -D_GNU_SOURCE -D_ISOC99_SOURCE -D_FILE_OFFSET_BITS=64 \
+          -D_POSIX_C_SOURCE=200112 -I. -Iplayer -I$(DEPS)/include \
+          -I$(DEPS)/include/SDL -Wno-deprecated-declarations -Wno-unused-function
+# Link the device's own libraries at runtime (the stock ffplay's search path).
+LDFLAGS := -L$(DEPS)/lib -Wl,-rpath-link,$(DEPS)/lib \
+           -Wl,-rpath,/mnt/SDCARD/.tmp_update/lib/parasyte:/mnt/SDCARD/miyoo/lib:/mnt/SDCARD/.tmp_update/lib \
+           -Wl,-s
+LIBS := -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavresample -lpostproc -lavutil \
+        -lSDL -lSDL_ttf -lm -lpthread
+
+.PHONY: all
+all: $(TARGET)
+$(TARGET): $(SRCS) player/config.h | output/build-arm
+	$(CC) $(CFLAGS) $(SRCS) -o $@ $(LDFLAGS) $(LIBS)
+output/build-arm:
+	mkdir -p $@

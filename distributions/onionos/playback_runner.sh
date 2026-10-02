@@ -372,7 +372,7 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         PLAYER_BIN="$APP_DIR/miyoofin-player"
         # The vflip,hflip filter below means the viewer sees the picture
         # rotated; the fork draws its on-screen display pre-rotated to match.
-        PLAYER_EXTRA_ARGS="-osd_rot180"
+        PLAYER_EXTRA_ARGS="-osd_rot180 -osd_screen_rot180"
         # Library runtime (informational): the local HLS playlist cannot report
         # a trustworthy duration, so the on-screen progress bar uses this.
         # Stream time 0 is the resume offset for remote playback (StartTimeTicks).

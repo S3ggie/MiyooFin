@@ -965,6 +965,8 @@ static void osd_dump_bmp(const OsdPicture *pic, const char *path)
 /* ---- miyoofin: subtitles ----------------------------------------------- */
 static const char *subs_dir;          /* app dir holding playback-tracks.txt and subs/<index>.srt */
 static const char *osd_font_path = "/mnt/SDCARD/miyoo/app/wqy-microhei.ttc";
+static int osd_screen_rot180;         /* the SCREEN (not the overlay) is upside down for the viewer */
+static int osd_stretch;               /* START: fill the whole display, ignoring aspect ratio */
 static double osd_base;               /* stream time 0 is this far into the media (resume offset), s */
 static SubTrackInfo sub_tracks[64];
 static int sub_ntracks;
@@ -1226,32 +1228,109 @@ static int sub_render_text(const char *text, int max_w, uint8_t **out, int *ow, 
     return 1;
 }
 
-/* Draws the active subtitle cue (if any) for media time `media_sec`. */
-static void sub_draw(const OsdPicture *pic, double media_sec, int bar_visible)
+/* Makes sure sub_img holds the rendered text of `cue` for a `screen_w`-wide target. */
+static int sub_ensure_image(int cue, int screen_w)
 {
-    int cue;
-    if (sub_cur < 0 || sub_cues_for != sub_cur || !sub_cues.n)
-        return;
-    cue = subs_find(&sub_cues, (int64_t)(media_sec * 1000.0) + sub_offset_ms);
-    if (cue < 0)
-        return;
     if (!sub_font && !sub_font_failed) {
         if (TTF_WasInit() || TTF_Init() == 0)
-            sub_font = TTF_OpenFont(osd_font_path, pic->w > 800 ? 40 : 22);
+            sub_font = TTF_OpenFont(osd_font_path, screen_w > 800 ? 40 : 22);
         sub_font_failed = !sub_font;
     }
     if (!sub_font)
-        return;
+        return 0;
     if (sub_img.cue != cue || sub_img.track != sub_cur || !sub_img.rgba) {
         av_freep(&sub_img.rgba);
-        if (!sub_render_text(sub_cues.cues[cue].text, pic->w - 40, &sub_img.rgba, &sub_img.w, &sub_img.h))
-            return;
+        if (!sub_render_text(sub_cues.cues[cue].text, screen_w - 40, &sub_img.rgba, &sub_img.w,
+                             &sub_img.h))
+            return 0;
         sub_img.cue = cue;
         sub_img.track = sub_cur;
     }
+    return 1;
+}
+
+/* Cue showing at `media_sec`, or -1. */
+static int sub_active_cue(double media_sec)
+{
+    if (sub_cur < 0 || sub_cues_for != sub_cur || !sub_cues.n)
+        return -1;
+    return subs_find(&sub_cues, (int64_t)(media_sec * 1000.0) + sub_offset_ms);
+}
+
+/* Draws the active subtitle cue INTO the picture (used when the picture fills the screen). */
+static void sub_draw(const OsdPicture *pic, int cue, int bar_visible)
+{
+    if (cue < 0 || !sub_ensure_image(cue, pic->w))
+        return;
     osd_blit_rgba(pic, (pic->w - sub_img.w) / 2,
                   pic->h - sub_img.h - 14 - (bar_visible ? osd_bar_geometry(pic).panel_h : 0),
                   sub_img.rgba, sub_img.w, sub_img.h, sub_img.w * 4);
+}
+
+/* Letterboxed video: draw the subtitle on the SCREEN, in the black bar under the
+ * picture (or over it when the bar is too thin). `cue` -1 clears a previous one. */
+static int sub_screen_key = -2;  /* what is currently drawn on the screen bar: cue<<8|track */
+static SDL_Rect sub_screen_rect; /* region it was drawn into */
+
+static void sub_screen_clear(void)
+{
+    if (sub_screen_key == -2)
+        return;
+    SDL_FillRect(screen, &sub_screen_rect, SDL_MapRGB(screen->format, 0, 0, 0));
+    SDL_UpdateRect(screen, sub_screen_rect.x, sub_screen_rect.y, sub_screen_rect.w, sub_screen_rect.h);
+    sub_screen_key = -2;
+}
+
+static void sub_screen_draw(const SDL_Rect *video, int cue, int force)
+{
+    SDL_Surface *img;
+    SDL_Rect bar, dst;
+    int key, bottom = screen->h - (video->y + video->h);
+    uint8_t *px;
+    if (cue < 0 || !sub_ensure_image(cue, screen->w)) {
+        sub_screen_clear();
+        return;
+    }
+    key = (cue << 8) | (sub_cur & 0xff);
+    if (key == sub_screen_key && !force)
+        return;
+    /* the bar the viewer sees below the picture; with a rotated screen that is the top one */
+    if (osd_screen_rot180) {
+        bar.x = 0; bar.y = 0; bar.w = screen->w; bar.h = video->y;
+    } else {
+        bar.x = 0; bar.y = video->y + video->h; bar.w = screen->w; bar.h = bottom;
+    }
+    px = av_malloc((size_t)sub_img.w * sub_img.h * 4);
+    if (!px)
+        return;
+    if (osd_screen_rot180) { /* pre-rotate so the viewer sees it upright */
+        int i, n = sub_img.w * sub_img.h;
+        for (i = 0; i < n; i++)
+            memcpy(px + (size_t)i * 4, sub_img.rgba + (size_t)(n - 1 - i) * 4, 4);
+    } else {
+        memcpy(px, sub_img.rgba, (size_t)sub_img.w * sub_img.h * 4);
+    }
+    img = SDL_CreateRGBSurfaceFrom(px, sub_img.w, sub_img.h, 32, sub_img.w * 4,
+                                   0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+    if (!img) {
+        av_free(px);
+        return;
+    }
+    SDL_SetAlpha(img, SDL_SRCALPHA, 255);
+    sub_screen_clear();
+    dst.x = (screen->w - sub_img.w) / 2;
+    dst.y = bar.y + (bar.h - sub_img.h) / 2;
+    if (dst.y < bar.y)
+        dst.y = bar.y;
+    dst.w = sub_img.w;
+    dst.h = sub_img.h;
+    SDL_FillRect(screen, &bar, SDL_MapRGB(screen->format, 0, 0, 0));
+    SDL_BlitSurface(img, NULL, screen, &dst);
+    SDL_UpdateRect(screen, bar.x, bar.y, bar.w, bar.h);
+    SDL_FreeSurface(img);
+    av_free(px);
+    sub_screen_rect = bar;
+    sub_screen_key = key;
 }
 /* ---------------------------------------------------------------------- */
 
@@ -1289,7 +1368,9 @@ static void osd_poll_commands(void)
 /* Draws the OSD onto the picture about to be displayed. Called from
  * video_image_display(); the picture is shown once per decoded frame, except
  * while paused or redrawing, where the same frame comes back. */
-static void osd_apply(VideoState *is, VideoPicture *vp)
+static int osd_cue = -1; /* cue showing for the frame being displayed, set by osd_apply */
+
+static void osd_apply(VideoState *is, VideoPicture *vp, int in_picture_subs)
 {
     int64_t now = av_gettime_relative();
     int want_bar = now < osd_bar_until;
@@ -1307,8 +1388,8 @@ static void osd_apply(VideoState *is, VideoPicture *vp)
     if (is->ic->start_time != AV_NOPTS_VALUE)
         pos -= is->ic->start_time / (double)AV_TIME_BASE;
     media_sec = osd_base + (isnan(pos) ? 0.0 : pos);
-    if (sub_cur >= 0 && sub_cues_for == sub_cur && sub_cues.n)
-        want_sub = subs_find(&sub_cues, (int64_t)(media_sec * 1000.0) + sub_offset_ms) >= 0;
+    osd_cue = sub_active_cue(media_sec);
+    want_sub = in_picture_subs && osd_cue >= 0;
     want = want_bar || want_toast || is->paused || want_sub;
 
     if (osd_shot_not_before && now >= osd_shot_not_before) {
@@ -1354,7 +1435,7 @@ static void osd_apply(VideoState *is, VideoPicture *vp)
         osd_saved.frame_id = vp->frame_id;
         osd_saved.bmp = vp->bmp;
         if (want_sub)
-            sub_draw(&pic, media_sec, want_bar || is->paused);
+            sub_draw(&pic, osd_cue, want_bar || is->paused);
         osd_render(&pic, &m);
     }
     if (shot) {
@@ -1371,7 +1452,7 @@ static void video_image_display(VideoState *is)
     SubPicture *sp;
     AVPicture pict;
     SDL_Rect rect;
-    int i;
+    int i, letterbox_subs, rect_changed;
 
     vp = &is->pictq[(is->pictq_rindex + is->pictq_rindex_shown) % VIDEO_PICTURE_QUEUE_SIZE];
     if (vp->bmp) {
@@ -1399,17 +1480,30 @@ static void video_image_display(VideoState *is)
             }
         }
 
-        osd_apply(is, vp);
+        if (osd_stretch) {
+            rect.x = is->xleft; rect.y = is->ytop; rect.w = is->width; rect.h = is->height;
+        } else {
+            calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
+        }
+        /* Letterboxed with room under the picture: subtitles go in the black bar. */
+        letterbox_subs = screen->h - (rect.y + rect.h) >= 40 || rect.y >= 40;
+        osd_apply(is, vp, !letterbox_subs);
 
-        calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
-
+        rect_changed = rect.x != is->last_display_rect.x || rect.y != is->last_display_rect.y ||
+                       rect.w != is->last_display_rect.w || rect.h != is->last_display_rect.h ||
+                       is->force_refresh;
         SDL_DisplayYUVOverlay(vp->bmp, &rect);
 
-        if (rect.x != is->last_display_rect.x || rect.y != is->last_display_rect.y || rect.w != is->last_display_rect.w || rect.h != is->last_display_rect.h || is->force_refresh) {
+        if (rect_changed) {
             int bgcolor = SDL_MapRGB(screen->format, 0x00, 0x00, 0x00);
             fill_border(is->xleft, is->ytop, is->width, is->height, rect.x, rect.y, rect.w, rect.h, bgcolor, 1);
             is->last_display_rect = rect;
+            sub_screen_key = -2; /* the border fill wiped any subtitle drawn in the bar */
         }
+        if (letterbox_subs)
+            sub_screen_draw(&rect, osd_cue, rect_changed);
+        else
+            sub_screen_clear();
     }
 }
 
@@ -3842,6 +3936,11 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_t:
                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_SUBTITLE);
                 break;
+            case SDLK_RETURN: /* START: stretch to the whole display / back to aspect fit */
+                osd_stretch = !osd_stretch;
+                osd_set_toast(osd_stretch ? "Stretch: fill screen" : "Stretch: original aspect");
+                cur_stream->force_refresh = 1;
+                break;
             case SDLK_LSHIFT: /* X button: next subtitle track */
                 sub_cycle();
                 cur_stream->force_refresh = 1;
@@ -4124,6 +4223,7 @@ static const OptionDef options[] = {
     { "osd_base", OPT_DOUBLE | HAS_ARG | OPT_EXPERT, { &osd_base }, "seconds of media before stream time 0 (resume offset)", "seconds" },
     { "subs_dir", HAS_ARG | OPT_STRING | OPT_EXPERT, { &subs_dir }, "directory with playback-tracks.txt and subs/<index>.srt", "dir" },
     { "osd_font", HAS_ARG | OPT_STRING | OPT_EXPERT, { &osd_font_path }, "TTF font for subtitles", "path" },
+    { "osd_screen_rot180", OPT_BOOL | OPT_EXPERT, { &osd_screen_rot180 }, "the screen surface (subtitle bars) is upside down for the viewer", "" },
     { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },
     { "exitonmousedown", OPT_BOOL | OPT_EXPERT, { &exit_on_mousedown }, "exit on mouse down", "" },

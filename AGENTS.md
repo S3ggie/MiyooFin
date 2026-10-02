@@ -230,3 +230,20 @@ Do not commit or deploy merely because validation passed.
 * Use normal `Search`, `Read`, `rg`, or other native tools for narrow exact verification once the relevant files or symbols are known.
 * Do not use Context Mode mechanically when a direct targeted read or exact search is simpler.
 * Avoid repeatedly searching or rereading repository areas that Context Mode has already located unless verification is necessary.
+
+## Resource Safety (shared host)
+
+This workstation also runs Jellyfin/media services. An unbounded bulk-format run
+(`git ls-files '*.c' | xargs clang-format -i`, which included the 9 MB
+`vendor/sqlite/sqlite3.c`) is the strong suspect for a host freeze and manual reboot.
+
+* Never run ad-hoc `clang-format -i` over `git ls-files` globs. Use `make format`
+  (`tools/format.sh`); it shares `tools/format-sources.sh` with `make format-check`,
+  which excludes vendored/imported/generated code (`vendor/`, `third_party/`, `player/`).
+* Run heavy work (`make ci-local`, `ci-local-full`, `test-tsan`, bulk formatting) through
+  `tools/bounded.sh`: a user systemd scope with hard memory/swap/task/CPU/time caps over the
+  whole process tree (`MF_MEM` default 6G, `MF_TIME`, `MF_CPU`).
+  Example: `MF_MEM=8G MF_TIME=1500 tools/bounded.sh make ci-local`.
+* Start long jobs in the background with a log plus an exit-status line, and wait with
+  a bounded loop (`timeout 300 sh -c 'until grep -q ^done log; do sleep 3; done'`).
+* No local GPU/VAAPI/Jellyfin burn-in playback tests (separate GPU incident; see docs/ui-script-harness.md).

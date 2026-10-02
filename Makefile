@@ -285,9 +285,12 @@ $(TSAN_RUNNER_TARGET): $(TSAN_RUNNER) $(TSAN_GROUP_TARGETS) | $(TEST_DIR)
 	chmod +x $@
 	@echo "  [TSAN] $@"
 
-.PHONY: refactor-check format-check clang-tidy ci-local ci-local-full ci-quick
+.PHONY: refactor-check format format-check clang-tidy ci-local ci-local-full ci-quick
 refactor-check:
 	@sh tools/refactor-check.sh
+
+format:
+	@sh tools/format.sh
 
 format-check:
 	@sh tools/format-check.sh

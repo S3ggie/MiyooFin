@@ -13,36 +13,7 @@ cd "$repo_root"
 # contain whitespace.
 source_list=$(mktemp "${TMPDIR:-/tmp}/miyoofin-format.XXXXXX")
 trap 'rm -f "$source_list"' EXIT HUP INT TERM
-git ls-files -z -- 'src/**' 'include/**' 'tools/**' 'tests/**' | python3 -c '
-import os
-import sys
-
-extensions = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
-roots = ("src", "include", "tools", "tests")
-excluded_directories = {
-    "external",
-    "generated",
-    "imported",
-    "third-party",
-    "third_party",
-    "vendor",
-}
-excluded_files = {
-    "src/image/stb_image_impl.cpp",
-}
-for raw_path in sys.stdin.buffer.read().split(b"\0"):
-    if not raw_path:
-        continue
-    path = os.fsdecode(raw_path)
-    parts = path.split("/")
-    if parts[0] not in roots or not any(path.endswith(extension) for extension in extensions):
-        continue
-    if path in excluded_files:
-        continue
-    if any(part.casefold() in excluded_directories for part in parts[1:]):
-        continue
-    sys.stdout.buffer.write(raw_path + b"\0")
-' >"$source_list"
+"$script_dir/format-sources.sh" >"$source_list"
 
 if [ ! -s "$source_list" ]; then
     echo "format check failed: no first-party C/C++ sources found"

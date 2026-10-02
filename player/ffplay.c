@@ -1370,7 +1370,31 @@ static void osd_poll_commands(void)
  * while paused or redrawing, where the same frame comes back. */
 static int osd_cue = -1; /* cue showing for the frame being displayed, set by osd_apply */
 
+static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_subs);
+
+/* Wraps the real work so its cost can be measured on the device (MFPERF lines). */
 static void osd_apply(VideoState *is, VideoPicture *vp, int in_picture_subs)
+{
+    static int64_t total_us, worst_us, last_report, frames, active;
+    int64_t t0 = av_gettime_relative(), t1;
+    osd_apply_inner(is, vp, in_picture_subs);
+    t1 = av_gettime_relative();
+    total_us += t1 - t0;
+    frames++;
+    if (t1 - t0 > 200)
+        active++;
+    if (t1 - t0 > worst_us)
+        worst_us = t1 - t0;
+    if (t1 - last_report > 5000000) {
+        if (access("/tmp/miyoofin-player-perf", F_OK) == 0)
+            fprintf(stderr, "MFPERF frames=%lld avg_us=%lld worst_us=%lld heavy=%lld\n", (long long)frames,
+                    (long long)(total_us / (frames ? frames : 1)), (long long)worst_us, (long long)active);
+        total_us = worst_us = frames = active = 0;
+        last_report = t1;
+    }
+}
+
+static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_subs)
 {
     int64_t now = av_gettime_relative();
     int want_bar = now < osd_bar_until;

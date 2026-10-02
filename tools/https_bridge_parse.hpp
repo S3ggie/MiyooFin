@@ -286,11 +286,10 @@ inline bool is_allowed_response_header(const char* name, size_t name_len)
 // Splits a request target into path and the two accepted parameters. Returns
 // false for any unknown parameter or non-numeric / over-long value.
 inline bool bridge_split_target(const std::string& target, std::string& path, std::string& audio,
-                                std::string& start, std::string& sub)
+                                std::string& start)
 {
     audio.clear();
     start.clear();
-    sub.clear();
     const size_t q = target.find('?');
     path = target.substr(0, q);
     if (q == std::string::npos)
@@ -315,8 +314,6 @@ inline bool bridge_split_target(const std::string& target, std::string& path, st
             audio = value;
         else if (key == "start" && start.empty())
             start = value;
-        else if (key == "sub" && sub.empty())
-            sub = value;
         else
             return false;
     }
@@ -327,9 +324,9 @@ inline bool bridge_split_target(const std::string& target, std::string& path, st
 // replaced, AudioStreamIndex appended, and PlaySessionId made unique so the
 // server starts a fresh transcode instead of reusing the previous one.
 inline std::string bridge_apply_overrides(std::string url, const std::string& audio,
-                                          const std::string& start, const std::string& sub = "")
+                                          const std::string& start)
 {
-    if (audio.empty() && start.empty() && sub.empty())
+    if (audio.empty() && start.empty())
         return url;
     auto replaceValue = [&url](const char* key, const std::string& value) {
         const std::string needle = std::string(key) + "=";
@@ -347,12 +344,9 @@ inline std::string bridge_apply_overrides(std::string url, const std::string& au
         url += "&StartTimeTicks=" + start;
     if (!audio.empty())
         url += "&AudioStreamIndex=" + audio;
-    // Burn a (bitmap) subtitle track into the picture: the server renders it.
-    if (!sub.empty()) {
-        if (!replaceValue("SubtitleStreamIndex", sub))
-            url += "&SubtitleStreamIndex=" + sub;
-        url += "&SubtitleMethod=Encode";
-    }
+    // Deliberately no subtitle burn-in: SubtitleMethod=Encode makes the server run a
+    // heavier GPU filter graph (observed to hang an AMD GPU); subtitles are rendered
+    // on the device instead, and bitmap subtitle tracks are simply not offered.
     // Unique session id per restart.
     const std::string needle = "PlaySessionId=";
     size_t at = url.find(needle);
@@ -361,8 +355,7 @@ inline std::string bridge_apply_overrides(std::string url, const std::string& au
         if (end == std::string::npos)
             end = url.size();
         url.insert(end, "-r" + (start.empty() ? std::string("0") : start) + "a" +
-                            (audio.empty() ? std::string("x") : audio) +
-                            (sub.empty() ? std::string() : "s" + sub));
+                            (audio.empty() ? std::string("x") : audio));
     }
     return url;
 }

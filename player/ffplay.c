@@ -1024,12 +1024,13 @@ static char *sub_read_file(const char *path, size_t *len)
 static int audio_cur = -1; /* sub_tracks index of the audio track playing; -1 = server default */
 static int burn_cur = -1; /* sub_tracks index of the bitmap subtitle burned into the stream, or -1 */
 
-/* Bitmap subtitles (PGS/DVD) cannot be drawn by the player; the server burns one
- * into the picture. Offer only English ones: foreign-language DVD discs carry
- * dozens and cycling through them would take forever. */
+/* Bitmap subtitles (PGS/DVD) cannot be drawn by the player. Having the server burn
+ * them in was removed: that makes Jellyfin run a GPU filter graph that hung an AMD GPU.
+ * They are simply not offered. */
 static int sub_is_burnable(int i)
 {
-    return sub_tracks[i].type == 's' && !sub_tracks[i].text && !strcmp(sub_tracks[i].lang, "eng");
+    (void)i;
+    return 0;
 }
 
 static void prefs_load(void)
@@ -4074,8 +4075,7 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
     n = snprintf(query, sizeof(query), "?start=%lld", (long long)(media * 10000000.0));
     if (audio_index >= 0)
         n += snprintf(query + n, sizeof(query) - n, "&audio=%d", audio_index);
-    if (sub_index >= 0)
-        snprintf(query + n, sizeof(query) - n, "&sub=%d", sub_index);
+    (void)sub_index; /* always -1: subtitle burn-in is not offered (see sub_is_burnable) */
     snprintf(url, sizeof(url), "%s%s", input_filename, query);
     restart_t0 = av_gettime_relative();
     stream_close(is);

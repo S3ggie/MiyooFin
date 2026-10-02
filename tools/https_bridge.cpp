@@ -299,8 +299,8 @@ static void handle_client(int client_fd, const std::string& upstream_url,
         return;
     }
     // "/stream" optionally with validated ?audio=<n>&start=<ticks> (stream restart).
-    std::string req_path, req_audio, req_start, req_sub;
-    const bool target_ok = bridge_split_target(req.path, req_path, req_audio, req_start, req_sub);
+    std::string req_path, req_audio, req_start;
+    const bool target_ok = bridge_split_target(req.path, req_path, req_audio, req_start);
     if ((req.method != "GET" && req.method != "HEAD") || !target_ok || req_path != "/stream") {
         const char* r = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n"
                         "Content-Length: 0\r\n\r\n";
@@ -309,10 +309,8 @@ static void handle_client(int client_fd, const std::string& upstream_url,
         return;
     }
     log_info("%s %s", req.method.c_str(), req.path.c_str());
-    const std::string primary_url =
-        bridge_apply_overrides(upstream_url, req_audio, req_start, req_sub);
-    const std::string secondary_url =
-        bridge_apply_overrides(fallback_url, req_audio, req_start, req_sub);
+    const std::string primary_url = bridge_apply_overrides(upstream_url, req_audio, req_start);
+    const std::string secondary_url = bridge_apply_overrides(fallback_url, req_audio, req_start);
     if (!req.range.empty())
         log_info("Range: %s", req.range.c_str());
 

@@ -1,3 +1,6 @@
+# WARNING: starts a REAL remote stream, i.e. a server-side transcode (VAAPI on the
+# author's server). Run it deliberately and once; never loop it or drive rapid
+# restarts - a burn-in transcode plus restart storm hung the server GPU once.
 # Remote playback (device): open a movie from the Movies tab and press Play, then
 # stay resident while the playback is driven/inspected from outside (the player's
 # command file); the harness ends it with the player's quit key.

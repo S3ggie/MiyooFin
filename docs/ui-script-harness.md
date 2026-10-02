@@ -375,3 +375,10 @@ Vulkan/libplacebo path (`overlay_vulkan`) once hung the server's AMD GPU; the se
 `VK_DRIVER_FILES=/nonexistent` for Jellyfin so only VAAPI is used. Before testing burn-in,
 confirm the newest Jellyfin ffmpeg log's command line contains no `vulkan`, `libplacebo` or
 `overlay_vulkan`. Prefer downloaded-item scenarios, which put no load on the server.
+
+### mfctl: quick remote control
+
+`tools/miyoo/mfctl.sh` wraps the pieces above for fast testing: `status`, `deploy`, `play local`,
+`key right right`, `shot`, `log`, `subs`, `jellyfin` (checks the newest Jellyfin ffmpeg command for
+Vulkan/libplacebo) and `quit`. Streamed playback is refused unless `MF_ALLOW_STREAM=1`. See the
+header of the script.

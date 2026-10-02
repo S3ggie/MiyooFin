@@ -113,6 +113,20 @@ bool PlaybackRequest::writeWithSourceAndDurationTo(
     return true;
 }
 
+bool PlaybackRequest::appendNextEpisode(const std::string& path, const std::string& nextItemId,
+                                        long long nextDurationTicks)
+{
+    if (!safePlaybackField(nextItemId))
+        return false;
+    FILE* f = std::fopen(path.c_str(), "a");
+    if (!f)
+        return false;
+    fprintf(f, "next_item_id=%s\n", nextItemId.c_str());
+    if (nextDurationTicks > 0)
+        fprintf(f, "next_duration_ticks=%lld\n", nextDurationTicks);
+    return std::fclose(f) == 0;
+}
+
 // -------------------------------------------------------------------
 // exists
 // -------------------------------------------------------------------

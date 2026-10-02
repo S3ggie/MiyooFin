@@ -74,34 +74,6 @@ inline const char* imageTypeName(ImageType type)
     return type == ImageType::Thumb ? "Thumb" : "Primary";
 }
 
-/// Splits an artwork identity key "itemId:Type:tag:WxH" (the layout of
-/// HomeArtworkController::identityKey) back into its parts. False when malformed.
-inline bool parseArtworkIdentityKey(const std::string& key, std::string& itemId, ImageType& type,
-                                    std::string& tag, int& width, int& height)
-{
-    const std::size_t a = key.find(':');
-    if (a == std::string::npos || a == 0)
-        return false;
-    const std::size_t b = key.find(':', a + 1);
-    const std::size_t c = key.rfind(':');
-    if (b == std::string::npos || c <= b)
-        return false;
-    const std::size_t x = key.find('x', c + 1);
-    if (x == std::string::npos)
-        return false;
-    const std::string typeName = key.substr(a + 1, b - a - 1);
-    if (typeName != "Thumb" && typeName != "Primary")
-        return false;
-    width = std::atoi(key.c_str() + c + 1);
-    height = std::atoi(key.c_str() + x + 1);
-    if (width <= 0 || height <= 0)
-        return false;
-    itemId = key.substr(0, a);
-    type = typeName == "Thumb" ? ImageType::Thumb : ImageType::Primary;
-    tag = key.substr(b + 1, c - b - 1);
-    return true;
-}
-
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
 static constexpr int ROW_ARTWORK_RAM_LIMIT = 64;
 static constexpr int MOVIE_ARTWORK_DECODE_BUDGET = 4;

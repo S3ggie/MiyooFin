@@ -91,6 +91,10 @@ REQUEST_ITEM_ID=$(read_kv playback-request.txt item_id)
 REQUEST_ITEM_TYPE=$(read_kv playback-request.txt item_type)
 REQUEST_RESUME_TICKS=$(read_kv playback-request.txt resume_ticks)
 REQUEST_DURATION_TICKS=$(read_kv playback-request.txt duration_ticks)
+REQUEST_NEXT_ID=$(read_kv playback-request.txt next_item_id)
+REQUEST_NEXT_DURATION=$(read_kv playback-request.txt next_duration_ticks)
+case "$REQUEST_NEXT_ID" in *[!A-Za-z0-9_.-]*) REQUEST_NEXT_ID="" ;; esac
+case "$REQUEST_NEXT_DURATION" in ''|*[!0-9]*) REQUEST_NEXT_DURATION=0 ;; esac
 REQUEST_SOURCE_MODE=$(read_kv playback-request.txt source_mode)
 REQUEST_DOWNLOAD_SCOPE=$(read_kv playback-request.txt download_scope)
 [ -z "$REQUEST_SOURCE_MODE" ] && REQUEST_SOURCE_MODE=jellyfin
@@ -372,7 +376,7 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         PLAYER_BIN="$APP_DIR/miyoofin-player"
         # The vflip,hflip filter below means the viewer sees the picture
         # rotated; the fork draws its on-screen display pre-rotated to match.
-        PLAYER_EXTRA_ARGS="-osd_rot180 -osd_screen_rot180"
+        PLAYER_EXTRA_ARGS="-osd_rot180 -osd_screen_rot180 -prefs $APP_DIR/player-prefs.txt"
         # The transcode is always H.264 + AAC in an MPEG-TS stream: a short probe
         # finds both streams, so every (re)open reaches the first picture sooner.
         if [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
@@ -401,6 +405,10 @@ if [ "$PLAYBACK_MODE" = onion ]; then
                 SUBS_PID=$!
             fi
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $LOCAL_ITEM_DIR -osd_local"
+        fi
+        # A queued next episode (streamed playback only): the player offers it near the end.
+        if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$REQUEST_NEXT_ID" ]; then
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_next"
         fi
         if [ "${#REQUEST_DURATION_TICKS}" -gt 7 ]; then
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_duration $(printf '%s' "$REQUEST_DURATION_TICKS" | sed 's/.\{7\}$//')"
@@ -477,6 +485,25 @@ if [ -n "$REPORTER_PID" ]; then
         stop_and_reap_child reporter "$REPORTER_PID"
     fi
     REPORTER_PID=""
+fi
+
+# -------------------------------------------------------------------
+# Next episode: the player exits with 10 when the viewer accepted (or let run) the
+# up-next prompt.  Reporting for this episode is finished above; start the next one
+# by rewriting the request and running this script again.
+# -------------------------------------------------------------------
+if [ "$FFPLAY_EXIT" = 10 ] && [ -n "$REQUEST_NEXT_ID" ] && [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
+    playback_log "next_episode requested"
+    cleanup_playback
+    {
+        printf 'item_id=%s\n' "$REQUEST_NEXT_ID"
+        printf 'item_type=episode\n'
+        printf 'resume_ticks=0\n'
+        printf 'source_mode=jellyfin\n'
+        [ "$REQUEST_NEXT_DURATION" != 0 ] && printf 'duration_ticks=%s\n' "$REQUEST_NEXT_DURATION"
+    } > playback-request.txt.next && mv playback-request.txt.next playback-request.txt
+    trap - EXIT
+    exec sh "$APP_DIR/playback_runner.sh"
 fi
 
 # -------------------------------------------------------------------

@@ -131,6 +131,28 @@ static void testLargePictureScalesAndSmallDoesNotCrash()
     Frame tiny(32, 24, 100); // must clip, not write out of bounds
     OsdPicture tp = tiny.picture(true);
     osd_render(&tp, &m);
+    // The track menu stays inside its footprint rectangle (rect 3).
+    {
+        Frame mf(640, 480, 100);
+        OsdPicture mp = mf.picture(true);
+        const char* labels[3] = {"Off", "English - Full", "Japanese"};
+        int checked[3] = {0, 1, 0};
+        osd_menu_render(&mp, "Subtitles", labels, checked, 3, 1);
+        int rects[OSD_FOOTPRINT_RECTS][4];
+        osd_footprint(&mp, rects);
+        int outside = 0, drawn = 0;
+        for (int y = 0; y < mf.h; ++y)
+            for (int x = 0; x < mf.w; ++x) {
+                const int* r = rects[3];
+                const bool inside = x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3];
+                if (mf.Y(x, y) != 100) {
+                    ++drawn;
+                    if (!inside)
+                        ++outside;
+                }
+            }
+        CHECK(drawn > 1000 && outside == 0);
+    }
     std::printf("[test] OSD scaling and tiny pictures OK\n");
 }
 
@@ -138,7 +160,8 @@ static void testSrtParsing()
 {
     std::printf("[test] SRT parsing and cue lookup\n");
     const std::string srt =
-        "\xEF\xBB\xBF1\r\n00:00:01,000 --> 00:00:03,500\r\n<i>Hello</i> {\\an8}world\r\n\r\n"
+        "\xEF\xBB\xBF"
+        "1\r\n00:00:01,000 --> 00:00:03,500\r\n<i>Hello</i> {\\an8}world\r\n\r\n"
         "2\r\n00:00:03,000 --> 00:00:04,000\r\nLine one\\NLine two\r\nand three\r\n\r\n"
         "garbage line\r\n\r\n"
         "00:01:00.5 --> 00:01:02.25\r\nno index, short fraction\r\n\r\n"
@@ -215,6 +238,38 @@ static void testBlendArgbIsRotatedAndClipped()
     std::printf("[test] ARGB blit onto YUV OK\n");
 }
 
+static void testLanguagePreferences()
+{
+    std::printf("[test] remembered language preferences\n");
+    SubPrefs p;
+    subs_prefs_parse("sub_lang=eng\nsub_off=0\naudio_lang=jpn\njunk\n", 43, &p);
+    CHECK(std::string(p.sub_lang) == "eng" && !p.sub_off && std::string(p.audio_lang) == "jpn");
+    char buf[96];
+    subs_prefs_format(&p, buf, sizeof(buf));
+    SubPrefs q;
+    subs_prefs_parse(buf, strlen(buf), &q);
+    CHECK(std::string(q.sub_lang) == "eng" && std::string(q.audio_lang) == "jpn");
+    subs_prefs_parse("sub_off=1\n", 11, &q);
+    CHECK(q.sub_off == 1 && q.sub_lang[0] == 0);
+
+    // Tracks: audio jpn(default) eng; subtitles eng-signs(forced,default) eng-full spa.
+    const std::string file = "a|2|0|1|0|jpn|Japanese\na|3|0|0|0|eng|English\n"
+                             "s|1|1|1|1|eng|Signs\ns|0|1|0|0|eng|Full\ns|4|1|0|0|spa|Spanish\n";
+    SubTrackInfo t[8];
+    int n = subs_parse_tracks(file.data(), file.size(), t, 8);
+    CHECK(n == 5);
+    int ok[8];
+    for (int i = 0; i < n; i++)
+        ok[i] = t[i].type == 's' && t[i].text;
+    CHECK(subs_pick_auto(t, n, 'a', "eng", nullptr) == 1);  // remembered language wins
+    CHECK(subs_pick_auto(t, n, 'a', "", nullptr) == 0);     // else the file's default
+    CHECK(subs_pick_auto(t, n, 'a', "fra", nullptr) == -1); // remembered but absent
+    CHECK(subs_pick_auto(t, n, 's', "eng", ok) == 3);       // full English beats forced signs
+    CHECK(subs_pick_auto(t, n, 's', "spa", ok) == 4);
+    CHECK(subs_pick_auto(t, n, 's', "", ok) == 2); // no preference: default flag
+    std::printf("[test] remembered language preferences OK\n");
+}
+
 } // namespace
 
 int main()
@@ -227,5 +282,6 @@ int main()
     testSrtParsing();
     testTrackFileParsing();
     testBlendArgbIsRotatedAndClipped();
+    testLanguagePreferences();
     return miyoofin_test::finish("player");
 }

@@ -61,6 +61,10 @@ class PlaybackRequest
                                              const std::string& scope, long long durationTicks,
                                              std::string& error);
 
+    /// Appends the episode to offer after this one finishes (streamed playback only).
+    static bool appendNextEpisode(const std::string& path, const std::string& nextItemId,
+                                  long long nextDurationTicks);
+
     /// Check whether a playback request file exists at an explicit path.
     static bool existsAt(const std::string& path);
 

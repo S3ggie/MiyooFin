@@ -345,6 +345,7 @@ static AVPacket flush_pkt;
 
 #define FF_ALLOC_EVENT   (SDL_USEREVENT)
 #define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
+#define FF_AUDIO_AUTO_EVENT (SDL_USEREVENT + 8)
 
 static SDL_Surface *screen;
 
@@ -966,8 +967,21 @@ static void osd_dump_bmp(const OsdPicture *pic, const char *path)
 static const char *subs_dir;          /* app dir holding playback-tracks.txt and subs/<index>.srt */
 static const char *osd_font_path = "/mnt/SDCARD/miyoo/app/wqy-microhei.ttc";
 static int osd_screen_rot180;         /* the SCREEN (not the overlay) is upside down for the viewer */
+static int osd_next;                 /* a next episode is queued: offer it near the end */
+static int next_requested, next_cancelled, next_prompt_active;
 static int osd_local;                /* downloaded playback: the stream cannot be reopened with other parameters */
 static int osd_stretch;               /* START: fill the whole display, ignoring aspect ratio */
+/* track menu state (SELECT); built and handled further down */
+#define MENU_MAX 80
+static int menu_open, menu_sel, menu_n;
+static int menu_kind[MENU_MAX];  /* 's' subtitle, 'a' audio */
+static int menu_track[MENU_MAX]; /* index into sub_tracks, -1 = subtitles off */
+static int menu_checked[MENU_MAX];
+static char menu_text[MENU_MAX][72];
+static const char *menu_labels[MENU_MAX];
+static const char *prefs_path;        /* remembered subtitle/audio language (file in the app dir) */
+static SubPrefs prefs;
+static int prefs_loaded;
 static double osd_base;               /* stream time 0 is this far into the media (resume offset), s */
 static SubTrackInfo sub_tracks[64];
 static int sub_ntracks;
@@ -1016,6 +1030,36 @@ static int burn_cur = -1; /* sub_tracks index of the bitmap subtitle burned into
 static int sub_is_burnable(int i)
 {
     return sub_tracks[i].type == 's' && !sub_tracks[i].text && !strcmp(sub_tracks[i].lang, "eng");
+}
+
+static void prefs_load(void)
+{
+    size_t len;
+    char *data;
+    if (prefs_loaded)
+        return;
+    prefs_loaded = 1;
+    memset(&prefs, 0, sizeof(prefs));
+    if (!prefs_path || !(data = sub_read_file(prefs_path, &len)))
+        return;
+    subs_prefs_parse(data, len, &prefs);
+    av_free(data);
+}
+
+static void prefs_save(void)
+{
+    char buf[128], tmp[600];
+    FILE *f;
+    if (!prefs_path)
+        return;
+    subs_prefs_format(&prefs, buf, sizeof(buf));
+    snprintf(tmp, sizeof(tmp), "%s.tmp", prefs_path);
+    f = fopen(tmp, "wb");
+    if (!f)
+        return;
+    fwrite(buf, 1, strlen(buf), f);
+    fclose(f);
+    rename(tmp, prefs_path);
 }
 
 static int sub_is_selectable(int i)
@@ -1081,13 +1125,26 @@ static void sub_poll(void)
         }
     }
     if (sub_ntracks && !sub_auto_done) {
-        int i;
+        int i, ok[64];
         sub_auto_done = 1;
-        for (i = 0; i < sub_ntracks; i++)
-            if (sub_is_selectable(i) && sub_tracks[i].is_default) {
-                sub_cur = i;
-                break;
+        prefs_load();
+        /* Text tracks only: an automatic choice never restarts the stream. */
+        for (i = 0; i < sub_ntracks && i < 64; i++)
+            ok[i] = sub_tracks[i].type == 's' && sub_tracks[i].text;
+        if (!prefs.sub_off)
+            sub_cur = subs_pick_auto(sub_tracks, sub_ntracks, 's', prefs.sub_lang, ok);
+        /* Remembered audio language that is not the server's default: switch once. */
+        if (!osd_local && prefs.audio_lang[0]) {
+            int want = subs_pick_auto(sub_tracks, sub_ntracks, 'a', prefs.audio_lang, NULL);
+            int def = subs_pick_auto(sub_tracks, sub_ntracks, 'a', "", NULL);
+            if (want >= 0 && want != def) {
+                SDL_Event e;
+                memset(&e, 0, sizeof(e));
+                e.type = FF_AUDIO_AUTO_EVENT;
+                e.user.code = want;
+                SDL_PushEvent(&e);
             }
+        }
     }
     if (sub_cur >= 0 && sub_cues_for != sub_cur && sub_file_ready(sub_cur)) {
         size_t len;
@@ -1110,24 +1167,24 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
 static double media_seconds_now(VideoState *is);
 static double seek_target = -1.0;
 
-static VideoState *sub_cycle(VideoState *is)
+/* Selects subtitle track `next` (an index into sub_tracks, -1 = off) and remembers
+ * the language for future videos. Burned-in (bitmap) tracks reopen the stream. */
+static VideoState *sub_select(VideoState *is, int next)
 {
     char label[96], toast[80];
-    int i, next = -1, start = sub_cur, before = burn_cur;
-    if (!subs_dir || sub_ntracks == 0) {
-        osd_set_toast("No subtitles");
-        return is;
-    }
-    /* order: off -> each text track -> each (English) burnable track -> off */
-    for (i = start + 1; i < sub_ntracks; i++)
-        if (sub_is_selectable(i)) {
-            next = i;
-            break;
-        }
+    int before = burn_cur;
     sub_cur = next;
     burn_cur = next >= 0 && sub_is_burnable(next) ? next : -1;
     av_freep(&sub_img.rgba);
     sub_img.cue = -1;
+    prefs_load();
+    if (next < 0) {
+        prefs.sub_off = 1;
+    } else {
+        prefs.sub_off = 0;
+        strncpy(prefs.sub_lang, sub_tracks[next].lang, sizeof(prefs.sub_lang) - 1);
+    }
+    prefs_save();
     if (sub_cur < 0) {
         snprintf(toast, sizeof(toast), "Subtitles: Off");
     } else {
@@ -1136,10 +1193,28 @@ static VideoState *sub_cycle(VideoState *is)
                  burn_cur >= 0 ? " (burned in)" : (sub_file_ready(sub_cur) ? "" : " (loading)"));
     }
     if (burn_cur != before) /* the picture itself changes: reopen the stream */
-        return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is), audio_cur >= 0 ? sub_tracks[audio_cur].index : -1,
+        return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is),
+                              audio_cur >= 0 ? sub_tracks[audio_cur].index : -1,
                               burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
     osd_set_toast(toast);
     return is;
+}
+
+/* X button: next subtitle track. */
+static VideoState *sub_cycle(VideoState *is)
+{
+    int i, next = -1;
+    if (!subs_dir || sub_ntracks == 0) {
+        osd_set_toast("No subtitles");
+        return is;
+    }
+    /* order: off -> each text track -> each (English) burnable track -> off */
+    for (i = sub_cur + 1; i < sub_ntracks; i++)
+        if (sub_is_selectable(i)) {
+            next = i;
+            break;
+        }
+    return sub_select(is, next);
 }
 
 /* Renders `text` (lines separated by '\n') into an RGBA bitmap: white glyphs with
@@ -1451,7 +1526,16 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
     media_sec = osd_base + (isnan(pos) ? 0.0 : pos);
     osd_cue = sub_active_cue(media_sec);
     want_sub = in_picture_subs && osd_cue >= 0;
-    want = want_bar || want_toast || is->paused || want_sub;
+    /* Up-next prompt over the last 20 seconds (needs a known runtime). */
+    next_prompt_active = 0;
+    if (osd_next && !next_cancelled && osd_duration > 90 && media_sec >= osd_duration - 20) {
+        snprintf(osd_toast, sizeof(osd_toast), "Next episode in %ds  A play  B cancel",
+                 (int)(osd_duration - media_sec) + 1);
+        osd_toast_until = now + 1000000;
+        want_toast = 1;
+        next_prompt_active = 1;
+    }
+    want = want_bar || want_toast || is->paused || want_sub || menu_open;
 
     if (osd_shot_not_before && now >= osd_shot_not_before) {
         osd_shot_not_before = 0;
@@ -1499,6 +1583,9 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
         if (want_sub)
             sub_draw(&pic, osd_cue, want_bar || is->paused);
         osd_render(&pic, &m);
+        if (menu_open)
+            osd_menu_render(&pic, "Tracks   A choose   B close", menu_labels, menu_checked, menu_n,
+                            menu_sel);
     }
     if (shot) {
         osd_dump_bmp(&pic, "/tmp/miyoofin-player-shot.bmp");
@@ -1756,7 +1843,7 @@ static void do_exit(VideoState *is)
         printf("\n");
     SDL_Quit();
     av_log(NULL, AV_LOG_QUIET, "%s", "");
-    exit(0);
+    exit(next_requested ? 10 : 0); /* 10 tells the runner to start the next episode */
 }
 
 static void sigterm_handler(int sig)
@@ -4046,13 +4133,26 @@ static void remote_seek_request(VideoState *is, double incr)
     }
 }
 
+/* Switches to audio track `next` (index into sub_tracks) by reopening the stream. */
+static VideoState *audio_select(VideoState *is, int next)
+{
+    char label[64], toast[64];
+    audio_cur = next;
+    prefs_load();
+    strncpy(prefs.audio_lang, sub_tracks[next].lang, sizeof(prefs.audio_lang) - 1);
+    prefs_save();
+    audio_track_label(next, label, sizeof(label));
+    snprintf(toast, sizeof(toast), "Audio: %.34s", label);
+    return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is),
+                          sub_tracks[next].index, burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
+}
+
 /* Y button: next audio track. */
 static VideoState *audio_swap(VideoState *is)
 {
-    char label[64], toast[64];
     int i, next = -1, start = audio_cur, count = 0;
 
-    if (!subs_dir || sub_ntracks == 0) {
+    if (!subs_dir || osd_local || sub_ntracks == 0) {
         osd_set_toast("No other audio tracks");
         return is;
     }
@@ -4072,11 +4172,82 @@ static VideoState *audio_swap(VideoState *is)
         if (sub_tracks[k].type == 'a')
             next = k;
     }
-    audio_cur = next;
-    audio_track_label(next, label, sizeof(label));
-    snprintf(toast, sizeof(toast), "Audio: %.34s", label);
-    return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is),
-                          sub_tracks[next].index, burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
+    return audio_select(is, next);
+}
+
+/* ---- track menu (SELECT): pick any subtitle or audio track directly -------- */
+static void menu_build(void)
+{
+    int i, shown_audio = audio_cur;
+    menu_n = 0;
+    menu_kind[menu_n] = 's';
+    menu_track[menu_n] = -1;
+    snprintf(menu_text[menu_n], sizeof(menu_text[0]), "Subtitles: Off");
+    menu_checked[menu_n++] = sub_cur < 0;
+    for (i = 0; i < sub_ntracks && menu_n < MENU_MAX; i++) {
+        char label[48];
+        if (!sub_is_selectable(i))
+            continue;
+        sub_track_label(i, label, sizeof(label));
+        menu_kind[menu_n] = 's';
+        menu_track[menu_n] = i;
+        snprintf(menu_text[menu_n], sizeof(menu_text[0]), "Subs: %.40s%s", label,
+                 sub_is_burnable(i) ? " (burned in)" : "");
+        menu_checked[menu_n++] = sub_cur == i;
+    }
+    if (!osd_local) {
+        if (shown_audio < 0)
+            for (i = 0; i < sub_ntracks; i++)
+                if (sub_tracks[i].type == 'a' && (sub_tracks[i].is_default || shown_audio < 0))
+                    shown_audio = i;
+        for (i = 0; i < sub_ntracks && menu_n < MENU_MAX; i++) {
+            char label[48];
+            if (sub_tracks[i].type != 'a')
+                continue;
+            audio_track_label(i, label, sizeof(label));
+            menu_kind[menu_n] = 'a';
+            menu_track[menu_n] = i;
+            snprintf(menu_text[menu_n], sizeof(menu_text[0]), "Audio: %.40s", label);
+            menu_checked[menu_n++] = shown_audio == i;
+        }
+    }
+    for (i = 0; i < menu_n; i++)
+        menu_labels[i] = menu_text[i];
+    menu_sel = 0;
+    for (i = 0; i < menu_n; i++)
+        if (menu_checked[i] && menu_kind[i] == 's') {
+            menu_sel = i;
+            break;
+        }
+}
+
+/* Handles a key while the menu is open. Returns the stream to keep using. */
+static VideoState *menu_key(VideoState *is, SDLKey key)
+{
+    switch (key) {
+    case SDLK_UP:
+        menu_sel = (menu_sel + menu_n - 1) % menu_n;
+        break;
+    case SDLK_DOWN:
+        menu_sel = (menu_sel + 1) % menu_n;
+        break;
+    case SDLK_SPACE: /* A: choose */
+    case SDLK_RETURN:
+        menu_open = 0;
+        if (menu_kind[menu_sel] == 's')
+            return sub_select(is, menu_track[menu_sel]);
+        if (menu_track[menu_sel] != audio_cur)
+            return audio_select(is, menu_track[menu_sel]);
+        break;
+    case SDLK_LCTRL: /* B */
+    case SDLK_RCTRL: /* SELECT */
+        menu_open = 0;
+        break;
+    default:
+        break;
+    }
+    is->force_refresh = 1;
+    return is;
 }
 /* ---------------------------------------------------------------------- */
 
@@ -4097,6 +4268,21 @@ static void event_loop(VideoState *cur_stream)
             if (osd_keylog)
                 fprintf(stderr, "MFKEY sym=%d\n", (int)event.key.keysym.sym);
             osd_activity();
+            if (next_prompt_active && !menu_open) {
+                if (event.key.keysym.sym == SDLK_SPACE || event.key.keysym.sym == SDLK_RETURN) {
+                    next_requested = 1;
+                    do_exit(cur_stream);
+                    break;
+                }
+                if (event.key.keysym.sym == SDLK_LCTRL) {
+                    next_cancelled = 1;
+                    break;
+                }
+            }
+            if (menu_open) { /* the menu owns the keys while it is up */
+                cur_stream = menu_key(cur_stream, event.key.keysym.sym);
+                break;
+            }
             cur_stream->force_refresh = cur_stream->paused ? 1 : cur_stream->force_refresh;
             switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
@@ -4131,6 +4317,15 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_RETURN: /* START: stretch to the whole display / back to aspect fit */
                 osd_stretch = !osd_stretch;
                 osd_set_toast(osd_stretch ? "Stretch: fill screen" : "Stretch: original aspect");
+                cur_stream->force_refresh = 1;
+                break;
+            case SDLK_RCTRL: /* SELECT: track menu */
+                if (subs_dir && sub_ntracks) {
+                    menu_build();
+                    menu_open = 1;
+                } else {
+                    osd_set_toast("No tracks to choose");
+                }
                 cur_stream->force_refresh = 1;
                 break;
             case SDLK_LALT: /* Y button: next audio track */
@@ -4274,7 +4469,14 @@ static void event_loop(VideoState *cur_stream)
             break;
         case SDL_QUIT:
         case FF_QUIT_EVENT:
+            /* the stream ended while the up-next prompt was showing: continue */
+            if (event.type == FF_QUIT_EVENT && next_prompt_active && !next_cancelled)
+                next_requested = 1;
             do_exit(cur_stream);
+            break;
+        case FF_AUDIO_AUTO_EVENT:
+            if (!osd_local && event.user.code >= 0 && event.user.code < sub_ntracks && audio_cur < 0)
+                cur_stream = audio_select(cur_stream, event.user.code);
             break;
         case FF_SEEK_EVENT:
             if (seek_target >= 0) {
@@ -4434,6 +4636,8 @@ static const OptionDef options[] = {
     { "osd_font", HAS_ARG | OPT_STRING | OPT_EXPERT, { &osd_font_path }, "TTF font for subtitles", "path" },
     { "osd_screen_rot180", OPT_BOOL | OPT_EXPERT, { &osd_screen_rot180 }, "the screen surface (subtitle bars) is upside down for the viewer", "" },
     { "osd_local", OPT_BOOL | OPT_EXPERT, { &osd_local }, "downloaded playback (no stream restarts)", "" },
+    { "prefs", HAS_ARG | OPT_STRING | OPT_EXPERT, { &prefs_path }, "file remembering subtitle/audio language", "path" },
+    { "osd_next", OPT_BOOL | OPT_EXPERT, { &osd_next }, "offer the queued next episode near the end", "" },
     { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },
     { "exitonmousedown", OPT_BOOL | OPT_EXPERT, { &exit_on_mousedown }, "exit on mouse down", "" },

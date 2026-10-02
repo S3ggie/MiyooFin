@@ -22,6 +22,12 @@ void EpisodeBrowserScreen::startSelectedEpisodePlayback()
             source == PlaybackSource::Local ? "local" : "jellyfin",
             source == PlaybackSource::Local ? m_downloads->scope() : "",
             m_episodes[m_selectedEpisode].runTimeTicks, error)) {
+        // Streamed playback offers the following episode when this one ends.
+        if (source != PlaybackSource::Local &&
+            m_selectedEpisode + 1 < static_cast<int>(m_episodes.size()))
+            PlaybackRequest::appendNextEpisode(PlaybackRequest::defaultPath(),
+                                               m_episodes[m_selectedEpisode + 1].id,
+                                               m_episodes[m_selectedEpisode + 1].runTimeTicks);
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerPaused = true;

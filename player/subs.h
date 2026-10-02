@@ -8,6 +8,7 @@
 #define MIYOOFIN_PLAYER_SUBS_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -258,6 +259,79 @@ static inline int subs_parse_tracks(const char *data, size_t len, SubTrackInfo *
         n++;
     }
     return n;
+}
+
+
+/* ---- remembered language preferences ------------------------------------ */
+
+typedef struct SubPrefs {
+    char sub_lang[8];   /* e.g. "eng"; empty = no choice remembered */
+    int sub_off;        /* the viewer last chose "no subtitles" */
+    char audio_lang[8]; /* e.g. "jpn"; empty = no choice remembered */
+} SubPrefs;
+
+static inline void subs_prefs_parse(const char *data, size_t len, SubPrefs *p)
+{
+    const char *cur = data, *end = data + len;
+    memset(p, 0, sizeof(*p));
+    while (cur < end) {
+        const char *eol = (const char *)memchr(cur, '\n', (size_t)(end - cur));
+        char line[64];
+        size_t l;
+        char *eq;
+        if (!eol)
+            eol = end;
+        l = (size_t)(eol - cur);
+        if (l >= sizeof(line))
+            l = sizeof(line) - 1;
+        memcpy(line, cur, l);
+        line[l] = 0;
+        cur = eol < end ? eol + 1 : end;
+        eq = strchr(line, '=');
+        if (!eq)
+            continue;
+        *eq++ = 0;
+        if (!strcmp(line, "sub_lang"))
+            strncpy(p->sub_lang, eq, sizeof(p->sub_lang) - 1);
+        else if (!strcmp(line, "audio_lang"))
+            strncpy(p->audio_lang, eq, sizeof(p->audio_lang) - 1);
+        else if (!strcmp(line, "sub_off"))
+            p->sub_off = eq[0] == '1';
+    }
+}
+
+static inline int subs_prefs_format(const SubPrefs *p, char *out, size_t cap)
+{
+    return snprintf(out, cap, "sub_lang=%s\nsub_off=%d\naudio_lang=%s\n", p->sub_lang, p->sub_off,
+                    p->audio_lang);
+}
+
+/* Index of the track to use automatically for `type` ('a' / 's'): the remembered
+ * language when one exists (preferring non-forced, then default), else the track
+ * the file marks default, else -1. `selectable` (may be NULL) restricts subtitle
+ * candidates (callers pass text / burnable tracks). */
+static inline int subs_pick_auto(const SubTrackInfo *t, int n, char type, const char *lang,
+                                 const int *selectable)
+{
+    int i, best = -1, best_score = -1;
+    for (i = 0; i < n; i++) {
+        int score;
+        if (t[i].type != type || (selectable && !selectable[i]))
+            continue;
+        score = t[i].is_default ? 1 : 0;
+        if (lang && lang[0]) {
+            if (strcmp(t[i].lang, lang))
+                continue;
+            score += 2 + (t[i].forced ? 0 : 4); /* a full track beats a forced/signs-only one */
+        } else if (!t[i].is_default) {
+            continue;
+        }
+        if (score > best_score) {
+            best_score = score;
+            best = i;
+        }
+    }
+    return best;
 }
 
 #endif /* MIYOOFIN_PLAYER_SUBS_H */

@@ -223,10 +223,25 @@ static inline double osd_progress(const OsdModel *m)
     return f < 0 ? 0 : (f > 1 ? 1 : f);
 }
 
+/* Track menu geometry (logical): a centred panel of up to OSD_MENU_ROWS rows. */
+#define OSD_MENU_ROWS 8
+static inline void osd_menu_box(const OsdPicture *p, int *x, int *y, int *w, int *h)
+{
+    int k = osd_scale(p);
+    *w = 420 * k;
+    *h = (OSD_MENU_ROWS * 26 + 44) * k;
+    if (*w > p->w - 16)
+        *w = p->w - 16;
+    if (*h > p->h - 16)
+        *h = p->h - 16;
+    *x = (p->w - *w) / 2;
+    *y = (p->h - *h) / 2;
+}
+
 /* Rectangles (PICTURE coordinates) osd_render may touch, as {x, y, w, h}: the
- * toast strip, the transport panel and the centre badge. The player saves these
+ * toast strip, the transport panel, the centre badge and the track menu. The player saves these
  * before drawing and restores them when the same frame is shown again. */
-#define OSD_FOOTPRINT_RECTS 3
+#define OSD_FOOTPRINT_RECTS 4
 static inline void osd_footprint(const OsdPicture *p, int rects[OSD_FOOTPRINT_RECTS][4])
 {
     OsdBarGeometry g = osd_bar_geometry(p);
@@ -247,6 +262,7 @@ static inline void osd_footprint(const OsdPicture *p, int rects[OSD_FOOTPRINT_RE
     logical[2][1] = (p->h - cs) / 2;
     logical[2][2] = cs;
     logical[2][3] = cs;
+    osd_menu_box(p, &logical[3][0], &logical[3][1], &logical[3][2], &logical[3][3]);
     for (i = 0; i < OSD_FOOTPRINT_RECTS; i++) {
         rects[i][0] = p->rot180 ? p->w - (logical[i][0] + logical[i][2]) : logical[i][0];
         rects[i][1] = p->rot180 ? p->h - (logical[i][1] + logical[i][3]) : logical[i][1];
@@ -280,6 +296,39 @@ static inline void osd_blit_rgba(const OsdPicture *p, int x, int y, const uint8_
             py = p->rot180 ? p->h - 1 - ly : ly;
             osd_chroma_at(p, px / 2, py / 2, U, V, a);
         }
+    }
+}
+
+/* Track menu: `labels[i]` rows with a check mark on `checked[i]`, `sel` highlighted,
+ * scrolled so the selection stays visible. */
+static inline void osd_menu_render(const OsdPicture *p, const char *title, const char *const *labels,
+                                   const int *checked, int n, int sel)
+{
+    OsdRgb bg = OSD_PANEL_BG, accent = OSD_ACCENT, text = OSD_TEXT, dim = OSD_TEXT_DIM;
+    OsdRgb row = {21, 28, 48}, white = {255, 255, 255};
+    int k = osd_scale(p), x, y, w, h, first, i, ry, maxc;
+    osd_menu_box(p, &x, &y, &w, &h);
+    osd_rect(p, x, y, w, h, bg, 235);
+    osd_rect(p, x, y, w, 2 * k, accent, 255);
+    osd_text(p, x + 14 * k, y + 12 * k, title, text, k);
+    first = sel - OSD_MENU_ROWS + 1;
+    if (first < 0)
+        first = 0;
+    if (first > n - OSD_MENU_ROWS)
+        first = n - OSD_MENU_ROWS > 0 ? n - OSD_MENU_ROWS : 0;
+    maxc = (w - 56 * k) / (8 * k);
+    for (i = 0; i < OSD_MENU_ROWS && first + i < n; i++) {
+        char line[96];
+        int idx = first + i;
+        ry = y + (36 + i * 26) * k;
+        if (idx == sel)
+            osd_rect(p, x + 8 * k, ry, w - 16 * k, 24 * k, accent, 255);
+        else if (checked[idx])
+            osd_rect(p, x + 8 * k, ry, w - 16 * k, 24 * k, row, 255);
+        snprintf(line, sizeof(line), "%.*s", maxc < 90 ? maxc : 90, labels[idx]);
+        osd_text(p, x + 40 * k, ry + 4 * k, line, idx == sel ? white : text, k);
+        if (checked[idx])
+            osd_text(p, x + 18 * k, ry + 4 * k, "*", idx == sel ? white : dim, k);
     }
 }
 

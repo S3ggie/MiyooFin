@@ -269,28 +269,6 @@ static void testRailWatchStateReachesMovieGrid()
     std::printf("[test] rail watch state reaches Movies grid OK\n");
 }
 
-static void testArtworkIdentityKeyParses()
-{
-    std::printf("[test] artwork identity key parsing\n");
-    std::string id, tag;
-    ImageType type = ImageType::Thumb;
-    int w = 0, h = 0;
-    CHECK(parseArtworkIdentityKey("abc123:Primary:t4g:128x192", id, type, tag, w, h));
-    CHECK(id == "abc123" && type == ImageType::Primary && tag == "t4g" && w == 128 && h == 192);
-    CHECK(parseArtworkIdentityKey("e9:Thumb:x:192x108", id, type, tag, w, h));
-    CHECK(type == ImageType::Thumb && w == 192 && h == 108);
-    // Round trip with the controller's own key builder.
-    HomeArtworkController::RequestIdentity ident{"item", ImageType::Primary, "tag", 64, 96};
-    CHECK(parseArtworkIdentityKey(HomeArtworkController::identityKey(ident), id, type, tag, w, h));
-    CHECK(id == "item" && tag == "tag" && w == 64 && h == 96);
-    CHECK(!parseArtworkIdentityKey("", id, type, tag, w, h));
-    CHECK(!parseArtworkIdentityKey("item:Primary:tag", id, type, tag, w, h));
-    CHECK(!parseArtworkIdentityKey("item:Logo:tag:64x96", id, type, tag, w, h));
-    CHECK(!parseArtworkIdentityKey(":Primary:tag:64x96", id, type, tag, w, h));
-    CHECK(!parseArtworkIdentityKey("item:Primary:tag:0x96", id, type, tag, w, h));
-    std::printf("[test] artwork identity key parsing OK\n");
-}
-
 static void testEpisodeFallsBackToSeriesPoster()
 {
     std::printf("[test] episode falls back to the show poster\n");

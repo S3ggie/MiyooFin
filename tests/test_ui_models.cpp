@@ -27,7 +27,6 @@ int main()
     testBatteryParseCharging();
     testBatteryChargingProbe();
     testRailWatchStateReachesMovieGrid();
-    testArtworkIdentityKeyParses();
     testEpisodeFallsBackToSeriesPoster();
     testConnectionMonitorStatesAndHysteresis();
     testConnectionMonitorFirstFailureIsOffline();

@@ -274,8 +274,11 @@ TSAN_RUNNER_TARGET := $(TEST_DIR)/test_tsan_runner
 test-tsan:
 	@$(MAKE) TSAN=1 test-tsan-run
 
+# ThreadSanitizer aborts ("unexpected memory mapping") under address-space
+# randomization on newer kernels; run the suites with it disabled when setarch exists.
+NO_ASLR := $(shell command -v setarch >/dev/null 2>&1 && echo "setarch $$(uname -m) -R")
 test-tsan-run: $(TSAN_RUNNER_TARGET)
-	@MIYOOFIN_TSAN_GROUPS="$(TSAN_GROUPS)" $(TSAN_RUNNER_TARGET)
+	@MIYOOFIN_TSAN_GROUPS="$(TSAN_GROUPS)" $(NO_ASLR) $(TSAN_RUNNER_TARGET)
 
 $(TSAN_RUNNER_TARGET): $(TSAN_RUNNER) $(TSAN_GROUP_TARGETS) | $(TEST_DIR)
 	cp $(TSAN_RUNNER) $@

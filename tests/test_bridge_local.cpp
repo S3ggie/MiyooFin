@@ -122,6 +122,7 @@ int main(int argc, char** argv)
     hls.itemId = "hls";
     hls.hlsStorage = true;
     hls.hlsSegmentCount = 3;
+    hls.runtimeTicks = 90000000; // 9 s over 3 segments: the playlist must say 3 s each
     hls.chunkSize = 1;
     hls.state = DownloadState::Complete;
     CHECK(store.saveManifest("scope", hls));
@@ -153,6 +154,8 @@ int main(int argc, char** argv)
     CHECK(has(playlist, "HTTP/1.1 200 OK") && has(body(playlist), "#EXTM3U\n") &&
           has(body(playlist), "/segments/000000\n") && has(body(playlist), "/segments/000001\n") &&
           has(body(playlist), "/segments/000002\n"));
+    CHECK(has(body(playlist), "#EXTINF:3.000,\n/segments/000000\n") &&
+          has(body(playlist), "#EXT-X-TARGETDURATION:3\n") && !has(body(playlist), "EXTINF:10"));
     std::string first = request(port, "GET /segments/000000 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
     CHECK(has(first, "HTTP/1.1 200 OK") && has(first, "Content-Length: 3") && body(first) == "ONE");
     std::string second = request(port, "GET /segments/000001 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");

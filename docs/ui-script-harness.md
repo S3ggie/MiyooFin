@@ -370,7 +370,7 @@ app logic and flow on the host build only.
 `play-remote`, `play-audio` and `play-angry` start a **real streamed playback**, which makes
 Jellyfin run an ffmpeg transcode (VAAPI on the author's server). Run them deliberately and
 one at a time; do not loop them or script rapid seek/audio restarts (the player spaces
-restarts 4 s apart). A subtitle burn-in transcode that went through Jellyfin's
+seeks at least 2 s apart). A subtitle burn-in transcode that went through Jellyfin's
 Vulkan/libplacebo path (`overlay_vulkan`) once hung the server's AMD GPU; the server now sets
 `VK_DRIVER_FILES=/nonexistent` for Jellyfin so only VAAPI is used. Before testing burn-in,
 confirm the newest Jellyfin ffmpeg log's command line contains no `vulkan`, `libplacebo` or

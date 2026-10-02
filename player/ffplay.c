@@ -1435,6 +1435,7 @@ static void sub_screen_draw(const SDL_Rect *video, int cue, int force)
  * real SDL key press, so remote tests drive the exact production key paths. */
 #define FF_SEEK_EVENT (SDL_USEREVENT + 7)
 static int64_t seek_deadline;
+static int64_t restart_last_us; /* when the last stream restart began (for pacing seeks) */
 static int64_t restart_t0; /* av_gettime_relative() when the last restart began, until its first frame */
 
 static void osd_poll_commands(void)
@@ -4065,15 +4066,7 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
     char url[1100], query[96];
     int n;
     VideoState *fresh;
-    /* Every restart makes the server start a transcode: never more than one per 4 s,
-     * however fast the viewer presses keys. */
-    {
-        static int64_t last_restart;
-        const int64_t now = av_gettime_relative();
-        if (last_restart && now - last_restart < 4000000)
-            SDL_Delay((Uint32)((4000000 - (now - last_restart)) / 1000));
-        last_restart = av_gettime_relative();
-    }
+    restart_last_us = av_gettime_relative();
     if (media < 0)
         media = 0;
     osd_set_toast(message);
@@ -4133,7 +4126,8 @@ static void remote_seek_request(VideoState *is, double incr)
     if (osd_duration > 0 && target > osd_duration - 5)
         target = osd_duration - 5 > 0 ? osd_duration - 5 : 0;
     seek_target = target;
-    seek_deadline = av_gettime_relative() + 1000000;
+    /* A remote jump reopens the stream (slow): wait longer for more taps. */
+    seek_deadline = av_gettime_relative() + (osd_local ? 450000 : 1000000);
     osd_format_time(target, label, sizeof(label));
     {
         char toast[64];
@@ -4383,7 +4377,7 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_DOWN:
                 incr = -60.0;
             do_seek:
-                    if (subs_dir && !osd_local) { /* remote stream: jump by reopening it */
+                    if (subs_dir || osd_local) { /* accumulate taps; see remote_seek_request */
                         remote_seek_request(cur_stream, incr);
                         break;
                     }
@@ -4488,7 +4482,22 @@ static void event_loop(VideoState *cur_stream)
                 cur_stream = audio_select(cur_stream, event.user.code);
             break;
         case FF_SEEK_EVENT:
-            if (seek_target >= 0) {
+            /* A remote jump starts a server transcode: space them out instead of
+             * blocking the player; the pending target is simply retried a little later. */
+            if (seek_target >= 0 && !osd_local && restart_last_us &&
+                av_gettime_relative() - restart_last_us < 2000000) {
+                seek_deadline = restart_last_us + 2000000;
+                break;
+            }
+            if (seek_target >= 0 && osd_local) {
+                /* Downloaded content seeks in place (no restart): jump to the exact
+                 * accumulated target. Stream time starts at ic->start_time. */
+                const double st = cur_stream->ic && cur_stream->ic->start_time != AV_NOPTS_VALUE
+                                      ? cur_stream->ic->start_time / (double)AV_TIME_BASE
+                                      : 0.0;
+                stream_seek(cur_stream, (int64_t)((seek_target + st) * AV_TIME_BASE), 0, 0);
+                seek_target = -1.0;
+            } else if (seek_target >= 0) {
                 char toast[48], t[32];
                 osd_format_time(seek_target, t, sizeof(t));
                 snprintf(toast, sizeof(toast), "Jumping to %s", t);

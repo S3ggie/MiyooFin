@@ -420,6 +420,7 @@ struct LocalMedia
 {
     std::string itemDir;
     std::uint64_t size = 0, chunk = 0, segments = 0;
+    std::uint64_t segmentMillis = 3000; // real duration of one HLS segment (see parse below)
     LocalMediaKind kind = LocalMediaKind::LegacyBytes;
     bool valid = false;
 };
@@ -469,6 +470,16 @@ static bool local_manifest(const std::string& path, LocalMedia& m)
         m.kind = LocalMediaKind::Hls;
         if (!local_number(manifest_value(b, "segments"), m.segments) || !m.segments)
             return false;
+        // The playlist must carry the segments' REAL length or the player's clock,
+        // duration and seeking are all scaled wrongly. Jellyfin's segments are
+        // equal-length, so runtime / segment count is exact; without a runtime
+        // fall back to Jellyfin's 3 s.
+        std::uint64_t runtimeTicks = 0;
+        if (local_number(manifest_value(b, "runtime"), runtimeTicks) && runtimeTicks) {
+            const std::uint64_t ms = runtimeTicks / 10000 / m.segments;
+            if (ms >= 500 && ms <= 30000)
+                m.segmentMillis = ms;
+        }
         m.valid = true;
         return true;
     }
@@ -595,12 +606,17 @@ static void handle_local_client(int fd, const LocalMedia& m)
     }
     if (m.kind == LocalMediaKind::Hls) {
         if (r.path == "/local.m3u8") {
-            std::string p =
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n";
+            char extinf[48];
+            std::snprintf(extinf, sizeof extinf, "#EXTINF:%llu.%03llu,\n",
+                          (unsigned long long)(m.segmentMillis / 1000),
+                          (unsigned long long)(m.segmentMillis % 1000));
+            std::string p = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:" +
+                            std::to_string((m.segmentMillis + 999) / 1000) +
+                            "\n#EXT-X-MEDIA-SEQUENCE:0\n";
             for (std::uint64_t i = 0; i < m.segments; i++) {
                 char number[32];
                 std::snprintf(number, sizeof number, "%06llu", (unsigned long long)i);
-                p += "#EXTINF:10.0,\n/segments/" + std::string(number) + "\n";
+                p += std::string(extinf) + "/segments/" + std::string(number) + "\n";
             }
             p += "#EXT-X-ENDLIST\n";
             send_local_body(fd, "application/vnd.apple.mpegurl", p, r.method == "HEAD");

@@ -11,8 +11,8 @@ struct Frame
     int w, h;
     std::vector<uint8_t> y, u, v;
     Frame(int width, int height, uint8_t yy)
-        : w(width), h(height), y(width * height, yy), u(((width + 1) / 2) * ((height + 1) / 2), 128),
-          v(u.size(), 128)
+        : w(width), h(height), y(width * height, yy),
+          u(((width + 1) / 2) * ((height + 1) / 2), 128), v(u.size(), 128)
     {}
     OsdPicture picture(bool rot180)
     {
@@ -27,7 +27,10 @@ struct Frame
         p.rot180 = rot180 ? 1 : 0;
         return p;
     }
-    uint8_t Y(int x, int yy) const { return y[yy * w + x]; }
+    uint8_t Y(int x, int yy) const
+    {
+        return y[yy * w + x];
+    }
 };
 
 static void testFormatTime()
@@ -61,8 +64,8 @@ static void testBarIsRotatedAndSeekFillTracksProgress()
     osd_render(&p, &m);
     OsdBarGeometry g = osd_bar_geometry(&p);
     // The panel sits at the LOGICAL bottom, i.e. the picture TOP when rotated.
-    CHECK(f.Y(5, 1) < 120);              // darkened panel (picture top rows)
-    CHECK(f.Y(5, f.h - 2) == 120);       // logical top-left untouched
+    CHECK(f.Y(5, 1) < 120);        // darkened panel (picture top rows)
+    CHECK(f.Y(5, f.h - 2) == 120); // logical top-left untouched
     // Filled vs unfilled part of the seek bar (logical row g.bar_y + 1).
     int row = f.h - 1 - (g.bar_y + 1);
     int filledX = f.w - 1 - (g.bar_x + g.bar_w / 8);
@@ -87,7 +90,7 @@ static void testHiddenBarDrawsNothingAndPauseShowsBadge()
     OsdModel paused{10, 100, 1, 0, nullptr};
     osd_render(&p, &paused);
     CHECK(f.Y(320, 240 - 10) != 90 || f.Y(320, 240 + 10) != 90); // centre badge
-    CHECK(f.Y(5, 1) < 90);                                         // bar forced on while paused
+    CHECK(f.Y(5, 1) < 90);                                       // bar forced on while paused
     std::printf("[test] OSD hidden bar and pause badge OK\n");
 }
 

@@ -71,13 +71,10 @@ bool PlaybackRequest::writeWithSourceTo(const std::string& path, const std::stri
                                         error);
 }
 
-bool PlaybackRequest::writeWithSourceAndDurationTo(const std::string& path,
-                                                   const std::string& itemId,
-                                                   const std::string& itemType,
-                                                   long long resumeTicks,
-                                                   const std::string& sourceMode,
-                                                   const std::string& scope,
-                                                   long long durationTicks, std::string& error)
+bool PlaybackRequest::writeWithSourceAndDurationTo(
+    const std::string& path, const std::string& itemId, const std::string& itemType,
+    long long resumeTicks, const std::string& sourceMode, const std::string& scope,
+    long long durationTicks, std::string& error)
 {
     if (!safePlaybackField(itemId)) {
         error = "item_id is unsafe";

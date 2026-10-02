@@ -429,6 +429,19 @@ static void testShowsPresentation()
     CHECK(libraryNameContainsAnimeToken("Anime"));CHECK(libraryNameContainsAnimeToken("My Anime"));CHECK(libraryNameContainsAnimeToken("Shows - Anime"));CHECK(!libraryNameContainsAnimeToken("Animated Shows"));CHECK(!libraryNameContainsAnimeToken("Animation"));
     CachedLibraryView normal{"n","TV Shows","tvshows",{titledShow("b","The Boys"),titledShow("bb","Breaking Bad"),titledShow("dup","Normal")}}; CachedLibraryView anime{"a","Anime Shows","tvshows",{titledShow("at","Attack on Titan"),titledShow("ap","The Apothecary Diaries"),titledShow("dup","Duplicate")}}; ShowsPresentation p=makeShowsPresentation({normal,anime});CHECK(p.shows.size()==2&&p.anime.size()==3);CHECK_EQ(p.shows[0].title,"The Boys");CHECK_EQ(p.shows[1].title,"Breaking Bad");CHECK_EQ(p.anime[0].title,"The Apothecary Diaries");CHECK(matchesAlphabetFilter(p.anime[0].title,0));CHECK(!matchesAlphabetFilter(p.anime[0].title,19));
     CHECK(moveShowsGrid(3,8,0,1)==3);CHECK(moveShowsGrid(3,8,1,0)==7);CHECK(moveShowsGrid(7,9,1,0)==8);CHECK(clampShowsGridScroll(12,50,0)==1);CHECK(closestShowsGridIndex(11,5)==4);
+    {
+        // 10 items, 4 columns: the last row only has columns 0-1.
+        StickyColumn sticky;
+        CHECK(moveGridVertical(2, 10, 4, 1, sticky) == 6);
+        CHECK(moveGridVertical(6, 10, 4, 1, sticky) == 9); // short row clamps to its last item
+        CHECK(moveGridVertical(9, 10, 4, 1, sticky) == 9); // no move past the last row
+        CHECK(moveGridVertical(9, 10, 4, -1, sticky) == 6); // and back to the starting column
+        CHECK(moveGridVertical(6, 10, 4, -1, sticky) == 2);
+        CHECK(moveGridVertical(2, 10, 4, -1, sticky) == 2);
+        CHECK(moveGridVertical(8, 10, 4, 1, sticky) == 8); // bottom row: stay put, not the last item
+        CHECK(moveGridVertical(0, 0, 4, 1, sticky) == 0);
+        CHECK(clampShowsGridScroll(20, 50, 0, 8) == 0); // 8 columns: item 20 is row 2
+    }
 }
 
 static void testShouldShowClockErrorTrue()

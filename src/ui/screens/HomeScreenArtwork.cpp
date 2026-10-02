@@ -201,7 +201,7 @@ std::set<std::string> HomeScreen::protectedRowArtworkKeys() const
     };
 
     if (activeTabNamed("Shows")) {
-        addGrid(m_filteredShows, m_showScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
+        addGrid(m_filteredShows, m_showScroll, showsColumns(), SHOWS_GRID_ROWS);
         addGrid(m_filteredAnime, m_animeScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
         if (const MediaItem* item = showsSelectedItem())
             add(*item);
@@ -261,18 +261,18 @@ void HomeScreen::updateShowsDecodeWorkingSet()
     };
     if (const MediaItem* selected = showsSelectedItem())
         add(*selected);
-    auto addGrid = [&](const std::vector<MediaItem>& items, int scroll) {
-        const int first = std::max(0, scroll) * SHOWS_GRID_COLUMNS;
-        const int last = std::min((int)items.size(), first + SHOWS_GRID_COLUMNS * SHOWS_GRID_ROWS);
+    auto addGrid = [&](const std::vector<MediaItem>& items, int scroll, int columns) {
+        const int first = std::max(0, scroll) * columns;
+        const int last = std::min((int)items.size(), first + columns * SHOWS_GRID_ROWS);
         for (int i = first; i < last; ++i)
             add(items[i]);
     };
     if (m_showsFocus == ShowsFocus::AnimeGrid) {
-        addGrid(m_filteredAnime, m_animeScroll);
-        addGrid(m_filteredShows, m_showScroll);
+        addGrid(m_filteredAnime, m_animeScroll, SHOWS_GRID_COLUMNS);
+        addGrid(m_filteredShows, m_showScroll, showsColumns());
     } else {
-        addGrid(m_filteredShows, m_showScroll);
-        addGrid(m_filteredAnime, m_animeScroll);
+        addGrid(m_filteredShows, m_showScroll, showsColumns());
+        addGrid(m_filteredAnime, m_animeScroll, SHOWS_GRID_COLUMNS);
     }
     if (keys != m_activeShowsDecodeKeys)
         ++m_showsArtworkGeneration;

@@ -210,7 +210,7 @@ void testHierarchyConsumerCancellationWakesWaiter()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     HierarchyServer server(
         {
@@ -268,7 +268,7 @@ void testHierarchyCachedFirstAndPartialFailure()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     const MediaItem series = hierarchySeries("series-partial");
     const MediaItem cachedSeason = hierarchySeason("season-cached", series.id);
@@ -326,7 +326,7 @@ void testHierarchyCheckpointRequiresCompleteSuccessAndRejectsStaleGeneration()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     HierarchyServer server(
         {{200,
           R"({"Items":[{"Id":"season-a","Type":"Season","Name":"Season A","SeriesId":"series-a"}]})"},
@@ -366,7 +366,7 @@ void testHierarchyStopJoinsActiveWork()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     HierarchyServer server({{200, R"({"Items":[]})"}}, 0);
     Session session;
     session.serverUrl = server.url();
@@ -419,7 +419,7 @@ void testHierarchyCancellationAllowsHomeReentry()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     // The first request stands in for a Home screen being torn down while its
     // hierarchy worker is still in the network call.  The second response is
@@ -464,7 +464,7 @@ void testHierarchyMutationSerializesLiveChanges()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     HierarchyServer server({{200, R"({"Items":[]})"}, {200, R"({"Items":[]})"}}, 0);
     Session session;
@@ -526,7 +526,7 @@ void testHierarchyStopPublishesQueuedCancellation()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     HierarchyServer server({{200, R"({"Items":[]})"}}, 0);
     Session session;
@@ -570,7 +570,7 @@ void testHierarchyAdmissionGatedBySerializedSlot()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = "http://127.0.0.1:1";

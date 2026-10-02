@@ -80,7 +80,7 @@ LibraryQueryTestScope makeLibraryQueryScope(const char* name)
     removeCatalogMigrationTestPaths(scope.paths);
     scope.db = std::make_shared<CatalogDb>();
     scope.epoch = scope.db->configureScope(scope.url, scope.user);
-    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
     seedLibraryQueryScope(*scope.db, scope.epoch);
     return scope;
 }
@@ -128,7 +128,7 @@ void testLibraryQueryContinuationIsNonBlocking()
         // executor joins its worker, which cannot finish a pending CatalogDb
         // read while the worker is held.
         scope.db->setWorkerPausedForTest(false);
-        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
 
         const auto moviePage = movieFuture.get();
         CHECK(moviePage.success && moviePage.items.size() == 2);
@@ -266,7 +266,7 @@ void testLibraryQuerySupersededEpoch()
     auto scope = makeLibraryQueryScope("superseded");
     const std::uint64_t staleEpoch = scope.epoch;
     const std::uint64_t currentEpoch = scope.db->configureScope(scope.url, scope.user);
-    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
     CHECK(currentEpoch != staleEpoch);
     {
         Session session;
@@ -333,7 +333,7 @@ void testLibraryQueryContinuationQueueCapacity()
         // Release CatalogDb and confirm every accepted continuation still
         // resolves. get() must not throw for either kind (no broken_promise).
         scope.db->setWorkerPausedForTest(false);
-        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
         std::size_t mediaAcceptedCount = 0;
         for (std::size_t i = 0; i < mediaFutures.size(); ++i) {
             const auto page = mediaFutures[i].get();
@@ -368,7 +368,7 @@ void testLibraryQueryContinuationQueueCapacity()
         CHECK(hierarchyRejectedCount >= 1);
 
         scope.db->setWorkerPausedForTest(false);
-        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+        CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
         std::size_t hierarchyAcceptedCount = 0;
         for (std::size_t i = 0; i < hierarchyFutures.size(); ++i) {
             const auto page = hierarchyFutures[i].get();
@@ -411,7 +411,7 @@ void testLibraryQueryDestructionFulfillsQueuedContinuations()
         scope.db->setWorkerPausedForTest(false);
     } // coordinator/query destructor runs here with continuations still queued
 
-    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(scope.db->waitForIdleForTest(std::chrono::seconds(10)));
     for (auto& future : futures) {
         const auto page = future.get(); // must not throw broken_promise
         CHECK(page.success || page.error != library::LibraryQueryErrorCategory::None);

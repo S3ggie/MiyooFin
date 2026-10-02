@@ -172,7 +172,8 @@ void HomeScreen::finishMediaPage(MediaPageState& state)
                     }
                 }
             }
-            const int removedRows = static_cast<int>((removedGridItems + 3) / 4);
+            const int columns = state.type == "anime" ? SHOWS_GRID_COLUMNS : showsColumns();
+            const int removedRows = static_cast<int>((removedGridItems + columns - 1) / columns);
             if (state.type == "anime")
                 m_animeScroll = m_animeScroll > removedRows ? m_animeScroll - removedRows : 0;
             else

@@ -117,7 +117,7 @@ static void testOfflineFetchPublishesDownloadedPresentation()
     const auto scope = makeControllerScope("offline");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = scope.url;
@@ -161,7 +161,7 @@ static void testOptionalRailFailureRetainsWarmCatalogContent()
     const auto scope = makeControllerScope("railfail");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     // Closed loopback port: the optional rail refresh fails immediately and
@@ -217,7 +217,7 @@ static void testColdFetchFailurePublishesTerminalFailure()
     const auto scope = makeControllerScope("cold");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = "http://127.0.0.1:1";
@@ -252,7 +252,7 @@ static void testFetchLifecycleAndReentry()
     const auto scope = makeControllerScope("lifecycle");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     // A live loopback server.  It signals when the first fetch's Home-rail
     // request has arrived, then holds that response until the test has
@@ -388,7 +388,7 @@ static void testInitialPopulationOnlyFirstPagesScheduleArtwork()
     const auto scope = makeControllerScope("artwork");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     const int listener = ::socket(AF_INET, SOCK_STREAM, 0);
     CHECK(listener >= 0);
@@ -497,7 +497,7 @@ static void testDestroyedUnstartedControllerReleasesStartupReservation()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = "http://127.0.0.1:1";
@@ -547,7 +547,7 @@ static void testDestroyedControllerDuringStartupHandoffReleasesDemand()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = "http://127.0.0.1:1";

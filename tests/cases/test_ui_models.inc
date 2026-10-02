@@ -100,7 +100,10 @@ static void testHomeSyncStatusStrings()
     CHECK_EQ(librarySyncStatus(0, false, true, false, false), "SYNCING...");
 
     const ShowsSyncProgress mid{2, 4};
-    CHECK_EQ(librarySyncStatus(1, true, false, false, false, mid), "SYNC 50%");
+    // Percentages show only while sync work is actually active; an unfinished count
+    // with nothing running must not read as "SYNC n%" (it stuck at 0% after syncing).
+    CHECK_EQ(librarySyncStatus(1, true, false, false, false, mid), "SYNCING...");
+    CHECK_EQ(librarySyncStatus(1, true, false, true, false, mid), "SYNC 50%");
     CHECK_EQ(librarySyncStatus(1, true, false, true, false), "SYNCING...");
     CHECK_EQ(librarySyncStatus(1, true, false, false, true), "SYNCED");
     CHECK_EQ(librarySyncStatus(1, true, false, false, false), "SYNCING...");

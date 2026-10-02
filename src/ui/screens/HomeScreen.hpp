@@ -496,6 +496,12 @@ class HomeScreen : public Screen
     void drawShowsPreview(SDL_Surface* fb);
     void drawShowsAlphabetRail(SDL_Surface* fb);
     int moveMovieGridCompact(int index, int count, int deltaRow, int deltaCol) const;
+    /// Shows fill the whole width (two grids' worth of columns) when the library has no anime.
+    int showsColumns() const
+    {
+        return m_animeItemIds.empty() ? 2 * SHOWS_GRID_COLUMNS : SHOWS_GRID_COLUMNS;
+    }
+    StickyColumn m_showSticky, m_animeSticky, m_movieSticky;
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView>& views);
 
     // Last member: destroyed (joined) before the result fields it writes.

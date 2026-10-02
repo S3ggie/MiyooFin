@@ -299,6 +299,8 @@ static void testNewGridAndSchedule(){CHECK(moveMovieGrid(8,10,0,1)==8);CHECK(mov
              "SYNC 40%");
     CHECK_EQ(librarySyncStatus(2,true,false,false,true,mid,true),"SYNC 40%");
     CHECK_EQ(librarySyncStatus(2,true,false,false,true,done,false),"SYNCED");
+    // Finished sync with a stale 0-of-N count (cached series never bump it) is not "SYNC 0%".
+    CHECK_EQ(librarySyncStatus(1,true,false,false,true,zero,false),"SYNCED");
     CHECK_EQ(artworkSyncStatus(true, true, ShowsSyncProgress{48,120}), "ART 40%");
     CHECK_EQ(artworkSyncStatus(true, true, ShowsSyncProgress{120,120}), "ART 100%");
     CHECK_EQ(artworkSyncStatus(true, false, ShowsSyncProgress{48,120}), "");

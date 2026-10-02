@@ -98,7 +98,7 @@ inline std::string librarySyncStatus(int tab, bool haveCache, bool offline, bool
         return "";
     if (offline && haveCache)
         return "OFFLINE";
-    if (shows.total && (metadataActive || hierarchyActive || shows.completed < shows.total))
+    if (shows.total && (metadataActive || hierarchyActive))
         return "SYNC " + std::to_string(shows.percent()) + "%";
     if (metadataActive)
         return "SYNCING...";

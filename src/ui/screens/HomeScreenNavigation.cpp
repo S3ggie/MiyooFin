@@ -159,7 +159,7 @@ void HomeScreen::refreshShowsFilter()
     m_showSelected = restoreSelectionIndex(m_filteredShows, selectedId, previousShowSelected);
     m_animeSelected = restoreSelectionIndex(m_filteredAnime, selectedId, previousAnimeSelected);
     m_showScroll = preserveGridScroll(m_showSelected, static_cast<int>(m_filteredShows.size()),
-                                      previousShowScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
+                                      previousShowScroll, showsColumns(), SHOWS_GRID_ROWS);
     m_animeScroll = preserveGridScroll(m_animeSelected, static_cast<int>(m_filteredAnime.size()),
                                        previousAnimeScroll, SHOWS_GRID_COLUMNS, SHOWS_GRID_ROWS);
     if (const MediaItem* item = showsSelectedItem())
@@ -188,7 +188,8 @@ void HomeScreen::clampShowsNavigation()
     if (!m_filteredShows.empty()) {
         m_showSelected =
             std::max(0, std::min(m_showSelected, static_cast<int>(m_filteredShows.size()) - 1));
-        m_showScroll = clampShowsGridScroll(m_showSelected, m_filteredShows.size(), m_showScroll);
+        m_showScroll = clampShowsGridScroll(m_showSelected, m_filteredShows.size(), m_showScroll,
+                                            showsColumns());
     } else {
         m_showSelected = 0;
         m_showScroll = 0;
@@ -546,15 +547,17 @@ bool HomeScreen::handleAction(Action action)
                 if (m_showsAlphabetFocus > 0)
                     --m_showsAlphabetFocus;
             } else if (m_showsFocus == ShowsFocus::ShowsGrid) {
-                if (gridAtTopRow(m_showSelected, SHOWS_GRID_COLUMNS))
+                if (gridAtTopRow(m_showSelected, showsColumns()))
                     requestEarlierMediaPage(m_showPage);
                 else
-                    m_showSelected = moveShowsGrid(m_showSelected, m_filteredShows.size(), -1, 0);
+                    m_showSelected = moveGridVertical(m_showSelected, (int)m_filteredShows.size(),
+                                                      showsColumns(), -1, m_showSticky);
             } else {
                 if (gridAtTopRow(m_animeSelected, SHOWS_GRID_COLUMNS))
                     requestEarlierMediaPage(m_animePage);
                 else
-                    m_animeSelected = moveShowsGrid(m_animeSelected, m_filteredAnime.size(), -1, 0);
+                    m_animeSelected = moveGridVertical(m_animeSelected, (int)m_filteredAnime.size(),
+                                                       SHOWS_GRID_COLUMNS, -1, m_animeSticky);
             }
             clampShowsNavigation();
             return true;
@@ -567,8 +570,9 @@ bool HomeScreen::handleAction(Action action)
                 if (gridAtTopRow(m_activeCard, MOVIE_GRID_COLUMNS))
                     requestEarlierMediaPage(m_moviePage);
                 else
-                    m_activeCard = moveMovieGridCompact(
-                        m_activeCard, static_cast<int>(currentRow()->items.size()), -1, 0);
+                    m_activeCard =
+                        moveGridVertical(m_activeCard, static_cast<int>(currentRow()->items.size()),
+                                         MOVIE_GRID_COLUMNS, -1, m_movieSticky);
             }
         } else {
             const int previousRow = m_activeRow;
@@ -588,14 +592,16 @@ bool HomeScreen::handleAction(Action action)
                     ++m_showsAlphabetFocus;
             } else if (m_showsFocus == ShowsFocus::ShowsGrid) {
                 const bool heldForPage = queueDownAtPageEdge(
-                    m_showPage, m_showSelected, m_filteredShows.size(), SHOWS_GRID_COLUMNS);
+                    m_showPage, m_showSelected, m_filteredShows.size(), showsColumns());
                 if (!heldForPage)
-                    m_showSelected = moveShowsGrid(m_showSelected, m_filteredShows.size(), 1, 0);
+                    m_showSelected = moveGridVertical(m_showSelected, (int)m_filteredShows.size(),
+                                                      showsColumns(), 1, m_showSticky);
             } else {
                 const bool heldForPage = queueDownAtPageEdge(
                     m_animePage, m_animeSelected, m_filteredAnime.size(), SHOWS_GRID_COLUMNS);
                 if (!heldForPage)
-                    m_animeSelected = moveShowsGrid(m_animeSelected, m_filteredAnime.size(), 1, 0);
+                    m_animeSelected = moveGridVertical(m_animeSelected, (int)m_filteredAnime.size(),
+                                                       SHOWS_GRID_COLUMNS, 1, m_animeSticky);
             }
             clampShowsNavigation();
             return true;
@@ -609,7 +615,8 @@ bool HomeScreen::handleAction(Action action)
                 const bool heldForPage =
                     queueDownAtPageEdge(m_moviePage, m_activeCard, count, MOVIE_GRID_COLUMNS);
                 if (!heldForPage)
-                    m_activeCard = moveMovieGridCompact(m_activeCard, count, 1, 0);
+                    m_activeCard =
+                        moveGridVertical(m_activeCard, count, MOVIE_GRID_COLUMNS, 1, m_movieSticky);
             }
         } else {
             const int previousRow = m_activeRow;
@@ -627,7 +634,7 @@ bool HomeScreen::handleAction(Action action)
             if (m_showsFocus == ShowsFocus::AlphabetRail)
                 return true;
             if (m_showsFocus == ShowsFocus::ShowsGrid) {
-                if (m_showSelected % 4) {
+                if (m_showSelected % showsColumns()) {
                     --m_showSelected;
                 } else {
                     m_showsFocus = ShowsFocus::AlphabetRail;
@@ -672,7 +679,7 @@ bool HomeScreen::handleAction(Action action)
                 else if (!m_filteredAnime.empty())
                     m_showsFocus = ShowsFocus::AnimeGrid;
             } else if (m_showsFocus == ShowsFocus::ShowsGrid) {
-                if (m_showSelected % 4 < 3) {
+                if (m_showSelected % showsColumns() < showsColumns() - 1) {
                     ++m_showSelected;
                 } else if (!m_filteredAnime.empty()) {
                     m_showsFocus = ShowsFocus::AnimeGrid;

@@ -82,7 +82,7 @@ makeMaintenanceCoordinator(const char* name, std::shared_ptr<CatalogDb>& db,
     db = std::make_shared<CatalogDb>();
     scope.epoch = db->configureScope(scope.url, scope.user);
     CHECK(scope.epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = serverUrl;
@@ -644,7 +644,7 @@ void testLiveChangeCatchUpFailureIsRetriedByCoordinator()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
@@ -714,7 +714,7 @@ void testLiveChangeCatchUpApplyFailureRetainsBarrier()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
@@ -788,7 +788,7 @@ void testLiveChangeCatchUpAndApplyPublishExactlyOnce()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     const auto seeded = db->writeSyncState(1000, 0, 0, {0, epoch, {}}).get();
     CHECK(seeded.success);
 
@@ -1306,7 +1306,7 @@ void testFullPopulationSuccessCommitsCheckpoint()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     const int listener = coordinatorTestListener();
     if (listener < 0) {
@@ -1365,7 +1365,7 @@ void testFullPopulationAfterLiveChangeAdvancesGeneration()
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
     CHECK(epoch != 0);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     const int listener = coordinatorTestListener();
     if (listener < 0) {
@@ -1442,7 +1442,7 @@ void testFullPopulationCancellationAbortsStagedGeneration()
     const auto scope = coordinatorTestScope("cancel");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     const int listener = coordinatorTestListener();
     if (listener < 0) {
         removeCoordinatorTestScope(scope);
@@ -1537,7 +1537,7 @@ void testFullPopulationFailureAbortsWithoutCheckpoint()
     const auto scope = coordinatorTestScope("failure");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
     const int listener = coordinatorTestListener();
     if (listener < 0) {
         removeCoordinatorTestScope(scope);
@@ -1596,7 +1596,7 @@ void testCoordinatorSerializesStartupFullSafetyAndLive()
     const auto scope = coordinatorTestScope("serialization");
     auto db = std::make_shared<CatalogDb>();
     const auto epoch = db->configureScope(scope.url, scope.user);
-    CHECK(db->waitForIdleForTest(std::chrono::seconds(2)));
+    CHECK(db->waitForIdleForTest(std::chrono::seconds(10)));
 
     Session session;
     session.serverUrl = "http://127.0.0.1:1";

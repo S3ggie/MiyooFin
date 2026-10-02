@@ -300,8 +300,9 @@ std::string HomeScreen::syncStatusText() const
         return artworkStatus;
     const std::size_t hierarchyCompleted = m_hierarchyCompleted.load();
     const std::size_t hierarchyTotal = m_hierarchyTotal.load();
-    const bool hierarchyInProgress =
-        hierarchyTotal != 0 && (m_hierarchyActive.load() || hierarchyCompleted < hierarchyTotal);
+    // Progress ends with the request: cached or already-known series never bump the
+    // completed count, so "completed < total" alone would show a stale 0% forever.
+    const bool hierarchyInProgress = hierarchyTotal != 0 && m_hierarchyActive.load();
     const ShowsSyncProgress progress =
         hierarchyInProgress
             ? ShowsSyncProgress{hierarchyCompleted, hierarchyTotal}
@@ -403,30 +404,37 @@ void HomeScreen::drawShowsGrid(SDL_Surface* fb)
 {
     const int leftX = BROWSE_X;
     const int rightX = BROWSE_X + SHOWS_HALF_W + 12;
+    const int columns = showsColumns();
+    const bool wide = columns != SHOWS_GRID_COLUMNS; // no anime: Shows takes the whole width
     drawSectionHeading(fb, leftX, SHOWS_LABEL_Y, "Shows", m_showsFocus == ShowsFocus::ShowsGrid,
                        std::to_string(m_filteredShows.size()));
-    drawSectionHeading(fb, rightX, SHOWS_LABEL_Y, "Anime", m_showsFocus == ShowsFocus::AnimeGrid,
-                       std::to_string(m_filteredAnime.size()));
-    ui::fill(fb, BROWSE_X + SHOWS_HALF_W + 5, SHOWS_LABEL_Y, 1,
-             480 - d::kFooterH - 8 - SHOWS_LABEL_Y, d::kDivider);
+    if (!wide) {
+        drawSectionHeading(fb, rightX, SHOWS_LABEL_Y, "Anime",
+                           m_showsFocus == ShowsFocus::AnimeGrid,
+                           std::to_string(m_filteredAnime.size()));
+        ui::fill(fb, BROWSE_X + SHOWS_HALF_W + 5, SHOWS_LABEL_Y, 1,
+                 480 - d::kFooterH - 8 - SHOWS_LABEL_Y, d::kDivider);
+    }
 
     auto draw = [&](const std::vector<MediaItem>& items, int scroll, int selected, bool focused,
-                    int base) {
-        const int gridW = 4 * GRID_CARD_W + 3 * GRID_GAP;
-        const int left = base + (SHOWS_HALF_W - gridW) / 2;
+                    int base, int cols) {
+        const int gridW = cols * GRID_CARD_W + (cols - 1) * GRID_GAP;
+        const int span = cols == SHOWS_GRID_COLUMNS ? SHOWS_HALF_W : 2 * SHOWS_HALF_W + 12;
+        const int left = base + (span - gridW) / 2;
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-            const int row = i / 4;
+            const int row = i / cols;
             if (row < scroll || row >= scroll + 3)
                 continue;
-            drawCard(fb, left + (i % 4) * (GRID_CARD_W + GRID_GAP),
+            drawCard(fb, left + (i % cols) * (GRID_CARD_W + GRID_GAP),
                      SHOWS_GRID_TOP + (row - scroll) * SHOWS_ROW_PITCH, GRID_CARD_W, GRID_CARD_H,
                      items[i], focused && i == selected);
         }
     };
     draw(m_filteredShows, m_showScroll, m_showSelected, m_showsFocus == ShowsFocus::ShowsGrid,
-         leftX);
-    draw(m_filteredAnime, m_animeScroll, m_animeSelected, m_showsFocus == ShowsFocus::AnimeGrid,
-         rightX);
+         leftX, columns);
+    if (!wide)
+        draw(m_filteredAnime, m_animeScroll, m_animeSelected, m_showsFocus == ShowsFocus::AnimeGrid,
+             rightX, SHOWS_GRID_COLUMNS);
     if (m_filteredShows.empty() && m_filteredAnime.empty()) {
         char b[64];
         if (m_showsActiveLetter >= 0)

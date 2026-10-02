@@ -69,23 +69,47 @@ inline ShowsPresentation makeShowsPresentation(const std::vector<CachedLibraryVi
     std::sort(out.anime.begin(), out.anime.end(), organizationalLess);
     return out;
 }
-inline int moveShowsGrid(int index, int count, int dr, int dc)
+inline int moveShowsGrid(int index, int count, int dr, int dc, int columns = 4)
 {
     if (count <= 0)
         return 0;
     index = std::max(0, std::min(index, count - 1));
-    int r = index / 4 + dr, c = index % 4 + dc;
-    if (c < 0 || c >= 4 || r < 0)
+    int r = index / columns + dr, c = index % columns + dc;
+    if (c < 0 || c >= columns || r < 0)
         return index;
-    int t = r * 4 + c;
+    int t = r * columns + c;
     return t >= count ? (dr > 0 ? count - 1 : index) : t;
 }
-inline int clampShowsGridScroll(int selected, int count, int scroll)
+/// Remembers the column a vertical walk started in, so a short last row does not
+/// drag the cursor into another column. Valid only while the selection is still
+/// where the last vertical move left it.
+struct StickyColumn
+{
+    int index = -1, column = 0;
+};
+/// One row up/down. The column is kept across rows; a short last row clamps to its
+/// last item, and going back up returns to the original column. No move past the
+/// first or last row.
+inline int moveGridVertical(int index, int count, int columns, int dr, StickyColumn& sticky)
+{
+    if (count <= 0 || columns <= 0)
+        return 0;
+    index = std::max(0, std::min(index, count - 1));
+    if (sticky.index != index)
+        sticky.column = index % columns;
+    const int row = index / columns + dr, lastRow = (count - 1) / columns;
+    int target = index;
+    if (row >= 0 && row <= lastRow)
+        target = std::min(row * columns + sticky.column, count - 1);
+    sticky.index = target;
+    return target;
+}
+inline int clampShowsGridScroll(int selected, int count, int scroll, int columns = 4)
 {
     if (count <= 0)
         return 0;
     selected = std::max(0, std::min(selected, count - 1));
-    int row = selected / 4, last = (count - 1) / 4, max = std::max(0, last - 2);
+    int row = selected / columns, last = (count - 1) / columns, max = std::max(0, last - 2);
     scroll = std::max(0, std::min(scroll, max));
     if (row < scroll)
         scroll = row;

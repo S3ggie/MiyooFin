@@ -64,7 +64,7 @@ appname() {
         *) echo "unknown app button: $1" >&2; exit 2 ;;
     esac
 }
-app_running() { r 'for f in /proc/[0-9]*/comm; do cat $f 2>/dev/null; done | grep -qx miyoofin'; }
+app_running() { r 'for f in /proc/[0-9]*/comm; do cat $f 2>/dev/null; done | grep -q "^miyoofin\$"'; }
 
 cmd=${1:-status}; shift || true
 case "$cmd" in

@@ -410,7 +410,8 @@ check-miyoo-libs:
 DOCKER_TAG := miyoofin-toolchain
 DOCKER_USER := $(shell id -u):$(shell id -g)
 # Docker builds run outside any cgroup scope we start, so cap them here (shared host).
-DOCKER_LIMITS ?= --memory=6g --memory-swap=6g --cpus=6
+# CI runners are dedicated and may not allow these flags, so they are skipped when CI is set.
+DOCKER_LIMITS ?= $(if $(CI),,--memory=6g --memory-swap=6g --cpus=6)
 # Parallel jobs for the cross build inside the container (override: make onionos JOBS=2).
 JOBS ?= $(shell nproc 2>/dev/null || echo 2)
 ARM_TARGET := output/build-arm/miyoofin

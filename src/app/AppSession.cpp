@@ -5,6 +5,8 @@
 #include "../music/MusicTracks.hpp"
 #include "../music/MusicDownloads.hpp"
 #include "../music/PlaysJournal.hpp"
+#include "../net/WatchedSync.hpp"
+#include "../cache/LibraryCache.hpp"
 #include <ctime>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -147,6 +149,11 @@ void App::loadSavedSession()
 }
 void App::goToHome()
 {
+    // Watched/unwatched changes go out from here, under the signed-in account.
+    WatchedSync::instance().setPath("cache/" +
+                                    LibraryCache::scopeKey(m_session.serverUrl, m_session.userId) +
+                                    "/watched-pending.txt");
+    WatchedSync::instance().setSession(m_session);
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
@@ -355,6 +362,7 @@ void App::loadRouteMemory()
 void App::logout()
 {
     printf("[App] Logging out\n");
+    WatchedSync::instance().setSession(Session{}); // pending changes wait for the next sign-in
     {
         const Session::Routes routes = m_session.routes();
         m_routeMemory = {m_session.serverUrl, routes.lan, routes.pub};

@@ -135,6 +135,12 @@ class JellyfinApi
                                                     const std::string& itemId, std::int64_t ticks,
                                                     std::string& error);
 
+    /// Marks an item (movie, episode, season or series) watched or unwatched for the user.
+    /// A series or season applies to everything inside it, on the server.
+    static PlaybackSyncStatus setPlayed(const std::string& baseUrl, const std::string& accessToken,
+                                        const std::string& userId, const std::string& deviceId,
+                                        const std::string& itemId, bool played, std::string& error);
+
     /// Normalise a user-entered URL.
     static std::string normaliseUrl(const std::string& input);
 

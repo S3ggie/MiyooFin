@@ -1,4 +1,5 @@
 #include "EpisodeBrowserScreen.hpp"
+#include "../../net/WatchedSync.hpp"
 #include "EpisodeBrowserLayout.hpp"
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -219,6 +220,42 @@ void EpisodeBrowserScreen::clampListScroll()
 // -------------------------------------------------------------------
 bool EpisodeBrowserScreen::handleAction(Action action)
 {
+    if (m_watchedMenu.active()) {
+        if (m_watchedMenu.handle(action) == ChoiceMenu::Result::Chosen) {
+            if (m_watchedMenu.chosen() == 0 && m_selectedEpisode >= 0 &&
+                m_selectedEpisode < (int)m_episodes.size()) {
+                MediaItem& ep = m_episodes[m_selectedEpisode];
+                ep.played = !ep.played;
+                if (ep.played)
+                    ep.playbackPositionTicks = 0;
+                WatchedSync::instance().enqueue(ep.id, ep.played);
+                m_toast = ep.played ? "Marked as watched" : "Marked as unwatched";
+                m_toastLeftMs = 2500;
+            } else if (m_watchedMenu.chosen() == 1) {
+                bool allPlayed = !m_episodes.empty();
+                for (const MediaItem& ep : m_episodes)
+                    allPlayed = allPlayed && ep.played;
+                m_seasonTarget = !allPlayed;
+                m_confirmWatchedSeason = true; // a whole season asks first
+            }
+        }
+        return true;
+    }
+    if (m_confirmWatchedSeason) {
+        if (action == Action::Confirm) {
+            for (MediaItem& ep : m_episodes) {
+                ep.played = m_seasonTarget;
+                if (m_seasonTarget)
+                    ep.playbackPositionTicks = 0;
+            }
+            WatchedSync::instance().enqueue(m_season.id, m_seasonTarget);
+            m_toast = m_seasonTarget ? "Season marked as watched" : "Season marked as unwatched";
+            m_toastLeftMs = 2500;
+        }
+        if (action == Action::Confirm || action == Action::Back)
+            m_confirmWatchedSeason = false;
+        return true;
+    }
     if (m_audioMenu.active()) {
         if (m_audioMenu.handle(action) == AudioChoiceMenu::Result::Picked && m_downloads)
             m_downloads->enqueue(m_audioMenu.takeItems());
@@ -245,6 +282,19 @@ bool EpisodeBrowserScreen::handleAction(Action action)
     }
 
     int total = (int)m_episodes.size();
+
+    if (action == Action::Menu && total > 0 && m_selectedEpisode >= 0 &&
+        m_selectedEpisode < total) {
+        bool allPlayed = true;
+        for (const MediaItem& ep : m_episodes)
+            allPlayed = allPlayed && ep.played;
+        m_watchedMenu.open(
+            "Watched",
+            {m_episodes[m_selectedEpisode].played ? "Mark this episode unwatched"
+                                                  : "Mark this episode watched",
+             allPlayed ? "Mark the whole season unwatched" : "Mark the whole season watched"});
+        return true;
+    }
 
     // Shoulder buttons for bio scrolling — works regardless of focus
     if (action == Action::PrevTab) {
@@ -360,8 +410,9 @@ bool EpisodeBrowserScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 // update — load selected-episode artwork when state is Ready
 // -------------------------------------------------------------------
-void EpisodeBrowserScreen::update(Uint32 /*dt*/)
+void EpisodeBrowserScreen::update(Uint32 dt)
 {
+    m_toastLeftMs = dt >= m_toastLeftMs ? 0 : m_toastLeftMs - dt;
     std::vector<MediaItem> cached;
     bool cachedDone = false;
     {

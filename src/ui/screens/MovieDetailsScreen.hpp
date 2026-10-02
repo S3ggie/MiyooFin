@@ -46,8 +46,11 @@ class MovieDetailsScreen : public Screen
     enum class ActionButton
     {
         Play,
-        Download
+        Download,
+        Watched
     };
+    std::string m_toast; // short confirmation shown in the footer
+    Uint32 m_toastLeftMs = 0;
 
     /// Prepare download state and artwork without touching the SDL thread.
     void prepareWorker();

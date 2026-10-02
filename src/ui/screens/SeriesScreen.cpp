@@ -95,8 +95,9 @@ void SeriesScreen::leave()
     m_artworkCv.notify_one();
 }
 
-void SeriesScreen::update(Uint32 /*dt*/)
+void SeriesScreen::update(Uint32 dt)
 {
+    m_toastLeftMs = dt >= m_toastLeftMs ? 0 : m_toastLeftMs - dt;
     std::vector<MediaItem> cached;
     bool cachedDone = false;
     {

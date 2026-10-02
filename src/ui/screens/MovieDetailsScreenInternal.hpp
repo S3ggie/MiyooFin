@@ -6,8 +6,8 @@
 namespace miyoofin {
 inline constexpr int FB_W = 640, FB_H = 480, BOTTOM_H = 18, POSTER_X = 24, POSTER_Y = 60,
                      POSTER_W = 176, POSTER_H = 264, RIGHT_X = 224, RIGHT_TOP_Y = 60,
-                     META_WRAP = 46, BTN_W = 140, BTN_H = 36, BTN_Y = 410, BTN_PLAY_X = 224,
-                     BTN_DL_X = 376;
+                     META_WRAP = 46, BTN_W = 124, BTN_H = 36, BTN_Y = 410, BTN_PLAY_X = 224,
+                     BTN_DL_X = 356, BTN_WATCH_X = 488;
 inline constexpr unsigned char FOCUS_OR = 255, FOCUS_OG = 220, FOCUS_OB = 40, FOCUS_IR = 255,
                                FOCUS_IG = 255, FOCUS_IB = 120;
 inline std::vector<std::string> wrapText(const char* text, int wrapCols)

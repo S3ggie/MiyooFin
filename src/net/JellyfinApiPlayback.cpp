@@ -49,6 +49,21 @@ PlaybackSyncStatus JellyfinApi::getPlaybackPositionTicks(
     return status;
 }
 
+PlaybackSyncStatus JellyfinApi::setPlayed(const std::string& baseUrl,
+                                          const std::string& accessToken, const std::string& userId,
+                                          const std::string& deviceId, const std::string& itemId,
+                                          bool played, std::string& error)
+{
+    HttpClient client;
+    client.setTimeoutSec(15);
+    HttpResponse response;
+    // POST marks played, DELETE clears it; the same URL either way.
+    const bool transport = client.perform(
+        played ? "POST" : "DELETE", baseUrl + "/Users/" + userId + "/PlayedItems/" + itemId,
+        buildAuthHeaders(accessToken, deviceId), {}, response, error);
+    return playbackStatus(transport, response.status);
+}
+
 PlaybackSyncStatus JellyfinApi::reportPlaybackStopped(const std::string& baseUrl,
                                                       const std::string& accessToken,
                                                       const std::string& deviceId,

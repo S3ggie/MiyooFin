@@ -145,6 +145,13 @@ void MovieDetailsScreen::renderContent(SDL_Surface* fb)
     ui::button(fb, BTN_DL_X, BTN_Y, BTN_W, BTN_H, "Download", ui::ButtonStyle::Secondary,
                m_actionBtn == ActionButton::Download);
 
+    ui::button(fb, BTN_WATCH_X, BTN_Y, BTN_W, BTN_H, m_movie.played ? "Unwatch" : "Mark watched",
+               ui::ButtonStyle::Secondary, m_actionBtn == ActionButton::Watched);
+    if (m_toastLeftMs > 0 && footer.message.empty()) {
+        footer.message = m_toast;
+        footer.messageColor = d::kAccentHi;
+    }
+
     footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Select"}, {ui::Key::B, "Back"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Scroll bio"});

@@ -4,6 +4,7 @@
 #include "../BitmapFont.hpp"
 #include "../../app/ScreenStack.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include "../../net/WatchedSync.hpp"
 #include "../../net/ArtworkUrl.hpp"
 #include "../../net/HttpClient.hpp"
 #include "../../net/RouteRequest.hpp"
@@ -147,12 +148,16 @@ bool MovieDetailsScreen::handleAction(Action action)
 
     // D-pad for action buttons
     case Action::Left:
-        if (m_actionBtn == ActionButton::Download)
+        if (m_actionBtn == ActionButton::Watched)
+            m_actionBtn = ActionButton::Download;
+        else if (m_actionBtn == ActionButton::Download)
             m_actionBtn = ActionButton::Play;
         return true;
     case Action::Right:
         if (m_actionBtn == ActionButton::Play)
             m_actionBtn = ActionButton::Download;
+        else if (m_actionBtn == ActionButton::Download)
+            m_actionBtn = ActionButton::Watched;
         return true;
 
     // Confirm
@@ -162,6 +167,15 @@ bool MovieDetailsScreen::handleAction(Action action)
                 m_planSnapshot.plan.canFit && !m_audioMenu.begin(m_planSnapshot.plan.items))
                 m_downloads->enqueue(m_planSnapshot.plan.items);
             m_confirmDownload = false;
+            return true;
+        }
+        if (m_actionBtn == ActionButton::Watched) {
+            m_movie.played = !m_movie.played;
+            if (m_movie.played)
+                m_movie.playbackPositionTicks = 0;
+            WatchedSync::instance().enqueue(m_movie.id, m_movie.played);
+            m_toast = m_movie.played ? "Marked as watched" : "Marked as unwatched";
+            m_toastLeftMs = 2500;
             return true;
         }
         if (m_actionBtn == ActionButton::Play) {
@@ -201,8 +215,9 @@ bool MovieDetailsScreen::handleAction(Action action)
 // -------------------------------------------------------------------
 // update
 // -------------------------------------------------------------------
-void MovieDetailsScreen::update(Uint32 /*dt*/)
+void MovieDetailsScreen::update(Uint32 dt)
 {
+    m_toastLeftMs = dt >= m_toastLeftMs ? 0 : m_toastLeftMs - dt;
     {
         UiDiagnostics::Scope scope("MovieDetailsScreen::publish async preparation");
         std::lock_guard<std::mutex> lock(m_prepareMutex);

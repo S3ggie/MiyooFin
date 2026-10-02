@@ -7,6 +7,7 @@
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "AudioChoiceMenu.hpp"
+#include "ChoiceMenu.hpp"
 #include "../../library/LibraryCoordinator.hpp"
 #include "../../library/LibraryQuery.hpp"
 #include <memory>
@@ -99,6 +100,12 @@ class SeriesScreen : public Screen
     bool m_networkOffline = false, m_downloadedOnly = false;
     std::uint64_t m_planId = 0;
     AudioChoiceMenu m_audioMenu;
+    // Watched state: SELECT opens a menu (a season or the whole series); both ask first.
+    ChoiceMenu m_watchedMenu;
+    int m_watchedConfirm = 0; // 0 none, 1 season, 2 series
+    bool m_watchedTarget = false;
+    std::string m_toast;
+    Uint32 m_toastLeftMs = 0;
     bool m_confirmDownload = false;
     bool m_planWholeSeries = false;
     std::vector<MediaItem> m_seasons;

@@ -231,14 +231,24 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
     ui::button(fb, 520, EB_BTN_Y, 104, EB_BTN_H, "Get Season", ui::ButtonStyle::Secondary,
                onButtons && m_actionBtn == ActionButton::DownloadSeason);
 
+    if (m_confirmWatchedSeason) {
+        footer.message = std::string("Mark the whole season ") +
+                         (m_seasonTarget ? "watched" : "unwatched") + "?  A confirm  B cancel";
+        footer.messageColor = d::kAccentHi;
+    } else if (m_toastLeftMs > 0 && footer.message.empty()) {
+        footer.message = m_toast;
+        footer.messageColor = d::kAccentHi;
+    }
     footer.hints = {{ui::Key::Dpad, "Move"},
                     {ui::Key::A, "Select"},
                     {ui::Key::B, "Back"},
-                    {ui::Key::Y, "Get season"}};
+                    {ui::Key::Y, "Get season"},
+                    {ui::Key::Select, "Watched"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});
     ui::footer(fb, footer);
     m_audioMenu.render(fb);
+    m_watchedMenu.render(fb);
 }
 
 } // namespace miyoofin

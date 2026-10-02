@@ -7,6 +7,7 @@
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
 #include "AudioChoiceMenu.hpp"
+#include "ChoiceMenu.hpp"
 #include "../../library/LibraryCoordinator.hpp"
 #include "../../library/LibraryQuery.hpp"
 #include <memory>
@@ -175,6 +176,11 @@ class EpisodeBrowserScreen : public Screen
     bool m_networkOffline = false, m_downloadedOnly = false;
     std::uint64_t m_planId = 0;
     AudioChoiceMenu m_audioMenu;
+    // Watched state: SELECT opens a menu (episode or whole season); a season asks first.
+    ChoiceMenu m_watchedMenu;
+    bool m_confirmWatchedSeason = false, m_seasonTarget = false;
+    std::string m_toast;
+    Uint32 m_toastLeftMs = 0;
     bool m_confirmDownload = false, m_planIsSeason = false;
     LoadState m_loadState = LoadState::Loading;
     std::string m_error;

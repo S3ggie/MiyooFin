@@ -71,6 +71,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/download/DownloadSubtitles.cpp \
     $(SRC_DIR)/download/DownloadAudio.cpp \
     $(SRC_DIR)/app/AppMode.cpp \
+    $(SRC_DIR)/net/WatchedSync.cpp \
     $(SRC_DIR)/app/CrashLog.cpp \
     $(SRC_DIR)/music/MusicApi.cpp \
     $(SRC_DIR)/music/MusicCache.cpp \
@@ -83,6 +84,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/music/MusicQueue.cpp \
     $(SRC_DIR)/music/MusicSettings.cpp \
     $(SRC_DIR)/ui/screens/AudioChoiceMenu.cpp \
+    $(SRC_DIR)/ui/screens/ChoiceMenu.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
     $(SRC_DIR)/download/DownloadManagerReconcileWorker.cpp \

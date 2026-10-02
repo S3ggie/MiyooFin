@@ -233,15 +233,22 @@ void SeriesScreen::render(SDL_Surface* fb)
         ui::roundFill(fb, d::kScreenW - 8, thumbY, 3, thumbH, 1, d::kAccentDim);
     }
 
-    footer.hints = {{ui::Key::Dpad, "Move"},
-                    {ui::Key::A, "Open"},
-                    {ui::Key::B, "Back"},
-                    {ui::Key::Y, "Season"},
-                    {ui::Key::X, "Series"}};
+    if (m_watchedConfirm != 0) {
+        footer.message = std::string("Mark the whole ") +
+                         (m_watchedConfirm == 2 ? "series " : "season ") +
+                         (m_watchedTarget ? "watched" : "unwatched") + "?  A confirm  B cancel";
+        footer.messageColor = d::kAccentHi;
+    } else if (m_toastLeftMs > 0 && footer.message.empty()) {
+        footer.message = m_toast;
+        footer.messageColor = d::kAccentHi;
+    }
+    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Open"},   {ui::Key::B, "Back"},
+                    {ui::Key::Y, "Season"},  {ui::Key::X, "Series"}, {ui::Key::Select, "Watched"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});
     ui::footer(fb, footer);
     m_audioMenu.render(fb);
+    m_watchedMenu.render(fb);
 }
 
 }

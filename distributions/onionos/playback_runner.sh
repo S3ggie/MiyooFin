@@ -125,6 +125,7 @@ fi
 SERVER_URL=$(read_kv session.txt server_url)
 LOCAL_SERVER_URL=$(read_kv session.txt local_server_url)
 PUBLIC_SERVER_URL=$(read_kv session.txt public_server_url)
+SESSION_ROUTES=$(read_kv session.txt routes)
 ACCESS_TOKEN=$(read_kv session.txt access_token)
 
 if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && { [ -z "$SERVER_URL" ] || [ -z "$ACCESS_TOKEN" ]; }; then
@@ -205,11 +206,20 @@ build_stream_url() {
     printf '%s' "$_url"
 }
 PLAY_SESSION_ID="miyoofin-$(date +%s)-$$"
-PUBLIC_BASE=${PUBLIC_SERVER_URL:-$SERVER_URL}
-LAN_BASE=$LOCAL_SERVER_URL
-# public_server_url is only set for LAN-canonical sessions.
-if [ -z "$LAN_BASE" ] && [ -n "$PUBLIC_SERVER_URL" ]; then LAN_BASE=$SERVER_URL; fi
-PUBLIC_TURL=$(build_stream_url "$PUBLIC_BASE")
+if [ "$SESSION_ROUTES" = 2 ]; then
+    # The two addresses exactly as the user set them (either may be empty); server_url is
+    # only the identity caches are filed under.
+    PUBLIC_BASE=$PUBLIC_SERVER_URL
+    LAN_BASE=$LOCAL_SERVER_URL
+    if [ -z "$PUBLIC_BASE" ] && [ -z "$LAN_BASE" ]; then PUBLIC_BASE=$SERVER_URL; fi
+else
+    PUBLIC_BASE=${PUBLIC_SERVER_URL:-$SERVER_URL}
+    LAN_BASE=$LOCAL_SERVER_URL
+    # public_server_url is only set for LAN-canonical sessions.
+    if [ -z "$LAN_BASE" ] && [ -n "$PUBLIC_SERVER_URL" ]; then LAN_BASE=$SERVER_URL; fi
+fi
+PUBLIC_TURL=""
+[ -n "$PUBLIC_BASE" ] && PUBLIC_TURL=$(build_stream_url "$PUBLIC_BASE")
 TURL=$PUBLIC_TURL
 FALLBACK_TURL=""
 if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$LAN_BASE" ]; then

@@ -466,9 +466,17 @@ static bool load_remote_context(const std::string& appDir, const char* tag, Remo
         std::printf("%s skipped reason=no_session_or_bad_id\n", tag);
         return false;
     }
-    const std::string publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
-    const std::string lanRoute =
-        localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    const std::string routesMode = read_kv_from_content(sessionContent, "routes");
+    std::string publicRoute, lanRoute;
+    if (routesMode == "2") { // the two addresses as set; server_url is just the identity
+        publicRoute = publicServerUrl;
+        lanRoute = localServerUrl;
+        if (publicRoute.empty() && lanRoute.empty())
+            publicRoute = serverUrl;
+    } else {
+        publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
+        lanRoute = localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    }
     ctx.route = playback_route(publicRoute, lanRoute);
     ctx.cacertPath = appDir + "/cacert.pem";
     const bool https = ctx.route.primary.compare(0, 8, "https://") == 0 ||
@@ -741,10 +749,20 @@ int main(int argc, char* argv[])
     int64_t resumeTicks = parse_resume_ticks(read_kv_from_content(reqContent, "resume_ticks"));
     // Downloaded/local playback retains its established public-only reporter
     // behavior. LAN route selection belongs only to remote Jellyfin playback.
-    const std::string publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
-    const std::string lanRoute =
-        localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
-    PlaybackRoute route = playback_route(publicRoute, sourceMode == "local" ? "" : lanRoute);
+    const std::string routesMode = read_kv_from_content(sessionContent, "routes");
+    std::string publicRoute, lanRoute;
+    if (routesMode == "2") { // the two addresses as set; server_url is just the identity
+        publicRoute = publicServerUrl;
+        lanRoute = localServerUrl;
+        if (publicRoute.empty() && lanRoute.empty())
+            publicRoute = serverUrl;
+    } else {
+        publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
+        lanRoute = localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
+    }
+    PlaybackRoute route = sourceMode == "local"
+                              ? playback_route(publicRoute.empty() ? lanRoute : publicRoute, "")
+                              : playback_route(publicRoute, lanRoute);
     reporter_log("item=%s server=%s", itemId.c_str(), serverUrl.c_str());
     reporter_log("[ReporterRoute] %s", route.usingLan ? "LAN" : "PUBLIC");
     reporter_log("resume ticks=%lld", (long long)resumeTicks);

@@ -21,10 +21,10 @@ ServerEntryScreen::ServerEntryScreen(const std::string& initialUrl, const std::s
 
 ServerEntryScreen::ServerEntryScreen(const std::string& initialUrl, const std::string& errorMsg,
                                      const std::string& expectedServerId, bool localAddressEntry,
-                                     bool publicAddressEntry)
+                                     bool publicAddressEntry, bool canRemove)
     : m_keyboard(kServerKeyboardConfig), m_url(initialUrl), m_message(errorMsg),
       m_expectedServerId(expectedServerId), m_localAddressEntry(localAddressEntry),
-      m_publicAddressEntry(publicAddressEntry)
+      m_publicAddressEntry(publicAddressEntry), m_canRemove(canRemove)
 {}
 
 ServerEntryScreen::~ServerEntryScreen()
@@ -34,7 +34,12 @@ ServerEntryScreen::~ServerEntryScreen()
 
 void ServerEntryScreen::startConnection()
 {
-    if (m_localAddressEntry && m_url.empty()) {
+    if ((m_localAddressEntry || m_publicAddressEntry) && m_url.empty()) {
+        if (!m_canRemove) {
+            m_message = "Keep at least one address";
+            return;
+        }
+        // Removing an address needs no check: nothing is connected to.
         m_serverUrl.clear();
         m_connected = true;
         m_finished = true;
@@ -197,8 +202,8 @@ void ServerEntryScreen::render(SDL_Surface* fb)
     namespace d = design;
     ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
     ui::HeaderSpec header;
-    header.title = m_localAddressEntry    ? "Local Jellyfin address"
-                   : m_publicAddressEntry ? "Public Jellyfin address"
+    header.title = m_localAddressEntry    ? "Home network address"
+                   : m_publicAddressEntry ? "Internet address"
                                           : "Connect to Jellyfin";
     header.showStatus = false;
     ui::header(fb, header);
@@ -230,8 +235,23 @@ void ServerEntryScreen::drawInputField(SDL_Surface* fb)
 void ServerEntryScreen::drawStatus(SDL_Surface* fb)
 {
     namespace d = design;
-    if (m_message.empty() && !m_connected && !m_connecting)
+    if (m_message.empty() && !m_connected && !m_connecting) {
+        if (m_localAddressEntry || m_publicAddressEntry) {
+            // Say what this address is for and how to remove it, right where the eye is.
+            const int y = m_keyboard.keyboardBottom() + 14;
+            const char* what =
+                m_localAddressEntry
+                    ? "Used first, on your home network (for example http://192.168.1.5:8096)."
+                    : "Used when you are away from home (for example "
+                      "https://jellyfin.example.com).";
+            ui::text(fb, d::kMargin, y, ui::fit(what, d::kScreenW - 2 * d::kMargin), d::kTextMuted);
+            ui::text(fb, d::kMargin, y + 20,
+                     m_canRemove ? "Leave it empty and press START to remove this address."
+                                 : "This is your only address, so it cannot be removed.",
+                     d::kTextSecondary);
+        }
         return;
+    }
     const int y = m_keyboard.keyboardBottom() + 14;
     if (m_connected) {
         // Success card in place of the keyboard's attention: name, version, address.

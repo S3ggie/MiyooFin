@@ -131,6 +131,7 @@ void App::configureCatalogScopeForSession()
 void App::loadSavedSession()
 {
     m_session = Session::load();
+    m_session.makeRoutesExplicit(); // older session files: derive the two addresses once
     if (m_session.valid()) {
         uiDiagnostics().log("[App] saved session valid=1");
         printf("[App] Loaded saved session for user '%s'\n", m_session.userName.c_str());
@@ -317,6 +318,10 @@ void App::goToLogin(const std::string& initialMessage)
 void App::logout()
 {
     printf("[App] Logging out\n");
+    {
+        const Session::Routes routes = m_session.routes();
+        m_routeMemory = {m_session.serverUrl, routes.lan, routes.pub};
+    }
     if (m_music)
         m_music->stop();
     std::atomic_store(&m_musicSession, std::shared_ptr<Session>()); // music workers: signed out

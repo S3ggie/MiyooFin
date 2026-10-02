@@ -1,4 +1,5 @@
 #include "Session.hpp"
+#include "ServerAddress.hpp"
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -29,6 +30,40 @@ static std::string readValue(const std::string& line, const char* key)
 }
 
 // -------------------------------------------------------------------
+// Routes.
+// -------------------------------------------------------------------
+Session::Routes Session::routes() const
+{
+    if (routesExplicit) {
+        Routes r{localServerUrl, publicServerUrl};
+        if (r.lan.empty() && r.pub.empty())
+            r.pub = serverUrl; // never leave a signed-in session without any address
+        return r;
+    }
+    // Older shape: the address typed at sign-in (serverUrl) plus at most one extra.
+    Routes r;
+    r.lan = !localServerUrl.empty() ? localServerUrl
+                                    : (isObviousLanServerUrl(serverUrl) ? serverUrl : "");
+    r.pub = isObviousLanServerUrl(serverUrl) ? publicServerUrl : serverUrl;
+    return r;
+}
+
+void Session::setRoutes(const std::string& lan, const std::string& pub)
+{
+    localServerUrl = lan;
+    publicServerUrl = pub;
+    routesExplicit = true;
+}
+
+void Session::makeRoutesExplicit()
+{
+    if (routesExplicit)
+        return;
+    const Routes r = routes();
+    setRoutes(r.lan, r.pub);
+}
+
+// -------------------------------------------------------------------
 // Save to an explicit path (atomic: write-tmp, fsync, chmod, rename).
 // -------------------------------------------------------------------
 bool Session::saveTo(const std::string& path) const
@@ -42,6 +77,8 @@ bool Session::saveTo(const std::string& path) const
     writeLine(f, "server_id", serverId);
     writeLine(f, "local_server_url", localServerUrl);
     writeLine(f, "public_server_url", publicServerUrl);
+    if (routesExplicit)
+        fprintf(f, "routes=2\n");
     writeLine(f, "access_token", accessToken);
     writeLine(f, "user_id", userId);
     writeLine(f, "user_name", userName);
@@ -111,6 +148,8 @@ Session Session::loadFrom(const std::string& path)
             s.userName = v;
         if (!(v = readValue(line, "device_id")).empty())
             s.deviceId = v;
+        if (!(v = readValue(line, "routes")).empty())
+            s.routesExplicit = v == "2";
         if (!(v = readValue(line, "manual_offline_mode")).empty())
             s.manualOfflineMode = v == "1" || v == "true";
     }

@@ -19,9 +19,11 @@ class ServerEntryScreen : public Screen
   public:
     ServerEntryScreen();
     ServerEntryScreen(const std::string& initialUrl, const std::string& errorMsg);
+    /// Edits one of the two saved addresses (Settings). `canRemove` is true when the other
+    /// address exists, so this one may be left empty to remove it.
     ServerEntryScreen(const std::string& initialUrl, const std::string& errorMsg,
                       const std::string& expectedServerId, bool localAddressEntry,
-                      bool publicAddressEntry = false);
+                      bool publicAddressEntry = false, bool canRemove = false);
     ~ServerEntryScreen() override;
 
     void enter() override;
@@ -92,6 +94,7 @@ class ServerEntryScreen : public Screen
     std::string m_expectedServerId;
     bool m_localAddressEntry = false;
     bool m_publicAddressEntry = false;
+    bool m_canRemove = false;
     bool m_addressEntryCancelled = false;
 
     // Connection attempt result; read after WorkerSlot::reap().

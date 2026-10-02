@@ -20,9 +20,26 @@ struct Session
     std::string userId;
     std::string userName;
     std::string deviceId;
+    /// True once `localServerUrl` / `publicServerUrl` hold the two addresses exactly as the user
+    /// set them (either may be empty). Older session files and in-memory sessions only have
+    /// `serverUrl`, from which the two addresses are derived (see routes()).
+    bool routesExplicit = false;
     /// User-selected downloaded-only library presentation.  This is not a
     /// connectivity state and must not affect requests or playback reporting.
     bool manualOfflineMode = false;
+
+    /// The two ways to reach the server. `lan` is tried first when set; `pub` is the fallback
+    /// (or the only route). `serverUrl` is only the identity that caches and downloads are
+    /// filed under, so changing an address never orphans them.
+    struct Routes
+    {
+        std::string lan, pub;
+    };
+    Routes routes() const;
+    /// Stores the addresses as given (either may be empty, not both).
+    void setRoutes(const std::string& lan, const std::string& pub);
+    /// Converts an older-shaped session to explicit addresses (a no-op otherwise).
+    void makeRoutesExplicit();
 
     /// True if the session contains enough data to attempt token validation.
     bool valid() const
@@ -42,6 +59,7 @@ struct Session
         userName.clear();
         deviceId.clear();
         manualOfflineMode = false;
+        routesExplicit = false;
     }
 
     /// Save to the default path ("session.txt") in the current directory.

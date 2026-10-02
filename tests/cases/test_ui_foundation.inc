@@ -54,6 +54,35 @@ static void testServerEntryKeyboardCaps()
     std::printf("[test] Server Entry keyboard caps OK\n");
 }
 
+static void testSettingsAddressRemoval()
+{
+    std::printf("[test] removing a server address\n");
+    // With the other address present, an empty entry removes this one (no network check).
+    ServerEntryScreen removable("https://old.example.com", "", "server-id", false, true, true);
+    removable.handleAction(Action::Back); // B in address mode cancels; use CLR then START to remove
+    CHECK(removable.addressEntryCancelled());
+
+    ServerEntryScreen remove("https://old.example.com", "", "server-id", false, true, true);
+    // Clear the text with the keyboard's Clear key (X), then confirm with START.
+    remove.handleAction(Action::Search);
+    CHECK(remove.entryText().empty());
+    remove.handleAction(Action::Settings);
+    CHECK(remove.connected() && remove.serverUrl().empty());
+
+    // The same for the home network address.
+    ServerEntryScreen removeHome("http://192.168.1.5:8096", "", "server-id", true, false, true);
+    removeHome.handleAction(Action::Search);
+    removeHome.handleAction(Action::Settings);
+    CHECK(removeHome.connected() && removeHome.serverUrl().empty());
+
+    // The last remaining address cannot be removed.
+    ServerEntryScreen last("https://only.example.com", "", "server-id", false, true, false);
+    last.handleAction(Action::Search);
+    last.handleAction(Action::Settings);
+    CHECK(!last.connected() && !last.finished());
+    std::printf("[test] removing a server address OK\n");
+}
+
 static void testSettingsAddressEntryCancel()
 {
     std::printf("[test] Settings address entry cancel\n");

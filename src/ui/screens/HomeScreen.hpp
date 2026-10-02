@@ -118,17 +118,14 @@ class HomeScreen : public Screen
     {
         return m_updateExitRequested;
     }
-    void setLocalServerUrl(const std::string& url)
+    /// The two server addresses changed in Settings (App saved them already).
+    void setRoutes(const std::string& lan, const std::string& pub)
     {
-        m_session.localServerUrl = url;
+        m_session.setRoutes(lan, pub);
     }
     void cancelAsyncWork() noexcept;
     void requestStopAllWorkers() noexcept;
     void joinAllWorkers();
-    void setPublicServerUrl(const std::string& url)
-    {
-        m_session.publicServerUrl = url;
-    }
     bool presentationOffline() const
     {
         return m_libraryOffline || m_session.manualOfflineMode;

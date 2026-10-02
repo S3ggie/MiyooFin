@@ -672,7 +672,7 @@ void HomeScreen::drawBottomHints(SDL_Surface* fb)
         spec.messageColor = d::kDanger;
     } else if (activeTabNamed("Settings")) {
         if (m_settingsState.confirmation == SettingsConfirmation::ChangeServer) {
-            spec.message = "Press A again to change server";
+            spec.message = "Press A again to sign out and pick another server";
             spec.messageColor = d::kWarning;
         } else if (m_settingsState.confirmation == SettingsConfirmation::Logout) {
             spec.message = "Press A again to log out";

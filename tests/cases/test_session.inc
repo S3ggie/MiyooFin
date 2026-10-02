@@ -111,6 +111,108 @@ static void testLocalServerIdentityVerification()
     std::printf("[test] local server identity verification OK\n");
 }
 
+static void testSessionRoutes()
+{
+    std::printf("[test] Session routes\n");
+    // Older shape: the address typed at sign-in plus at most one extra.
+    Session publicOnly;
+    publicOnly.serverUrl = "https://public.example.com";
+    CHECK(publicOnly.routes().lan.empty() && publicOnly.routes().pub == publicOnly.serverUrl);
+    Session lanOnly;
+    lanOnly.serverUrl = "http://192.168.1.5:8096";
+    CHECK(lanOnly.routes().lan == lanOnly.serverUrl && lanOnly.routes().pub.empty());
+    Session publicPlusLan = publicOnly;
+    publicPlusLan.localServerUrl = "http://192.168.1.5:8096";
+    CHECK(publicPlusLan.routes().lan == "http://192.168.1.5:8096" &&
+          publicPlusLan.routes().pub == "https://public.example.com");
+    Session lanPlusPublic = lanOnly;
+    lanPlusPublic.publicServerUrl = "https://public.example.com";
+    CHECK(lanPlusPublic.routes().lan == lanOnly.serverUrl &&
+          lanPlusPublic.routes().pub == "https://public.example.com");
+
+    // Converting keeps the effective addresses and the identity.
+    Session converted = lanPlusPublic;
+    converted.makeRoutesExplicit();
+    CHECK(converted.routesExplicit && converted.serverUrl == lanOnly.serverUrl);
+    CHECK(converted.routes().lan == lanPlusPublic.routes().lan &&
+          converted.routes().pub == lanPlusPublic.routes().pub);
+
+    // Explicit addresses are independent: drop either one, never touching the identity.
+    const std::string identity = converted.serverUrl;
+    const std::string scope = LibraryCache::scopeKey(converted.serverUrl, "user");
+    converted.setRoutes("", "https://public.example.com"); // home network address removed
+    CHECK(converted.routes().lan.empty() && converted.routes().pub == "https://public.example.com");
+    CHECK(converted.serverUrl == identity && LibraryCache::scopeKey(converted.serverUrl, "user") == scope);
+    converted.setRoutes("http://192.168.1.9:8096", ""); // and the other way round
+    CHECK(converted.routes().lan == "http://192.168.1.9:8096" && converted.routes().pub.empty());
+    converted.setRoutes("", ""); // never leaves a signed-in session without any address
+    CHECK(converted.routes().pub == identity);
+
+    // Saved and reloaded exactly as set, including a removed address.
+    const std::string path = "test_session_routes.txt";
+    Session saved = publicOnly;
+    saved.accessToken = "t";
+    saved.userId = "u";
+    saved.setRoutes("http://192.168.1.5:8096", "");
+    CHECK(saved.saveTo(path));
+    Session loaded = Session::loadFrom(path);
+    CHECK(loaded.routesExplicit && loaded.routes().lan == "http://192.168.1.5:8096" &&
+          loaded.routes().pub.empty() && loaded.serverUrl == "https://public.example.com");
+    std::remove(path.c_str());
+    // A session file from before this existed loads in the older shape, then converts once.
+    Session old = lanPlusPublic;
+    old.accessToken = "t";
+    old.userId = "u";
+    CHECK(old.saveTo(path));
+    Session oldLoaded = Session::loadFrom(path);
+    CHECK(!oldLoaded.routesExplicit && oldLoaded.routes().pub == "https://public.example.com");
+    oldLoaded.makeRoutesExplicit();
+    CHECK(oldLoaded.saveTo(path) && Session::loadFrom(path).routesExplicit);
+    std::remove(path.c_str());
+    oldLoaded.clear();
+    CHECK(!oldLoaded.routesExplicit);
+
+    // Requests use the two addresses as set: home network first, internet as the fallback.
+    Session both;
+    both.serverUrl = "https://public.example.com";
+    both.setRoutes("http://192.168.1.5:8096", "https://other.example.com");
+    std::string error;
+    std::vector<std::string> tried;
+    CHECK(!RouteRequest(both).run(
+        [&](const std::string& base) {
+            tried.push_back(base);
+            error = "Transport: Couldn't connect";
+            return false;
+        },
+        error));
+    CHECK(tried.size() == 2 && tried[0] == "http://192.168.1.5:8096" &&
+          tried[1] == "https://other.example.com");
+    Session homeOnly = both;
+    homeOnly.setRoutes("http://192.168.1.5:8096", "");
+    tried.clear();
+    error.clear();
+    CHECK(!RouteRequest(homeOnly).run(
+        [&](const std::string& base) {
+            tried.push_back(base);
+            error = "Transport: Couldn't connect";
+            return false;
+        },
+        error));
+    CHECK(tried.size() == 1 && tried[0] == "http://192.168.1.5:8096"); // no phantom fallback
+    Session internetOnly = both;
+    internetOnly.setRoutes("", "https://other.example.com");
+    tried.clear();
+    CHECK(RouteRequest(internetOnly).run(
+        [&](const std::string& base) {
+            tried.push_back(base);
+            return true;
+        },
+        error));
+    CHECK(tried.size() == 1 && tried[0] == "https://other.example.com" &&
+          RouteRequest(internetOnly).primary() == "https://other.example.com");
+    std::printf("[test] Session routes OK\n");
+}
+
 static void testSystemInfoParsing()
 {
     std::printf("[test] SystemInfo Id parsing\n");

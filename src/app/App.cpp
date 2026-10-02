@@ -14,6 +14,7 @@
 #include "../ui/screens/MusicScreen.hpp"
 #include "../ui/Design.hpp"
 #include "CrashLog.hpp"
+#include "../net/ServerAddress.hpp"
 #include "../ui/screens/ServerEntryScreen.hpp"
 #include "../ui/screens/ConnectScreen.hpp"
 #include "../ui/screens/LoginScreen.hpp"
@@ -549,22 +550,22 @@ int App::run()
                     }
                 } else if (auto* entry = dynamic_cast<ServerEntryScreen*>(top)) {
                     if (entry->connected() && entry->finished()) {
-                        if (entry->localAddressEntry()) {
-                            m_session.localServerUrl = entry->serverUrl();
-                            m_session.save();
-                            m_stack.pop();
-                            if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
-                                home->setLocalServerUrl(m_session.localServerUrl);
-                            continue;
-                        }
-                        if (entry->publicAddressEntry()) {
-                            m_session.publicServerUrl = entry->serverUrl();
+                        if (entry->localAddressEntry() || entry->publicAddressEntry()) {
+                            // Saving an address never signs you out: only the address changes.
+                            m_session.makeRoutesExplicit();
+                            const Session::Routes current = m_session.routes();
+                            m_session.setRoutes(
+                                entry->localAddressEntry() ? entry->serverUrl() : current.lan,
+                                entry->publicAddressEntry() ? entry->serverUrl() : current.pub);
                             m_session.save();
                             m_stack.pop();
                             if (m_downloadManager)
                                 m_downloadManager->configure(m_session);
+                            std::atomic_store(&m_musicSession,
+                                              std::make_shared<Session>(m_session));
                             if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
-                                home->setPublicServerUrl(m_session.publicServerUrl);
+                                home->setRoutes(m_session.localServerUrl,
+                                                m_session.publicServerUrl);
                             continue;
                         }
                         m_serverUrl = entry->serverUrl();
@@ -604,6 +605,19 @@ int App::run()
                             // Save the session
                             printf("[App] LoginScreen success -> Home\n");
                             m_session.serverUrl = m_serverUrl;
+                            // The address typed at sign-in becomes the home-network or the
+                            // internet address by what it looks like; a signed-out session
+                            // gets its other address back when it is the same server.
+                            {
+                                std::string lan, pub;
+                                if (m_routeMemory.identity == m_serverUrl) {
+                                    lan = m_routeMemory.lan;
+                                    pub = m_routeMemory.pub;
+                                }
+                                if (lan.empty() && pub.empty())
+                                    (isObviousLanServerUrl(m_serverUrl) ? lan : pub) = m_serverUrl;
+                                m_session.setRoutes(lan, pub);
+                            }
                             m_session.serverId = login->result().serverId;
                             m_session.accessToken = login->result().accessToken;
                             m_session.userId = login->result().userId;
@@ -636,11 +650,13 @@ int App::run()
                         home->cancelAsyncWork();
                         m_running = false;
                     } else if (home->takeLocalAddressRequest()) {
+                        const Session::Routes routes = m_session.routes();
                         m_stack.push(std::make_unique<ServerEntryScreen>(
-                            m_session.localServerUrl, "", m_session.serverId, true));
+                            routes.lan, "", m_session.serverId, true, false, !routes.pub.empty()));
                     } else if (home->takePublicAddressRequest()) {
+                        const Session::Routes routes = m_session.routes();
                         m_stack.push(std::make_unique<ServerEntryScreen>(
-                            m_session.publicServerUrl, "", m_session.serverId, false, true));
+                            routes.pub, "", m_session.serverId, false, true, !routes.lan.empty()));
                     } else if (home->changeServerRequested()) {
                         logout();
                         m_stack.popToRoot();

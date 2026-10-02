@@ -5,6 +5,7 @@ int main()
 {
     testServerEntryKeyboardCaps();
     testSettingsAddressEntryCancel();
+    testSettingsAddressRemoval();
     testLoginKeyboardCaps();
     testOnScreenKeyboardGrid();
     testOnScreenKeyboardSpace();

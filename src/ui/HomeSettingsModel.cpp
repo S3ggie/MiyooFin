@@ -6,25 +6,17 @@ namespace miyoofin {
 
 std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session)
 {
-    const bool lanOnly = session.localServerUrl.empty() && isObviousLanServerUrl(session.serverUrl);
-    std::vector<HomeSettingsAddressRow> rows;
-    rows.push_back({lanOnly ? "LAN Server" : "Public Server",
-                    session.serverUrl.empty() ? "Not connected" : session.serverUrl,
-                    HomeSettingsRowAction::ChangeServer});
-    if (lanOnly)
-        rows.push_back({"Public Address",
-                        session.publicServerUrl.empty() ? "Not Set" : session.publicServerUrl,
-                        HomeSettingsRowAction::PublicAddress});
-    else
-        rows.push_back({"Local Address",
-                        session.localServerUrl.empty() ? "Not Set" : session.localServerUrl,
-                        HomeSettingsRowAction::LocalAddress});
-    return rows;
+    // Two plainly named addresses, each optional on its own (at least one must stay).
+    const Session::Routes routes = session.routes();
+    return {{"Home network address", routes.lan.empty() ? "Not set" : routes.lan,
+             HomeSettingsRowAction::LocalAddress},
+            {"Internet address", routes.pub.empty() ? "Not set" : routes.pub,
+             HomeSettingsRowAction::PublicAddress}};
 }
 
 int homeSettingsRowCount(const Session& session)
 {
-    return 1 + (int)homeSettingsAddressRows(session).size() + 9;
+    return 1 + (int)homeSettingsAddressRows(session).size() + 10;
 }
 
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
@@ -35,10 +27,12 @@ HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
     if (row >= 1 && row <= static_cast<int>(addresses.size()))
         return addresses[row - 1].action;
     const int count = homeSettingsRowCount(session);
-    if (row == count - 3)
-        return HomeSettingsRowAction::CheckForUpdates;
-    if (row == count - 4)
+    if (row == count - 5)
         return HomeSettingsRowAction::MusicMode;
+    if (row == count - 4)
+        return HomeSettingsRowAction::CheckForUpdates;
+    if (row == count - 2)
+        return HomeSettingsRowAction::ChangeServer;
     return row == count - 1 ? HomeSettingsRowAction::Logout : HomeSettingsRowAction::None;
 }
 

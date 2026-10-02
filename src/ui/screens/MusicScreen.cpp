@@ -702,7 +702,9 @@ void MusicScreen::refreshSettingsRows(MusicPane& pane)
         action("Download quality", "Used for offline music", std::to_string(download) + " kbps"),
         action("Clear music cache", "Streamed tracks and covers (downloads stay)",
                m_cacheClearArmed ? "Press A again" : ""),
-        action("Server", m_session.serverUrl, ""),
+        action("Server",
+               m_session.routes().lan.empty() ? m_session.routes().pub : m_session.routes().lan,
+               ""),
         action("Account", m_session.userName, m_session.manualOfflineMode ? "Offline mode" : "")};
     pane.requested = true;
     pane.loadedOnce = true;

@@ -83,8 +83,9 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
         }
         rows.push_back({"UPDATES", updateValue});
     }
-    rows.insert(rows.end(),
-                {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR}, {"ACCOUNT", "Log Out"}});
+    rows.insert(rows.end(), {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
+                             {"SERVER", "Sign in to a different server"},
+                             {"ACCOUNT", "Log Out"}});
     namespace d = design;
     constexpr int ROW_H = 58, PITCH = 66, TOP = d::kHeaderH + 10,
                   W = d::kScreenW - 2 * d::kMargin - 8;
@@ -110,6 +111,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
             color = raw == "ON" ? d::kWarning : d::kSuccess;
         else if (label == "ACCOUNT" && raw == "Log Out")
             color = d::kDanger;
+        else if (raw == "Not set")
+            color = d::kTextMuted;
         ui::textClamped(fb, d::kMargin + 14, y + 30, W - 28, raw, color);
     }
     // Scroll position along the right edge.

@@ -122,47 +122,56 @@ static void testHomeSyncStatusStrings()
 static void testHomeSettingsModel()
 {
     std::printf("[test] Home settings address rows and actions\n");
-    CHECK(homeSettingsBaseRowCount() == 11);
+    CHECK(homeSettingsBaseRowCount() == 13);
 
+    // Two plainly named addresses, whatever the session looks like.
     Session lan;
     lan.serverUrl = "http://192.168.1.5:8096";
     const auto lanRows = homeSettingsAddressRows(lan);
     CHECK(lanRows.size() == 2);
-    CHECK_EQ(lanRows[0].section, "LAN Server");
+    CHECK_EQ(lanRows[0].section, "Home network address");
     CHECK_EQ(lanRows[0].value, lan.serverUrl);
-    CHECK(lanRows[0].action == HomeSettingsRowAction::ChangeServer);
-    CHECK_EQ(lanRows[1].section, "Public Address");
-    CHECK_EQ(lanRows[1].value, "Not Set");
+    CHECK(lanRows[0].action == HomeSettingsRowAction::LocalAddress);
+    CHECK_EQ(lanRows[1].section, "Internet address");
+    CHECK_EQ(lanRows[1].value, "Not set");
     CHECK(lanRows[1].action == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowCount(lan) == 12);
+    CHECK(homeSettingsRowCount(lan) == 13);
     CHECK(homeSettingsRowAction(0, lan) == HomeSettingsRowAction::OfflineMode);
-    CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::ChangeServer);
+    CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::LocalAddress);
     CHECK(homeSettingsRowAction(2, lan) == HomeSettingsRowAction::PublicAddress);
     CHECK(homeSettingsRowAction(8, lan) == HomeSettingsRowAction::MusicMode);
     CHECK(homeSettingsRowAction(9, lan) == HomeSettingsRowAction::CheckForUpdates);
-    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::Logout);
+    CHECK(homeSettingsRowAction(10, lan) == HomeSettingsRowAction::None); // about
+    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::ChangeServer);
+    CHECK(homeSettingsRowAction(12, lan) == HomeSettingsRowAction::Logout);
     CHECK(homeSettingsRowAction(5, lan) == HomeSettingsRowAction::None);
 
     Session pub;
     pub.serverUrl = "https://jellyfin.example.com";
     pub.localServerUrl = "http://192.168.1.5:8096";
     const auto pubRows = homeSettingsAddressRows(pub);
-    CHECK(pubRows.size() == 2);
-    CHECK_EQ(pubRows[0].section, "Public Server");
-    CHECK_EQ(pubRows[1].section, "Local Address");
-    CHECK(pubRows[1].action == HomeSettingsRowAction::LocalAddress);
-    CHECK(homeSettingsRowAction(2, pub) == HomeSettingsRowAction::LocalAddress);
-    CHECK(homeSettingsRowCount(pub) == 12);
+    CHECK_EQ(pubRows[0].value, "http://192.168.1.5:8096");
+    CHECK_EQ(pubRows[1].value, "https://jellyfin.example.com");
+
+    // Explicit addresses are shown exactly as set; either may be empty on its own.
+    Session explicitOnlyInternet;
+    explicitOnlyInternet.serverUrl = "http://192.168.1.5:8096"; // identity only
+    explicitOnlyInternet.setRoutes("", "https://jellyfin.example.com");
+    const auto onlyInternet = homeSettingsAddressRows(explicitOnlyInternet);
+    CHECK_EQ(onlyInternet[0].value, "Not set");
+    CHECK_EQ(onlyInternet[1].value, "https://jellyfin.example.com");
+    Session explicitOnlyHome;
+    explicitOnlyHome.serverUrl = "https://jellyfin.example.com";
+    explicitOnlyHome.setRoutes("http://192.168.1.5:8096", "");
+    CHECK_EQ(homeSettingsAddressRows(explicitOnlyHome)[0].value, "http://192.168.1.5:8096");
+    CHECK_EQ(homeSettingsAddressRows(explicitOnlyHome)[1].value, "Not set");
 
     Session empty;
     const auto emptyRows = homeSettingsAddressRows(empty);
-    CHECK_EQ(emptyRows[0].value, "Not connected");
-    CHECK_EQ(emptyRows[1].value, "Not Set");
+    CHECK_EQ(emptyRows[0].value, "Not set");
+    CHECK_EQ(emptyRows[1].value, "Not set");
     CHECK(homeSettingsRowAction(0, empty) == HomeSettingsRowAction::OfflineMode);
-    CHECK(homeSettingsRowAction(2, empty) == HomeSettingsRowAction::LocalAddress);
-    CHECK(homeSettingsRowAction(8, empty) == HomeSettingsRowAction::MusicMode);
-    CHECK(homeSettingsRowAction(9, empty) == HomeSettingsRowAction::CheckForUpdates);
-    CHECK(homeSettingsRowAction(11, empty) == HomeSettingsRowAction::Logout);
+    CHECK(homeSettingsRowAction(2, empty) == HomeSettingsRowAction::PublicAddress);
     CHECK(homeSettingsRowAction(3, empty) == HomeSettingsRowAction::None);
     std::printf("[test] Home settings address rows and actions OK\n");
 }

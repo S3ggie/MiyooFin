@@ -1,10 +1,12 @@
 #include "test_support.hpp"
+#include "../src/net/RouteRequest.hpp"
 #include "cases/test_session.inc"
 int main()
 {
     testSession();
     testSessionBackwardCompatibility();
     testLocalServerIdentityVerification();
+    testSessionRoutes();
     testSystemInfoParsing();
     testSessionEmpty();
     testSessionAtomicNoTmpResidue();

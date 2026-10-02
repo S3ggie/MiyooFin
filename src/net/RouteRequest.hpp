@@ -27,14 +27,11 @@ class RouteRequest
     explicit RouteRequest(const Session& session) : m_session(session) {}
     std::string lan() const
     {
-        return !m_session.localServerUrl.empty()
-                   ? m_session.localServerUrl
-                   : (isObviousLanServerUrl(m_session.serverUrl) ? m_session.serverUrl : "");
+        return m_session.routes().lan;
     }
     std::string publicRoute() const
     {
-        return isObviousLanServerUrl(m_session.serverUrl) ? m_session.publicServerUrl
-                                                          : m_session.serverUrl;
+        return m_session.routes().pub;
     }
     std::string primary() const
     {

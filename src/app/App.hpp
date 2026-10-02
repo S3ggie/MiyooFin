@@ -93,6 +93,11 @@ class App
 
     // MiyooFin Music: the mode the app is in, the audio player (alive for the whole run),
     // and the session copy its worker threads read.
+    /// The addresses of the server we signed out of, so signing back in keeps both.
+    struct RouteMemory
+    {
+        std::string identity, lan, pub;
+    } m_routeMemory;
     AppMode m_mode = AppMode::Video;
     music::MusicSettings m_musicSettings;
     std::unique_ptr<music::MusicDownloads> m_musicDownloads; // outlives the player's fetches

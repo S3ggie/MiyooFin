@@ -1,5 +1,6 @@
 #include "../UiKit.hpp"
 #include "AuthCheckScreen.hpp"
+#include "../../net/RouteRequest.hpp"
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../net/JellyfinApi.hpp"
@@ -56,14 +57,19 @@ void AuthCheckScreen::startCheck()
     m_checkSuccess = false;
     m_checkError.clear();
 
-    std::string url = m_session.serverUrl;
+    const Session session = m_session;
     std::string token = m_session.accessToken;
     std::string uid = m_session.userId;
     std::string devId = m_session.deviceId;
 
-    m_checkWorker.start([this, url, token, uid, devId](const CancelToken&) {
+    m_checkWorker.start([this, session, token, uid, devId](const CancelToken&) {
         std::string err;
-        bool ok = JellyfinApi::validateToken(url, token, uid, devId, err);
+        // Home network address first, then the internet one.
+        bool ok = RouteRequest(session).run(
+            [&](const std::string& base) {
+                return JellyfinApi::validateToken(base, token, uid, devId, err);
+            },
+            err);
         if (ok) {
             m_checkSuccess = true;
         } else {

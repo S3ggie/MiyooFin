@@ -129,17 +129,18 @@ static void testOfflineLibraryProjection(){
     CHECK(transitionTabIndex(offline,3,online)==4);
 }
 static void testSettingsRowActions(){
-    CHECK(HomeScreen::settingsRowCount() == 11);
+    CHECK(HomeScreen::settingsRowCount() == 13);
     CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::OfflineMode);
-    CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::ChangeServer);
-    CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::PublicAddress);
     CHECK(HomeScreen::settingsRowAction(3)==HomeScreen::SettingsRowAction::None);
     CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::None);
     CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::MusicMode);
     CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::CheckForUpdates);
-    // Logout is the last row (count-1 = 11 for 2-address-row sessions)
-    CHECK(HomeScreen::settingsRowAction(11)==HomeScreen::SettingsRowAction::Logout);
     CHECK(HomeScreen::settingsRowAction(10)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(11)==HomeScreen::SettingsRowAction::ChangeServer);
+    // Logout is the last row.
+    CHECK(HomeScreen::settingsRowAction(12)==HomeScreen::SettingsRowAction::Logout);
 }
 static void testLanServerAddressClassificationAndSettingsLayout(){
     std::printf("[test] LAN server address classification and Settings layout\n");
@@ -160,14 +161,14 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
     Session lanOnly; lanOnly.serverUrl="http://192.168.1.10:8096";
     const auto lanRows=HomeScreen::settingsAddressRows(lanOnly);
     CHECK(lanRows.size()==2);
-    CHECK_EQ(lanRows[0].section,"LAN Server");
+    CHECK_EQ(lanRows[0].section,"Home network address");
     CHECK_EQ(lanRows[0].value,"http://192.168.1.10:8096");
-    CHECK(lanRows[0].action==HomeScreen::SettingsRowAction::ChangeServer);
-    CHECK_EQ(lanRows[1].section,"Public Address");
-    CHECK_EQ(lanRows[1].value,"Not Set");
+    CHECK(lanRows[0].action==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK_EQ(lanRows[1].section,"Internet address");
+    CHECK_EQ(lanRows[1].value,"Not set");
     CHECK(lanRows[1].action==HomeScreen::SettingsRowAction::PublicAddress);
-    CHECK(HomeScreen::settingsRowCount(lanOnly)==12);
-    CHECK(HomeScreen::settingsRowAction(1,lanOnly)==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK(HomeScreen::settingsRowCount(lanOnly)==13);
+    CHECK(HomeScreen::settingsRowAction(1,lanOnly)==HomeScreen::SettingsRowAction::LocalAddress);
     CHECK(HomeScreen::settingsRowAction(2,lanOnly)==HomeScreen::SettingsRowAction::PublicAddress);
     lanOnly.publicServerUrl="https://public.example.com";
     CHECK_EQ(HomeScreen::settingsAddressRows(lanOnly)[1].value,"https://public.example.com");
@@ -175,18 +176,13 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
     Session publicOnly; publicOnly.serverUrl="https://public.example.com";
     const auto publicRows=HomeScreen::settingsAddressRows(publicOnly);
     CHECK(publicRows.size()==2);
-    CHECK_EQ(publicRows[0].section,"Public Server");
-    CHECK_EQ(publicRows[0].value,"https://public.example.com");
-    CHECK_EQ(publicRows[1].section,"Local Address");
-    CHECK_EQ(publicRows[1].value,"Not Set");
-    CHECK(HomeScreen::settingsRowAction(2,publicOnly)==HomeScreen::SettingsRowAction::LocalAddress);
+    CHECK_EQ(publicRows[0].value,"Not set");
+    CHECK_EQ(publicRows[1].value,"https://public.example.com");
 
     Session dualRoute=publicOnly; dualRoute.localServerUrl="http://192.168.1.10:8096";
     const auto dualRows=HomeScreen::settingsAddressRows(dualRoute);
-    CHECK(dualRows.size()==2);
-    CHECK_EQ(dualRows[0].section,"Public Server");
-    CHECK_EQ(dualRows[1].section,"Local Address");
-    CHECK_EQ(dualRows[1].value,"http://192.168.1.10:8096");
+    CHECK_EQ(dualRows[0].value,"http://192.168.1.10:8096");
+    CHECK_EQ(dualRows[1].value,"https://public.example.com");
 }
 static void testSeriesCachedSeasonHandoff(){
     const std::string seriesSource=readTestBytes("src/ui/screens/SeriesScreen.cpp");

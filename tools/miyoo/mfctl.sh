@@ -3,6 +3,11 @@
 # AI-driven testing. Server-safe by default: streamed playback is refused unless you set
 # MF_ALLOW_STREAM=1 (each stream makes Jellyfin run an ffmpeg transcode).
 #
+#   mfctl.sh setup               enable the app's remote control (once; survives restarts)
+#   mfctl.sh app start|stop      launch MiyooFin from the Onion menu / quit it (no harness needed)
+#   mfctl.sh press <buttons>...  press app buttons with a short pause: up down left right a b x y
+#                                l r l2 r2 start select  (e.g. mfctl.sh press r r a)
+#   mfctl.sh look [name]         screenshot of the APP screen -> $MF_OUT/<name>.png
 #   mfctl.sh status              what is running on the device (app / player / menu)
 #   mfctl.sh deploy [what]       cross-build in Docker and install (what: app player bridge reporter all)
 #   mfctl.sh play local          open the first downloaded episode (no server load)
@@ -50,8 +55,61 @@ need_free_menu() {
     fi
 }
 
+appname() {
+    case "$1" in
+        up) echo Up ;; down) echo Down ;; left) echo Left ;; right) echo Right ;;
+        a) echo Confirm ;; b) echo Back ;; x) echo Search ;; y) echo ActionsMenu ;;
+        l) echo PrevTab ;; r) echo NextTab ;; l2) echo PrevPage ;; r2) echo NextPage ;;
+        start) echo Settings ;; select) echo Menu ;;
+        *) echo "unknown app button: $1" >&2; exit 2 ;;
+    esac
+}
+app_running() { r 'for f in /proc/[0-9]*/comm; do cat $f 2>/dev/null; done | grep -qx miyoofin'; }
+
 cmd=${1:-status}; shift || true
 case "$cmd" in
+setup)
+    r "touch $APP/.remote-control && echo remote control enabled"
+    ;;
+app)
+    case "${1:-}" in
+        start)
+            app_running && { echo "already running"; exit 0; }
+            need_free_menu
+            sh "$ROOT/tools/miyoo/onion-remote-launch.sh" > "$OUT/launch.log" 2>&1 || { echo "launch failed: $OUT/launch.log" >&2; exit 5; }
+            for _ in $(seq 1 60); do app_running && break; sleep 1; done
+            app_running && echo "MiyooFin started (give it ~10 s to load the library)" || { echo "did not start" >&2; exit 5; }
+            ;;
+        stop)
+            app_running || { echo "not running"; exit 0; }
+            r 'printf "quit\n" > /tmp/miyoofin-app-cmd'
+            for _ in $(seq 1 30); do app_running || break; sleep 1; done
+            app_running && { echo "still running: run 'mfctl.sh setup' once, and this build must be deployed (older builds ignore it)" >&2; exit 6; }
+            echo stopped
+            ;;
+        *) echo "app start|stop" >&2; exit 2 ;;
+    esac
+    ;;
+press)
+    [ $# -gt 0 ] || { echo "press <button>..." >&2; exit 2; }
+    for b in "$@"; do
+        r "printf 'key $(appname "$b")\n' > /tmp/miyoofin-app-cmd"
+        sleep "${MF_KEY_DELAY:-0.5}"
+    done
+    ;;
+look)
+    name=${1:-app}
+    before=$(r "stat -c %Y $APP/screenshot.bmp 2>/dev/null || echo 0")
+    r 'touch /tmp/miyoofin-screenshot-request'
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        now=$(r "stat -c %Y $APP/screenshot.bmp 2>/dev/null || echo 0")
+        [ "$now" != "$before" ] && break
+    done
+    scp -q -P 2222 -i "$KEY" -o BatchMode=yes "onion@$HOST:$APP/screenshot.bmp" "$OUT/$name.bmp"
+    python3 -c "from PIL import Image;Image.open('$OUT/$name.bmp').save('$OUT/$name.png')"
+    echo "$OUT/$name.png"
+    ;;
 status)
     procs
     r "cat $APP/player-prefs.txt 2>/dev/null; tail -2 $APP/playback-launch.log 2>/dev/null | cut -c1-110"

@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "RemoteExitSignal.hpp"
+#include "RemoteControl.hpp"
 #include "DisplaySizing.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../diagnostics/UiDiagnostics.hpp"
@@ -423,6 +424,8 @@ int App::run()
             }
             if (!m_playbackStarting && consumeRemoteExitRequest())
                 actions.push_back(Action::Exit);
+            if (!m_playbackStarting)
+                pollRemoteControl(actions); // developer control, off unless .remote-control exists
             if (!m_playbackStarting) {
                 for (Action a : actions) {
                     uiDiagnostics().setLastAction(actionName(a));

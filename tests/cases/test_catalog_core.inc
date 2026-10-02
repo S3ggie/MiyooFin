@@ -783,3 +783,23 @@ static void testCatalogDbAuthoritativeReconcile()
           && cleared.seriesDeleted == 2);
     CHECK(db.getSeasons(std::get<0>(keep).id).get().items.empty());
 }
+
+static void testRemoteControlParsing()
+{
+    std::printf("[test] remote control command parsing\n");
+    std::vector<Action> a;
+    parseRemoteCommands("key Right\nkey Confirm\r\nbogus\nkey Nope\nkey NextTab \nquit\n", a);
+    CHECK(a.size() == 4);
+    CHECK(a[0] == Action::Right && a[1] == Action::Confirm && a[2] == Action::NextTab &&
+          a[3] == Action::Exit);
+    std::vector<Action> many;
+    std::string flood;
+    for (int i = 0; i < 100; ++i)
+        flood += "key Down\n";
+    parseRemoteCommands(flood, many);
+    CHECK(many.size() == 16); // bounded per poll
+    std::vector<Action> none;
+    parseRemoteCommands("", none);
+    CHECK(none.empty());
+    std::printf("[test] remote control command parsing OK\n");
+}

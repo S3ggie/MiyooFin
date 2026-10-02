@@ -28,6 +28,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/app/AppSession.cpp \
     $(SRC_DIR)/app/AppPlayback.cpp \
     $(SRC_DIR)/app/RemoteExitSignal.cpp \
+    $(SRC_DIR)/app/RemoteControl.cpp \
     $(SRC_DIR)/catalog/CatalogDb.cpp \
     $(SRC_DIR)/catalog/CatalogDbWrite.cpp \
     $(SRC_DIR)/catalog/CatalogDbSchema.cpp \

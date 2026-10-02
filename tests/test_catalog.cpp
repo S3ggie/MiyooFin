@@ -1,4 +1,5 @@
 #include "test_support.hpp"
+#include "../src/app/RemoteControl.hpp"
 #include "../src/library/LibrarySync.hpp"
 #include "../src/catalog/CatalogCompatibility.hpp"
 #include <filesystem>
@@ -9,6 +10,7 @@
 int main()
 {
     testRemoteExitSignal();
+    testRemoteControlParsing();
     testDisplaySizingFallback();
     testCatalogDbLifecycle();
     testCatalogDbQueue();

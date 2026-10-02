@@ -103,7 +103,7 @@ while [ $# -gt 0 ]; do
         --timeout-s) TIMEOUT_S=${2:?--timeout-s needs a value}; shift 2 ;;
         --timeout-s=*) TIMEOUT_S=${1#--timeout-s=}; shift ;;
         -h|--help)
-            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series|home-reentry|offline-playback|login-connect|settings|tour|art>"
+            echo "usage: $0 [--dry-run] [--desktop-keys] [--server-unavailable] [--no-session] [--timeout-s N] <smoke|series|home-reentry|offline-playback|login-connect|settings|tour|art|play-remote>"
             exit 0 ;;
         -*) echo "device-run: unknown flag: $1" >&2; exit 2 ;;
         *) NAME=$1; shift ;;
@@ -767,6 +767,11 @@ case "$NAME" in
         want='[ServerEntryScreen] enter'
         SHOT="$OUT/shots/login-error.bmp"
         CHECKS="rendered"
+        ;;
+    play-remote)
+        want='[HomeScreen] Library loaded'
+        SHOT=""
+        CHECKS=""
         ;;
     art)
         want='[HomeScreen] Library loaded'

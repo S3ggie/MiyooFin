@@ -315,7 +315,7 @@ $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
-$(TEST_DIR)/test_player: player/osd.h player/osd_font.h
+$(TEST_DIR)/test_player: player/osd.h player/osd_font.h player/subs.h
 $(TEST_DIR)/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
 $(TEST_DIR)/test_api_core: tests/cases/test_api_core.inc
 $(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc
@@ -562,7 +562,7 @@ REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
 .PHONY: reporter
 reporter: $(REPORTER_HOST)
 
-$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp | $(BUILD_DIR)
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp tools/playback_tracks.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
@@ -571,7 +571,7 @@ reporter-test: $(REPORTER_TEST) $(REPORTER_HOST)
 	@$(REPORTER_TEST)
 	@REPORTER=$(REPORTER_HOST) sh tests/test_playback_resume_refresh.sh
 
-$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp | $(TEST_DIR)
+$(REPORTER_TEST): $(REPORTER_TEST_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp tools/playback_tracks.hpp | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 

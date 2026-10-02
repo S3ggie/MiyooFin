@@ -25,6 +25,9 @@
 
 #include "config.h"
 #include "osd.h"
+#include "subs.h"
+#include <SDL/SDL_ttf.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <inttypes.h>
 #include <math.h>
@@ -958,6 +961,300 @@ static void osd_dump_bmp(const OsdPicture *pic, const char *path)
     fclose(f);
 }
 
+
+/* ---- miyoofin: subtitles ----------------------------------------------- */
+static const char *subs_dir;          /* app dir holding playback-tracks.txt and subs/<index>.srt */
+static const char *osd_font_path = "/mnt/SDCARD/miyoo/app/wqy-microhei.ttc";
+static double osd_base;               /* stream time 0 is this far into the media (resume offset), s */
+static SubTrackInfo sub_tracks[64];
+static int sub_ntracks;
+static int sub_cur = -1;              /* index into sub_tracks of the shown subtitle, -1 = off */
+static int sub_auto_done;
+static int64_t sub_offset_ms;
+static SubCues sub_cues;
+static int sub_cues_for = -2;         /* sub_tracks index the loaded cues belong to */
+static int64_t sub_last_poll;
+static TTF_Font *sub_font;
+static int sub_font_failed;
+/* Rendered text cache: one cue at a time. */
+static struct { int cue; int track; uint8_t *rgba; int w, h; } sub_img = { -1, -1, NULL, 0, 0 };
+
+static char *sub_read_file(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0 || n > 4 * 1024 * 1024 || !(buf = av_malloc(n + 1))) {
+        fclose(f);
+        return NULL;
+    }
+    if ((long)fread(buf, 1, n, f) != n) {
+        fclose(f);
+        av_free(buf);
+        return NULL;
+    }
+    fclose(f);
+    buf[n] = 0;
+    *len = (size_t)n;
+    return buf;
+}
+
+static int sub_is_selectable(int i)
+{
+    return sub_tracks[i].type == 's' && sub_tracks[i].text;
+}
+
+/* "English - Hearing Impaired - SUBRIP - External" -> "English - Hearing Impaired":
+ * drops the codec and bookkeeping words Jellyfin appends to display titles. */
+static void sub_track_label(int i, char *out, size_t cap)
+{
+    static const char *noise[] = { "SUBRIP", "SRT", "ASS", "SSA", "VTT", "WEBVTT", "External",
+                                   "Default", "Forced", "MOV_TEXT", NULL };
+    const char *name = sub_tracks[i].title[0] ? sub_tracks[i].title
+                     : sub_tracks[i].lang[0]  ? sub_tracks[i].lang : "Track";
+    size_t used = 0;
+    const char *p = name;
+    out[0] = 0;
+    while (*p && used + 1 < cap) {
+        const char *sep = strstr(p, " - ");
+        size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        int skip = 0, k;
+        for (k = 0; noise[k]; k++)
+            if (strlen(noise[k]) == len && !av_strncasecmp(p, noise[k], len))
+                skip = 1;
+        if (!skip && len) {
+            int n = snprintf(out + used, cap - used, "%s%.*s", used ? " - " : "", (int)len, p);
+            if (n < 0)
+                break;
+            used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
+        }
+        if (!sep)
+            break;
+        p = sep + 3;
+    }
+    if (!out[0])
+        snprintf(out, cap, "%s", name);
+}
+
+static int sub_file_ready(int i)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/subs/%d.srt", subs_dir, sub_tracks[i].index);
+    return access(path, R_OK) == 0;
+}
+
+/* Reloads the track list and, once the chosen track's file exists, its cues. */
+static void sub_poll(void)
+{
+    int64_t now = av_gettime_relative();
+    char path[512];
+    if (!subs_dir || now - sub_last_poll < 700000)
+        return;
+    sub_last_poll = now;
+    if (sub_ntracks == 0) {
+        size_t len;
+        char *data;
+        snprintf(path, sizeof(path), "%s/playback-tracks.txt", subs_dir);
+        data = sub_read_file(path, &len);
+        if (data) {
+            sub_ntracks = subs_parse_tracks(data, len, sub_tracks, 64);
+            av_free(data);
+        }
+    }
+    if (sub_ntracks && !sub_auto_done) {
+        int i;
+        sub_auto_done = 1;
+        for (i = 0; i < sub_ntracks; i++)
+            if (sub_is_selectable(i) && sub_tracks[i].is_default) {
+                sub_cur = i;
+                break;
+            }
+    }
+    if (sub_cur >= 0 && sub_cues_for != sub_cur && sub_file_ready(sub_cur)) {
+        size_t len;
+        char *data;
+        subs_free(&sub_cues);
+        snprintf(path, sizeof(path), "%s/subs/%d.srt", subs_dir, sub_tracks[sub_cur].index);
+        data = sub_read_file(path, &len);
+        if (data) {
+            subs_parse_srt(data, len, &sub_cues);
+            av_free(data);
+        }
+        sub_cues_for = sub_cur;
+        av_freep(&sub_img.rgba);
+        sub_img.cue = -1;
+    }
+}
+
+static void sub_cycle(void)
+{
+    char label[96], toast[64];
+    int i, next = -1, start = sub_cur;
+    if (!subs_dir || sub_ntracks == 0) {
+        osd_set_toast("No subtitles");
+        return;
+    }
+    /* order: off -> first selectable -> ... -> last -> off */
+    for (i = start + 1; i < sub_ntracks; i++)
+        if (sub_is_selectable(i)) {
+            next = i;
+            break;
+        }
+    sub_cur = next;
+    av_freep(&sub_img.rgba);
+    sub_img.cue = -1;
+    if (sub_cur < 0) {
+        osd_set_toast("Subtitles: Off");
+        return;
+    }
+    sub_track_label(sub_cur, label, sizeof(label));
+    snprintf(toast, sizeof(toast), "Subs: %.40s%s", label,
+             sub_file_ready(sub_cur) ? "" : " (loading)");
+    osd_set_toast(toast);
+}
+
+/* Renders `text` (lines separated by '\n') into an RGBA bitmap: white glyphs with
+ * a black 1px outline, wrapped to max_w pixels, at most 3 lines. */
+static int sub_render_text(const char *text, int max_w, uint8_t **out, int *ow, int *oh)
+{
+    char *dup = av_strdup(text), *line, *save = NULL;
+    char *lines[3];
+    static char lbuf[3][512];
+    int widths[3], nlines = 0, i, lh, maxw = 0, W, H;
+    uint8_t *rgba;
+    if (!dup || !sub_font)
+        return 0;
+    lh = TTF_FontLineSkip(sub_font);
+    for (line = strtok_r(dup, "\n", &save); line && nlines < 3; line = strtok_r(NULL, "\n", &save)) {
+        /* greedy wrap by pixels, preferring spaces, then any UTF-8 boundary */
+        while (*line && nlines < 3) {
+            int w = 0, h = 0;
+            size_t len = strlen(line), cut = len, last_space = 0, pos = 0;
+            TTF_SizeUTF8(sub_font, line, &w, &h);
+            if (w > max_w) {
+                cut = 0;
+                while (pos < len) {
+                    size_t step = 1;
+                    unsigned char c = (unsigned char)line[pos];
+                    char saved;
+                    if (c >= 0xF0) step = 4; else if (c >= 0xE0) step = 3; else if (c >= 0xC0) step = 2;
+                    if (pos + step > len)
+                        break;
+                    saved = line[pos + step];
+                    line[pos + step] = 0;
+                    TTF_SizeUTF8(sub_font, line, &w, &h);
+                    line[pos + step] = saved;
+                    if (w > max_w)
+                        break;
+                    if (c == ' ')
+                        last_space = pos;
+                    pos += step;
+                    cut = pos;
+                }
+                if (cut == 0)
+                    cut = len;
+                else if (cut < len && last_space > 0)
+                    cut = last_space;
+            }
+            {
+                size_t take = cut < sizeof(lbuf[0]) - 1 ? cut : sizeof(lbuf[0]) - 1;
+                memcpy(lbuf[nlines], line, take);
+                lbuf[nlines][take] = 0;
+                lines[nlines] = lbuf[nlines];
+                TTF_SizeUTF8(sub_font, lines[nlines], &widths[nlines], &h);
+                if (widths[nlines] > maxw)
+                    maxw = widths[nlines];
+                nlines++;
+                if (cut >= len)
+                    break;
+                line += cut;
+                while (*line == ' ')
+                    line++;
+            }
+        }
+    }
+    if (nlines == 0) {
+        av_free(dup);
+        return 0;
+    }
+    W = maxw + 4;
+    H = nlines * lh + 4;
+    rgba = av_mallocz((size_t)W * H * 4);
+    if (!rgba) {
+        av_free(dup);
+        return 0;
+    }
+    for (i = 0; i < nlines; i++) {
+        static const SDL_Color black = { 0, 0, 0 }, white = { 255, 255, 255 };
+        int pass;
+        for (pass = 0; pass < 2; pass++) {
+            SDL_Surface *glyphs = TTF_RenderUTF8_Blended(sub_font, lines[i], pass ? white : black);
+            int dx, dy, x, y, ox = 2 + (maxw - widths[i]) / 2, oy = 2 + i * lh;
+            if (!glyphs)
+                continue;
+            for (dy = pass ? 0 : -1; dy <= (pass ? 0 : 1); dy++)
+                for (dx = pass ? 0 : -1; dx <= (pass ? 0 : 1); dx++)
+                    for (y = 0; y < glyphs->h; y++)
+                        for (x = 0; x < glyphs->w; x++) {
+                            Uint32 px = *(Uint32 *)((Uint8 *)glyphs->pixels + y * glyphs->pitch + x * 4);
+                            int a = (px & glyphs->format->Amask) >> glyphs->format->Ashift;
+                            int tx = ox + x + dx, ty = oy + y + dy;
+                            uint8_t *d;
+                            if (tx < 0 || ty < 0 || tx >= W || ty >= H || a == 0)
+                                continue;
+                            d = rgba + ((size_t)ty * W + tx) * 4;
+                            if (a > d[3]) {
+                                d[0] = d[1] = d[2] = pass ? 255 : 0;
+                                d[3] = (uint8_t)a;
+                            } else if (pass) {
+                                /* white over black outline: keep white colour */
+                                d[0] = d[1] = d[2] = 255;
+                            }
+                        }
+            SDL_FreeSurface(glyphs);
+        }
+    }
+    av_free(dup);
+    *out = rgba;
+    *ow = W;
+    *oh = H;
+    return 1;
+}
+
+/* Draws the active subtitle cue (if any) for media time `media_sec`. */
+static void sub_draw(const OsdPicture *pic, double media_sec, int bar_visible)
+{
+    int cue;
+    if (sub_cur < 0 || sub_cues_for != sub_cur || !sub_cues.n)
+        return;
+    cue = subs_find(&sub_cues, (int64_t)(media_sec * 1000.0) + sub_offset_ms);
+    if (cue < 0)
+        return;
+    if (!sub_font && !sub_font_failed) {
+        if (TTF_WasInit() || TTF_Init() == 0)
+            sub_font = TTF_OpenFont(osd_font_path, pic->w > 800 ? 40 : 22);
+        sub_font_failed = !sub_font;
+    }
+    if (!sub_font)
+        return;
+    if (sub_img.cue != cue || sub_img.track != sub_cur || !sub_img.rgba) {
+        av_freep(&sub_img.rgba);
+        if (!sub_render_text(sub_cues.cues[cue].text, pic->w - 40, &sub_img.rgba, &sub_img.w, &sub_img.h))
+            return;
+        sub_img.cue = cue;
+        sub_img.track = sub_cur;
+    }
+    osd_blit_rgba(pic, (pic->w - sub_img.w) / 2,
+                  pic->h - sub_img.h - 14 - (bar_visible ? osd_bar_geometry(pic).panel_h : 0),
+                  sub_img.rgba, sub_img.w, sub_img.h, sub_img.w * 4);
+}
+/* ---------------------------------------------------------------------- */
+
 /* Test hook: /tmp/miyoofin-player-cmd holds lines "key <SDLKey>"; each becomes a
  * real SDL key press, so remote tests drive the exact production key paths. */
 static void osd_poll_commands(void)
@@ -997,11 +1294,22 @@ static void osd_apply(VideoState *is, VideoPicture *vp)
     int64_t now = av_gettime_relative();
     int want_bar = now < osd_bar_until;
     int want_toast = osd_toast[0] && now < osd_toast_until;
-    int want = want_bar || want_toast || is->paused;
+    int want_sub = 0;
+    int want;
     int shot = 0;
     OsdPicture pic;
     OsdModel m;
     double pos;
+    double media_sec;
+
+    sub_poll();
+    pos = get_master_clock(is);
+    if (is->ic->start_time != AV_NOPTS_VALUE)
+        pos -= is->ic->start_time / (double)AV_TIME_BASE;
+    media_sec = osd_base + (isnan(pos) ? 0.0 : pos);
+    if (sub_cur >= 0 && sub_cues_for == sub_cur && sub_cues.n)
+        want_sub = subs_find(&sub_cues, (int64_t)(media_sec * 1000.0) + sub_offset_ms) >= 0;
+    want = want_bar || want_toast || is->paused || want_sub;
 
     if (osd_shot_not_before && now >= osd_shot_not_before) {
         osd_shot_not_before = 0;
@@ -1033,10 +1341,7 @@ static void osd_apply(VideoState *is, VideoPicture *vp)
 
     if (want) {
         int i;
-        pos = get_master_clock(is);
-        if (is->ic->start_time != AV_NOPTS_VALUE)
-            pos -= is->ic->start_time / (double)AV_TIME_BASE;
-        m.pos_sec = isnan(pos) ? 0.0 : pos;
+        m.pos_sec = media_sec;
         m.dur_sec = osd_duration > 0 ? osd_duration
                 : (is->ic->duration > 0 ? is->ic->duration / (double)AV_TIME_BASE : 0.0);
         m.paused = is->paused;
@@ -1048,6 +1353,8 @@ static void osd_apply(VideoState *is, VideoPicture *vp)
         osd_saved.valid = 1;
         osd_saved.frame_id = vp->frame_id;
         osd_saved.bmp = vp->bmp;
+        if (want_sub)
+            sub_draw(&pic, media_sec, want_bar || is->paused);
         osd_render(&pic, &m);
     }
     if (shot) {
@@ -3535,6 +3842,10 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_t:
                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_SUBTITLE);
                 break;
+            case SDLK_LSHIFT: /* X button: next subtitle track */
+                sub_cycle();
+                cur_stream->force_refresh = 1;
+                break;
             case SDLK_w:
 #if CONFIG_AVFILTER
                 if (cur_stream->show_mode == SHOW_MODE_VIDEO && cur_stream->vfilter_idx < nb_vfilters - 1) {
@@ -3810,6 +4121,9 @@ static const OptionDef options[] = {
     { "sync", HAS_ARG | OPT_EXPERT, { .func_arg = opt_sync }, "set audio-video sync. type (type=audio/video/ext)", "type" },
     { "autoexit", OPT_BOOL | OPT_EXPERT, { &autoexit }, "exit at the end", "" },
     { "osd_duration", OPT_DOUBLE | HAS_ARG | OPT_EXPERT, { &osd_duration }, "runtime in seconds for the on-screen progress bar", "seconds" },
+    { "osd_base", OPT_DOUBLE | HAS_ARG | OPT_EXPERT, { &osd_base }, "seconds of media before stream time 0 (resume offset)", "seconds" },
+    { "subs_dir", HAS_ARG | OPT_STRING | OPT_EXPERT, { &subs_dir }, "directory with playback-tracks.txt and subs/<index>.srt", "dir" },
+    { "osd_font", HAS_ARG | OPT_STRING | OPT_EXPERT, { &osd_font_path }, "TTF font for subtitles", "path" },
     { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },
     { "exitonmousedown", OPT_BOOL | OPT_EXPERT, { &exit_on_mousedown }, "exit on mouse down", "" },

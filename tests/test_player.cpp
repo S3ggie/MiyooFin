@@ -1,6 +1,7 @@
 #include "test_support.hpp"
 
 #include "../player/osd.h"
+#include "../player/subs.h"
 
 #include <vector>
 
@@ -133,6 +134,87 @@ static void testLargePictureScalesAndSmallDoesNotCrash()
     std::printf("[test] OSD scaling and tiny pictures OK\n");
 }
 
+static void testSrtParsing()
+{
+    std::printf("[test] SRT parsing and cue lookup\n");
+    const std::string srt =
+        "\xEF\xBB\xBF1\r\n00:00:01,000 --> 00:00:03,500\r\n<i>Hello</i> {\\an8}world\r\n\r\n"
+        "2\r\n00:00:03,000 --> 00:00:04,000\r\nLine one\\NLine two\r\nand three\r\n\r\n"
+        "garbage line\r\n\r\n"
+        "00:01:00.5 --> 00:01:02.25\r\nno index, short fraction\r\n\r\n"
+        "4\r\n00:02:00,000 --> 00:02:01,000\r\n<b></b>\r\n";
+    SubCues c;
+    CHECK(subs_parse_srt(srt.data(), srt.size(), &c) == 3); // the empty-markup cue is dropped
+    CHECK(c.cues[0].start_ms == 1000 && c.cues[0].end_ms == 3500);
+    CHECK(std::string(c.cues[0].text) == "Hello world");
+    CHECK(std::string(c.cues[1].text) == "Line one\nLine two\nand three");
+    CHECK(c.cues[2].start_ms == 60500 && c.cues[2].end_ms == 62250); // ".5" is 500 ms
+    CHECK(subs_find(&c, 500) == -1);
+    CHECK(subs_find(&c, 1000) == 0);
+    CHECK(subs_find(&c, 3200) == 1); // overlap: later-starting cue wins
+    CHECK(subs_find(&c, 3800) == 1);
+    CHECK(subs_find(&c, 4000) == -1); // end is exclusive
+    CHECK(subs_find(&c, 61000) == 2);
+    CHECK(subs_find(&c, 999999) == -1);
+    subs_free(&c);
+    // Out-of-order input is sorted; junk yields nothing.
+    const std::string rev =
+        "1\n00:00:09,000 --> 00:00:10,000\nb\n\n2\n00:00:01,000 --> 00:00:02,000\na\n";
+    CHECK(subs_parse_srt(rev.data(), rev.size(), &c) == 2 && std::string(c.cues[0].text) == "a");
+    subs_free(&c);
+    CHECK(subs_parse_srt("hello", 5, &c) == 0);
+    CHECK(subs_parse_srt("", 0, &c) == 0);
+    std::printf("[test] SRT parsing and cue lookup OK\n");
+}
+
+static void testTrackFileParsing()
+{
+    std::printf("[test] track list file parsing\n");
+    const std::string file = "a|1|0|1|0|eng|English - Dolby\ns|3|1|0|0|eng|English   SDH\n"
+                             "s|4|0|1|0|fra|\nbogus line\ns|5|1|0|1|jpn|Japanese\n";
+    SubTrackInfo t[8];
+    int n = subs_parse_tracks(file.data(), file.size(), t, 8);
+    CHECK(n == 4);
+    CHECK(t[0].type == 'a' && t[0].index == 1 && t[0].is_default);
+    CHECK(t[1].type == 's' && t[1].index == 3 && t[1].text &&
+          std::string(t[1].title) == "English   SDH");
+    CHECK(t[2].index == 4 && !t[2].text && std::string(t[2].title).empty());
+    CHECK(t[3].forced && std::string(t[3].lang) == "jpn");
+    CHECK(subs_parse_tracks(file.data(), file.size(), t, 2) == 2); // bounded
+    std::printf("[test] track list file parsing OK\n");
+}
+
+static void testBlendArgbIsRotatedAndClipped()
+{
+    std::printf("[test] ARGB blit onto YUV\n");
+    Frame f(64, 48, 100);
+    OsdPicture p = f.picture(true);
+    uint8_t px[4 * 4 * 4];
+    for (int i = 0; i < 16; ++i) { // 4x4 opaque white
+        px[i * 4 + 0] = 255;
+        px[i * 4 + 1] = 255;
+        px[i * 4 + 2] = 255;
+        px[i * 4 + 3] = 255;
+    }
+    osd_blit_rgba(&p, 2, 3, px, 4, 4, 16);    // logical (2,3)
+    CHECK(f.Y(64 - 1 - 2, 48 - 1 - 3) > 200); // rotated destination
+    CHECK(f.Y(2, 3) == 100);
+    // Fully transparent pixels leave the picture untouched; off-screen is clipped.
+    for (int i = 0; i < 16; ++i)
+        px[i * 4 + 3] = 0;
+    Frame g(64, 48, 100);
+    OsdPicture q = g.picture(false);
+    osd_blit_rgba(&q, 10, 10, px, 4, 4, 16);
+    osd_blit_rgba(&q, -3, -3, px, 4, 4, 16);
+    osd_blit_rgba(&q, 62, 46, px, 4, 4, 16);
+    CHECK(g.y == std::vector<uint8_t>(64 * 48, 100));
+    for (int i = 0; i < 16; ++i)
+        px[i * 4 + 3] = 255;
+    osd_blit_rgba(&q, 62, 46, px, 4, 4, 16); // partially off the corner: no overrun
+    CHECK(g.Y(63, 47) > 200);
+    std::printf("[test] ARGB blit onto YUV OK\n");
+}
+
 } // namespace
 
 int main()
@@ -142,5 +224,8 @@ int main()
     testHiddenBarDrawsNothingAndPauseShowsBadge();
     testRenderStaysInsideFootprint();
     testLargePictureScalesAndSmallDoesNotCrash();
+    testSrtParsing();
+    testTrackFileParsing();
+    testBlendArgbIsRotatedAndClipped();
     return miyoofin_test::finish("player");
 }

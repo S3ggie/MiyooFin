@@ -9,6 +9,7 @@
 #include <limits>
 #include "../tools/playback_clock_parser.hpp"
 #include "../tools/playback_resume.hpp"
+#include "../tools/playback_tracks.hpp"
 #include "../tools/playback_route.hpp"
 
 static int g_failures = 0;
@@ -696,6 +697,49 @@ static void testPosCfgTrustRule()
     std::printf("[test] pos_cfg_is_trustworthy OK\n");
 }
 
+// ---- Subtitle / audio track list -----------------------------------------
+static const char* kItemJson =
+    "{\"Name\":\"Movie\",\"MediaSources\":[{\"Id\":\"src1\",\"Path\":\"/m/a \\\"b\\\".mkv\","
+    "\"MediaStreams\":["
+    "{\"Codec\":\"h264\",\"Type\":\"Video\",\"Index\":0,\"IsDefault\":true},"
+    "{\"Codec\":\"eac3\",\"Language\":\"eng\",\"DisplayTitle\":\"English - "
+    "Dolby\",\"Type\":\"Audio\","
+    "\"Index\":1,\"IsDefault\":true,\"Extra\":{\"Type\":\"Subtitle\",\"Index\":99}},"
+    "{\"Codec\":\"jpn\",\"Language\":\"jpn\",\"Type\":\"Audio\",\"Index\":2},"
+    "{\"Codec\":\"subrip\",\"Language\":\"eng\",\"DisplayTitle\":\"English | "
+    "SDH\",\"Type\":\"Subtitle\","
+    "\"Index\":3,\"IsDefault\":false,\"IsForced\":false},"
+    "{\"Codec\":\"PGSSUB\",\"Language\":\"fra\",\"Type\":\"Subtitle\",\"Index\":4,\"IsDefault\":"
+    "true},"
+    "{\"Codec\":\"ass\",\"Language\":\"jpn\",\"Type\":\"Subtitle\",\"Index\":5,\"IsForced\":true}"
+    "]}]}";
+
+static void testParseTracks()
+{
+    std::printf("[test] playback track list parsing\n");
+    PlaybackTracks t;
+    CHECK(playback_parse_tracks(kItemJson, t));
+    CHECK(t.mediaSourceId == "src1");
+    CHECK(t.tracks.size() == 5); // video skipped; nested "Extra" object not a stream
+    CHECK(t.tracks[0].type == 'a' && t.tracks[0].index == 1 && t.tracks[0].isDefault);
+    CHECK(t.tracks[0].title == "English - Dolby" && t.tracks[0].lang == "eng");
+    CHECK(t.tracks[2].type == 's' && t.tracks[2].index == 3 && t.tracks[2].text);
+    CHECK(t.tracks[3].codec == "PGSSUB" && !t.tracks[3].text && t.tracks[3].isDefault);
+    CHECK(t.tracks[4].forced && t.tracks[4].text);
+    const std::string file = playback_format_tracks(t);
+    CHECK(file.find("s|3|1|0|0|eng|English   SDH\n") !=
+          std::string::npos); // '|' in titles sanitised
+    CHECK(file.find("s|4|0|1|0|fra|\n") != std::string::npos);
+    // Fetch order: default/forced text tracks first, bitmap tracks excluded, limit honoured.
+    auto order = playback_subtitle_fetch_order(t, 12);
+    CHECK(order.size() == 2 && order[0].index == 5 && order[1].index == 3);
+    CHECK(playback_subtitle_fetch_order(t, 1).size() == 1);
+    PlaybackTracks none;
+    CHECK(!playback_parse_tracks("{\"Name\":\"x\"}", none));
+    CHECK(!playback_parse_tracks("{\"MediaSources\":[{\"Id\":\"\"}]}", none));
+    std::printf("[test] playback track list parsing OK\n");
+}
+
 int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
@@ -776,6 +820,7 @@ int main()
     std::printf("\n--- Resume refresh ---\n");
     testParseUserPositionTicks();
     testReplaceResumeTicks();
+    testParseTracks();
 
     std::printf("\n");
     if (g_failures == 0) {

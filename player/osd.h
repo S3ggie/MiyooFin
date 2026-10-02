@@ -44,6 +44,9 @@ typedef struct OsdRgb {
 #define OSD_TEXT {238, 244, 255}
 #define OSD_TEXT_DIM {175, 180, 195}
 
+/* Height (at scale 1) of the subtitle area above the transport panel. */
+#define OSD_SUB_BAND 100
+
 static inline int osd_scale(const OsdPicture *p)
 {
     return p->w > 800 ? 2 : 1;
@@ -235,10 +238,11 @@ static inline void osd_footprint(const OsdPicture *p, int rects[OSD_FOOTPRINT_RE
     logical[0][1] = 12 * k;
     logical[0][2] = p->w;
     logical[0][3] = 28 * k;
+    /* Bottom band: the transport panel plus room for 3 subtitle lines above it. */
     logical[1][0] = 0;
-    logical[1][1] = g.panel_y;
+    logical[1][1] = g.panel_y - OSD_SUB_BAND * k;
     logical[1][2] = p->w;
-    logical[1][3] = g.panel_h;
+    logical[1][3] = g.panel_h + OSD_SUB_BAND * k;
     logical[2][0] = (p->w - cs) / 2;
     logical[2][1] = (p->h - cs) / 2;
     logical[2][2] = cs;
@@ -248,6 +252,34 @@ static inline void osd_footprint(const OsdPicture *p, int rects[OSD_FOOTPRINT_RE
         rects[i][1] = p->rot180 ? p->h - (logical[i][1] + logical[i][3]) : logical[i][1];
         rects[i][2] = logical[i][2];
         rects[i][3] = logical[i][3];
+    }
+}
+
+/* Blends an RGBA (byte order R,G,B,A) bitmap at logical (x, y), honouring its
+ * alpha, rotation and the picture bounds. Used for rendered subtitle text. */
+static inline void osd_blit_rgba(const OsdPicture *p, int x, int y, const uint8_t *rgba, int w,
+                                 int h, int pitch)
+{
+    int ix, iy;
+    for (iy = 0; iy < h; iy++) {
+        int ly = y + iy;
+        if (ly < 0 || ly >= p->h)
+            continue;
+        for (ix = 0; ix < w; ix++) {
+            const uint8_t *s = rgba + iy * pitch + ix * 4;
+            int lx = x + ix, a = s[3], Y, U, V, px, py;
+            OsdRgb c;
+            if (!a || lx < 0 || lx >= p->w)
+                continue;
+            c.r = s[0];
+            c.g = s[1];
+            c.b = s[2];
+            osd_rgb_to_yuv(c, &Y, &U, &V);
+            osd_luma(p, lx, ly, Y, a);
+            px = p->rot180 ? p->w - 1 - lx : lx;
+            py = p->rot180 ? p->h - 1 - ly : ly;
+            osd_chroma_at(p, px / 2, py / 2, U, V, a);
+        }
     }
 }
 

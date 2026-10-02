@@ -18,7 +18,7 @@ LIBS := -lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavre
 
 .PHONY: all
 all: $(TARGET)
-$(TARGET): $(SRCS) player/config.h player/osd.h player/osd_font.h | output/build-arm
+$(TARGET): $(SRCS) player/config.h player/osd.h player/osd_font.h player/subs.h | output/build-arm
 	$(CC) $(CFLAGS) $(SRCS) -o $@ $(LDFLAGS) $(LIBS)
 output/build-arm:
 	mkdir -p $@

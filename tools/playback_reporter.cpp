@@ -38,6 +38,7 @@
 
 #include "playback_clock_parser.hpp"
 #include "playback_resume.hpp"
+#include "playback_tracks.hpp"
 #include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
 
@@ -304,13 +305,13 @@ static bool report_event(const char* name, const std::string& path, const Playba
 // ===================================================================
 
 static const int REFRESH_TIMEOUT_SEC = 3;
-static const size_t MAX_REFRESH_BODY = 256 * 1024;
+static size_t g_max_body = 256 * 1024; // per-request response cap; one thread only
 
 static size_t append_write(void* ptr, size_t size, size_t nmemb, void* userdata)
 {
     std::string* out = static_cast<std::string*>(userdata);
     const size_t bytes = size * nmemb;
-    if (out->size() + bytes > MAX_REFRESH_BODY)
+    if (out->size() + bytes > g_max_body)
         return 0; // oversized: abort the transfer
     out->append(static_cast<const char*>(ptr), bytes);
     return bytes;
@@ -370,62 +371,84 @@ static bool safe_path_id(const std::string& id)
     return true;
 }
 
-static int refresh_resume(const std::string& appDir)
+// Everything needed to ask the server about the item being played.
+struct RemoteContext
 {
-    const std::string requestPath = appDir + "/playback-request.txt";
-    const std::string reqContent = read_file(requestPath);
-    if (reqContent.empty()) {
-        std::printf("resume_refresh skipped reason=no_request\n");
-        return 0;
-    }
-    const std::string itemId = read_kv_from_content(reqContent, "item_id");
-    const std::string sourceMode = read_kv_from_content(reqContent, "source_mode");
-    // Downloaded playback reconciles through the offline journal instead.
-    if (sourceMode == "local") {
-        std::printf("resume_refresh skipped reason=local\n");
-        return 0;
-    }
-    const int64_t cachedTicks =
-        parse_resume_ticks(read_kv_from_content(reqContent, "resume_ticks"));
+    std::string requestPath, reqContent, itemId, userId;
+    std::string cacertPath;
+    PlaybackRoute route;
+    std::vector<std::string> headers;
+};
 
+// Loads the pending remote request and session. Prints `<tag> skipped reason=...`
+// and returns false when there is nothing to do (local playback, no session...).
+static bool load_remote_context(const std::string& appDir, const char* tag, RemoteContext& ctx)
+{
+    ctx.requestPath = appDir + "/playback-request.txt";
+    ctx.reqContent = read_file(ctx.requestPath);
+    if (ctx.reqContent.empty()) {
+        std::printf("%s skipped reason=no_request\n", tag);
+        return false;
+    }
+    ctx.itemId = read_kv_from_content(ctx.reqContent, "item_id");
+    // Downloaded playback has no server round trips here.
+    if (read_kv_from_content(ctx.reqContent, "source_mode") == "local") {
+        std::printf("%s skipped reason=local\n", tag);
+        return false;
+    }
     const std::string sessionContent = read_file(appDir + "/session.txt");
     const std::string serverUrl = read_kv_from_content(sessionContent, "server_url");
     const std::string localServerUrl = read_kv_from_content(sessionContent, "local_server_url");
     const std::string publicServerUrl = read_kv_from_content(sessionContent, "public_server_url");
     const std::string accessToken = read_kv_from_content(sessionContent, "access_token");
-    const std::string userId = read_kv_from_content(sessionContent, "user_id");
+    ctx.userId = read_kv_from_content(sessionContent, "user_id");
     const std::string deviceId = read_kv_from_content(sessionContent, "device_id");
-    if (serverUrl.empty() || accessToken.empty() || !safe_path_id(userId) ||
-        !safe_path_id(itemId)) {
-        std::printf("resume_refresh skipped reason=no_session_or_bad_id\n");
-        return 0;
+    if (serverUrl.empty() || accessToken.empty() || !safe_path_id(ctx.userId) ||
+        !safe_path_id(ctx.itemId)) {
+        std::printf("%s skipped reason=no_session_or_bad_id\n", tag);
+        return false;
     }
-
     const std::string publicRoute = publicServerUrl.empty() ? serverUrl : publicServerUrl;
     const std::string lanRoute =
         localServerUrl.empty() && !publicServerUrl.empty() ? serverUrl : localServerUrl;
-    const PlaybackRoute route = playback_route(publicRoute, lanRoute);
-    std::string cacertPath = appDir + "/cacert.pem";
-    const bool https = route.primary.compare(0, 8, "https://") == 0 ||
-                       route.fallback.compare(0, 8, "https://") == 0;
-    if (!nonempty_file(cacertPath)) {
+    ctx.route = playback_route(publicRoute, lanRoute);
+    ctx.cacertPath = appDir + "/cacert.pem";
+    const bool https = ctx.route.primary.compare(0, 8, "https://") == 0 ||
+                       ctx.route.fallback.compare(0, 8, "https://") == 0;
+    if (!nonempty_file(ctx.cacertPath)) {
         if (https) {
-            // Never weaken TLS verification: keep the cached position.
-            std::printf("resume_refresh skipped reason=no_ca\n");
-            return 0;
+            // Never weaken TLS verification.
+            std::printf("%s skipped reason=no_ca\n", tag);
+            return false;
         }
-        cacertPath.clear();
+        ctx.cacertPath.clear();
     }
+    ctx.headers.push_back("X-Emby-Token: " + accessToken);
+    build_identity_headers(deviceId, ctx.headers);
+    return true;
+}
+
+// GET `path` on the primary route, falling back to the other on transport errors.
+static GetResult get_with_fallback(const RemoteContext& ctx, const std::string& path)
+{
+    GetResult result = get_body(ctx.route.primary + path, ctx.headers, ctx.cacertPath);
+    if (!ctx.route.fallback.empty() &&
+        playback_should_fallback(result.transportFailure, result.httpStatus))
+        result = get_body(ctx.route.fallback + path, ctx.headers, ctx.cacertPath);
+    return result;
+}
+
+static int refresh_resume(const std::string& appDir)
+{
+    RemoteContext ctx;
+    if (!load_remote_context(appDir, "resume_refresh", ctx))
+        return 0;
+    const std::string& reqContent = ctx.reqContent;
+    const int64_t cachedTicks =
+        parse_resume_ticks(read_kv_from_content(reqContent, "resume_ticks"));
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    std::vector<std::string> headers;
-    headers.push_back("X-Emby-Token: " + accessToken);
-    build_identity_headers(deviceId, headers);
-    const std::string path = "/Users/" + userId + "/Items/" + itemId;
-    GetResult result = get_body(route.primary + path, headers, cacertPath);
-    if (!route.fallback.empty() &&
-        playback_should_fallback(result.transportFailure, result.httpStatus))
-        result = get_body(route.fallback + path, headers, cacertPath);
+    GetResult result = get_with_fallback(ctx, "/Users/" + ctx.userId + "/Items/" + ctx.itemId);
     curl_global_cleanup();
 
     int64_t serverTicks = 0;
@@ -441,7 +464,7 @@ static int refresh_resume(const std::string& appDir)
         std::printf("resume_refresh unchanged ticks=%lld\n", (long long)cachedTicks);
         return 0;
     }
-    FILE* out = std::fopen(requestPath.c_str(), "w");
+    FILE* out = std::fopen(ctx.requestPath.c_str(), "w");
     const std::string updated = playback_replace_resume_ticks(reqContent, serverTicks);
     if (!out || std::fwrite(updated.data(), 1, updated.size(), out) != updated.size()) {
         if (out)
@@ -455,6 +478,65 @@ static int refresh_resume(const std::string& appDir)
     return 0;
 }
 
+// Writes `data` to `path` via a temporary name so readers never see a partial file.
+static bool write_atomic(const std::string& path, const std::string& data)
+{
+    const std::string tmp = path + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f)
+        return false;
+    const bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+    std::fclose(f);
+    if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+// --fetch-subs: write playback-tracks.txt, then save each selectable text
+// subtitle track as subs/<index>.srt. Runs in the background next to the player
+// (which picks files up as they appear). Best effort; nothing sensitive printed.
+static int fetch_subs(const std::string& appDir)
+{
+    RemoteContext ctx;
+    if (!load_remote_context(appDir, "subs_fetch", ctx))
+        return 0;
+    const std::string tracksPath = appDir + "/playback-tracks.txt";
+    const std::string subsDir = appDir + "/subs";
+    std::remove(tracksPath.c_str());
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    g_max_body = 512 * 1024;
+    GetResult item = get_with_fallback(ctx, "/Users/" + ctx.userId + "/Items/" + ctx.itemId);
+    PlaybackTracks tracks;
+    if (item.transportFailure || item.httpStatus < 200 || item.httpStatus >= 300 ||
+        !playback_parse_tracks(item.body, tracks) || !safe_path_id(tracks.mediaSourceId)) {
+        std::printf("subs_fetch failed stage=tracks http=%ld\n", item.httpStatus);
+        curl_global_cleanup();
+        return 0;
+    }
+    ::mkdir(subsDir.c_str(), 0755);
+    write_atomic(tracksPath, playback_format_tracks(tracks));
+    int saved = 0;
+    g_max_body = 1024 * 1024;
+    for (const PlaybackTrack& t : playback_subtitle_fetch_order(tracks, 12)) {
+        if (!g_running)
+            break;
+        const std::string path = "/Videos/" + ctx.itemId + "/" + tracks.mediaSourceId +
+                                 "/Subtitles/" + std::to_string(t.index) + "/0/Stream.srt";
+        const GetResult srt = get_with_fallback(ctx, path);
+        if (srt.transportFailure || srt.httpStatus < 200 || srt.httpStatus >= 300 ||
+            srt.body.empty())
+            continue;
+        if (write_atomic(subsDir + "/" + std::to_string(t.index) + ".srt", srt.body))
+            ++saved;
+    }
+    curl_global_cleanup();
+    std::printf("subs_fetch done tracks=%zu saved=%d\n", tracks.tracks.size(), saved);
+    return 0;
+}
+
 // ===================================================================
 // Main
 // ===================================================================
@@ -463,6 +545,10 @@ int main(int argc, char* argv[])
 {
     if (argc == 3 && std::strcmp(argv[2], "--refresh-resume") == 0)
         return refresh_resume(argv[1]);
+    if (argc == 3 && std::strcmp(argv[2], "--fetch-subs") == 0) {
+        std::signal(SIGTERM, signal_handler);
+        return fetch_subs(argv[1]);
+    }
     if (argc != 2) {
         std::fprintf(stderr,
                      "Usage: %s <app-dir> [--refresh-resume]\n"

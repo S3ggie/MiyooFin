@@ -64,6 +64,10 @@ cleanup_playback() {
         stop_and_reap_child ffplay "$FFPLAY_PID"
         FFPLAY_PID=""
     fi
+    if [ -n "$SUBS_PID" ]; then
+        stop_and_reap_child subs-fetch "$SUBS_PID"
+        SUBS_PID=""
+    fi
     if [ -n "$REPORTER_PID" ]; then
         stop_and_reap_child reporter "$REPORTER_PID"
         REPORTER_PID=""
@@ -240,6 +244,7 @@ playback_log "Resume ticks=$REQUEST_RESUME_TICKS PlaySessionId=$PLAY_SESSION_ID"
 rm -f /tmp/stay_awake
 BRIDGE_PID=""
 REPORTER_PID=""
+SUBS_PID=""
 FFPLAY_PID=""
 trap 'cleanup_playback' EXIT
 trap 'exit 143' HUP INT TERM
@@ -370,6 +375,19 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         PLAYER_EXTRA_ARGS="-osd_rot180"
         # Library runtime (informational): the local HLS playlist cannot report
         # a trustworthy duration, so the on-screen progress bar uses this.
+        # Stream time 0 is the resume offset for remote playback (StartTimeTicks).
+        if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ "${#REQUEST_RESUME_TICKS}" -gt 7 ]; then
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_base $(printf '%s' "$REQUEST_RESUME_TICKS" | sed 's/.\{7\}$//')"
+        fi
+        # Remote playback: fetch the track list and text subtitles in the
+        # background (best effort, bounded by cleanup); the player picks the
+        # files up as they appear.  Downloaded playback has none yet.
+        if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -x "$APP_DIR/miyoofin-playback-reporter" ]; then
+            rm -rf "$APP_DIR/subs" "$APP_DIR/playback-tracks.txt"
+            "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --fetch-subs > "$APP_DIR/playback-subs.log" 2>&1 &
+            SUBS_PID=$!
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $APP_DIR"
+        fi
         if [ "${#REQUEST_DURATION_TICKS}" -gt 7 ]; then
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_duration $(printf '%s' "$REQUEST_DURATION_TICKS" | sed 's/.\{7\}$//')"
         fi

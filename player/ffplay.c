@@ -4304,6 +4304,7 @@ static void event_loop(VideoState *cur_stream)
             }
             if (osd_keylog)
                 fprintf(stderr, "MFKEY sym=%d\n", (int)event.key.keysym.sym);
+            int bar_was_up = av_gettime_relative() < osd_bar_until;
             osd_activity();
             if (next_prompt_active && !menu_open) {
                 if (event.key.keysym.sym == SDLK_SPACE || event.key.keysym.sym == SDLK_RETURN) {
@@ -4322,6 +4323,12 @@ static void event_loop(VideoState *cur_stream)
             }
             cur_stream->force_refresh = cur_stream->paused ? 1 : cur_stream->force_refresh;
             switch (event.key.keysym.sym) {
+            case SDLK_LCTRL: /* B: hide the transport bar now, or bring it back */
+                osd_bar_until = bar_was_up ? 0 : av_gettime_relative() + 4000000;
+                if (bar_was_up)
+                    osd_toast_until = 0;
+                cur_stream->force_refresh = 1;
+                break;
             case SDLK_q:
                 do_exit(cur_stream);
                 break;

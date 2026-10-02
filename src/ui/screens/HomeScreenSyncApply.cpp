@@ -111,6 +111,7 @@ void HomeScreen::resetMediaPaging()
     reset(m_moviePage, "movie", m_movieActiveLetter);
     reset(m_showPage, "show", m_showsActiveLetter);
     reset(m_animePage, "anime", m_showsActiveLetter);
+    m_showTotal = m_animeTotal = {};
     m_movieWindow.clear();
     m_showWindow.clear();
     m_animeWindow.clear();
@@ -130,6 +131,10 @@ void HomeScreen::finishMediaPage(MediaPageState& state)
     state.inFlight = false;
     if (!result.success || result.cancelled || result.superseded)
         return;
+    if (result.totalKnown && state.type == "anime" && state.letter < 0)
+        m_noAnime = result.totalCount == 0;
+    if (result.totalKnown && state.type != "movie")
+        (state.type == "anime" ? m_animeTotal : m_showTotal) = {true, result.totalCount};
     if (m_artworkController)
         m_artworkController->queuePosterJobs(planMediaPagePosterJobs(result.items), true);
     if (!m_firstMediaPageReadCompletedLogged) {
@@ -157,28 +162,36 @@ void HomeScreen::finishMediaPage(MediaPageState& state)
     }
     static constexpr std::size_t kWindowLimit = 96;
     if (window.size() > kWindowLimit) {
-        const std::size_t remove = window.size() - kWindowLimit;
+        // Drop whole grid rows only: removing a partial row would shift every remaining
+        // item sideways and the cursor would jump to another column while scrolling.
+        const bool movie = state.type == "movie";
+        const std::size_t columns =
+            movie ? 8 : (state.type == "anime" ? SHOWS_GRID_COLUMNS : showsColumns());
+        const auto& filtered = state.type == "anime" ? m_animeWindow : m_showWindow;
+        const auto shown = [&](const MediaItem& item) {
+            if (movie)
+                return true;
+            for (const auto& f : filtered)
+                if (f.id == item.id)
+                    return true;
+            return false;
+        };
+        std::vector<bool> visible;
+        visible.reserve(window.size());
+        for (const auto& item : window)
+            visible.push_back(shown(item));
+        const std::size_t remove =
+            alignedWindowTrim(visible, window.size() - kWindowLimit, columns);
         std::size_t removedGridItems = 0;
-        if (state.type == "movie") {
-            const int removedRows = static_cast<int>((remove + 7) / 8);
+        for (std::size_t i = 0; i < remove; ++i)
+            removedGridItems += visible[i] ? 1 : 0;
+        const int removedRows = static_cast<int>(removedGridItems / columns);
+        if (movie)
             m_rowScroll = m_rowScroll > removedRows ? m_rowScroll - removedRows : 0;
-        } else {
-            const auto& filtered = state.type == "anime" ? m_animeWindow : m_showWindow;
-            for (std::size_t i = 0; i < remove; ++i) {
-                for (const auto& item : filtered) {
-                    if (item.id == window[i].id) {
-                        ++removedGridItems;
-                        break;
-                    }
-                }
-            }
-            const int columns = state.type == "anime" ? SHOWS_GRID_COLUMNS : showsColumns();
-            const int removedRows = static_cast<int>((removedGridItems + columns - 1) / columns);
-            if (state.type == "anime")
-                m_animeScroll = m_animeScroll > removedRows ? m_animeScroll - removedRows : 0;
-            else
-                m_showScroll = m_showScroll > removedRows ? m_showScroll - removedRows : 0;
-        }
+        else if (state.type == "anime")
+            m_animeScroll = m_animeScroll > removedRows ? m_animeScroll - removedRows : 0;
+        else
+            m_showScroll = m_showScroll > removedRows ? m_showScroll - removedRows : 0;
         window.erase(window.begin(), window.begin() + static_cast<std::ptrdiff_t>(remove));
         state.hasEarlier = true;
     }

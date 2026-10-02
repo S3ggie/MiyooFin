@@ -117,6 +117,19 @@ inline int clampShowsGridScroll(int selected, int count, int scroll, int columns
         scroll = row - 2;
     return scroll;
 }
+/// How many leading window items to drop (at least `minRemove`) so that the number of
+/// visible ones dropped is a whole number of grid rows; `visible[i]` says whether window
+/// item i is shown in the grid. Keeps every remaining item in its column.
+inline std::size_t alignedWindowTrim(const std::vector<bool>& visible, std::size_t minRemove,
+                                     std::size_t columns)
+{
+    std::size_t remove = std::min(minRemove, visible.size()), shown = 0;
+    for (std::size_t i = 0; i < remove; ++i)
+        shown += visible[i] ? 1 : 0;
+    while (columns && shown % columns != 0 && remove < visible.size())
+        shown += visible[remove++] ? 1 : 0;
+    return remove;
+}
 inline int closestShowsGridIndex(int source, int targetCount)
 {
     if (targetCount <= 0)

@@ -710,6 +710,30 @@ void CatalogDb::processMediaPage(const std::shared_ptr<MediaPageCommand>& comman
     sqlite3_finalize(memberships);
     if (!result.cancelled && result.error == CatalogDbErrorCategory::None)
         result.success = true;
+    if (result.success && !command->after.valid) {
+        const std::string countSql =
+            "SELECT COUNT(*) FROM media_items WHERE kind=?1 AND "
+            "EXISTS (SELECT 1 FROM library_membership "
+            "JOIN library_views ON library_views.id=library_membership.view_id "
+            "WHERE library_membership.item_id=media_items.id "
+            "AND library_views.collection_type=?4) AND 1=1" +
+            animeFilter +
+            " AND (?2 < 0 OR (organizational_sort_key>=?3 AND organizational_sort_key<?5))";
+        sqlite3_stmt* count = nullptr;
+        if (sqlite3_prepare_v2(m_db, countSql.c_str(), -1, &count, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int(count, 1, command->type == "movie" ? 1 : 2);
+            sqlite3_bind_int(count, 2, command->letter);
+            sqlite3_bind_text(count, 3, lower.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(count, 4, command->type == "movie" ? "movies" : "tvshows", -1,
+                              SQLITE_STATIC);
+            sqlite3_bind_text(count, 5, upper.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(count) == SQLITE_ROW) {
+                result.totalCount = static_cast<std::size_t>(sqlite3_column_int64(count, 0));
+                result.totalKnown = true;
+            }
+        }
+        sqlite3_finalize(count);
+    }
     finish();
 }
 void CatalogDb::processLibraryRead(const std::shared_ptr<LibraryReadCommand>& command)

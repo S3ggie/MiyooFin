@@ -440,6 +440,14 @@ static void testShowsPresentation()
         CHECK(moveGridVertical(2, 10, 4, -1, sticky) == 2);
         CHECK(moveGridVertical(8, 10, 4, 1, sticky) == 8); // bottom row: stay put, not the last item
         CHECK(moveGridVertical(0, 0, 4, 1, sticky) == 0);
+        // Trimming a full window drops whole rows so no item changes column.
+        CHECK(alignedWindowTrim(std::vector<bool>(20, true), 5, 4) == 8);
+        CHECK(alignedWindowTrim(std::vector<bool>(20, true), 8, 4) == 8);
+        std::vector<bool> hidden(20, true);
+        hidden[1] = false; // an item the grid doesn't show doesn't count toward a row
+        CHECK(alignedWindowTrim(hidden, 5, 4) == 5); // 4 visible among the first 5: already a row
+        CHECK(alignedWindowTrim(hidden, 6, 4) == 9); // 5 visible: extend until a full row (8) is dropped
+        CHECK(alignedWindowTrim(std::vector<bool>(3, true), 2, 8) == 3); // can't drop more than exists
         CHECK(clampShowsGridScroll(20, 50, 0, 8) == 0); // 8 columns: item 20 is row 2
     }
 }

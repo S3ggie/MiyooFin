@@ -283,6 +283,14 @@ class HomeScreen : public Screen
         std::future<library::MediaPage> future;
     };
     MediaPageState m_moviePage, m_showPage, m_animePage;
+    // Whole-library counts for the section headings (first page of each query reports them).
+    struct MediaTotal
+    {
+        bool known = false;
+        std::size_t count = 0;
+    };
+    MediaTotal m_showTotal, m_animeTotal;
+    bool m_noAnime = false; // the unfiltered anime query came back empty
 
     // Logout (two-step confirm on Y)
     bool m_logoutArmed = false;
@@ -499,7 +507,7 @@ class HomeScreen : public Screen
     /// Shows fill the whole width (two grids' worth of columns) when the library has no anime.
     int showsColumns() const
     {
-        return m_animeItemIds.empty() ? 2 * SHOWS_GRID_COLUMNS : SHOWS_GRID_COLUMNS;
+        return m_noAnime && m_animeItemIds.empty() ? 2 * SHOWS_GRID_COLUMNS : SHOWS_GRID_COLUMNS;
     }
     StickyColumn m_showSticky, m_animeSticky, m_movieSticky;
     static std::vector<MediaItem> combineMovieViews(const std::vector<CachedLibraryView>& views);

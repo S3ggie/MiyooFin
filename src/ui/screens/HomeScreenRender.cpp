@@ -406,12 +406,19 @@ void HomeScreen::drawShowsGrid(SDL_Surface* fb)
     const int rightX = BROWSE_X + SHOWS_HALF_W + 12;
     const int columns = showsColumns();
     const bool wide = columns != SHOWS_GRID_COLUMNS; // no anime: Shows takes the whole width
+    // Whole-library totals once known (the loaded window only grows as you scroll).
+    const std::size_t animeCount = m_animeTotal.known && m_showsActiveLetter == m_animePage.letter
+                                       ? m_animeTotal.count
+                                       : m_filteredAnime.size();
+    const std::size_t showCount =
+        m_showTotal.known && m_animeTotal.known && m_showTotal.count >= m_animeTotal.count
+            ? m_showTotal.count - m_animeTotal.count
+            : m_filteredShows.size();
     drawSectionHeading(fb, leftX, SHOWS_LABEL_Y, "Shows", m_showsFocus == ShowsFocus::ShowsGrid,
-                       std::to_string(m_filteredShows.size()));
+                       std::to_string(showCount));
     if (!wide) {
         drawSectionHeading(fb, rightX, SHOWS_LABEL_Y, "Anime",
-                           m_showsFocus == ShowsFocus::AnimeGrid,
-                           std::to_string(m_filteredAnime.size()));
+                           m_showsFocus == ShowsFocus::AnimeGrid, std::to_string(animeCount));
         ui::fill(fb, BROWSE_X + SHOWS_HALF_W + 5, SHOWS_LABEL_Y, 1,
                  480 - d::kFooterH - 8 - SHOWS_LABEL_Y, d::kDivider);
     }

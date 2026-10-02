@@ -64,6 +64,9 @@ struct MediaPage
     std::vector<MediaItem> items;
     std::map<std::string, std::vector<LibraryMembership>> membershipsByItem;
     LibraryPageCursor next;
+    /// Size of the whole result set (all pages); known only on a first page.
+    bool totalKnown = false;
+    std::size_t totalCount = 0;
 };
 
 struct HierarchyPage

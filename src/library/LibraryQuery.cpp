@@ -90,6 +90,8 @@ MediaPage toLibraryPage(CatalogDbMediaPageResult result)
         out.membershipsByItem.emplace(std::move(entry.first),
                                       toLibraryMemberships(std::move(entry.second)));
     out.next = toLibraryCursor(std::move(result.next));
+    out.totalKnown = result.totalKnown;
+    out.totalCount = result.totalCount;
     return out;
 }
 

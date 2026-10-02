@@ -289,6 +289,9 @@ struct CatalogDbMediaPageResult
     std::vector<MediaItem> items;
     std::map<std::string, std::vector<CatalogDbMediaPageMembership>> membershipsByItem;
     CatalogDbPageCursor next;
+    /// Rows matching the whole query (not just this page); set on first pages only.
+    bool totalKnown = false;
+    std::size_t totalCount = 0;
 };
 
 struct CatalogDbMediaPageUpsertResult

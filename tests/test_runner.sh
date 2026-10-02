@@ -31,6 +31,7 @@ test_player
 test_music
 test_music_player
 test_music_downloads
+test_music_screen
 '
 pids=
 

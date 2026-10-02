@@ -290,6 +290,15 @@ void App::switchMode(AppMode mode)
         home->cancelAsyncWork();
     if (mode == AppMode::Video && m_music)
         m_music->shutdown(1500); // playback does not follow you into the video app
+    // The video Settings tab saves offline mode into session.txt from its own copy of the
+    // session; pick that up so both modes (and the new screen) agree on it.
+    {
+        const Session saved = Session::load();
+        if (saved.valid()) {
+            std::lock_guard<std::mutex> lock(m_journalMutex);
+            m_session.manualOfflineMode = saved.manualOfflineMode;
+        }
+    }
     m_mode = mode;
     saveAppMode(m_mode);
     design::usePalette(m_mode == AppMode::Music);

@@ -96,6 +96,37 @@ class MusicScreen : public Screen
     void saveState();
 
     // ---- exposed for tests ----
+    int activeTabForTest() const
+    {
+        return m_activeTab;
+    }
+    int rowCountForTest() const
+    {
+        return static_cast<int>(activePane().rows.size());
+    }
+    int selectedForTest() const
+    {
+        return activePane().frame.selected;
+    }
+    std::string selectedTitleForTest() const
+    {
+        const MusicPane& p = activePane();
+        return p.frame.selected >= 0 && p.frame.selected < static_cast<int>(p.rows.size())
+                   ? p.rows[p.frame.selected].title
+                   : std::string();
+    }
+    int drillDepthForTest() const
+    {
+        return static_cast<int>(m_tabs[m_activeTab].drill.size());
+    }
+    MusicPaneKind paneKindForTest() const
+    {
+        return activePane().frame.kind;
+    }
+    bool menuOpenForTest() const
+    {
+        return m_menu.open;
+    }
     static std::vector<std::string> tabNames();
     static music::ListingRequest requestFor(const MusicFrame& frame, int start);
 

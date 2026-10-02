@@ -555,9 +555,12 @@ void MusicScreen::syncResumeRow(MusicPane& pane)
         pane.rows.front() = row;
     } else {
         pane.rows.insert(pane.rows.begin(), row);
-        pane.frame.selected += pane.rows.size() > 1 ? 1 : 0;
-        if (pane.rows.size() == 1)
+        // A cursor the user has not moved starts on "Continue listening"; one they have moved
+        // stays on the same item (it shifted down by one).
+        if (pane.frame.selectedId.empty())
             pane.frame.selected = 0;
+        else
+            pane.frame.selected += 1;
         clampPane(pane);
     }
 }
@@ -1026,7 +1029,6 @@ void MusicScreen::activateRow(const MusicRow& row)
         break;
     case MusicRow::Kind::Playlist:
         f.kind = MusicPaneKind::PlaylistTracks;
-        f.subtitle = row.subtitle;
         openFrame(f);
         break;
     case MusicRow::Kind::Action:

@@ -66,9 +66,9 @@ void HomeScreen::updateMediaPaging()
     } else if (activeTabNamed("Shows")) {
         const int showCount = static_cast<int>(m_filteredShows.size());
         const int animeCount = static_cast<int>(m_filteredAnime.size());
-        if (showCount == 0 || m_showSelected + 4 >= showCount)
+        if (showCount == 0 || !m_showPage.next.valid || m_showSelected + 4 >= showCount)
             requestMediaPage(m_showPage);
-        if (animeCount == 0 || m_animeSelected + 4 >= animeCount)
+        if (animeCount == 0 || !m_animePage.next.valid || m_animeSelected + 4 >= animeCount)
             requestMediaPage(m_animePage);
     }
 }

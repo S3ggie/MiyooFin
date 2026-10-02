@@ -323,6 +323,8 @@ static void testCatalogDbMediaPageUpsertAndPopulation()
     auto failed = db.upsertMediaPageForTest(failing, 1, metadata).get();
     CHECK(!failed.success && failed.error == CatalogDbErrorCategory::SqliteError);
     auto after = db.readMediaPage("movie", -1, 64, {}, metadata).get();
+    // The first page reports the whole result-set size for the Shows/Anime counters.
+    CHECK(after.totalKnown && after.totalCount == after.items.size());
     CHECK(after.success && std::none_of(after.items.begin(), after.items.end(),
         [](const MediaItem &v) { return v.id == "rollback-a" || v.id == "rollback-b"; }));
     auto cancel = std::make_shared<std::atomic_bool>(true);

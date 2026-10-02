@@ -1,4 +1,5 @@
 #include "DownloadStore.hpp"
+#include "DownloadSubtitles.hpp"
 #include "../cache/LibraryCache.hpp"
 #include <atomic>
 #include <cstdio>
@@ -542,6 +543,7 @@ bool DownloadStore::removeItem(const std::string& s, const std::string& id, std:
         std::remove(segmentPath(s, id, k, true).c_str());
     }
     std::remove(manifestPath(s, id).c_str());
+    removeSubtitleSidecars(itemPath(s, id));
     sweepTmpFiles(itemPath(s, id));
     ::rmdir((itemPath(s, id) + "/chunks").c_str());
     ::rmdir((itemPath(s, id) + "/segments").c_str());

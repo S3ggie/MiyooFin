@@ -966,6 +966,7 @@ static void osd_dump_bmp(const OsdPicture *pic, const char *path)
 static const char *subs_dir;          /* app dir holding playback-tracks.txt and subs/<index>.srt */
 static const char *osd_font_path = "/mnt/SDCARD/miyoo/app/wqy-microhei.ttc";
 static int osd_screen_rot180;         /* the SCREEN (not the overlay) is upside down for the viewer */
+static int osd_local;                /* downloaded playback: the stream cannot be reopened with other parameters */
 static int osd_stretch;               /* START: fill the whole display, ignoring aspect ratio */
 static double osd_base;               /* stream time 0 is this far into the media (resume offset), s */
 static SubTrackInfo sub_tracks[64];
@@ -4178,7 +4179,7 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_DOWN:
                 incr = -60.0;
             do_seek:
-                    if (subs_dir) { /* remote stream: jump by reopening it */
+                    if (subs_dir && !osd_local) { /* remote stream: jump by reopening it */
                         remote_seek_request(cur_stream, incr);
                         break;
                     }
@@ -4432,6 +4433,7 @@ static const OptionDef options[] = {
     { "subs_dir", HAS_ARG | OPT_STRING | OPT_EXPERT, { &subs_dir }, "directory with playback-tracks.txt and subs/<index>.srt", "dir" },
     { "osd_font", HAS_ARG | OPT_STRING | OPT_EXPERT, { &osd_font_path }, "TTF font for subtitles", "path" },
     { "osd_screen_rot180", OPT_BOOL | OPT_EXPERT, { &osd_screen_rot180 }, "the screen surface (subtitle bars) is upside down for the viewer", "" },
+    { "osd_local", OPT_BOOL | OPT_EXPERT, { &osd_local }, "downloaded playback (no stream restarts)", "" },
     { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },
     { "exitonmousedown", OPT_BOOL | OPT_EXPERT, { &exit_on_mousedown }, "exit on mouse down", "" },

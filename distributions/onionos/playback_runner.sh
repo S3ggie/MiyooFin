@@ -384,14 +384,23 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ "${#REQUEST_RESUME_TICKS}" -gt 7 ]; then
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_base $(printf '%s' "$REQUEST_RESUME_TICKS" | sed 's/.\{7\}$//')"
         fi
-        # Remote playback: fetch the track list and text subtitles in the
-        # background (best effort, bounded by cleanup); the player picks the
-        # files up as they appear.  Downloaded playback has none yet.
+        # Subtitles. Remote playback fetches the track list and text subtitles in
+        # the background (best effort, bounded by cleanup); downloaded playback
+        # reads the copies saved beside the download, topping them up from the
+        # server when they are missing and it is reachable.  The player picks
+        # files up as they appear.
         if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -x "$APP_DIR/miyoofin-playback-reporter" ]; then
             rm -rf "$APP_DIR/subs" "$APP_DIR/playback-tracks.txt"
             "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --fetch-subs > "$APP_DIR/playback-subs.log" 2>&1 &
             SUBS_PID=$!
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $APP_DIR"
+        elif [ "$REQUEST_SOURCE_MODE" = local ]; then
+            LOCAL_ITEM_DIR="$APP_DIR/downloads/$REQUEST_DOWNLOAD_SCOPE/items/$REQUEST_ITEM_ID"
+            if [ ! -f "$LOCAL_ITEM_DIR/playback-tracks.txt" ] && [ -x "$APP_DIR/miyoofin-playback-reporter" ]; then
+                "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --fetch-subs > "$APP_DIR/playback-subs.log" 2>&1 &
+                SUBS_PID=$!
+            fi
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $LOCAL_ITEM_DIR -osd_local"
         fi
         if [ "${#REQUEST_DURATION_TICKS}" -gt 7 ]; then
             PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_duration $(printf '%s' "$REQUEST_DURATION_TICKS" | sed 's/.\{7\}$//')"

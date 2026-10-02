@@ -241,6 +241,15 @@ class JellyfinApi
         Playlist
     };
     static HlsFailure classifyHlsFailure(long httpStatus, int transportCode);
+    /// Raw item JSON (for its MediaStreams) / one subtitle track converted to SRT.
+    /// Bodies are capped; both are background-only and best effort.
+    static bool getItemJson(const std::string& baseUrl, const std::string& accessToken,
+                            const std::string& userId, const std::string& deviceId,
+                            const std::string& itemId, std::string& body, std::string& error);
+    static bool getSubtitleSrt(const std::string& baseUrl, const std::string& accessToken,
+                               const std::string& deviceId, const std::string& itemId,
+                               const std::string& mediaSourceId, int streamIndex, std::string& body,
+                               std::string& error);
     static bool getHlsSegmentUrls(const std::string& baseUrl, const std::string& accessToken,
                                   const std::string& deviceId, const std::string& itemId,
                                   const std::string& mediaSourceId,

@@ -38,7 +38,7 @@
 
 #include "playback_clock_parser.hpp"
 #include "playback_resume.hpp"
-#include "playback_tracks.hpp"
+#include "../include/miyoofin/playback_tracks.hpp"
 #include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
 
@@ -382,7 +382,8 @@ struct RemoteContext
 
 // Loads the pending remote request and session. Prints `<tag> skipped reason=...`
 // and returns false when there is nothing to do (local playback, no session...).
-static bool load_remote_context(const std::string& appDir, const char* tag, RemoteContext& ctx)
+static bool load_remote_context(const std::string& appDir, const char* tag, RemoteContext& ctx,
+                                bool allowLocal = false)
 {
     ctx.requestPath = appDir + "/playback-request.txt";
     ctx.reqContent = read_file(ctx.requestPath);
@@ -392,7 +393,7 @@ static bool load_remote_context(const std::string& appDir, const char* tag, Remo
     }
     ctx.itemId = read_kv_from_content(ctx.reqContent, "item_id");
     // Downloaded playback has no server round trips here.
-    if (read_kv_from_content(ctx.reqContent, "source_mode") == "local") {
+    if (!allowLocal && read_kv_from_content(ctx.reqContent, "source_mode") == "local") {
         std::printf("%s skipped reason=local\n", tag);
         return false;
     }
@@ -500,10 +501,26 @@ static bool write_atomic(const std::string& path, const std::string& data)
 static int fetch_subs(const std::string& appDir)
 {
     RemoteContext ctx;
-    if (!load_remote_context(appDir, "subs_fetch", ctx))
+    if (!load_remote_context(appDir, "subs_fetch", ctx, true))
         return 0;
-    const std::string tracksPath = appDir + "/playback-tracks.txt";
-    const std::string subsDir = appDir + "/subs";
+    // Downloaded playback keeps its subtitles beside the downloaded segments
+    // (a download has one fixed audio track, so only subtitle lines are listed).
+    const bool local = read_kv_from_content(ctx.reqContent, "source_mode") == "local";
+    std::string outDir = appDir;
+    if (local) {
+        const std::string scope = read_kv_from_content(ctx.reqContent, "download_scope");
+        if (!safe_path_id(scope)) {
+            std::printf("subs_fetch skipped reason=bad_scope\n");
+            return 0;
+        }
+        outDir = appDir + "/downloads/" + scope + "/items/" + ctx.itemId;
+        if (file_exists(outDir + "/playback-tracks.txt")) {
+            std::printf("subs_fetch skipped reason=already_saved\n");
+            return 0;
+        }
+    }
+    const std::string tracksPath = outDir + "/playback-tracks.txt";
+    const std::string subsDir = outDir + "/subs";
     std::remove(tracksPath.c_str());
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -517,7 +534,17 @@ static int fetch_subs(const std::string& appDir)
         return 0;
     }
     ::mkdir(subsDir.c_str(), 0755);
-    write_atomic(tracksPath, playback_format_tracks(tracks));
+    if (local) {
+        PlaybackTracks subsOnly;
+        subsOnly.mediaSourceId = tracks.mediaSourceId;
+        for (const PlaybackTrack& t : tracks.tracks)
+            if (t.type == 's')
+                subsOnly.tracks.push_back(t);
+        tracks = std::move(subsOnly);
+    }
+    // For a local item the list is only published once the files are in place.
+    if (!local)
+        write_atomic(tracksPath, playback_format_tracks(tracks));
     int saved = 0;
     // Subtitle files can be several hundred KB and the device is busy decoding:
     // allow a long transfer and one retry per track.
@@ -543,6 +570,8 @@ static int fetch_subs(const std::string& appDir)
         if (write_atomic(subsDir + "/" + std::to_string(t.index) + ".srt", srt.body))
             ++saved;
     }
+    if (local && saved > 0)
+        write_atomic(tracksPath, playback_format_tracks(tracks));
     curl_global_cleanup();
     std::printf("subs_fetch done tracks=%zu saved=%d\n", tracks.tracks.size(), saved);
     return 0;

@@ -155,7 +155,7 @@ REPORTER_ARM     := output/build-arm/miyoofin-playback-reporter
 
 reporter: $(REPORTER_ARM)
 
-$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp tools/playback_tracks.hpp $(BUILD_CONFIG) | output/build-arm
+$(REPORTER_ARM): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp include/miyoofin/playback_tracks.hpp $(BUILD_CONFIG) | output/build-arm
 	$(CXX) $(CXXFLAGS) $(REL_LDFLAGS) -Itools -Iinclude -L$(SYSROOT)/lib -L/opt/miyoo/lib -Wl,-rpath-link,/opt/miyoo/lib -Wl,--allow-shlib-undefined -o $@ $< -lcurl
 	@echo "  [LINK] $@"
 

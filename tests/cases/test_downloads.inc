@@ -1167,3 +1167,31 @@ static void testPlaybackToggleTouchesOnlyAffectedItems()
     CHECK(readFixture(store.manifestPath("anonymous","idle-y"))==yContentBefore);
     std::printf("[test] playback toggle touches only affected items OK\n");
 }
+
+static void testSubtitleSidecars()
+{
+    std::printf("[test] download subtitle sidecars\n");
+    const std::string dir = "/tmp/miyoofin-sidecars-" + std::to_string(static_cast<long long>(getpid()));
+    ::mkdir(dir.c_str(), 0755);
+    ::mkdir((dir + "/subs").c_str(), 0755);
+    auto write = [](const std::string& path, const std::string& text) {
+        FILE* f = std::fopen(path.c_str(), "wb");
+        CHECK(f != nullptr);
+        if (f) {
+            std::fwrite(text.data(), 1, text.size(), f);
+            std::fclose(f);
+        }
+    };
+    write(dir + "/playback-tracks.txt", "s|3|1|1|0|eng|English\n");
+    write(dir + "/subs/3.srt", "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+    // An existing track list means "already saved": no network is attempted.
+    CHECK(miyoofin::fetchSubtitleSidecars(miyoofin::Session{}, dir, "item", "src"));
+    miyoofin::removeSubtitleSidecars(dir);
+    struct stat st;
+    CHECK(::stat((dir + "/playback-tracks.txt").c_str(), &st) != 0);
+    CHECK(::stat((dir + "/subs").c_str(), &st) != 0);
+    // Removing again (nothing there) is harmless.
+    miyoofin::removeSubtitleSidecars(dir);
+    ::rmdir(dir.c_str());
+    std::printf("[test] download subtitle sidecars OK\n");
+}

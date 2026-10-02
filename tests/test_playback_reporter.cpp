@@ -9,7 +9,7 @@
 #include <limits>
 #include "../tools/playback_clock_parser.hpp"
 #include "../tools/playback_resume.hpp"
-#include "../tools/playback_tracks.hpp"
+#include "../include/miyoofin/playback_tracks.hpp"
 #include "../tools/playback_route.hpp"
 
 static int g_failures = 0;

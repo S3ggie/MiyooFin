@@ -1,4 +1,5 @@
 #include "DownloadManager.hpp"
+#include "DownloadSubtitles.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../net/TlsConfig.hpp"
@@ -391,6 +392,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                 break;
             }
     }
+    // Subtitles for offline viewing: small, best effort, and outside the lock.
+    fetchSubtitleSidecars(session, m_store.itemPath(scope, item.itemId), item.itemId,
+                          item.mediaSourceId);
     // Recovery scan runs once per transfer; the resume offset is reused below
     // instead of scanning the segment directory a second time.
     const std::uint64_t resumeFrom = m_store.firstIncompleteSegment(scope, item);

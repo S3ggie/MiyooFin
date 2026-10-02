@@ -168,4 +168,44 @@ bool JellyfinApi::getHlsSegmentUrls(const std::string& b, const std::string& t,
     return true;
 }
 
+bool JellyfinApi::getItemJson(const std::string& baseUrl, const std::string& accessToken,
+                              const std::string& userId, const std::string& deviceId,
+                              const std::string& itemId, std::string& body, std::string& error)
+{
+    HttpClient client;
+    client.setConnectTimeoutSec(10);
+    client.setTimeoutSec(20);
+    HttpResponse response;
+    if (!client.perform("GET", baseUrl + "/Users/" + userId + "/Items/" + itemId,
+                        buildAuthHeaders(accessToken, deviceId), {}, response, error) ||
+        !response.ok()) {
+        if (error.empty())
+            error = "Item request failed (HTTP " + std::to_string(response.status) + ")";
+        return false;
+    }
+    body = std::move(response.body);
+    return true;
+}
+
+bool JellyfinApi::getSubtitleSrt(const std::string& baseUrl, const std::string& accessToken,
+                                 const std::string& deviceId, const std::string& itemId,
+                                 const std::string& mediaSourceId, int streamIndex,
+                                 std::string& body, std::string& error)
+{
+    HttpClient client;
+    client.setConnectTimeoutSec(10);
+    client.setTimeoutSec(60);
+    HttpResponse response;
+    const std::string url = baseUrl + "/Videos/" + itemId + "/" + mediaSourceId + "/Subtitles/" +
+                            std::to_string(streamIndex) + "/0/Stream.srt";
+    if (!client.perform("GET", url, buildAuthHeaders(accessToken, deviceId), {}, response, error) ||
+        !response.ok() || response.body.empty() || response.body.size() > 3u * 1024u * 1024u) {
+        if (error.empty())
+            error = "Subtitle request failed (HTTP " + std::to_string(response.status) + ")";
+        return false;
+    }
+    body = std::move(response.body);
+    return true;
+}
+
 } // namespace miyoofin

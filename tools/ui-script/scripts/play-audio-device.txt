@@ -1,6 +1,7 @@
 # WARNING: starts a REAL remote stream, i.e. a server-side transcode (VAAPI on the
 # author's server). Run it deliberately and once; never loop it or drive rapid
-# restarts - a burn-in transcode plus restart storm hung the server GPU once.
+# restarts. Before testing, check the newest Jellyfin ffmpeg log: its command line must
+# not contain vulkan / libplacebo / overlay_vulkan (the server has Vulkan disabled).
 # Remote playback of "21" (two audio tracks) from the Movies tab (device): second row, seventh card.
 # stay resident while the playback is driven/inspected from outside (the player's
 # command file); the harness ends it with the player's quit key.

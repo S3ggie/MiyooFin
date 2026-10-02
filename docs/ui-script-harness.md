@@ -368,9 +368,10 @@ app logic and flow on the host build only.
 ### Server load from device scenarios
 
 `play-remote`, `play-audio` and `play-angry` start a **real streamed playback**, which makes
-Jellyfin run an ffmpeg transcode (hardware-accelerated on some servers). Run them
-deliberately and one at a time. Do not loop them or script rapid seek/audio restarts: the
-player already spaces restarts 4 s apart, but a server GPU hung once when a subtitle
-burn-in transcode (`SubtitleMethod=Encode`) overlapped other transcodes. Burn-in is no
-longer requestable (the bridge rejects it). Prefer downloaded-item scenarios, which put no
-load on the server.
+Jellyfin run an ffmpeg transcode (VAAPI on the author's server). Run them deliberately and
+one at a time; do not loop them or script rapid seek/audio restarts (the player spaces
+restarts 4 s apart). A subtitle burn-in transcode that went through Jellyfin's
+Vulkan/libplacebo path (`overlay_vulkan`) once hung the server's AMD GPU; the server now sets
+`VK_DRIVER_FILES=/nonexistent` for Jellyfin so only VAAPI is used. Before testing burn-in,
+confirm the newest Jellyfin ffmpeg log's command line contains no `vulkan`, `libplacebo` or
+`overlay_vulkan`. Prefer downloaded-item scenarios, which put no load on the server.

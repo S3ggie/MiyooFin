@@ -13,7 +13,8 @@ namespace music {
 struct Track
 {
     std::string id, title, album, albumId, artist, artistId, albumArtist;
-    std::string imageTag;      // the track's own Primary image, usually empty
+    std::string entryId;  // PlaylistItemId: this track's slot in a playlist (needed to remove it)
+    std::string imageTag; // the track's own Primary image, usually empty
     std::string albumImageTag; // the album's Primary image (what art shows for a track)
     int trackNumber = 0, discNumber = 0;
     std::int64_t runTimeTicks = 0; // 100 ns units, like Jellyfin

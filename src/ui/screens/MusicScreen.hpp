@@ -10,6 +10,7 @@
 #include "../../net/Session.hpp"
 #include "../BatteryMonitor.hpp"
 #include "../MusicUiState.hpp"
+#include "ChoiceMenu.hpp"
 #include <SDL2/SDL.h>
 #include <deque>
 #include <map>
@@ -123,6 +124,14 @@ class MusicScreen : public Screen
     {
         return activePane().frame.kind;
     }
+    const std::string& toastForTest() const
+    {
+        return m_toast;
+    }
+    bool pickerOpenForTest() const
+    {
+        return m_picker.active();
+    }
     bool menuOpenForTest() const
     {
         return m_menu.open;
@@ -142,7 +151,9 @@ class MusicScreen : public Screen
         ShuffleAll,
         PlayNext,
         Append,
-        Download
+        Download,
+        AddToPlaylist, // fetch an album/playlist's tracks, then pick the playlist
+        PickPlaylist   // the playlist list for the picker has arrived
     };
     struct Pending
     {
@@ -180,6 +191,18 @@ class MusicScreen : public Screen
     void clampPane(MusicPane& pane);
     void refreshSettingsRows(MusicPane& pane);
     void syncResumeRow(MusicPane& pane);
+    void syncNewPlaylistRow(MusicPane& pane);
+    // playlists
+    void startPlaylistPicker(std::vector<music::Track> tracks);
+    void openPickerFor(const std::vector<music::Playlist>& playlists);
+    void chosePlaylist(int index);
+    void askPlaylistName(const std::string& title, const std::string& initial,
+                         std::vector<music::Track> tracks);
+    void createPlaylistNamed(const std::string& name, std::vector<music::Track> tracks);
+    void deletePlaylistById(const std::string& id, const std::string& name);
+    void removeFromPlaylist(const music::Track& track);
+    void applyJobResults();
+    void refreshPlaylists();
     void refreshDownloadRows(MusicPane& pane);
     music::DownloadCollection collectionFor(const MusicRow& row) const;
     music::DownloadCollection collectionForPane(const MusicPane& pane) const;
@@ -231,7 +254,10 @@ class MusicScreen : public Screen
     music::MusicSettings* m_settings;
     music::MusicDownloads* m_downloads;
     std::uint64_t m_downloadsRevision = 0;
-    std::string m_removeArmed; // collection whose removal awaits a second press
+    std::string m_removeArmed; // collection or playlist whose removal awaits a second press
+    ChoiceMenu m_picker;       // "add to which playlist?"
+    std::vector<music::Track> m_pickTracks;
+    std::vector<music::Playlist> m_pickPlaylists;
     std::unique_ptr<music::MusicLibrary> m_library;
     BatteryMonitor m_battery;
 

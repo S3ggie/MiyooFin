@@ -94,6 +94,23 @@ bool reportPlayback(const Connection& c, ReportKind kind, const std::string& tra
                     std::int64_t positionTicks, bool paused, const std::string& playSessionId,
                     std::string& error);
 
+/// Playlist changes (music playlists only). All of them need the server.
+std::string buildCreatePlaylistBody(const std::string& name, const std::string& userId,
+                                    const std::vector<std::string>& trackIds);
+std::string buildAddToPlaylistUrl(const std::string& baseUrl, const std::string& userId,
+                                  const std::string& playlistId,
+                                  const std::vector<std::string>& trackIds);
+std::string buildRemoveFromPlaylistUrl(const std::string& baseUrl, const std::string& playlistId,
+                                       const std::vector<std::string>& entryIds);
+bool createPlaylist(const Connection& c, const std::string& name,
+                    const std::vector<std::string>& trackIds, std::string& newId,
+                    std::string& error);
+bool addToPlaylist(const Connection& c, const std::string& playlistId,
+                   const std::vector<std::string>& trackIds, std::string& error);
+bool removeFromPlaylist(const Connection& c, const std::string& playlistId,
+                        const std::vector<std::string>& entryIds, std::string& error);
+bool deletePlaylist(const Connection& c, const std::string& playlistId, std::string& error);
+
 /// Marks a track as played at `isoTime` (offline plays synced later). `gone` is set when the
 /// server no longer has the item, so the caller can drop the entry for good.
 bool markPlayed(const Connection& c, const std::string& trackId, const std::string& isoTime,

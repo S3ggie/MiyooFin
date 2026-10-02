@@ -400,13 +400,18 @@ void MusicScreen::renderFooter(SDL_Surface* fb, bool miniShown)
     footer.showLink = false;
     if (m_view == View::NowPlaying) {
         if (m_queueView)
-            footer.hints = {{ui::Key::A, "Play"}, {ui::Key::Y, "Remove"}, {ui::Key::B, "Back"}};
+            footer.hints = {{ui::Key::A, "Play"},
+                            {ui::Key::Y, "Remove"},
+                            {ui::Key::X, "Save as playlist"},
+                            {ui::Key::B, "Back"}};
         else
             footer.hints = {{ui::Key::A, "Pause"},
                             {ui::Key::Dpad, "Seek"},
                             {ui::Key::L2, "Skip"},
                             {ui::Key::X, "Shuffle"},
                             {ui::Key::Y, "Repeat"}};
+    } else if (m_picker.active()) {
+        footer.hints = {{ui::Key::A, "Select"}, {ui::Key::B, "Close"}};
     } else if (m_menu.open) {
         footer.hints = {{ui::Key::A, "Select"}, {ui::Key::B, "Close"}};
     } else {
@@ -456,6 +461,7 @@ void MusicScreen::render(SDL_Surface* fb)
     renderFooter(fb, mini);
     if (m_menu.open)
         renderMenu(fb);
+    m_picker.render(fb);
 }
 
 } // namespace miyoofin

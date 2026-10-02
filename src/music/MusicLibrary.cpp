@@ -58,6 +58,7 @@ MusicLibrary::MusicLibrary(Session session, std::string cacheRoot, std::string s
     m_offline.store(m_session.manualOfflineMode);
     m_listThread = std::thread([this] { listLoop(); });
     m_coverThread = std::thread([this] { coverLoop(); });
+    m_jobThread = std::thread([this] { jobLoop(); });
 }
 
 MusicLibrary::~MusicLibrary()
@@ -71,6 +72,7 @@ MusicLibrary::~MusicLibrary()
     m_wake.notify_all();
     m_listThread.join();
     m_coverThread.join();
+    m_jobThread.join();
 }
 
 std::string MusicLibrary::coverKey(const std::string& itemId, const std::string& tag, int size)
@@ -98,6 +100,60 @@ void MusicLibrary::clearCaches(std::set<std::string> keep)
     }
     m_clearRequested.store(true);
     m_wake.notify_all();
+}
+
+std::uint64_t MusicLibrary::runJob(std::string label, JobFn op)
+{
+    std::uint64_t ticket;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ticket = m_nextTicket++;
+        m_jobs.push_back({ticket, std::move(label), std::move(op)});
+    }
+    m_wake.notify_all();
+    return ticket;
+}
+
+std::vector<JobResult> MusicLibrary::takeJobs()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<JobResult> out;
+    out.swap(m_jobResults);
+    return out;
+}
+
+void MusicLibrary::eraseListCache(const ListingRequest& request)
+{
+    m_cache.erase(request.key());
+}
+
+void MusicLibrary::jobLoop()
+{
+    for (;;) {
+        Job job;
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_wake.wait(lock, [this] { return m_stop.load() || !m_jobs.empty(); });
+            if (m_stop.load())
+                return;
+            job = std::move(m_jobs.front());
+            m_jobs.pop_front();
+        }
+        JobResult result;
+        result.ticket = job.ticket;
+        result.label = job.label;
+        if (m_offline.load()) {
+            result.error = "Needs a connection";
+        } else {
+            std::string error;
+            result.ok = onRoute(m_session, error,
+                                [&](const Connection& c) { return job.op(c, result.id, error); });
+            if (!result.ok)
+                result.error = error.empty() ? "Failed" : error;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_jobResults.push_back(std::move(result));
+    }
 }
 
 void MusicLibrary::cancelLists()

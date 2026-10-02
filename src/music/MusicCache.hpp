@@ -27,6 +27,8 @@ class MusicCache
     bool loadPlaylists(const std::string& key, std::vector<Playlist>& items, int& total) const;
 
     /// A key reduced to characters safe in a file name.
+    /// Forgets one cached listing (after the server-side list changed).
+    void erase(const std::string& key) const;
     static std::string fileKey(const std::string& key);
     const std::string& dir() const
     {

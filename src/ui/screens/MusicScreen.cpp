@@ -1,6 +1,8 @@
 #include "MusicScreen.hpp"
 #include "../../music/MusicApi.hpp"
 #include "../UiKit.hpp"
+#include "TextEntryScreen.hpp"
+#include "../../app/ScreenStack.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -21,8 +23,10 @@ constexpr std::size_t kMaxCovers = 80;
 
 constexpr int kMenuPlay = 1, kMenuShuffle = 2, kMenuPlayNext = 3, kMenuAppend = 4, kMenuGoAlbum = 5,
               kMenuGoArtist = 6, kMenuDownload = 7, kMenuRemove = 8, kMenuRetry = 9,
-              kMenuDownloadPage = 10, kMenuPlayDownloaded = 11, kMenuShuffleDownloaded = 12;
+              kMenuDownloadPage = 10, kMenuPlayDownloaded = 11, kMenuShuffleDownloaded = 12,
+              kMenuAddToPlaylist = 13, kMenuRemoveFromPlaylist = 14, kMenuDeletePlaylist = 15;
 constexpr const char* kDownloadPrefix = "dl:";
+constexpr const char* kNewPlaylistId = "__newplaylist__";
 
 std::string readText(const std::string& path)
 {
@@ -504,8 +508,11 @@ void MusicScreen::update(Uint32 dt)
         applyListResult(r);
     }
     takeCovers();
+    applyJobResults();
 
     MusicPane& pane = activePane();
+    if (pane.frame.kind == MusicPaneKind::Playlists)
+        syncNewPlaylistRow(pane);
     if (pane.frame.kind == MusicPaneKind::Settings)
         refreshSettingsRows(pane);
     if (pane.frame.kind == MusicPaneKind::Home)
@@ -681,6 +688,182 @@ void MusicScreen::downloadTracks(const music::DownloadCollection& collection,
     m_toastUntil = m_clock + 2200;
 }
 
+// "+ New playlist" is always the first row of the Playlists tab.
+void MusicScreen::syncNewPlaylistRow(MusicPane& pane)
+{
+    const bool have = !pane.rows.empty() && pane.rows.front().id == kNewPlaylistId;
+    if (have)
+        return;
+    MusicRow row;
+    row.kind = MusicRow::Kind::Action;
+    row.id = kNewPlaylistId;
+    row.title = "+ New playlist";
+    row.subtitle = "Create an empty playlist";
+    const bool hadRows = !pane.rows.empty();
+    pane.rows.insert(pane.rows.begin(), row);
+    pane.frame.selected = hadRows ? pane.frame.selected + 1 : 0;
+    clampPane(pane);
+}
+
+void MusicScreen::startPlaylistPicker(std::vector<music::Track> tracks)
+{
+    if (tracks.empty()) {
+        m_toast = "Nothing to add";
+        m_toastUntil = m_clock + 2000;
+        return;
+    }
+    m_pickTracks = std::move(tracks);
+    music::ListingRequest r;
+    r.kind = music::Listing::Playlists;
+    r.limit = 200;
+    m_pending[m_library->requestList(r)] = Pending{PendingKind::PickPlaylist, 0, {}};
+    m_toast = "Loading playlists...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::openPickerFor(const std::vector<music::Playlist>& playlists)
+{
+    m_pickPlaylists = playlists;
+    std::vector<std::string> items = {"+ New playlist..."};
+    for (const music::Playlist& p : playlists)
+        items.push_back(p.title);
+    const std::size_t n = m_pickTracks.size();
+    m_picker.open(n == 1 ? "Add \"" + m_pickTracks[0].title + "\" to..."
+                         : "Add " + std::to_string(n) + " tracks to...",
+                  std::move(items));
+}
+
+void MusicScreen::chosePlaylist(int index)
+{
+    std::vector<music::Track> tracks = std::move(m_pickTracks);
+    m_pickTracks.clear();
+    if (index <= 0) {
+        askPlaylistName("New playlist", "", std::move(tracks));
+        return;
+    }
+    if (index - 1 >= static_cast<int>(m_pickPlaylists.size()))
+        return;
+    const music::Playlist playlist = m_pickPlaylists[index - 1];
+    std::vector<std::string> ids;
+    for (const music::Track& t : tracks)
+        ids.push_back(t.id);
+    m_library->runJob(
+        "add|" + playlist.id + "|" + playlist.title,
+        [ids, id = playlist.id](const music::Connection& c, std::string&, std::string& error) {
+            return music::addToPlaylist(c, id, ids, error);
+        });
+    m_toast = "Adding...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::askPlaylistName(const std::string& title, const std::string& initial,
+                                  std::vector<music::Track> tracks)
+{
+    if (!m_stack)
+        return;
+    m_stack->push(
+        std::make_unique<TextEntryScreen>(title, initial, [this, tracks](const std::string& name) {
+            createPlaylistNamed(name, tracks);
+        }));
+}
+
+void MusicScreen::createPlaylistNamed(const std::string& name, std::vector<music::Track> tracks)
+{
+    std::vector<std::string> ids;
+    for (const music::Track& t : tracks)
+        ids.push_back(t.id);
+    m_library->runJob("create||" + name,
+                      [name, ids](const music::Connection& c, std::string& id, std::string& error) {
+                          return music::createPlaylist(c, name, ids, id, error);
+                      });
+    m_toast = "Creating \"" + name + "\"...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::deletePlaylistById(const std::string& id, const std::string& name)
+{
+    if (m_removeArmed != id) { // deleting cannot be undone: ask twice
+        m_removeArmed = id;
+        m_toast = "Choose Delete playlist again to delete " + name;
+        m_toastUntil = m_clock + 3000;
+        return;
+    }
+    m_removeArmed.clear();
+    m_library->runJob("delete|" + id + "|" + name,
+                      [id](const music::Connection& c, std::string&, std::string& error) {
+                          return music::deletePlaylist(c, id, error);
+                      });
+    m_toast = "Deleting...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::removeFromPlaylist(const music::Track& track)
+{
+    const MusicPane& pane = activePane();
+    if (pane.frame.kind != MusicPaneKind::PlaylistTracks || track.entryId.empty())
+        return;
+    const std::string playlistId = pane.frame.id, entry = track.entryId;
+    m_library->runJob(
+        "remove|" + playlistId + "|" + track.title,
+        [playlistId, entry](const music::Connection& c, std::string&, std::string& error) {
+            return music::removeFromPlaylist(c, playlistId, {entry}, error);
+        });
+    m_toast = "Removing...";
+    m_toastUntil = m_clock + 1500;
+}
+
+void MusicScreen::refreshPlaylists()
+{
+    music::ListingRequest r;
+    r.kind = music::Listing::Playlists;
+    r.limit = 100;
+    m_library->eraseListCache(r);
+    for (MusicPane& p : m_tabs[static_cast<int>(MusicTab::Playlists)].roots) {
+        p.requested = false; // loaded again the next time it is shown
+        p.ticket = 0;
+    }
+}
+
+void MusicScreen::applyJobResults()
+{
+    for (const music::JobResult& r : m_library->takeJobs()) {
+        const std::size_t first = r.label.find('|');
+        const std::size_t second = r.label.find('|', first + 1);
+        const std::string kind = r.label.substr(0, first);
+        const std::string id = r.label.substr(first + 1, second - first - 1);
+        const std::string name = r.label.substr(second + 1);
+        if (!r.ok) {
+            m_toast = "Couldn't " +
+                      std::string(kind == "add"      ? "add"
+                                  : kind == "create" ? "create the playlist"
+                                  : kind == "remove" ? "remove"
+                                                     : "delete the playlist") +
+                      ": " + r.error;
+            m_toastUntil = m_clock + 3500;
+            continue;
+        }
+        music::ListingRequest tracksOfPlaylist;
+        tracksOfPlaylist.kind = music::Listing::PlaylistTracks;
+        tracksOfPlaylist.parentId = id;
+        if (kind == "create") {
+            m_toast = "Created \"" + name + "\"";
+            refreshPlaylists();
+        } else if (kind == "delete") {
+            m_toast = "Deleted \"" + name + "\"";
+            refreshPlaylists();
+        } else {
+            m_toast = kind == "add" ? "Added to \"" + name + "\"" : "Removed \"" + name + "\"";
+            m_library->eraseListCache(tracksOfPlaylist);
+            MusicPane& pane = activePane();
+            if (pane.frame.kind == MusicPaneKind::PlaylistTracks && pane.frame.id == id) {
+                pane.requested = false; // show the changed playlist
+                pane.ticket = 0;
+            }
+        }
+        m_toastUntil = m_clock + 2500;
+    }
+}
+
 void MusicScreen::refreshSettingsRows(MusicPane& pane)
 {
     auto action = [](const std::string& title, const std::string& subtitle,
@@ -799,6 +982,12 @@ void MusicScreen::requestVisibleCovers()
 
 bool MusicScreen::handleAction(Action action)
 {
+    if (m_picker.active()) {
+        const ChoiceMenu::Result result = m_picker.handle(action);
+        if (result == ChoiceMenu::Result::Chosen)
+            chosePlaylist(m_picker.chosen());
+        return true;
+    }
     if (m_menu.open)
         return handleMenu(action);
     if (m_view == View::NowPlaying)
@@ -958,6 +1147,19 @@ void MusicScreen::playCollection(const MusicRow& row, PendingKind kind)
 
 void MusicScreen::applyPending(const music::ListResult& r, const Pending& pending)
 {
+    if (pending.kind == PendingKind::PickPlaylist) {
+        // The playlist list for the picker: the first answer (cache or server) is used.
+        if (r.playlists.items.empty() && !r.final)
+            return;
+        m_pending.erase(r.ticket);
+        if (!r.ok && r.playlists.items.empty() && r.error == "Offline") {
+            m_toast = "Playlists need a connection";
+            m_toastUntil = m_clock + 2500;
+            return;
+        }
+        openPickerFor(r.playlists.items);
+        return;
+    }
     // A cached answer is trimmed to its first rows: act on it only when it is complete.
     const bool complete = !r.fromCache || static_cast<int>(r.tracks.items.size()) >= r.tracks.total;
     if (r.tracks.items.empty() || !complete) {
@@ -969,9 +1171,15 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         return;
     }
     m_pending.erase(r.ticket); // a cached answer is good enough to act on
-    if (!m_player && pending.kind != PendingKind::Download)
+    if (!m_player && pending.kind != PendingKind::Download &&
+        pending.kind != PendingKind::AddToPlaylist)
         return;
     switch (pending.kind) {
+    case PendingKind::PickPlaylist:
+        break;
+    case PendingKind::AddToPlaylist:
+        startPlaylistPicker(r.tracks.items);
+        break;
     case PendingKind::PlayAll:
         m_player->playTracks(r.tracks.items, 0, false);
         break;
@@ -1030,7 +1238,9 @@ void MusicScreen::activateRow(const MusicRow& row)
         openFrame(f);
         break;
     case MusicRow::Kind::Action:
-        if (row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0) {
+        if (row.id == kNewPlaylistId) {
+            askPlaylistName("New playlist", "", {});
+        } else if (row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0) {
             f.kind = MusicPaneKind::DownloadedTracks;
             f.id = row.id.substr(std::strlen(kDownloadPrefix));
             openFrame(f);
@@ -1053,7 +1263,11 @@ void MusicScreen::openMenu(const MusicRow& row)
         row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0;
     switch (row.kind) {
     case MusicRow::Kind::Track:
-        m_menu.items = {{"Play next", kMenuPlayNext}, {"Add to queue", kMenuAppend}};
+        m_menu.items = {{"Play next", kMenuPlayNext},
+                        {"Add to queue", kMenuAppend},
+                        {"Add to playlist...", kMenuAddToPlaylist}};
+        if (pane.frame.kind == MusicPaneKind::PlaylistTracks && !row.track.entryId.empty())
+            m_menu.items.push_back({"Remove from this playlist", kMenuRemoveFromPlaylist});
         if (inCollection)
             m_menu.items.push_back({pane.frame.kind == MusicPaneKind::PlaylistTracks
                                         ? "Download playlist"
@@ -1071,7 +1285,10 @@ void MusicScreen::openMenu(const MusicRow& row)
         m_menu.items = {{"Play", kMenuPlay},
                         {"Shuffle", kMenuShuffle},
                         {"Play next", kMenuPlayNext},
-                        {"Add to queue", kMenuAppend}};
+                        {"Add to queue", kMenuAppend},
+                        {"Add to playlist...", kMenuAddToPlaylist}};
+        if (row.kind == MusicRow::Kind::Playlist)
+            m_menu.items.push_back({"Delete playlist", kMenuDeletePlaylist});
         if (m_downloads)
             m_menu.items.push_back(isDownloaded(row) ? MenuItem{"Remove download", kMenuRemove}
                                                      : MenuItem{"Download", kMenuDownload});
@@ -1187,6 +1404,18 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
                 m_player->playTracks(std::move(tracks), 0, action == kMenuShuffleDownloaded);
         }
         break;
+    case kMenuAddToPlaylist:
+        if (track)
+            startPlaylistPicker({row.track});
+        else
+            playCollection(row, PendingKind::AddToPlaylist);
+        break;
+    case kMenuRemoveFromPlaylist:
+        removeFromPlaylist(row.track);
+        break;
+    case kMenuDeletePlaylist:
+        deletePlaylistById(row.id, row.title);
+        break;
     case kMenuGoAlbum: {
         MusicFrame f;
         f.kind = MusicPaneKind::AlbumTracks;
@@ -1293,8 +1522,15 @@ bool MusicScreen::handleNowPlaying(Action action)
     case Action::NextTab:
         m_player->next();
         return true;
-    case Action::Search: // X
-        m_player->setShuffle(!m_player->queue().shuffle());
+    case Action::Search:   // X
+        if (m_queueView) { // the queue as a new playlist
+            std::vector<music::Track> tracks;
+            for (int i = 0; i < m_player->queue().size(); ++i)
+                tracks.push_back(*m_player->queue().at(i));
+            askPlaylistName("Save queue as playlist", "My queue", std::move(tracks));
+        } else {
+            m_player->setShuffle(!m_player->queue().shuffle());
+        }
         return true;
     case Action::ActionsMenu: // Y
         if (m_queueView) {

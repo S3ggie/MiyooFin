@@ -71,6 +71,11 @@ std::string MusicCache::fileKey(const std::string& key)
     return out.empty() ? "_" : out;
 }
 
+void MusicCache::erase(const std::string& key) const
+{
+    std::remove(pathFor(key).c_str());
+}
+
 std::string MusicCache::pathFor(const std::string& key) const
 {
     return m_dir + "/" + fileKey(key) + ".tsv";
@@ -123,7 +128,7 @@ bool MusicCache::saveTracks(const std::string& key, const std::vector<Track>& it
         rows.push_back({t.id, t.title, t.album, t.albumId, t.artist, t.artistId, t.albumArtist,
                         t.imageTag, t.albumImageTag, std::to_string(t.trackNumber),
                         std::to_string(t.discNumber), std::to_string(t.runTimeTicks),
-                        t.favorite ? "1" : "0"});
+                        t.favorite ? "1" : "0", t.entryId});
     return save(key, rows, total);
 }
 
@@ -150,6 +155,8 @@ bool MusicCache::loadTracks(const std::string& key, std::vector<Track>& items, i
         t.discNumber = static_cast<int>(toInt64(r[10]));
         t.runTimeTicks = toInt64(r[11]);
         t.favorite = r[12] == "1";
+        if (r.size() > 13)
+            t.entryId = r[13];
         items.push_back(std::move(t));
     }
     return true;

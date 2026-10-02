@@ -8,8 +8,8 @@ Checked items are done and pushed. Order is the build order.
 - [ ] Skip intro / credits button in the player (Jellyfin media segments)
 
 ## Music
-- [ ] Playlist maker: add to playlist, new playlist, remove from playlist, delete playlist (music only)
-- [ ] Save the current queue as a playlist
+- [x] Playlist maker: add to playlist, new playlist, remove from playlist, delete playlist (music only)
+- [x] Save the current queue as a playlist
 - [ ] Album grid view
 - [ ] Screen-off listening, with the buttons locked after a combo
 

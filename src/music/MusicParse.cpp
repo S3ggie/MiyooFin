@@ -92,6 +92,7 @@ Track parseTrack(const std::string& obj)
     firstNamed(obj, "ArtistItems", t.artist, t.artistId);
     if (t.artist.empty())
         t.artist = t.albumArtist;
+    t.entryId = J::jsonStringField(obj, "PlaylistItemId");
     t.imageTag = primaryTag(obj);
     t.albumImageTag = J::jsonStringField(obj, "AlbumPrimaryImageTag");
     t.trackNumber = J::jsonIntField(obj, "IndexNumber");

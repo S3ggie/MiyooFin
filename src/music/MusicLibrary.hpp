@@ -8,6 +8,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -40,6 +41,15 @@ struct CoverResult
     bool dropped = false; // never fetched (queue overflow): ask again if it is still needed
 };
 
+/// The outcome of a server change (create / add to / remove from / delete a playlist).
+struct JobResult
+{
+    std::uint64_t ticket = 0;
+    std::string label; // what the caller asked for ("add", "create", ...)
+    bool ok = false;
+    std::string error, id; // `id`: a newly created playlist's id
+};
+
 /// Everything the music screens read from the server, off the UI thread: listings (two
 /// pages deep in a cache for instant redraws) and cover art (disk cache + decode). The UI
 /// thread only calls the cheap request/take methods.
@@ -65,6 +75,13 @@ class MusicLibrary
     {
         m_offline.store(offline);
     }
+
+    /// Runs a server change on a worker: `op` gets a connection and fills `id` / `error`.
+    using JobFn = std::function<bool(const Connection&, std::string& id, std::string& error)>;
+    std::uint64_t runJob(std::string label, JobFn op);
+    std::vector<JobResult> takeJobs();
+    /// Forgets one cached listing (its server-side list just changed).
+    void eraseListCache(const ListingRequest& request);
 
     std::vector<ListResult> takeLists();
     std::vector<CoverResult> takeCovers();
@@ -108,6 +125,16 @@ class MusicLibrary
     std::deque<CoverJob> m_coverJobs;
     std::vector<ListResult> m_listResults;
     std::vector<CoverResult> m_coverResults;
+    struct Job
+    {
+        std::uint64_t ticket;
+        std::string label;
+        JobFn op;
+    };
+    std::deque<Job> m_jobs;
+    std::vector<JobResult> m_jobResults;
+    std::thread m_jobThread;
+    void jobLoop();
     std::uint64_t m_nextTicket = 1;
     std::thread m_listThread, m_coverThread;
 };

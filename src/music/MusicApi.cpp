@@ -269,6 +269,120 @@ bool reportPlayback(const Connection& c, ReportKind kind, const std::string& tra
     return true;
 }
 
+namespace {
+
+std::string joinEncoded(const std::vector<std::string>& ids)
+{
+    std::string out;
+    for (std::size_t i = 0; i < ids.size(); ++i)
+        out += (i ? "," : "") + percentEncode(ids[i]);
+    return out;
+}
+
+std::string jsonEscape(const std::string& s)
+{
+    std::string out;
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += static_cast<char>(c);
+        } else if (c < 0x20) {
+            out += ' ';
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+// One request that returns no body of interest; success is any 2xx.
+bool simpleRequest(const Connection& c, const char* method, const std::string& url,
+                   const std::string& body, std::string& responseBody, std::string& error)
+{
+    HttpClient client;
+    client.setTimeoutSec(20);
+    HttpResponse response;
+    auto headers = JellyfinApi::buildAuthHeaders(c.accessToken, c.deviceId);
+    if (!body.empty())
+        headers.push_back("Content-Type: application/json");
+    if (!client.perform(method, url, headers, body, response, error)) {
+        if (error.empty())
+            error = "Could not reach server";
+        return false;
+    }
+    if (!response.ok()) {
+        error = response.status == 401 || response.status == 403
+                    ? "Not allowed on this server"
+                    : "Request failed (HTTP " + std::to_string(response.status) + ")";
+        return false;
+    }
+    responseBody = std::move(response.body);
+    return true;
+}
+
+} // namespace
+
+std::string buildCreatePlaylistBody(const std::string& name, const std::string& userId,
+                                    const std::vector<std::string>& trackIds)
+{
+    std::string ids;
+    for (std::size_t i = 0; i < trackIds.size(); ++i)
+        ids += std::string(i ? "," : "") + "\"" + jsonEscape(trackIds[i]) + "\"";
+    return "{\"Name\":\"" + jsonEscape(name) + "\",\"Ids\":[" + ids + "],\"UserId\":\"" +
+           jsonEscape(userId) + "\",\"MediaType\":\"Audio\"}";
+}
+
+std::string buildAddToPlaylistUrl(const std::string& baseUrl, const std::string& userId,
+                                  const std::string& playlistId,
+                                  const std::vector<std::string>& trackIds)
+{
+    return baseUrl + "/Playlists/" + percentEncode(playlistId) +
+           "/Items?UserId=" + percentEncode(userId) + "&Ids=" + joinEncoded(trackIds);
+}
+
+std::string buildRemoveFromPlaylistUrl(const std::string& baseUrl, const std::string& playlistId,
+                                       const std::vector<std::string>& entryIds)
+{
+    return baseUrl + "/Playlists/" + percentEncode(playlistId) +
+           "/Items?EntryIds=" + joinEncoded(entryIds);
+}
+
+bool createPlaylist(const Connection& c, const std::string& name,
+                    const std::vector<std::string>& trackIds, std::string& newId,
+                    std::string& error)
+{
+    std::string body;
+    if (!simpleRequest(c, "POST", c.baseUrl + "/Playlists",
+                       buildCreatePlaylistBody(name, c.userId, trackIds), body, error))
+        return false;
+    newId = JellyfinApi::jsonStringField(body, "Id");
+    return true;
+}
+
+bool addToPlaylist(const Connection& c, const std::string& playlistId,
+                   const std::vector<std::string>& trackIds, std::string& error)
+{
+    std::string body;
+    return simpleRequest(c, "POST",
+                         buildAddToPlaylistUrl(c.baseUrl, c.userId, playlistId, trackIds), "", body,
+                         error);
+}
+
+bool removeFromPlaylist(const Connection& c, const std::string& playlistId,
+                        const std::vector<std::string>& entryIds, std::string& error)
+{
+    std::string body;
+    return simpleRequest(c, "DELETE", buildRemoveFromPlaylistUrl(c.baseUrl, playlistId, entryIds),
+                         "", body, error);
+}
+
+bool deletePlaylist(const Connection& c, const std::string& playlistId, std::string& error)
+{
+    std::string body;
+    return simpleRequest(c, "DELETE", c.baseUrl + "/Items/" + percentEncode(playlistId), "", body,
+                         error);
+}
+
 bool markPlayed(const Connection& c, const std::string& trackId, const std::string& isoTime,
                 bool& gone, std::string& error)
 {

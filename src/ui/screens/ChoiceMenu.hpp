@@ -20,6 +20,11 @@ class ChoiceMenu
         Cancelled
     };
     void open(std::string title, std::vector<std::string> items);
+    /// Keeps the cursor where it was (a list that is rebuilt while open).
+    int selected() const
+    {
+        return m_selected;
+    }
     bool active() const
     {
         return m_active;
@@ -33,6 +38,7 @@ class ChoiceMenu
     void render(SDL_Surface* fb) const;
 
   private:
+    static constexpr int kMaxVisible = 8;
     bool m_active = false;
     int m_selected = 0;
     std::string m_title;

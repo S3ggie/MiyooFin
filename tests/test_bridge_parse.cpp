@@ -520,6 +520,40 @@ static void testContentRangeValuePreservation()
     std::printf("[test] Content-Range value preservation OK\n");
 }
 
+static void testStreamRestartTargets()
+{
+    std::printf("[test] bridge stream restart targets\n");
+    std::string path, audio, start;
+    CHECK(bridge_split_target("/stream", path, audio, start) && path == "/stream" &&
+          audio.empty() && start.empty());
+    CHECK(bridge_split_target("/stream?audio=3&start=8050000000", path, audio, start));
+    CHECK(path == "/stream" && audio == "3" && start == "8050000000");
+    CHECK(bridge_split_target("/stream?start=5", path, audio, start) && audio.empty() &&
+          start == "5");
+    // Anything else is rejected: nothing arbitrary reaches the upstream URL.
+    CHECK(!bridge_split_target("/stream?audio=3;rm", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio=-1", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio=", path, audio, start));
+    CHECK(!bridge_split_target("/stream?ApiKey=x", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio=1&audio=2", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio=12345678901234567890", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio", path, audio, start));
+
+    const std::string url =
+        "http://h/Videos/i/"
+        "stream.ts?Static=false&StartTimeTicks=100&PlaySessionId=mf-1-2&ApiKey=tok";
+    CHECK(bridge_apply_overrides(url, "", "") == url);
+    CHECK(bridge_apply_overrides(url, "3", "900") ==
+          "http://h/Videos/i/"
+          "stream.ts?Static=false&StartTimeTicks=900&PlaySessionId=mf-1-2-r900a3&ApiKey=tok&"
+          "AudioStreamIndex=3");
+    CHECK(bridge_apply_overrides(url, "", "900").find("AudioStreamIndex") == std::string::npos);
+    // No StartTimeTicks in the base URL: appended. No session id: left alone.
+    CHECK(bridge_apply_overrides("http://h/s?a=1", "2", "7") ==
+          "http://h/s?a=1&StartTimeTicks=7&AudioStreamIndex=2");
+    std::printf("[test] bridge stream restart targets OK\n");
+}
+
 int main()
 {
     std::printf("B5f1 HTTPS bridge parsing tests\n");
@@ -577,6 +611,9 @@ int main()
     std::printf("\n--- B5f1 case-insensitive routing + Content-Range tests ---\n");
     testCaseInsensitiveRouting();
     testContentRangeValuePreservation();
+
+    std::printf("\n--- stream restart targets ---\n");
+    testStreamRestartTargets();
 
     std::printf("\n");
     if (g_failures == 0) {

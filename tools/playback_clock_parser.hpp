@@ -86,6 +86,29 @@ inline int64_t absolute_position_ticks(int64_t resumeTicks, double localSeconds)
 // Returns true on success and writes the PTS in seconds to `outSeconds`.
 // Returns false if the line does not contain a valid pts_time value.
 // -------------------------------------------------------------------
+// The player prints "MFBASE ticks=<N>" when it reopens the stream at a new start
+// position (audio track swap): from then on pts are relative to N, not to the
+// original resume position. Returns false when the record has no valid marker.
+inline bool parse_mfbase_ticks(const std::string& record, long long& ticks)
+{
+    const char needle[] = "MFBASE ticks=";
+    const size_t at = record.find(needle);
+    if (at == std::string::npos)
+        return false;
+    size_t pos = at + sizeof(needle) - 1;
+    long long value = 0;
+    size_t digits = 0;
+    while (pos < record.size() && record[pos] >= '0' && record[pos] <= '9' && digits < 18) {
+        value = value * 10 + (record[pos] - '0');
+        ++pos;
+        ++digits;
+    }
+    if (digits == 0)
+        return false;
+    ticks = value;
+    return true;
+}
+
 inline bool parse_showinfo_pts(const std::string& record, double& outSeconds)
 {
     if (record.empty())

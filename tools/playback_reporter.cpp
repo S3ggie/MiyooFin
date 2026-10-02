@@ -645,6 +645,9 @@ int main(int argc, char* argv[])
     size_t fileOffset = 0;
     std::string partialBuf;
     double lastPts = -1.0;
+    // pts are relative to the stream's start; a player stream reopen (audio swap)
+    // moves that start, announced by an MFBASE marker.
+    int64_t streamBaseTicks = resumeTicks;
     bool startAttempted = false;
     bool hasPts = false;
     bool ffplayExited = false;
@@ -694,6 +697,13 @@ int main(int argc, char* argv[])
                 std::string record;
                 while (extract_record(partialBuf, parsePos, record)) {
                     inspectPlayerOutput(record);
+                    {
+                        long long base = 0;
+                        if (parse_mfbase_ticks(record, base)) {
+                            streamBaseTicks = base;
+                            reporter_log("stream base ticks=%lld", base);
+                        }
+                    }
                     double pts = 0.0;
                     if (parse_showinfo_pts(record, pts)) {
                         lastPts = pts;
@@ -704,13 +714,13 @@ int main(int argc, char* argv[])
                                          pts);
                             reporter_log("first pts %.4f sec", pts);
                             report_event("ReportPlaybackStart", "/Sessions/Playing", route, itemId,
-                                         absolute_position_ticks(resumeTicks, pts), false, false,
-                                         accessToken, deviceId, cacertPath);
+                                         absolute_position_ticks(streamBaseTicks, pts), false,
+                                         false, accessToken, deviceId, cacertPath);
                         } else {
                             // Subsequent valid PTS → send PlaybackProgress
                             report_event("progress", "/Sessions/Playing/Progress", route, itemId,
-                                         absolute_position_ticks(resumeTicks, pts), false, false,
-                                         accessToken, deviceId, cacertPath);
+                                         absolute_position_ticks(streamBaseTicks, pts), false,
+                                         false, accessToken, deviceId, cacertPath);
                         }
                     }
                 }
@@ -747,6 +757,13 @@ int main(int argc, char* argv[])
                 std::string record;
                 while (extract_record(partialBuf, parsePos, record)) {
                     inspectPlayerOutput(record);
+                    {
+                        long long base = 0;
+                        if (parse_mfbase_ticks(record, base)) {
+                            streamBaseTicks = base;
+                            reporter_log("stream base ticks=%lld", base);
+                        }
+                    }
                     double pts = 0.0;
                     if (parse_showinfo_pts(record, pts)) {
                         lastPts = pts;
@@ -820,7 +837,7 @@ int main(int argc, char* argv[])
     // attempt even when FFplay itself returned zero; no retry is performed.
     bool failed = (exitCode != 0) || outputInitFailed;
     if (hasPts) {
-        const int64_t finalTicks = absolute_position_ticks(resumeTicks, lastPts);
+        const int64_t finalTicks = absolute_position_ticks(streamBaseTicks, lastPts);
         const std::string resultPath = appDir + "/playback-result.txt";
         const bool serverReported =
             report_event("stopped", "/Sessions/Playing/Stopped", route, itemId, finalTicks, true,

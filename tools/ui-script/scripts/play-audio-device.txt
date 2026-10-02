@@ -1,0 +1,20 @@
+# Remote playback of "21" (two audio tracks) from the Movies tab (device): second row, seventh card.
+# stay resident while the playback is driven/inspected from outside (the player's
+# command file); the harness ends it with the player's quit key.
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+KEY NextTab 3
+SETTLE 3000
+KEY Down 3 800
+KEY Right 3 500
+KEY Right 3 500
+KEY Right 3 500
+KEY Right 3 500
+KEY Right 3 500
+KEY Right 3 500
+KEY Confirm 3 1500
+SETTLE 5000
+KEY Confirm 3 1500
+WAIT_LOG [App] Starting external playback handoff 30000
+SETTLE 150000
+QUIT

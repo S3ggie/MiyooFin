@@ -274,4 +274,87 @@ inline bool is_allowed_response_header(const char* name, size_t name_len)
            ci_eq(name, name_len, "Content-Range") || ci_eq(name, name_len, "Accept-Ranges");
 }
 
+// ===================================================================
+// Stream restarts (audio track swap)
+//
+// The player re-requests the stream as "/stream?audio=<N>&start=<ticks>" to
+// change the transcoded audio track (or resume point). The bridge rewrites its
+// fixed upstream URL: nothing from the request is ever copied except validated
+// digit strings, so the token and the rest of the URL stay under its control.
+// ===================================================================
+
+// Splits a request target into path and the two accepted parameters. Returns
+// false for any unknown parameter or non-numeric / over-long value.
+inline bool bridge_split_target(const std::string& target, std::string& path, std::string& audio,
+                                std::string& start)
+{
+    audio.clear();
+    start.clear();
+    const size_t q = target.find('?');
+    path = target.substr(0, q);
+    if (q == std::string::npos)
+        return true;
+    size_t pos = q + 1;
+    while (pos < target.size()) {
+        size_t amp = target.find('&', pos);
+        if (amp == std::string::npos)
+            amp = target.size();
+        const std::string pair = target.substr(pos, amp - pos);
+        pos = amp + 1;
+        const size_t eq = pair.find('=');
+        if (eq == std::string::npos)
+            return false;
+        const std::string key = pair.substr(0, eq), value = pair.substr(eq + 1);
+        if (value.empty() || value.size() > 19)
+            return false;
+        for (char c : value)
+            if (c < '0' || c > '9')
+                return false;
+        if (key == "audio" && audio.empty())
+            audio = value;
+        else if (key == "start" && start.empty())
+            start = value;
+        else
+            return false;
+    }
+    return true;
+}
+
+// Applies validated overrides to an upstream stream URL: StartTimeTicks is
+// replaced, AudioStreamIndex appended, and PlaySessionId made unique so the
+// server starts a fresh transcode instead of reusing the previous one.
+inline std::string bridge_apply_overrides(std::string url, const std::string& audio,
+                                          const std::string& start)
+{
+    if (audio.empty() && start.empty())
+        return url;
+    auto replaceValue = [&url](const char* key, const std::string& value) {
+        const std::string needle = std::string(key) + "=";
+        size_t at = url.find(needle);
+        if (at == std::string::npos)
+            return false;
+        at += needle.size();
+        size_t end = url.find('&', at);
+        if (end == std::string::npos)
+            end = url.size();
+        url.replace(at, end - at, value);
+        return true;
+    };
+    if (!start.empty() && !replaceValue("StartTimeTicks", start))
+        url += "&StartTimeTicks=" + start;
+    if (!audio.empty())
+        url += "&AudioStreamIndex=" + audio;
+    // Unique session id per restart.
+    const std::string needle = "PlaySessionId=";
+    size_t at = url.find(needle);
+    if (at != std::string::npos) {
+        size_t end = url.find('&', at);
+        if (end == std::string::npos)
+            end = url.size();
+        url.insert(end, "-r" + (start.empty() ? std::string("0") : start) + "a" +
+                            (audio.empty() ? std::string("x") : audio));
+    }
+    return url;
+}
+
 #endif // HTTPS_BRIDGE_PARSE_HPP

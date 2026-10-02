@@ -260,6 +260,14 @@ static size_t header_cb(char* buffer, size_t size, size_t nitems, void* /*ud*/)
 // ===================================================================
 // Handle one client connection
 // ===================================================================
+// curl progress callback: non-zero aborts the transfer once the client closed.
+static int client_hung_up_cb(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+{
+    char byte;
+    const int fd = *static_cast<int*>(userdata);
+    return ::recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0 ? 1 : 0;
+}
+
 static void handle_client(int client_fd, const std::string& upstream_url,
                           const std::string& fallback_url, const std::string& cacert_path)
 {
@@ -290,7 +298,10 @@ static void handle_client(int client_fd, const std::string& upstream_url,
         send_all(client_fd, r, std::strlen(r));
         return;
     }
-    if ((req.method != "GET" && req.method != "HEAD") || req.path != "/stream") {
+    // "/stream" optionally with validated ?audio=<n>&start=<ticks> (stream restart).
+    std::string req_path, req_audio, req_start;
+    const bool target_ok = bridge_split_target(req.path, req_path, req_audio, req_start);
+    if ((req.method != "GET" && req.method != "HEAD") || !target_ok || req_path != "/stream") {
         const char* r = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n"
                         "Content-Length: 0\r\n\r\n";
         send_all(client_fd, r, std::strlen(r));
@@ -298,6 +309,8 @@ static void handle_client(int client_fd, const std::string& upstream_url,
         return;
     }
     log_info("%s %s", req.method.c_str(), req.path.c_str());
+    const std::string primary_url = bridge_apply_overrides(upstream_url, req_audio, req_start);
+    const std::string secondary_url = bridge_apply_overrides(fallback_url, req_audio, req_start);
     if (!req.range.empty())
         log_info("Range: %s", req.range.c_str());
 
@@ -344,18 +357,24 @@ static void handle_client(int client_fd, const std::string& upstream_url,
         }
         if (req.method == "HEAD")
             curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+        // Stop at once when the player closes its end (stream restart): otherwise
+        // a transcode that is still starting up would hold the single-threaded
+        // bridge until its first byte arrives.
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, client_hung_up_cb);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &client_fd);
         s_upstream = {};
         s_final_headers_sent = false;
         s_client_fd = client_fd;
         return curl_easy_perform(curl);
     };
-    CURLcode res = perform(upstream_url);
-    if (!fallback_url.empty() &&
+    CURLcode res = perform(primary_url);
+    if (!secondary_url.empty() && res != CURLE_ABORTED_BY_CALLBACK &&
         playback_should_fallback(res != CURLE_OK && res != CURLE_WRITE_ERROR,
                                  s_upstream.status_code) &&
         !s_final_headers_sent) {
         log_info("[PlaybackRoute] LAN failed; PUBLIC");
-        res = perform(fallback_url);
+        res = perform(secondary_url);
     }
 
     // Send final headers if not yet sent (HEAD or empty-body responses)
@@ -365,13 +384,16 @@ static void handle_client(int client_fd, const std::string& upstream_url,
             s_final_headers_sent = true;
         } else if (s_upstream.status_code >= 400) {
             send_error_response(s_upstream.status_code);
-        } else if (res != CURLE_OK && res != CURLE_WRITE_ERROR) {
+        } else if (res != CURLE_OK && res != CURLE_WRITE_ERROR &&
+                   res != CURLE_ABORTED_BY_CALLBACK) {
             send_error_response(502);
             s_upstream.status_code = 502;
         }
     }
 
-    if (res != CURLE_OK && res != CURLE_WRITE_ERROR) {
+    if (res == CURLE_ABORTED_BY_CALLBACK) {
+        log_info("client disconnected");
+    } else if (res != CURLE_OK && res != CURLE_WRITE_ERROR) {
         log_info("curl error: %s", curl_easy_strerror(res));
     } else {
         log_info("upstream HTTP %ld", s_upstream.status_code);

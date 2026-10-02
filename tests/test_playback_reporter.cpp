@@ -740,6 +740,18 @@ static void testParseTracks()
     std::printf("[test] playback track list parsing OK\n");
 }
 
+static void testParseMfBase()
+{
+    std::printf("[test] MFBASE marker parsing\n");
+    long long t = 0;
+    CHECK(parse_mfbase_ticks("MFBASE ticks=8050000000", t) && t == 8050000000LL);
+    CHECK(parse_mfbase_ticks("noise MFBASE ticks=12 trailing", t) && t == 12);
+    CHECK(!parse_mfbase_ticks("MFBASE ticks=", t));
+    CHECK(!parse_mfbase_ticks("MFBASE ticks=-5", t));
+    CHECK(!parse_mfbase_ticks("pts_time:1.5", t));
+    std::printf("[test] MFBASE marker parsing OK\n");
+}
+
 int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
@@ -821,6 +833,7 @@ int main()
     testParseUserPositionTicks();
     testReplaceResumeTicks();
     testParseTracks();
+    testParseMfBase();
 
     std::printf("\n");
     if (g_failures == 0) {

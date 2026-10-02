@@ -3888,6 +3888,74 @@ static void seek_chapter(VideoState *is, int incr)
 }
 
 /* handle an event sent by the GUI */
+
+/* ---- miyoofin: audio track swap ----------------------------------------- */
+static int audio_cur = -1; /* sub_tracks index of the audio track playing; -1 = server default */
+
+static void audio_track_label(int i, char *out, size_t cap)
+{
+    const char *name = sub_tracks[i].title[0] ? sub_tracks[i].title
+                     : sub_tracks[i].lang[0]  ? sub_tracks[i].lang : "Track";
+    snprintf(out, cap, "%s", name);
+}
+
+/* Y button: next audio track. The remote transcode carries one audio track, so
+ * the stream is reopened at the current position asking for the new one (the last
+ * picture stays on screen meanwhile). Returns the stream to keep using. */
+static VideoState *audio_swap(VideoState *is)
+{
+    char label[64], url[1100], toast[64];
+    int i, next = -1, start = audio_cur, count = 0;
+    double pos, media;
+    VideoState *fresh;
+
+    if (!subs_dir || sub_ntracks == 0) {
+        osd_set_toast("No other audio tracks");
+        return is;
+    }
+    if (start < 0) { /* the server's default: the first default audio track, else the first */
+        for (i = 0; i < sub_ntracks; i++)
+            if (sub_tracks[i].type == 'a' && (sub_tracks[i].is_default || start < 0))
+                start = i;
+    }
+    for (i = 0; i < sub_ntracks; i++)
+        count += sub_tracks[i].type == 'a';
+    if (count < 2) {
+        osd_set_toast("No other audio tracks");
+        return is;
+    }
+    for (i = 1; i <= sub_ntracks && next < 0; i++) {
+        int k = (start + i) % sub_ntracks;
+        if (sub_tracks[k].type == 'a')
+            next = k;
+    }
+    pos = get_master_clock(is);
+    if (is->ic->start_time != AV_NOPTS_VALUE)
+        pos -= is->ic->start_time / (double)AV_TIME_BASE;
+    media = osd_base + (isnan(pos) ? 0.0 : pos);
+    audio_cur = next;
+    audio_track_label(next, label, sizeof(label));
+    snprintf(toast, sizeof(toast), "Audio: %.34s", label);
+    osd_set_toast(toast);
+    is->force_refresh = 1;
+    video_display(is); /* paint the message on the frozen last frame */
+
+    snprintf(url, sizeof(url), "%s?audio=%d&start=%lld", input_filename, sub_tracks[next].index,
+             (long long)(media * 10000000.0));
+    stream_close(is);
+    osd_saved.valid = 0;
+    osd_base = media;
+    fprintf(stderr, "MFBASE ticks=%lld\n", (long long)(media * 10000000.0));
+    fflush(stderr);
+    fresh = stream_open(url, file_iformat);
+    if (!fresh) {
+        av_log(NULL, AV_LOG_FATAL, "audio swap: could not reopen the stream\n");
+        do_exit(NULL);
+    }
+    return fresh;
+}
+/* ---------------------------------------------------------------------- */
+
 static void event_loop(VideoState *cur_stream)
 {
     SDL_Event event;
@@ -3940,6 +4008,9 @@ static void event_loop(VideoState *cur_stream)
                 osd_stretch = !osd_stretch;
                 osd_set_toast(osd_stretch ? "Stretch: fill screen" : "Stretch: original aspect");
                 cur_stream->force_refresh = 1;
+                break;
+            case SDLK_LALT: /* Y button: next audio track */
+                cur_stream = audio_swap(cur_stream);
                 break;
             case SDLK_LSHIFT: /* X button: next subtitle track */
                 sub_cycle();

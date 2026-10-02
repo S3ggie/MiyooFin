@@ -304,7 +304,7 @@ static bool report_event(const char* name, const std::string& path, const Playba
 // any failure keeps the cached value. Nothing sensitive is printed.
 // ===================================================================
 
-static const int REFRESH_TIMEOUT_SEC = 3;
+static long g_timeout_sec = 3;         // per request; raised for subtitle downloads
 static size_t g_max_body = 256 * 1024; // per-request response cap; one thread only
 
 static size_t append_write(void* ptr, size_t size, size_t nmemb, void* userdata)
@@ -336,8 +336,8 @@ static GetResult get_body(const std::string& url, const std::vector<std::string>
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_write);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)REFRESH_TIMEOUT_SEC);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)REFRESH_TIMEOUT_SEC);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, g_timeout_sec);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
     // TLS verification — MUST remain enabled
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -519,13 +519,24 @@ static int fetch_subs(const std::string& appDir)
     ::mkdir(subsDir.c_str(), 0755);
     write_atomic(tracksPath, playback_format_tracks(tracks));
     int saved = 0;
-    g_max_body = 1024 * 1024;
+    // Subtitle files can be several hundred KB and the device is busy decoding:
+    // allow a long transfer and one retry per track.
+    g_max_body = 3 * 1024 * 1024;
+    g_timeout_sec = 25;
     for (const PlaybackTrack& t : playback_subtitle_fetch_order(tracks, 12)) {
         if (!g_running)
             break;
         const std::string path = "/Videos/" + ctx.itemId + "/" + tracks.mediaSourceId +
                                  "/Subtitles/" + std::to_string(t.index) + "/0/Stream.srt";
-        const GetResult srt = get_with_fallback(ctx, path);
+        GetResult srt;
+        for (int attempt = 0; attempt < 2 && g_running; ++attempt) {
+            srt = get_with_fallback(ctx, path);
+            if (!srt.transportFailure && srt.httpStatus >= 200 && srt.httpStatus < 300 &&
+                !srt.body.empty())
+                break;
+            std::printf("subs_fetch retry track=%d http=%ld transport=%d\n", t.index,
+                        srt.httpStatus, srt.transportFailure ? 1 : 0);
+        }
         if (srt.transportFailure || srt.httpStatus < 200 || srt.httpStatus >= 300 ||
             srt.body.empty())
             continue;

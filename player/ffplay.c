@@ -1440,7 +1440,7 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
 
     sub_poll();
     pos = get_master_clock(is);
-    if (is->ic->start_time != AV_NOPTS_VALUE)
+    if (is->ic && is->ic->start_time != AV_NOPTS_VALUE)
         pos -= is->ic->start_time / (double)AV_TIME_BASE;
     media_sec = osd_base + (isnan(pos) ? 0.0 : pos);
     osd_cue = sub_active_cue(media_sec);
@@ -1479,7 +1479,7 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
         int i;
         m.pos_sec = media_sec;
         m.dur_sec = osd_duration > 0 ? osd_duration
-                : (is->ic->duration > 0 ? is->ic->duration / (double)AV_TIME_BASE : 0.0);
+                : (is->ic && is->ic->duration > 0 ? is->ic->duration / (double)AV_TIME_BASE : 0.0);
         m.paused = is->paused;
         m.bar_visible = want_bar;
         m.toast = want_toast ? osd_toast : NULL;
@@ -3956,7 +3956,7 @@ static void audio_track_label(int i, char *out, size_t cap)
 static double media_seconds_now(VideoState *is)
 {
     double pos = get_master_clock(is);
-    if (is->ic->start_time != AV_NOPTS_VALUE)
+    if (is->ic && is->ic->start_time != AV_NOPTS_VALUE)
         pos -= is->ic->start_time / (double)AV_TIME_BASE;
     return osd_base + (isnan(pos) ? 0.0 : pos);
 }
@@ -4001,6 +4001,10 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
 static void remote_seek_request(VideoState *is, double incr)
 {
     char label[40];
+    if (!is->ic) { /* the stream is still opening after a restart: nothing to seek in yet */
+        osd_set_toast("Still loading...");
+        return;
+    }
     double base = seek_target >= 0 ? seek_target : media_seconds_now(is);
     double target = base + incr;
     if (target < 0)

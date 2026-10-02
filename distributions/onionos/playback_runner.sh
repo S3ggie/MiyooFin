@@ -373,6 +373,11 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         # The vflip,hflip filter below means the viewer sees the picture
         # rotated; the fork draws its on-screen display pre-rotated to match.
         PLAYER_EXTRA_ARGS="-osd_rot180 -osd_screen_rot180"
+        # The transcode is always H.264 + AAC in an MPEG-TS stream: a short probe
+        # finds both streams, so every (re)open reaches the first picture sooner.
+        if [ "$REQUEST_SOURCE_MODE" = jellyfin ]; then
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -probesize 262144 -analyzeduration 500000"
+        fi
         # Library runtime (informational): the local HLS playlist cannot report
         # a trustworthy duration, so the on-screen progress bar uses this.
         # Stream time 0 is the resume offset for remote playback (StartTimeTicks).

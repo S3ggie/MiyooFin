@@ -1359,6 +1359,7 @@ static void sub_screen_draw(const SDL_Rect *video, int cue, int force)
  * real SDL key press, so remote tests drive the exact production key paths. */
 #define FF_SEEK_EVENT (SDL_USEREVENT + 7)
 static int64_t seek_deadline;
+static int64_t restart_t0; /* av_gettime_relative() when the last restart began, until its first frame */
 
 static void osd_poll_commands(void)
 {
@@ -1438,6 +1439,10 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
     double pos;
     double media_sec;
 
+    if (restart_t0) {
+        fprintf(stderr, "MFRESTART first_frame_ms=%lld\n", (long long)((av_gettime_relative() - restart_t0) / 1000));
+        restart_t0 = 0;
+    }
     sub_poll();
     pos = get_master_clock(is);
     if (is->ic && is->ic->start_time != AV_NOPTS_VALUE)
@@ -3984,6 +3989,7 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
     if (sub_index >= 0)
         snprintf(query + n, sizeof(query) - n, "&sub=%d", sub_index);
     snprintf(url, sizeof(url), "%s%s", input_filename, query);
+    restart_t0 = av_gettime_relative();
     stream_close(is);
     /* A read thread aborted while still opening reports failure with an
      * FF_QUIT_EVENT; the stream it belonged to is gone, so that must not end
@@ -4010,6 +4016,15 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
 static void remote_seek_request(VideoState *is, double incr)
 {
     char label[40];
+    /* Each restart costs a few seconds, so taps made while a jump is pending
+     * speed up: 1x, 1x, 2x, 3x, 6x of the key's step. */
+    static int taps;
+    static double last_dir;
+    if (seek_target < 0 || (incr < 0) != (last_dir < 0))
+        taps = 0;
+    last_dir = incr;
+    ++taps;
+    incr *= taps <= 2 ? 1 : (taps == 3 ? 2 : (taps == 4 ? 3 : 6));
     if (!is->ic) { /* the stream is still opening after a restart: nothing to seek in yet */
         osd_set_toast("Still loading...");
         return;

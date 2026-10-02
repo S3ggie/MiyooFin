@@ -1006,9 +1006,20 @@ static char *sub_read_file(const char *path, size_t *len)
     return buf;
 }
 
+static int audio_cur = -1; /* sub_tracks index of the audio track playing; -1 = server default */
+static int burn_cur = -1; /* sub_tracks index of the bitmap subtitle burned into the stream, or -1 */
+
+/* Bitmap subtitles (PGS/DVD) cannot be drawn by the player; the server burns one
+ * into the picture. Offer only English ones: foreign-language DVD discs carry
+ * dozens and cycling through them would take forever. */
+static int sub_is_burnable(int i)
+{
+    return sub_tracks[i].type == 's' && !sub_tracks[i].text && !strcmp(sub_tracks[i].lang, "eng");
+}
+
 static int sub_is_selectable(int i)
 {
-    return sub_tracks[i].type == 's' && sub_tracks[i].text;
+    return sub_tracks[i].type == 's' && (sub_tracks[i].text || sub_is_burnable(i));
 }
 
 /* "English - Hearing Impaired - SUBRIP - External" -> "English - Hearing Impaired":
@@ -1093,31 +1104,41 @@ static void sub_poll(void)
     }
 }
 
-static void sub_cycle(void)
+static VideoState *restart_stream(VideoState *is, double media, int audio_index, int sub_index,
+                                 const char *message);
+static double media_seconds_now(VideoState *is);
+static double seek_target = -1.0;
+
+static VideoState *sub_cycle(VideoState *is)
 {
-    char label[96], toast[64];
-    int i, next = -1, start = sub_cur;
+    char label[96], toast[80];
+    int i, next = -1, start = sub_cur, before = burn_cur;
     if (!subs_dir || sub_ntracks == 0) {
         osd_set_toast("No subtitles");
-        return;
+        return is;
     }
-    /* order: off -> first selectable -> ... -> last -> off */
+    /* order: off -> each text track -> each (English) burnable track -> off */
     for (i = start + 1; i < sub_ntracks; i++)
         if (sub_is_selectable(i)) {
             next = i;
             break;
         }
     sub_cur = next;
+    burn_cur = next >= 0 && sub_is_burnable(next) ? next : -1;
     av_freep(&sub_img.rgba);
     sub_img.cue = -1;
     if (sub_cur < 0) {
-        osd_set_toast("Subtitles: Off");
-        return;
+        snprintf(toast, sizeof(toast), "Subtitles: Off");
+    } else {
+        sub_track_label(sub_cur, label, sizeof(label));
+        snprintf(toast, sizeof(toast), "Subs: %.34s%s", label,
+                 burn_cur >= 0 ? " (burned in)" : (sub_file_ready(sub_cur) ? "" : " (loading)"));
     }
-    sub_track_label(sub_cur, label, sizeof(label));
-    snprintf(toast, sizeof(toast), "Subs: %.40s%s", label,
-             sub_file_ready(sub_cur) ? "" : " (loading)");
+    if (burn_cur != before) /* the picture itself changes: reopen the stream */
+        return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is), audio_cur >= 0 ? sub_tracks[audio_cur].index : -1,
+                              burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
     osd_set_toast(toast);
+    return is;
 }
 
 /* Renders `text` (lines separated by '\n') into an RGBA bitmap: white glyphs with
@@ -1336,12 +1357,22 @@ static void sub_screen_draw(const SDL_Rect *video, int cue, int force)
 
 /* Test hook: /tmp/miyoofin-player-cmd holds lines "key <SDLKey>"; each becomes a
  * real SDL key press, so remote tests drive the exact production key paths. */
+#define FF_SEEK_EVENT (SDL_USEREVENT + 7)
+static int64_t seek_deadline;
+
 static void osd_poll_commands(void)
 {
     static int64_t last;
     int64_t now = av_gettime_relative();
     char line[64];
     FILE *f;
+    if (seek_target >= 0 && now >= seek_deadline) {
+        SDL_Event e;
+        memset(&e, 0, sizeof(e));
+        e.type = FF_SEEK_EVENT;
+        SDL_PushEvent(&e);
+        seek_deadline = now + 3000000; /* do not re-push before the handler ran */
+    }
     if (now - last < 250000)
         return;
     last = now;
@@ -3914,8 +3945,6 @@ static void seek_chapter(VideoState *is, int incr)
 /* handle an event sent by the GUI */
 
 /* ---- miyoofin: audio track swap ----------------------------------------- */
-static int audio_cur = -1; /* sub_tracks index of the audio track playing; -1 = server default */
-
 static void audio_track_label(int i, char *out, size_t cap)
 {
     const char *name = sub_tracks[i].title[0] ? sub_tracks[i].title
@@ -3923,15 +3952,76 @@ static void audio_track_label(int i, char *out, size_t cap)
     snprintf(out, cap, "%s", name);
 }
 
-/* Y button: next audio track. The remote transcode carries one audio track, so
- * the stream is reopened at the current position asking for the new one (the last
- * picture stays on screen meanwhile). Returns the stream to keep using. */
+/* Current position in media seconds (resume offset included). */
+static double media_seconds_now(VideoState *is)
+{
+    double pos = get_master_clock(is);
+    if (is->ic->start_time != AV_NOPTS_VALUE)
+        pos -= is->ic->start_time / (double)AV_TIME_BASE;
+    return osd_base + (isnan(pos) ? 0.0 : pos);
+}
+
+/* The remote transcode cannot jump around, so seeking and audio swaps reopen the
+ * stream at `media` seconds (optionally with another audio track). The last
+ * picture stays on screen, carrying `message`, while the new stream starts.
+ * Returns the stream to keep using. */
+static VideoState *restart_stream(VideoState *is, double media, int audio_index, int sub_index,
+                                  const char *message)
+{
+    char url[1100], query[96];
+    int n;
+    VideoState *fresh;
+    if (media < 0)
+        media = 0;
+    osd_set_toast(message);
+    is->force_refresh = 1;
+    video_display(is); /* paint the message on the frozen last frame */
+
+    n = snprintf(query, sizeof(query), "?start=%lld", (long long)(media * 10000000.0));
+    if (audio_index >= 0)
+        n += snprintf(query + n, sizeof(query) - n, "&audio=%d", audio_index);
+    if (sub_index >= 0)
+        snprintf(query + n, sizeof(query) - n, "&sub=%d", sub_index);
+    snprintf(url, sizeof(url), "%s%s", input_filename, query);
+    stream_close(is);
+    osd_saved.valid = 0;
+    osd_base = media;
+    seek_target = -1.0;
+    fprintf(stderr, "MFBASE ticks=%lld\n", (long long)(media * 10000000.0));
+    fflush(stderr);
+    fresh = stream_open(url, file_iformat);
+    if (!fresh) {
+        av_log(NULL, AV_LOG_FATAL, "stream restart: could not reopen the stream\n");
+        do_exit(NULL);
+    }
+    return fresh;
+}
+
+/* Remote seek: accumulate presses, then restart once they settle. */
+static void remote_seek_request(VideoState *is, double incr)
+{
+    char label[40];
+    double base = seek_target >= 0 ? seek_target : media_seconds_now(is);
+    double target = base + incr;
+    if (target < 0)
+        target = 0;
+    if (osd_duration > 0 && target > osd_duration - 5)
+        target = osd_duration - 5 > 0 ? osd_duration - 5 : 0;
+    seek_target = target;
+    seek_deadline = av_gettime_relative() + 700000;
+    osd_format_time(target, label, sizeof(label));
+    {
+        char toast[64];
+        snprintf(toast, sizeof(toast), "%s %s", incr < 0 ? "<<" : ">>", label);
+        osd_set_toast(toast);
+    }
+}
+
+/* Y button: next audio track. */
 static VideoState *audio_swap(VideoState *is)
 {
-    char label[64], url[1100], toast[64];
+    char label[64], toast[64];
     int i, next = -1, start = audio_cur, count = 0;
-    double pos, media;
-    VideoState *fresh;
 
     if (!subs_dir || sub_ntracks == 0) {
         osd_set_toast("No other audio tracks");
@@ -3953,30 +4043,11 @@ static VideoState *audio_swap(VideoState *is)
         if (sub_tracks[k].type == 'a')
             next = k;
     }
-    pos = get_master_clock(is);
-    if (is->ic->start_time != AV_NOPTS_VALUE)
-        pos -= is->ic->start_time / (double)AV_TIME_BASE;
-    media = osd_base + (isnan(pos) ? 0.0 : pos);
     audio_cur = next;
     audio_track_label(next, label, sizeof(label));
     snprintf(toast, sizeof(toast), "Audio: %.34s", label);
-    osd_set_toast(toast);
-    is->force_refresh = 1;
-    video_display(is); /* paint the message on the frozen last frame */
-
-    snprintf(url, sizeof(url), "%s?audio=%d&start=%lld", input_filename, sub_tracks[next].index,
-             (long long)(media * 10000000.0));
-    stream_close(is);
-    osd_saved.valid = 0;
-    osd_base = media;
-    fprintf(stderr, "MFBASE ticks=%lld\n", (long long)(media * 10000000.0));
-    fflush(stderr);
-    fresh = stream_open(url, file_iformat);
-    if (!fresh) {
-        av_log(NULL, AV_LOG_FATAL, "audio swap: could not reopen the stream\n");
-        do_exit(NULL);
-    }
-    return fresh;
+    return restart_stream(is, seek_target >= 0 ? seek_target : media_seconds_now(is),
+                          sub_tracks[next].index, burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
 }
 /* ---------------------------------------------------------------------- */
 
@@ -4037,7 +4108,7 @@ static void event_loop(VideoState *cur_stream)
                 cur_stream = audio_swap(cur_stream);
                 break;
             case SDLK_LSHIFT: /* X button: next subtitle track */
-                sub_cycle();
+                cur_stream = sub_cycle(cur_stream);
                 cur_stream->force_refresh = 1;
                 break;
             case SDLK_w:
@@ -4079,6 +4150,10 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_DOWN:
                 incr = -60.0;
             do_seek:
+                    if (subs_dir) { /* remote stream: jump by reopening it */
+                        remote_seek_request(cur_stream, incr);
+                        break;
+                    }
                     {
                         char t[32];
                         snprintf(t, sizeof(t), "%s%d%s", incr < 0 ? "-" : "+", (int)(incr < 0 ? -incr : incr) >= 60 ? (int)(incr < 0 ? -incr : incr) / 60 : (int)(incr < 0 ? -incr : incr), (int)(incr < 0 ? -incr : incr) >= 60 ? "m" : "s");
@@ -4171,6 +4246,16 @@ static void event_loop(VideoState *cur_stream)
         case SDL_QUIT:
         case FF_QUIT_EVENT:
             do_exit(cur_stream);
+            break;
+        case FF_SEEK_EVENT:
+            if (seek_target >= 0) {
+                char toast[48], t[32];
+                osd_format_time(seek_target, t, sizeof(t));
+                snprintf(toast, sizeof(toast), "Jumping to %s", t);
+                cur_stream = restart_stream(cur_stream, seek_target,
+                                            audio_cur >= 0 ? sub_tracks[audio_cur].index : -1,
+                                            burn_cur >= 0 ? sub_tracks[burn_cur].index : -1, toast);
+            }
             break;
         case FF_ALLOC_EVENT:
             alloc_picture(event.user.data1);

@@ -523,21 +523,21 @@ static void testContentRangeValuePreservation()
 static void testStreamRestartTargets()
 {
     std::printf("[test] bridge stream restart targets\n");
-    std::string path, audio, start;
-    CHECK(bridge_split_target("/stream", path, audio, start) && path == "/stream" &&
+    std::string path, audio, start, sub;
+    CHECK(bridge_split_target("/stream", path, audio, start, sub) && path == "/stream" &&
           audio.empty() && start.empty());
-    CHECK(bridge_split_target("/stream?audio=3&start=8050000000", path, audio, start));
+    CHECK(bridge_split_target("/stream?audio=3&start=8050000000", path, audio, start, sub));
     CHECK(path == "/stream" && audio == "3" && start == "8050000000");
-    CHECK(bridge_split_target("/stream?start=5", path, audio, start) && audio.empty() &&
+    CHECK(bridge_split_target("/stream?start=5", path, audio, start, sub) && audio.empty() &&
           start == "5");
     // Anything else is rejected: nothing arbitrary reaches the upstream URL.
-    CHECK(!bridge_split_target("/stream?audio=3;rm", path, audio, start));
-    CHECK(!bridge_split_target("/stream?audio=-1", path, audio, start));
-    CHECK(!bridge_split_target("/stream?audio=", path, audio, start));
-    CHECK(!bridge_split_target("/stream?ApiKey=x", path, audio, start));
-    CHECK(!bridge_split_target("/stream?audio=1&audio=2", path, audio, start));
-    CHECK(!bridge_split_target("/stream?audio=12345678901234567890", path, audio, start));
-    CHECK(!bridge_split_target("/stream?audio", path, audio, start));
+    CHECK(!bridge_split_target("/stream?audio=3;rm", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?audio=-1", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?audio=", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?ApiKey=x", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?audio=1&audio=2", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?audio=12345678901234567890", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?audio", path, audio, start, sub));
 
     const std::string url =
         "http://h/Videos/i/"
@@ -551,6 +551,18 @@ static void testStreamRestartTargets()
     // No StartTimeTicks in the base URL: appended. No session id: left alone.
     CHECK(bridge_apply_overrides("http://h/s?a=1", "2", "7") ==
           "http://h/s?a=1&StartTimeTicks=7&AudioStreamIndex=2");
+    // Burned-in bitmap subtitles: validated digits, forces server-side Encode.
+    CHECK(bridge_split_target("/stream?sub=7&start=9", path, audio, start, sub) && sub == "7");
+    CHECK(!bridge_split_target("/stream?sub=7&sub=8", path, audio, start, sub));
+    CHECK(!bridge_split_target("/stream?sub=x", path, audio, start, sub));
+    const std::string burned = bridge_apply_overrides(url, "", "900", "7");
+    CHECK(burned.find("&SubtitleStreamIndex=7") != std::string::npos &&
+          burned.find("&SubtitleMethod=Encode") != std::string::npos &&
+          burned.find("PlaySessionId=mf-1-2-r900ax"
+                      "s7") != std::string::npos);
+    const std::string withSub = "http://h/s?SubtitleStreamIndex=-1&StartTimeTicks=1";
+    CHECK(bridge_apply_overrides(withSub, "", "5", "3") ==
+          "http://h/s?SubtitleStreamIndex=3&StartTimeTicks=5&SubtitleMethod=Encode");
     std::printf("[test] bridge stream restart targets OK\n");
 }
 

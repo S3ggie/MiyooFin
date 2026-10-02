@@ -59,9 +59,9 @@ do
 done
 
 if [ "$status" -ne 0 ]; then
-    for test_binary in $TEST_BINARIES
+    for test_binary in $TEST_BINARIES test_catalog_parity_sync test_telemetry_format test_telemetry_schema test_session
     do
-        cat "$run_dir/$test_binary.log"
+        [ -f "$run_dir/$test_binary.log" ] && cat "$run_dir/$test_binary.log"
     done
     exit "$status"
 fi

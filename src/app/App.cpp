@@ -13,6 +13,7 @@
 #include "../ui/screens/HomeScreen.hpp"
 #include "../ui/screens/MusicScreen.hpp"
 #include "../ui/Design.hpp"
+#include "CrashLog.hpp"
 #include "../ui/screens/ServerEntryScreen.hpp"
 #include "../ui/screens/ConnectScreen.hpp"
 #include "../ui/screens/LoginScreen.hpp"
@@ -115,6 +116,7 @@ App::App()
 App::~App()
 {
     m_music.reset(); // stops the audio engine and its workers
+    m_musicDownloads.reset();
     uiDiagnostics().setSuspended(true);
     uiDiagnostics().stop();
     if (m_savedValidationThread.joinable())
@@ -161,6 +163,7 @@ bool App::init()
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    installCrashLog();
     m_mode = loadAppMode();
     design::usePalette(m_mode == AppMode::Music);
     const char* desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");

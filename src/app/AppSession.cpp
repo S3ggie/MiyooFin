@@ -3,6 +3,10 @@
 #include "../ui/screens/MusicScreen.hpp"
 #include "../ui/Design.hpp"
 #include "../music/MusicTracks.hpp"
+#include "../music/MusicDownloads.hpp"
+#include "../music/PlaysJournal.hpp"
+#include <ctime>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include "../ui/screens/LoginScreen.hpp"
 #include "../net/RouteRequest.hpp"
@@ -147,8 +151,8 @@ void App::goToHome()
     if (m_mode == AppMode::Music) {
         ensureMusicPlayer();
         std::atomic_store(&m_musicSession, std::make_shared<Session>(m_session));
-        m_stack.push(std::make_unique<MusicScreen>(m_session, m_downloadManager, m_music.get(),
-                                                   &m_musicSettings));
+        m_stack.push(std::make_unique<MusicScreen>(m_session, m_music.get(), &m_musicSettings,
+                                                   m_musicDownloads.get()));
         return;
     }
     m_stack.push(std::make_unique<HomeScreen>(
@@ -171,6 +175,33 @@ void App::ensureMusicPlayer()
     options.engineUnsetEnv = {"SDL_AUDIODRIVER", "SDL_VIDEODRIVER", "LD_PRELOAD"};
     m_musicSettings.load("music-settings.txt");
 
+    music::MusicDownloads::Hooks downloadHooks;
+    downloadHooks.fetch = [this](const std::string& trackId, const std::string& dest,
+                                 std::string& error, const std::atomic<bool>& cancelled) {
+        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+        if (!session) {
+            error = "Not signed in";
+            return false;
+        }
+        const music::AudioQuality quality{
+            music::MusicSettings::sanitize(m_musicSettings.downloadKbps)};
+        return music::onRoute(*session, error, [&](const music::Connection& c) {
+            return music::downloadTrack(c, trackId, quality, dest, error, &cancelled);
+        });
+    };
+    downloadHooks.offline = [this] {
+        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+        return !session || session->manualOfflineMode;
+    };
+    downloadHooks.freeBytes = [] {
+        struct statvfs vfs;
+        if (statvfs("music-downloads", &vfs) != 0 && statvfs(".", &vfs) != 0)
+            return std::uint64_t{0};
+        return static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
+    };
+    m_musicDownloads =
+        std::make_unique<music::MusicDownloads>("music-downloads", std::move(downloadHooks));
+
     music::PlayerHooks hooks;
     hooks.resolve = [this](const music::Track& track, const std::atomic<bool>& cancelled) {
         const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
@@ -179,20 +210,42 @@ void App::ensureMusicPlayer()
             out.error = "Not signed in";
             return out;
         }
-        return music::resolveTrack(
+        music::TrackSourceConfig source =
             music::makeServerSource(*session, "music-cache/stream",
-                                    {music::MusicSettings::sanitize(m_musicSettings.streamKbps)}),
-            track, cancelled);
+                                    {music::MusicSettings::sanitize(m_musicSettings.streamKbps)});
+        // Offline copies win over everything else (and work with no network at all).
+        source.downloadedPath = [this](const std::string& id) {
+            return m_musicDownloads ? m_musicDownloads->pathFor(id) : std::string();
+        };
+        return music::resolveTrack(source, track, cancelled);
     };
     hooks.report = [this](music::ReportKind kind, const music::Track& track, std::int64_t ticks,
                           bool paused, const std::string& playSessionId) {
         const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
         if (!session)
             return;
+        static music::PlaysJournal journal("music-plays.journal");
         std::string error;
-        music::onRoute(*session, error, [&](const music::Connection& c) {
-            return music::reportPlayback(c, kind, track.id, ticks, paused, playSessionId, error);
-        });
+        const bool reported = !session->manualOfflineMode &&
+                              music::onRoute(*session, error, [&](const music::Connection& c) {
+                                  return music::reportPlayback(c, kind, track.id, ticks, paused,
+                                                               playSessionId, error);
+                              });
+        // A play that could not be reported still counts: it is sent later with its time.
+        if (kind == music::ReportKind::Stopped && !reported &&
+            music::countsAsPlayed(static_cast<double>(ticks) / 1e7, track.durationSeconds()))
+            journal.add(track.id, static_cast<std::int64_t>(std::time(nullptr)));
+        if (reported) {
+            journal.flush([&](const music::PlaysJournal::Entry& e) {
+                bool gone = false;
+                std::string err;
+                const bool ok = music::onRoute(*session, err, [&](const music::Connection& c) {
+                    return music::markPlayed(
+                        c, e.trackId, music::PlaysJournal::isoTime(e.epochSeconds), gone, err);
+                });
+                return ok || gone;
+            });
+        }
     };
     hooks.setAwake = [](bool awake) {
         // Onion's idle sleep checks this file, exactly as it does during video playback.
@@ -203,7 +256,29 @@ void App::ensureMusicPlayer()
             std::remove("/tmp/stay_awake");
         }
     };
+    hooks.saveQueue = [](const std::string& text) {
+        if (text.empty()) {
+            std::remove("music-queue.txt");
+            return;
+        }
+        if (FILE* f = std::fopen("music-queue.txt.tmp", "w")) {
+            std::fwrite(text.data(), 1, text.size(), f);
+            std::fclose(f);
+            std::rename("music-queue.txt.tmp", "music-queue.txt");
+        }
+    };
     m_music = std::make_unique<music::MusicPlayer>(std::move(options), std::move(hooks));
+    if (FILE* f = std::fopen("music-queue.txt", "r")) {
+        std::string text;
+        char buf[4096];
+        std::size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+            text.append(buf, n);
+        std::fclose(f);
+        music::SavedQueue saved;
+        if (music::parseQueue(text, saved))
+            m_music->restoreQueue(saved);
+    }
 }
 
 void App::switchMode(AppMode mode)
@@ -214,7 +289,7 @@ void App::switchMode(AppMode mode)
     if (auto* home = dynamic_cast<HomeScreen*>(m_stack.top()))
         home->cancelAsyncWork();
     if (mode == AppMode::Video && m_music)
-        m_music->stop(); // playback does not follow you into the video app
+        m_music->shutdown(1500); // playback does not follow you into the video app
     m_mode = mode;
     saveAppMode(m_mode);
     design::usePalette(m_mode == AppMode::Music);

@@ -44,7 +44,8 @@ struct CoverResult
 class MusicLibrary
 {
   public:
-    MusicLibrary(Session session, std::string cacheRoot);
+    /// `cacheRoot` holds lists/ and covers/; `streamDir` is where streamed tracks are kept.
+    MusicLibrary(Session session, std::string cacheRoot, std::string streamDir = "");
     ~MusicLibrary();
     MusicLibrary(const MusicLibrary&) = delete;
     MusicLibrary& operator=(const MusicLibrary&) = delete;
@@ -54,6 +55,9 @@ class MusicLibrary
     /// Drops queued listings and stops the one in flight; their results are discarded.
     void cancelLists();
     void requestCover(const std::string& itemId, const std::string& tag, int size);
+    /// Deletes cached listings, covers and streamed tracks (downloads are elsewhere) on a
+    /// worker thread.
+    void clearCaches();
     void setOffline(bool offline)
     {
         m_offline.store(offline);
@@ -91,6 +95,8 @@ class MusicLibrary
     std::atomic<bool> m_stop{false};
     std::atomic<std::uint64_t> m_generation{1};
     std::atomic<bool> m_cancelCurrentList{false};
+    std::atomic<bool> m_clearRequested{false};
+    std::string m_streamDir;
 
     std::mutex m_mutex;
     std::condition_variable m_wake;

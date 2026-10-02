@@ -11,6 +11,11 @@ namespace {
 
 namespace d = design;
 
+bool isAlphabetical(MusicPaneKind k)
+{
+    return k == MusicPaneKind::Artists || k == MusicPaneKind::Albums || k == MusicPaneKind::Songs;
+}
+
 constexpr int kSubBarTop = 44, kSubBarH = 28;
 constexpr int kRowHeight = 44;
 constexpr int kMiniTop = 404, kMiniH = 52;
@@ -68,6 +73,7 @@ void MusicScreen::renderSubBar(SDL_Surface* fb)
                               : root.frame.kind == MusicPaneKind::Songs     ? "Songs"
                               : root.frame.kind == MusicPaneKind::Playlists ? "Playlists"
                               : root.frame.kind == MusicPaneKind::Home      ? "Home"
+                              : root.frame.kind == MusicPaneKind::Downloads ? "Downloads"
                                                                             : "";
         x += ui::text(fb, x, y, section, d::kTextMuted) + 8;
         x += ui::text(fb, x, y, "/", d::kTextMuted) + 8;
@@ -89,8 +95,13 @@ void MusicScreen::renderSubBar(SDL_Surface* fb)
                                                                           : "Settings";
         ui::text(fb, x, y, title, d::kText);
     }
-    // Right side: the letter filter and the count.
+    // Right side: offline marker, the letter filter and the count.
     int right = d::kScreenW - d::kMargin;
+    if (m_session.manualOfflineMode) {
+        right -= ui::textWidth("Offline") + 16;
+        ui::chip(fb, right, y - 2, "Offline", d::kRaised, d::kWarning);
+        right -= 10;
+    }
     if (pane.total > 0 && pane.frame.kind != MusicPaneKind::Home) {
         const std::string count = std::to_string(pane.total);
         right -= ui::textWidth(count);
@@ -130,10 +141,11 @@ void MusicScreen::renderDetailHeader(SDL_Surface* fb, const MusicPane& pane, int
     }
     char meta[64] = "";
     if (f.kind == MusicPaneKind::ArtistAlbums)
-        std::snprintf(meta, sizeof(meta), "%d albums", static_cast<int>(pane.rows.size()));
+        std::snprintf(meta, sizeof(meta), "%d %s", static_cast<int>(pane.rows.size()),
+                      pane.rows.size() == 1 ? "album" : "albums");
     else if (tracks > 0)
-        std::snprintf(meta, sizeof(meta), "%d tracks - %d min", tracks,
-                      static_cast<int>(ticks / 10000000 / 60));
+        std::snprintf(meta, sizeof(meta), "%d %s - %d min", tracks,
+                      tracks == 1 ? "track" : "tracks", static_cast<int>(ticks / 10000000 / 60));
     ui::text(fb, x, y, meta, d::kTextMuted);
     ui::fill(fb, d::kMargin, top + 104, d::kScreenW - 2 * d::kMargin, 1, d::kDivider);
 }
@@ -154,7 +166,7 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
         std::string line, detail;
         if (pane.frame.kind == MusicPaneKind::Downloads) {
             line = "No offline music yet";
-            detail = "Album downloads will appear here.";
+            detail = "Press Y on an album or playlist to download it.";
         } else if (pane.failed) {
             line = "Couldn't load";
             detail = pane.error;
@@ -194,7 +206,7 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
         }
         const int thumb = kRowHeight - 10;
         int textX = d::kMargin + 10;
-        if (row.kind != MusicRow::Kind::Action) {
+        if (row.kind != MusicRow::Kind::Action || !row.artId.empty()) {
             drawCover(fb, row.artId, row.artTag, d::kMargin + 10, y + 1, thumb, 128, row.title);
             textX += thumb + 10;
         }
@@ -204,6 +216,10 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
             ui::text(fb, rightEdge - rw, y + 12, row.right,
                      selected ? d::kTextSecondary : d::kTextMuted);
             rightEdge -= rw + 12;
+        }
+        if (isDownloaded(row) && row.kind != MusicRow::Kind::Action) {
+            ui::iconDownload(fb, rightEdge - 12, y + 13, 12, d::kAccentHi);
+            rightEdge -= 20;
         }
         const bool playing = row.kind == MusicRow::Kind::Track && m_player &&
                              m_player->view().track.id == row.track.id &&
@@ -215,6 +231,11 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
             ui::textClamped(fb, textX, y + 3, rightEdge - textX, row.title, titleColor);
             ui::textClamped(fb, textX, y + 21, rightEdge - textX, row.subtitle,
                             selected ? d::kTextSecondary : d::kTextMuted);
+        }
+        if (row.progress >= 0) {
+            const int barW = rowW - (textX - d::kMargin) - 12;
+            ui::fill(fb, textX, y + kRowHeight - 9, barW, 3, d::kDivider);
+            gradientBar(fb, textX, y + kRowHeight - 9, barW, 3, barW * row.progress / 100);
         }
         y += kRowHeight;
     }
@@ -395,6 +416,8 @@ void MusicScreen::renderFooter(SDL_Surface* fb, bool miniShown)
             pane.rows[pane.frame.selected].kind != MusicRow::Kind::Action &&
             pane.rows[pane.frame.selected].kind != MusicRow::Kind::Artist)
             footer.hints.push_back({ui::Key::Y, "Options"});
+        if (isAlphabetical(pane.frame.kind))
+            footer.hints[0].label = "Move, A-Z";
         if (miniShown)
             footer.hints.push_back({ui::Key::Start, "Now playing"});
     }

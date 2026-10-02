@@ -22,6 +22,7 @@ constexpr std::int64_t kHangMs = 6000;
 constexpr std::int64_t kProgressMs = 10000;
 constexpr std::int64_t kCrashWindowMs = 60000;
 constexpr int kMaxCrashes = 3;
+constexpr std::int64_t kSaveMs = 5000;
 
 std::int64_t steadyMs()
 {
@@ -418,10 +419,31 @@ void MusicPlayer::report(ReportKind kind, bool paused)
     m_wake.notify_all();
 }
 
-void MusicPlayer::finishPlayback(bool reportStop)
+void MusicPlayer::saveQueueNow()
 {
-    if (m_state == PlayState::Idle)
+    m_queueDirty = false;
+    m_lastSaveMs = now();
+    if (!m_hooks.saveQueue)
         return;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingSave = m_queue.empty() || m_queueFinished
+                            ? std::string()
+                            : serializeQueue(m_queue.snapshot(m_position));
+        m_hasPendingSave = true;
+    }
+    m_wake.notify_all();
+}
+
+void MusicPlayer::finishPlayback(bool reportStop, bool naturalEnd)
+{
+    if (naturalEnd)
+        m_queueFinished = true;
+    if (m_state == PlayState::Idle) {
+        if (naturalEnd)
+            saveQueueNow();
+        return;
+    }
     if (reportStop && m_started)
         report(ReportKind::Stopped, false);
     if (m_pid > 0)
@@ -439,6 +461,7 @@ void MusicPlayer::finishPlayback(bool reportStop)
     m_preloadRequested = false;
     m_failures = 0;
     setState(PlayState::Idle);
+    saveQueueNow(); // keep the queue and position, or clear them after a natural end
 }
 
 void MusicPlayer::handleEvent(const EngineEvent& e)
@@ -458,6 +481,7 @@ void MusicPlayer::handleEvent(const EngineEvent& e)
             setState(PlayState::Playing);
         report(ReportKind::Start, false);
         maybePreloadNext();
+        markQueueDirty();
         break;
     case T::Pos:
         if (m_state == PlayState::Idle || !m_started)
@@ -474,9 +498,10 @@ void MusicPlayer::handleEvent(const EngineEvent& e)
         m_started = false;
         const bool gapless = !m_preloadPath.empty();
         if (!m_queue.advance()) {
-            finishPlayback(false);
+            finishPlayback(false, true);
             break;
         }
+        markQueueDirty();
         if (gapless) {
             m_loadedPath = m_preloadPath;
             m_preloadPath.clear();
@@ -525,6 +550,8 @@ void MusicPlayer::poll()
         m_lastProgressMs = now();
         report(ReportKind::Progress, false);
     }
+    if (m_queueDirty && m_state != PlayState::Idle && now() - m_lastSaveMs >= kSaveMs)
+        saveQueueNow();
 }
 
 // ---- controls -----------------------------------------------------------------------------------
@@ -537,7 +564,9 @@ void MusicPlayer::playTracks(std::vector<Track> tracks, int startIndex, bool shu
     if (shuffle)
         m_queue.setShuffle(true);
     m_queue.set(std::move(tracks), startIndex);
+    m_queueFinished = false;
     m_failures = 0;
+    markQueueDirty();
     startCurrent(0);
 }
 
@@ -546,6 +575,7 @@ void MusicPlayer::pause()
     if (m_state != PlayState::Playing)
         return;
     sendLine("pause");
+    markQueueDirty();
     setState(PlayState::Paused);
     report(ReportKind::Progress, true);
 }
@@ -623,11 +653,13 @@ void MusicPlayer::jumpTo(int position)
 void MusicPlayer::setShuffle(bool on)
 {
     m_queue.setShuffle(on);
+    markQueueDirty();
     invalidatePreload();
 }
 
 void MusicPlayer::cycleRepeat()
 {
+    markQueueDirty();
     const Repeat r = m_queue.repeat();
     m_queue.setRepeat(r == Repeat::Off   ? Repeat::All
                       : r == Repeat::All ? Repeat::One
@@ -637,12 +669,14 @@ void MusicPlayer::cycleRepeat()
 
 void MusicPlayer::playNext(Track track)
 {
+    markQueueDirty();
     m_queue.playNext(std::move(track));
     invalidatePreload();
 }
 
 void MusicPlayer::append(Track track)
 {
+    markQueueDirty();
     m_queue.append(std::move(track));
     invalidatePreload();
 }
@@ -650,14 +684,36 @@ void MusicPlayer::append(Track track)
 bool MusicPlayer::removeAt(int position)
 {
     const bool removed = m_queue.removeAt(position);
-    if (removed)
+    if (removed) {
+        markQueueDirty();
         invalidatePreload();
+    }
     return removed;
 }
 
 void MusicPlayer::stop()
 {
     finishPlayback(true);
+}
+
+void MusicPlayer::restoreQueue(const SavedQueue& saved)
+{
+    if (m_state != PlayState::Idle || saved.tracks.empty())
+        return;
+    m_queue.restore(saved);
+    m_queueFinished = false;
+    m_position = saved.seconds;
+    if (const Track* t = m_queue.current())
+        m_duration = t->durationSeconds();
+}
+
+void MusicPlayer::resumeSaved()
+{
+    if (m_state != PlayState::Idle || m_queue.empty())
+        return;
+    m_queueFinished = false;
+    m_failures = 0;
+    startCurrent(m_position);
 }
 
 PlayerView MusicPlayer::view() const
@@ -673,6 +729,7 @@ PlayerView MusicPlayer::view() const
     v.queuePosition = m_queue.position();
     v.queueSize = m_queue.size();
     v.message = m_message;
+    v.resumable = m_state == PlayState::Idle && !m_queue.empty() && !m_queueFinished;
     return v;
 }
 
@@ -716,7 +773,18 @@ void MusicPlayer::reportLoop()
         ReportJob job;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_wake.wait(lock, [this] { return m_stopWorkers || !m_reportJobs.empty(); });
+            m_wake.wait(lock, [this] {
+                return m_stopWorkers || !m_reportJobs.empty() || m_hasPendingSave;
+            });
+            if (m_hasPendingSave) {
+                std::string text;
+                text.swap(m_pendingSave);
+                m_hasPendingSave = false;
+                lock.unlock();
+                if (m_hooks.saveQueue)
+                    m_hooks.saveQueue(text);
+                continue;
+            }
             if (m_reportJobs.empty())
                 return; // stopping and drained
             job = std::move(m_reportJobs.front());

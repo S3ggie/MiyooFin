@@ -94,6 +94,11 @@ bool reportPlayback(const Connection& c, ReportKind kind, const std::string& tra
                     std::int64_t positionTicks, bool paused, const std::string& playSessionId,
                     std::string& error);
 
+/// Marks a track as played at `isoTime` (offline plays synced later). `gone` is set when the
+/// server no longer has the item, so the caller can drop the entry for good.
+bool markPlayed(const Connection& c, const std::string& trackId, const std::string& isoTime,
+                bool& gone, std::string& error);
+
 } // namespace music
 } // namespace miyoofin
 

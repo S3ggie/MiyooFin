@@ -15,6 +15,7 @@
 #include "../net/Session.hpp"
 #include "../download/DownloadManager.hpp"
 #include "../library/LibraryCoordinator.hpp"
+#include "../music/MusicDownloads.hpp"
 #include "../music/MusicPlayer.hpp"
 #include "../music/MusicSettings.hpp"
 #include "AppMode.hpp"
@@ -94,6 +95,7 @@ class App
     // and the session copy its worker threads read.
     AppMode m_mode = AppMode::Video;
     music::MusicSettings m_musicSettings;
+    std::unique_ptr<music::MusicDownloads> m_musicDownloads; // outlives the player's fetches
     std::unique_ptr<music::MusicPlayer> m_music;
     std::shared_ptr<Session> m_musicSession;
     void ensureMusicPlayer();

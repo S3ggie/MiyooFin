@@ -3,6 +3,7 @@
 
 #include "../../app/Screen.hpp"
 #include "../../download/DownloadManager.hpp"
+#include "../../music/MusicDownloads.hpp"
 #include "../../music/MusicLibrary.hpp"
 #include "../../music/MusicPlayer.hpp"
 #include "../../music/MusicSettings.hpp"
@@ -38,6 +39,7 @@ struct MusicRow
     music::Album album;
     music::Artist artist;
     music::Playlist playlist;
+    int progress = -1; // 0-100 for a download in flight, -1 = none
     bool selectable() const
     {
         return kind != Kind::Heading;
@@ -52,6 +54,7 @@ struct MusicPane
     std::uint64_t ticket = 0, ticket2 = 0; // outstanding listing requests (Home has two)
     bool requested = false, failed = false, loadedOnce = false, hasMore = false;
     int total = 0;
+    std::uint64_t builtRevision = 0; // download state the rows were built from
     std::string error;
     // Home is assembled from two listings.
     std::vector<music::Album> homeAlbums;
@@ -64,8 +67,8 @@ struct MusicPane
 class MusicScreen : public Screen
 {
   public:
-    MusicScreen(const Session& session, std::shared_ptr<DownloadManager> downloads,
-                music::MusicPlayer* player, music::MusicSettings* settings);
+    MusicScreen(const Session& session, music::MusicPlayer* player, music::MusicSettings* settings,
+                music::MusicDownloads* downloads);
     ~MusicScreen() override;
 
     void enter() override;
@@ -107,12 +110,14 @@ class MusicScreen : public Screen
         PlayAll,
         ShuffleAll,
         PlayNext,
-        Append
+        Append,
+        Download
     };
     struct Pending
     {
         PendingKind kind;
         int startIndex = 0;
+        music::DownloadCollection collection; // for Download
     };
     struct MenuItem
     {
@@ -143,6 +148,13 @@ class MusicScreen : public Screen
     void restoreSelection(MusicPane& pane, const std::string& selectedId);
     void clampPane(MusicPane& pane);
     void refreshSettingsRows(MusicPane& pane);
+    void syncResumeRow(MusicPane& pane);
+    void refreshDownloadRows(MusicPane& pane);
+    music::DownloadCollection collectionFor(const MusicRow& row) const;
+    music::DownloadCollection collectionForPane(const MusicPane& pane) const;
+    void downloadTracks(const music::DownloadCollection& collection,
+                        const std::vector<music::Track>& tracks);
+    bool isDownloaded(const MusicRow& row) const;
     void markDirty()
     {
         m_stateDirty = true;
@@ -184,9 +196,11 @@ class MusicScreen : public Screen
     int detailHeaderHeight(const MusicPane& pane) const;
 
     Session m_session;
-    std::shared_ptr<DownloadManager> m_downloads;
     music::MusicPlayer* m_player;
     music::MusicSettings* m_settings;
+    music::MusicDownloads* m_downloads;
+    std::uint64_t m_downloadsRevision = 0;
+    std::string m_removeArmed; // collection whose removal awaits a second press
     std::unique_ptr<music::MusicLibrary> m_library;
     BatteryMonitor m_battery;
 

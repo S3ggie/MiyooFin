@@ -221,7 +221,7 @@ MODULE_BOUNDARIES_TEST := tests/test_module_boundaries.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player
+               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player music_downloads
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -265,7 +265,8 @@ test-sanitize:
 # because it needs an instrumented rebuild and a TSan-capable host toolchain.
 TSAN_GROUPS := library_coordinator library_hierarchy library_query catalog \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync \
-               home_library_controller home_artwork_controller downloads worker_slot ui_models
+               home_library_controller home_artwork_controller downloads worker_slot ui_models \
+               music music_player music_downloads
 TSAN_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TSAN_GROUPS))
 TSAN_RUNNER := tests/test_tsan_runner.sh
 TSAN_RUNNER_TARGET := $(TEST_DIR)/test_tsan_runner

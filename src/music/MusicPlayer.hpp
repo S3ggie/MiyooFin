@@ -57,6 +57,8 @@ struct PlayerHooks
         report;
     /// Called on the UI thread when playing state changes (for the stay-awake file).
     std::function<void(bool awake)> setAwake;
+    /// Persists the queue (serialized text; "" = nothing to resume). Runs on the report thread.
+    std::function<void(const std::string& text)> saveQueue;
 };
 
 struct PlayerOptions
@@ -84,7 +86,8 @@ struct PlayerView
     bool shuffle = false;
     Repeat repeat = Repeat::Off;
     int queuePosition = -1, queueSize = 0;
-    std::string message; // last problem worth showing ("" = none)
+    std::string message;    // last problem worth showing ("" = none)
+    bool resumable = false; // idle, but a saved queue can be picked up where it stopped
 };
 
 /// Owns the play queue, the audio-engine child process, and the background work (fetching
@@ -114,6 +117,9 @@ class MusicPlayer
     void append(Track track);
     bool removeAt(int position);
     void stop();
+    /// Loads a queue saved by an earlier run; it waits (idle, resumable) until resumeSaved().
+    void restoreQueue(const SavedQueue& saved);
+    void resumeSaved();
     /// Blocks up to `timeoutMs` for the engine to exit (app exit / before video playback).
     void shutdown(int timeoutMs);
 
@@ -172,7 +178,12 @@ class MusicPlayer
     void applyFetchResult(const FetchResult& r);
     void superviseEngine();
     void report(ReportKind kind, bool paused);
-    void finishPlayback(bool report);
+    void finishPlayback(bool report, bool naturalEnd = false);
+    void markQueueDirty()
+    {
+        m_queueDirty = true;
+    }
+    void saveQueueNow();
     void setState(PlayState state);
     void fetchLoop();
     void reportLoop();
@@ -205,6 +216,10 @@ class MusicPlayer
     std::int64_t m_lastProgressMs = 0;
     bool m_awake = false;
     double m_pendingStart = 0;
+    bool m_queueDirty = false, m_queueFinished = false;
+    std::int64_t m_lastSaveMs = 0;
+    bool m_hasPendingSave = false;
+    std::string m_pendingSave;
     int m_failures = 0; // consecutive tracks that could not be played
 
     // workers

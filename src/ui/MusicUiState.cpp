@@ -46,7 +46,7 @@ bool readFrame(const std::vector<std::string>& f, MusicFrame& out)
     if (f.size() < 12)
         return false;
     const int kind = std::atoi(f[2].c_str());
-    if (kind < 0 || kind > static_cast<int>(MusicPaneKind::PlaylistTracks))
+    if (kind < 0 || kind > static_cast<int>(MusicPaneKind::DownloadedTracks))
         return false;
     out.kind = static_cast<MusicPaneKind>(kind);
     out.id = f[3];

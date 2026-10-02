@@ -269,5 +269,32 @@ bool reportPlayback(const Connection& c, ReportKind kind, const std::string& tra
     return true;
 }
 
+bool markPlayed(const Connection& c, const std::string& trackId, const std::string& isoTime,
+                bool& gone, std::string& error)
+{
+    gone = false;
+    HttpClient client;
+    client.setTimeoutSec(10);
+    HttpResponse response;
+    auto headers = JellyfinApi::buildAuthHeaders(c.accessToken, c.deviceId);
+    if (!client.perform("POST",
+                        c.baseUrl + "/Users/" + percentEncode(c.userId) + "/PlayedItems/" +
+                            percentEncode(trackId) + "?DatePlayed=" + percentEncode(isoTime),
+                        headers, {}, response, error)) {
+        if (error.empty())
+            error = "Could not reach server";
+        return false;
+    }
+    if (response.status == 404) {
+        gone = true;
+        return false;
+    }
+    if (!response.ok()) {
+        error = "Mark played failed (HTTP " + std::to_string(response.status) + ")";
+        return false;
+    }
+    return true;
+}
+
 } // namespace music
 } // namespace miyoofin

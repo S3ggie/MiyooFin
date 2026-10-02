@@ -133,7 +133,8 @@ void testPlaysQueueGapless()
         if (e.compare(0, 6, "start:") == 0)
             starts.push_back(e);
     CHECK(starts == (std::vector<std::string>{"start:t0", "start:t1", "start:t2"}));
-    CHECK(rig.saw("stop:t0") && rig.saw("stop:t1") && rig.saw("stop:t2"));
+    CHECK(
+        rig.until([&] { return rig.saw("stop:t0") && rig.saw("stop:t1") && rig.saw("stop:t2"); }));
     std::printf("[test] player plays a queue and reports OK\n");
 }
 
@@ -172,7 +173,7 @@ void testControls()
     CHECK(rig.until([&] { return rig.player->view().position < 3.0; }));
     rig.player->stop();
     CHECK(rig.player->view().state == PlayState::Idle);
-    CHECK(rig.saw("stop:t1"));
+    CHECK(rig.until([&] { return rig.saw("stop:t1"); }));
     std::printf("[test] player pause, skip and previous OK\n");
 }
 
@@ -194,7 +195,7 @@ void testEngineCrashRecovery()
     Rig rig({"FAKE_CRASH_FILE=" + crashDir + "/crashed", "FAKE_LEN_MS=20000"});
     rig.player->playTracks(tracks({"t0"}), 0, false);
     CHECK(rig.until([&] { return rig.player->view().state == PlayState::Playing; }));
-    CHECK(rig.saw("start:t0"));
+    CHECK(rig.until([&] { return rig.saw("start:t0"); }));
     std::system(("rm -rf " + crashDir).c_str());
     std::printf("[test] player recovers from an engine crash OK\n");
 }
@@ -210,7 +211,7 @@ void testShutdownReapsEngine()
     rig.player->shutdown(2000);
     CHECK(rig.player->enginePid() <= 0);
     CHECK(kill(pid, 0) != 0); // gone, not a zombie
-    CHECK(rig.saw("stop:t0"));
+    CHECK(rig.until([&] { return rig.saw("stop:t0"); }));
     std::printf("[test] player shutdown reaps the engine OK\n");
 }
 
@@ -232,6 +233,71 @@ void testRepeatAndShuffleKeepPlaying()
     std::printf("[test] player repeat one OK\n");
 }
 
+void testResume()
+{
+    std::printf("[test] player resumes a saved queue\n");
+    Rig rig({"FAKE_LEN_MS=200000"});
+    SavedQueue saved;
+    saved.tracks = tracks({"r0", "r1", "r2"});
+    saved.position = 1;
+    saved.seconds = 42;
+    rig.player->restoreQueue(saved);
+    PlayerView v = rig.player->view();
+    CHECK(v.state == PlayState::Idle && v.resumable && v.track.id == "r1" && v.position == 42);
+    rig.player->resumeSaved();
+    CHECK(rig.until([&] { return rig.player->view().state == PlayState::Playing; }));
+    CHECK(rig.player->view().track.id == "r1" && !rig.player->view().resumable);
+    CHECK(rig.until([&] { return rig.player->view().position >= 42.0; }));
+    rig.player->stop();
+    CHECK(rig.player->view().resumable); // stopping by hand keeps the place
+    std::printf("[test] player resumes a saved queue OK\n");
+}
+
+void testSavesQueue()
+{
+    std::printf("[test] player saves its queue\n");
+    Rig rig({"FAKE_LEN_MS=20000"});
+    std::mutex mutex;
+    std::vector<std::string> saves;
+    PlayerHooks hooks;
+    // A second player with a saveQueue hook: the first rig has none.
+    PlayerOptions options;
+    options.enginePath = "tests/fixtures/fake-audio-engine.sh";
+    options.engineEnv = {"FAKE_LEN_MS=20000"};
+    hooks.resolve = [&](const Track& t, const std::atomic<bool>&) {
+        ResolvedTrack r;
+        r.ok = true;
+        r.path = rig.dir + "/" + t.id + ".mp3";
+        return r;
+    };
+    hooks.saveQueue = [&](const std::string& text) {
+        std::lock_guard<std::mutex> lock(mutex);
+        saves.push_back(text);
+    };
+    {
+        MusicPlayer player(options, hooks);
+        player.playTracks(tracks({"s0", "s1"}), 0, false);
+        for (int i = 0; i < 200 && player.view().state != PlayState::Playing; ++i) {
+            player.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        player.stop();
+        for (int i = 0; i < 100; ++i) {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (!saves.empty())
+                    break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(!saves.empty());
+    SavedQueue parsed;
+    CHECK(parseQueue(saves.back(), parsed) && parsed.tracks.size() == 2);
+    std::printf("[test] player saves its queue OK\n");
+}
+
 } // namespace
 
 int main()
@@ -243,5 +309,7 @@ int main()
     testEngineCrashRecovery();
     testShutdownReapsEngine();
     testRepeatAndShuffleKeepPlaying();
+    testResume();
+    testSavesQueue();
     return miyoofin_test::finish("music_player");
 }

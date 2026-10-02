@@ -31,7 +31,8 @@ enum class MusicPaneKind
     Settings,
     ArtistAlbums,
     AlbumTracks,
-    PlaylistTracks
+    PlaylistTracks,
+    DownloadedTracks // a downloaded album/playlist, listed from the device (no network)
 };
 
 /// What survives leaving a page and coming back (and restarting the app): where the

@@ -5,6 +5,7 @@
 #include "../src/music/MusicParse.hpp"
 #include "../src/music/MusicQueue.hpp"
 #include "../src/music/MusicTracks.hpp"
+#include "../src/music/PlaysJournal.hpp"
 #include "../src/ui/MusicUiState.hpp"
 #include "../src/app/AppMode.hpp"
 
@@ -360,6 +361,85 @@ void testUiState()
     std::printf("[test] music UI state OK\n");
 }
 
+void testQueuePersistence()
+{
+    std::printf("[test] saved queue\n");
+    MusicQueue q;
+    q.seed(3);
+    q.setShuffle(true);
+    q.setRepeat(Repeat::All);
+    q.set(tracks(10), 4);
+    q.advance();
+    q.advance();
+    Track odd = track("odd");
+    odd.title = "Tab\there";
+    odd.runTimeTicks = 1234567890123;
+    q.playNext(odd);
+    const SavedQueue saved = q.snapshot(83.5);
+    CHECK(saved.tracks.size() == 11 && saved.position == q.position() && saved.shuffle);
+    const std::string text = serializeQueue(saved);
+    SavedQueue back;
+    CHECK(parseQueue(text, back));
+    CHECK(back.tracks.size() == 11 && back.position == saved.position && back.shuffle &&
+          back.repeat == Repeat::All && back.seconds == 83.5);
+    CHECK(back.tracks[q.position() + 1].title == "Tab here" &&
+          back.tracks[q.position() + 1].runTimeTicks == 1234567890123);
+    MusicQueue restored;
+    restored.restore(back);
+    CHECK(restored.size() == 11 && restored.position() == q.position() &&
+          restored.current()->id == q.current()->id && restored.shuffle() &&
+          restored.repeat() == Repeat::All);
+    CHECK(restored.peekNext()->id == q.peekNext()->id); // same order as when it was saved
+    // A half-written file keeps its whole lines; junk is rejected.
+    SavedQueue cut;
+    CHECK(parseQueue(text.substr(0, text.size() - 20), cut) && cut.tracks.size() == 10);
+    CHECK(!parseQueue("junk", cut) && !parseQueue("MFMQ=1\n", cut));
+    CHECK(!parseQueue("MFMQ=1\nstate\t0\t0\t0\t0\n", cut)); // no tracks
+    // Very long queues are trimmed around the current track.
+    MusicQueue big;
+    big.set(tracks(900), 700);
+    const SavedQueue trimmed = big.snapshot(0);
+    CHECK(static_cast<int>(trimmed.tracks.size()) == kSavedQueueMaxTracks);
+    CHECK(trimmed.tracks[trimmed.position].id == "t700");
+    std::printf("[test] saved queue OK\n");
+}
+
+void testPlaysJournal()
+{
+    std::printf("[test] plays journal\n");
+    CHECK(countsAsPlayed(120, 200) && !countsAsPlayed(99, 200) && countsAsPlayed(240, 1200) &&
+          !countsAsPlayed(10, 0) && !countsAsPlayed(0, 200));
+    CHECK(PlaysJournal::isoTime(0) == "1970-01-01T00:00:00Z" &&
+          PlaysJournal::isoTime(1700000000) == "2023-11-14T22:13:20Z");
+    char tmpl[] = "/tmp/miyoofin-journal-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    PlaysJournal journal(dir + "/plays");
+    CHECK(journal.entries().empty());
+    journal.add("a", 100);
+    journal.add("b", 200);
+    journal.add("c", 300);
+    journal.add("", 400); // ignored
+    CHECK(journal.entries().size() == 3);
+    // Offline: the first send is refused, nothing is lost.
+    CHECK(journal.flush([](const PlaysJournal::Entry&) { return false; }) == 0 &&
+          journal.entries().size() == 3);
+    // Back online, but the connection drops after two plays.
+    std::vector<std::string> sent;
+    CHECK(journal.flush([&](const PlaysJournal::Entry& e) {
+        if (sent.size() == 2)
+            return false;
+        sent.push_back(e.trackId);
+        return true;
+    }) == 2);
+    CHECK(sent == (std::vector<std::string>{"a", "b"}));
+    auto left = journal.entries();
+    CHECK(left.size() == 1 && left[0].trackId == "c" && left[0].epochSeconds == 300);
+    CHECK(journal.flush([](const PlaysJournal::Entry&) { return true; }) == 1 &&
+          journal.entries().empty());
+    std::system(("rm -rf " + dir).c_str());
+    std::printf("[test] plays journal OK\n");
+}
+
 } // namespace
 
 int main()
@@ -370,5 +450,7 @@ int main()
     testQueue();
     testTrackSource();
     testUiState();
+    testQueuePersistence();
+    testPlaysJournal();
     return miyoofin_test::finish("music");
 }

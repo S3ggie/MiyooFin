@@ -20,7 +20,9 @@ constexpr Uint32 kStateSaveMs = 2000;
 constexpr std::size_t kMaxCovers = 80;
 
 constexpr int kMenuPlay = 1, kMenuShuffle = 2, kMenuPlayNext = 3, kMenuAppend = 4, kMenuGoAlbum = 5,
-              kMenuGoArtist = 6;
+              kMenuGoArtist = 6, kMenuDownload = 7, kMenuRemove = 8, kMenuRetry = 9,
+              kMenuDownloadPage = 10, kMenuPlayDownloaded = 11, kMenuShuffleDownloaded = 12;
+constexpr const char* kDownloadPrefix = "dl:";
 
 std::string readText(const std::string& path)
 {
@@ -171,10 +173,10 @@ music::ListingRequest MusicScreen::requestFor(const MusicFrame& frame, int start
 // ---- construction
 // ---------------------------------------------------------------------------------
 
-MusicScreen::MusicScreen(const Session& session, std::shared_ptr<DownloadManager> downloads,
-                         music::MusicPlayer* player, music::MusicSettings* settings)
-    : m_session(session), m_downloads(std::move(downloads)), m_player(player), m_settings(settings),
-      m_library(std::make_unique<music::MusicLibrary>(session, kCacheRoot))
+MusicScreen::MusicScreen(const Session& session, music::MusicPlayer* player,
+                         music::MusicSettings* settings, music::MusicDownloads* downloads)
+    : m_session(session), m_player(player), m_settings(settings), m_downloads(downloads),
+      m_library(std::make_unique<music::MusicLibrary>(session, kCacheRoot, "music-cache/stream"))
 {
     MusicUiState state = MusicUiState::defaults();
     MusicUiState saved;
@@ -287,6 +289,7 @@ int MusicScreen::detailHeaderHeight(const MusicPane& pane) const
     switch (pane.frame.kind) {
     case MusicPaneKind::AlbumTracks:
     case MusicPaneKind::PlaylistTracks:
+    case MusicPaneKind::DownloadedTracks:
     case MusicPaneKind::ArtistAlbums:
         return 108;
     default:
@@ -327,8 +330,9 @@ void MusicScreen::requestPane(MusicPane& pane, bool nextPage)
         break;
     }
     case MusicPaneKind::Downloads:
+    case MusicPaneKind::DownloadedTracks:
     case MusicPaneKind::Settings:
-        break;
+        break; // built from local state, not requested
     default:
         pane.ticket = m_library->requestList(
             requestFor(pane.frame, nextPage ? static_cast<int>(pane.rows.size()) : 0));
@@ -492,7 +496,7 @@ void MusicScreen::update(Uint32 dt)
     for (const music::ListResult& r : m_library->takeLists()) {
         auto pending = m_pending.find(r.ticket);
         if (pending != m_pending.end()) {
-            applyPending(r, pending->second);
+            applyPending(r, Pending(pending->second)); // a copy: the entry is erased inside
             continue;
         }
         applyListResult(r);
@@ -502,6 +506,11 @@ void MusicScreen::update(Uint32 dt)
     MusicPane& pane = activePane();
     if (pane.frame.kind == MusicPaneKind::Settings)
         refreshSettingsRows(pane);
+    if (pane.frame.kind == MusicPaneKind::Home)
+        syncResumeRow(pane);
+    if (pane.frame.kind == MusicPaneKind::Downloads ||
+        pane.frame.kind == MusicPaneKind::DownloadedTracks)
+        refreshDownloadRows(pane);
     if (!pane.requested)
         requestPane(pane, false);
     // The next page loads before the cursor reaches the end of what we have.
@@ -514,6 +523,158 @@ void MusicScreen::update(Uint32 dt)
         saveState();
     if (!m_toast.empty() && m_clock > m_toastUntil)
         m_toast.clear();
+}
+
+constexpr const char* kResumeId = "__resume__";
+
+// "Continue listening": the first row of Home while a saved queue is waiting.
+void MusicScreen::syncResumeRow(MusicPane& pane)
+{
+    const music::PlayerView v = m_player ? m_player->view() : music::PlayerView{};
+    const bool want = v.resumable;
+    const bool have = !pane.rows.empty() && pane.rows.front().id == kResumeId;
+    if (!want) {
+        if (have) {
+            pane.rows.erase(pane.rows.begin());
+            pane.frame.selected = std::max(0, pane.frame.selected - 1);
+            clampPane(pane);
+        }
+        return;
+    }
+    MusicRow row;
+    row.kind = MusicRow::Kind::Action;
+    row.id = kResumeId;
+    row.title = "Continue listening";
+    row.subtitle = v.track.title + " - " + v.track.artist;
+    row.right = music::formatDuration(static_cast<int>(v.position));
+    row.artId = v.track.artId();
+    row.artTag = v.track.artTag();
+    if (have) {
+        pane.rows.front() = row;
+    } else {
+        pane.rows.insert(pane.rows.begin(), row);
+        pane.frame.selected += pane.rows.size() > 1 ? 1 : 0;
+        if (pane.rows.size() == 1)
+            pane.frame.selected = 0;
+        clampPane(pane);
+    }
+    pane.requested = true;
+}
+
+std::string formatMegabytes(std::uint64_t bytes)
+{
+    char buf[32];
+    if (bytes >= 1024ull * 1024 * 1024)
+        std::snprintf(buf, sizeof(buf), "%.1f GB",
+                      static_cast<double>(bytes) / (1024.0 * 1024 * 1024));
+    else
+        std::snprintf(buf, sizeof(buf), "%.0f MB", static_cast<double>(bytes) / (1024.0 * 1024));
+    return buf;
+}
+
+// The Downloads tab (one row per downloaded album/playlist/track) and the page of a downloaded
+// collection. Both come straight from the local index, so they work with no network at all.
+void MusicScreen::refreshDownloadRows(MusicPane& pane)
+{
+    pane.requested = true;
+    pane.loadedOnce = true;
+    if (!m_downloads)
+        return;
+    // Progress moves quickly while downloading, so rebuild on every change (cheap: no I/O).
+    const std::uint64_t revision = m_downloads->revision();
+    if (revision == m_downloadsRevision && pane.builtRevision == revision)
+        return;
+    m_downloadsRevision = revision;
+    pane.builtRevision = revision;
+    const std::string selectedId = pane.frame.selectedId;
+    pane.rows.clear();
+    if (pane.frame.kind == MusicPaneKind::DownloadedTracks) {
+        for (const music::Track& t : m_downloads->tracksOf(pane.frame.id))
+            pane.rows.push_back(trackRow(t, false));
+        pane.total = static_cast<int>(pane.rows.size());
+    } else {
+        for (const music::DownloadStatus& s : m_downloads->snapshot()) {
+            MusicRow r;
+            r.kind = MusicRow::Kind::Action;
+            r.id = kDownloadPrefix + s.collection.id;
+            r.title = s.collection.name;
+            std::string info = s.collection.artist.empty() ? "" : s.collection.artist + " - ";
+            info += std::to_string(s.done) + "/" + std::to_string(s.total) +
+                    (s.total == 1 ? " track" : " tracks");
+            if (s.failed)
+                info = "Failed: " + s.error;
+            else if (s.done < s.total)
+                info = (s.active ? "Downloading " : "Waiting ") + info;
+            r.subtitle = info;
+            r.right = formatMegabytes(s.bytes);
+            r.artId = s.collection.artId;
+            r.artTag = s.collection.artTag;
+            if (s.done < s.total && !s.failed)
+                r.progress = s.total ? s.done * 100 / s.total : 0;
+            pane.rows.push_back(std::move(r));
+        }
+        pane.total = static_cast<int>(pane.rows.size());
+    }
+    restoreSelection(pane, selectedId);
+}
+
+bool MusicScreen::isDownloaded(const MusicRow& row) const
+{
+    if (!m_downloads)
+        return false;
+    switch (row.kind) {
+    case MusicRow::Kind::Track:
+        return m_downloads->hasTrack(row.track.id);
+    case MusicRow::Kind::Album:
+        return m_downloads->hasCollection(row.album.id);
+    case MusicRow::Kind::Playlist:
+        return m_downloads->hasCollection(row.playlist.id);
+    default:
+        return false;
+    }
+}
+
+music::DownloadCollection MusicScreen::collectionFor(const MusicRow& row) const
+{
+    music::DownloadCollection c;
+    c.id = row.id;
+    c.name = row.title;
+    c.artist = row.kind == MusicRow::Kind::Album ? row.album.artist : "";
+    c.artId = row.artId;
+    c.artTag = row.artTag;
+    c.kind = row.kind == MusicRow::Kind::Album      ? "album"
+             : row.kind == MusicRow::Kind::Playlist ? "playlist"
+                                                    : "track";
+    if (row.kind == MusicRow::Kind::Track) {
+        c.id = "track-" + row.track.id;
+        c.name = row.track.title;
+        c.artist = row.track.artist;
+        c.artId = row.track.artId();
+        c.artTag = row.track.artTag();
+    }
+    return c;
+}
+
+music::DownloadCollection MusicScreen::collectionForPane(const MusicPane& pane) const
+{
+    music::DownloadCollection c;
+    c.id = pane.frame.id;
+    c.name = pane.frame.title;
+    c.artist = pane.frame.subtitle;
+    c.artId = pane.frame.artId;
+    c.artTag = pane.frame.artTag;
+    c.kind = pane.frame.kind == MusicPaneKind::PlaylistTracks ? "playlist" : "album";
+    return c;
+}
+
+void MusicScreen::downloadTracks(const music::DownloadCollection& collection,
+                                 const std::vector<music::Track>& tracks)
+{
+    if (!m_downloads || tracks.empty())
+        return;
+    m_downloads->enqueue(collection, tracks);
+    m_toast = "Downloading " + collection.name;
+    m_toastUntil = m_clock + 2200;
 }
 
 void MusicScreen::refreshSettingsRows(MusicPane& pane)
@@ -739,7 +900,11 @@ bool MusicScreen::handleBrowse(Action action)
         return true;
     }
     case Action::Confirm:
-        if (pane.frame.kind == MusicPaneKind::Settings) {
+        if (pane.frame.selected >= 0 && pane.frame.selected < count &&
+            pane.rows[pane.frame.selected].id == kResumeId) {
+            if (m_player)
+                m_player->resumeSaved();
+        } else if (pane.frame.kind == MusicPaneKind::Settings) {
             settingsAction(pane.frame.selected);
         } else if (pane.frame.selected >= 0 && pane.frame.selected < count) {
             activateRow(pane.rows[pane.frame.selected]);
@@ -785,7 +950,8 @@ void MusicScreen::playCollection(const MusicRow& row, PendingKind kind)
         r.kind = music::Listing::PlaylistTracks;
     else
         return;
-    m_pending[m_library->requestList(r)] = {kind, 0};
+    Pending p{kind, 0, collectionFor(row)};
+    m_pending[m_library->requestList(r)] = p;
     m_toast = "Loading...";
     m_toastUntil = m_clock + 1500;
 }
@@ -801,7 +967,7 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         return;
     }
     m_pending.erase(r.ticket); // a cached answer is good enough to act on
-    if (!m_player)
+    if (!m_player && pending.kind != PendingKind::Download)
         return;
     switch (pending.kind) {
     case PendingKind::PlayAll:
@@ -821,6 +987,9 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         m_toastUntil = m_clock + 1500;
         break;
     }
+    case PendingKind::Download:
+        downloadTracks(pending.collection, r.tracks.items);
+        break;
     case PendingKind::Append:
         if (!m_player->active()) {
             m_player->playTracks(r.tracks.items, 0, false);
@@ -859,6 +1028,13 @@ void MusicScreen::activateRow(const MusicRow& row)
         f.subtitle = row.subtitle;
         openFrame(f);
         break;
+    case MusicRow::Kind::Action:
+        if (row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0) {
+            f.kind = MusicPaneKind::DownloadedTracks;
+            f.id = row.id.substr(std::strlen(kDownloadPrefix));
+            openFrame(f);
+        }
+        break;
     default:
         break;
     }
@@ -868,10 +1044,23 @@ void MusicScreen::openMenu(const MusicRow& row)
 {
     m_menu = Menu{};
     m_menu.row = row;
+    const MusicPane& pane = activePane();
+    const bool inCollection = pane.frame.kind == MusicPaneKind::AlbumTracks ||
+                              pane.frame.kind == MusicPaneKind::PlaylistTracks;
+    const bool isDownloadRow =
+        row.kind == MusicRow::Kind::Action &&
+        row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0;
     switch (row.kind) {
     case MusicRow::Kind::Track:
         m_menu.items = {{"Play next", kMenuPlayNext}, {"Add to queue", kMenuAppend}};
-        if (!row.track.albumId.empty())
+        if (inCollection)
+            m_menu.items.push_back({pane.frame.kind == MusicPaneKind::PlaylistTracks
+                                        ? "Download playlist"
+                                        : "Download album",
+                                    kMenuDownloadPage});
+        if (m_downloads && !m_downloads->hasTrack(row.track.id))
+            m_menu.items.push_back({"Download track", kMenuDownload});
+        if (!row.track.albumId.empty() && pane.frame.kind != MusicPaneKind::AlbumTracks)
             m_menu.items.push_back({"Go to album", kMenuGoAlbum});
         if (!row.track.artistId.empty())
             m_menu.items.push_back({"Go to artist", kMenuGoArtist});
@@ -882,6 +1071,20 @@ void MusicScreen::openMenu(const MusicRow& row)
                         {"Shuffle", kMenuShuffle},
                         {"Play next", kMenuPlayNext},
                         {"Add to queue", kMenuAppend}};
+        if (m_downloads)
+            m_menu.items.push_back(isDownloaded(row) ? MenuItem{"Remove download", kMenuRemove}
+                                                     : MenuItem{"Download", kMenuDownload});
+        break;
+    case MusicRow::Kind::Action:
+        if (!isDownloadRow)
+            return;
+        m_menu.items = {{"Play", kMenuPlayDownloaded}, {"Shuffle", kMenuShuffleDownloaded}};
+        if (m_downloads) {
+            for (const music::DownloadStatus& s : m_downloads->snapshot())
+                if (kDownloadPrefix + s.collection.id == row.id && s.failed)
+                    m_menu.items.push_back({"Retry download", kMenuRetry});
+        }
+        m_menu.items.push_back({"Remove download", kMenuRemove});
         break;
     default:
         return;
@@ -923,6 +1126,51 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
             m_toastUntil = m_clock + 1500;
         } else {
             playCollection(row, PendingKind::Append);
+        }
+        break;
+    case kMenuDownload:
+        if (track) {
+            downloadTracks(collectionFor(row), {row.track});
+        } else {
+            playCollection(row, PendingKind::Download);
+        }
+        break;
+    case kMenuDownloadPage: {
+        const MusicPane& pane = activePane();
+        std::vector<music::Track> tracks;
+        for (const MusicRow& r : pane.rows)
+            if (r.kind == MusicRow::Kind::Track)
+                tracks.push_back(r.track);
+        downloadTracks(collectionForPane(pane), tracks);
+        break;
+    }
+    case kMenuRemove: {
+        if (!m_downloads)
+            break;
+        const bool isDlRow = row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0;
+        const std::string id = isDlRow ? row.id.substr(std::strlen(kDownloadPrefix)) : row.id;
+        if (m_removeArmed != id) { // asks twice: removal cannot be undone
+            m_removeArmed = id;
+            m_toast = "Choose Remove again to delete " + row.title;
+            m_toastUntil = m_clock + 3000;
+            break;
+        }
+        m_removeArmed.clear();
+        m_downloads->removeCollection(id);
+        m_toast = "Removed " + row.title;
+        m_toastUntil = m_clock + 2000;
+        break;
+    }
+    case kMenuRetry:
+        if (m_downloads && row.id.size() > std::strlen(kDownloadPrefix))
+            m_downloads->retry(row.id.substr(std::strlen(kDownloadPrefix)));
+        break;
+    case kMenuPlayDownloaded:
+    case kMenuShuffleDownloaded:
+        if (m_downloads && m_player && row.id.size() > std::strlen(kDownloadPrefix)) {
+            auto tracks = m_downloads->tracksOf(row.id.substr(std::strlen(kDownloadPrefix)));
+            if (!tracks.empty())
+                m_player->playTracks(std::move(tracks), 0, action == kMenuShuffleDownloaded);
         }
         break;
     case kMenuGoAlbum: {
@@ -1068,9 +1316,7 @@ void MusicScreen::settingsAction(int index)
         }
         m_cacheClearArmed = false;
         // Remove cached tracks, covers and lists (downloads are untouched).
-        const int rc =
-            std::system("rm -rf music-cache/stream music-cache/covers music-cache/lists");
-        (void)rc;
+        m_library->clearCaches(); // done on a worker thread
         m_toast = "Music cache cleared";
         m_toastUntil = m_clock + 2000;
     }

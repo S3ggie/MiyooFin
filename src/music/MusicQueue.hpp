@@ -4,6 +4,7 @@
 #include "MusicTypes.hpp"
 #include <cstdint>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace miyoofin {
@@ -15,6 +16,21 @@ enum class Repeat
     All,
     One
 };
+
+/// A queue as saved between runs: tracks in the order they play, where we were, and how
+/// far into the current track.
+struct SavedQueue
+{
+    std::vector<Track> tracks;
+    int position = 0;
+    bool shuffle = false;
+    Repeat repeat = Repeat::Off;
+    double seconds = 0;
+};
+constexpr int kSavedQueueMaxTracks = 500;
+std::string serializeQueue(const SavedQueue& queue);
+/// False for anything that is not a saved queue. Tolerates truncation (keeps whole lines).
+bool parseQueue(const std::string& text, SavedQueue& out);
 
 /// The play queue: the tracks in their source order plus the order they play in.
 /// Pure logic (no SDL, no I/O), so every rule is unit-tested on the host.
@@ -73,6 +89,11 @@ class MusicQueue
     void append(Track track);
     /// Removes an upcoming or past entry; the current track cannot be removed.
     bool removeAt(int position);
+
+    /// The queue in play order, trimmed to kSavedQueueMaxTracks around the current track.
+    SavedQueue snapshot(double seconds) const;
+    /// Rebuilds a saved queue; its order is the play order, so shuffle is only a label.
+    void restore(const SavedQueue& saved);
 
     void seed(std::uint32_t seed)
     {

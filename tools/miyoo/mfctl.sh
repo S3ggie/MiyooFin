@@ -76,7 +76,14 @@ app)
         start)
             app_running && { echo "already running"; exit 0; }
             need_free_menu
-            MIYOO_SSH_KEY="$KEY" MIYOO_SSH_TARGET="onion@$HOST" MIYOO_HOST="$HOST" MIYOO_SSH_PORT=2222 sh "$ROOT/tools/miyoo/onion-remote-launch.sh" > "$OUT/launch.log" 2>&1 || { echo "launch failed: $OUT/launch.log" >&2; exit 5; }
+            # The Onion helper refuses while a previous launch is still settling: retry a few times.
+            launched=0
+            for attempt in 1 2 3 4; do
+                if MIYOO_SSH_KEY="$KEY" MIYOO_SSH_TARGET="onion@$HOST" MIYOO_HOST="$HOST" MIYOO_SSH_PORT=2222 sh "$ROOT/tools/miyoo/onion-remote-launch.sh" > "$OUT/launch.log" 2>&1; then launched=1; break; fi
+                grep -q "another Onion-native launch helper is active" "$OUT/launch.log" || break
+                sleep 6
+            done
+            [ "$launched" = 1 ] || { echo "launch failed: $OUT/launch.log" >&2; exit 5; }
             for _ in $(seq 1 60); do app_running && break; sleep 1; done
             app_running && echo "MiyooFin started (give it ~10 s to load the library)" || { echo "did not start" >&2; exit 5; }
             ;;

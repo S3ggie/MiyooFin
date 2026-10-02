@@ -50,9 +50,10 @@ template <typename T> void trimForCache(Page<T>& page)
 
 } // namespace
 
-MusicLibrary::MusicLibrary(Session session, std::string cacheRoot)
+MusicLibrary::MusicLibrary(Session session, std::string cacheRoot, std::string streamDir)
     : m_session(std::move(session)), m_cache(cacheRoot + "/lists"),
-      m_coverDir(cacheRoot + "/covers")
+      m_coverDir(cacheRoot + "/covers"),
+      m_streamDir(streamDir.empty() ? cacheRoot + "/stream" : std::move(streamDir))
 {
     m_offline.store(m_session.manualOfflineMode);
     m_listThread = std::thread([this] { listLoop(); });
@@ -83,6 +84,12 @@ std::uint64_t MusicLibrary::requestList(const ListingRequest& request)
     }
     m_wake.notify_all();
     return ticket;
+}
+
+void MusicLibrary::clearCaches()
+{
+    m_clearRequested.store(true);
+    m_wake.notify_all();
 }
 
 void MusicLibrary::cancelLists()
@@ -231,9 +238,18 @@ void MusicLibrary::coverLoop()
         CoverJob job;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_wake.wait(lock, [this] { return m_stop.load() || !m_coverJobs.empty(); });
+            m_wake.wait(lock, [this] {
+                return m_stop.load() || !m_coverJobs.empty() || m_clearRequested.load();
+            });
             if (m_stop.load())
                 return;
+            if (m_clearRequested.exchange(false)) {
+                lock.unlock();
+                pruneCache(m_coverDir, 0, "");
+                pruneCache(m_cache.dir(), 0, "");
+                pruneCache(m_streamDir, 0, "");
+                continue;
+            }
             job = m_coverJobs.back(); // newest first: what the user is looking at now
             m_coverJobs.pop_back();
         }

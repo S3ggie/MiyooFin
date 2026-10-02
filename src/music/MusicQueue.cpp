@@ -1,5 +1,6 @@
 #include "MusicQueue.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <numeric>
 
 namespace miyoofin {
@@ -60,6 +61,118 @@ void MusicQueue::reshuffleKeepingCurrent()
     m_order.push_back(currentIndex);
     m_order.insert(m_order.end(), rest.begin(), rest.end());
     m_pos = 0;
+}
+
+SavedQueue MusicQueue::snapshot(double seconds) const
+{
+    SavedQueue s;
+    s.shuffle = m_shuffle;
+    s.repeat = m_repeat;
+    s.seconds = seconds;
+    int first = 0, last = size();
+    if (last > kSavedQueueMaxTracks) {
+        first = std::max(0, std::min(m_pos - 50, last - kSavedQueueMaxTracks));
+        last = first + kSavedQueueMaxTracks;
+    }
+    for (int i = first; i < last; ++i)
+        s.tracks.push_back(m_tracks[m_order[i]]);
+    s.position = m_pos - first;
+    return s;
+}
+
+void MusicQueue::restore(const SavedQueue& saved)
+{
+    m_tracks = saved.tracks;
+    m_order.resize(m_tracks.size());
+    std::iota(m_order.begin(), m_order.end(), 0);
+    m_pos = m_tracks.empty() ? 0 : std::max(0, std::min(saved.position, size() - 1));
+    m_shuffle = saved.shuffle;
+    m_repeat = saved.repeat;
+}
+
+namespace {
+
+std::string clean(const std::string& s)
+{
+    std::string out = s;
+    for (char& c : out)
+        if (c == '\t' || c == '\n' || c == '\r')
+            c = ' ';
+    return out;
+}
+
+} // namespace
+
+std::string serializeQueue(const SavedQueue& q)
+{
+    std::string out = "MFMQ=1\n";
+    out += "state\t" + std::to_string(q.position) + "\t" + std::to_string(q.seconds) + "\t" +
+           (q.shuffle ? "1" : "0") + "\t" + std::to_string(static_cast<int>(q.repeat)) + "\n";
+    for (const Track& t : q.tracks)
+        out += "t\t" + clean(t.id) + "\t" + clean(t.title) + "\t" + clean(t.album) + "\t" +
+               clean(t.albumId) + "\t" + clean(t.artist) + "\t" + clean(t.artistId) + "\t" +
+               clean(t.albumArtist) + "\t" + clean(t.imageTag) + "\t" + clean(t.albumImageTag) +
+               "\t" + std::to_string(t.trackNumber) + "\t" + std::to_string(t.discNumber) + "\t" +
+               std::to_string(t.runTimeTicks) + "\n";
+    return out;
+}
+
+bool parseQueue(const std::string& text, SavedQueue& out)
+{
+    SavedQueue q;
+    std::size_t pos = text.find('\n');
+    if (pos == std::string::npos || text.compare(0, pos, "MFMQ=1") != 0)
+        return false;
+    bool haveState = false;
+    while (pos != std::string::npos && pos + 1 < text.size()) {
+        const std::size_t start = pos + 1;
+        const std::size_t end = text.find('\n', start);
+        if (end == std::string::npos)
+            break; // a truncated last line is dropped
+        std::vector<std::string> f;
+        std::size_t s = start;
+        for (;;) {
+            const std::size_t tab = text.find('\t', s);
+            if (tab == std::string::npos || tab >= end) {
+                f.push_back(text.substr(s, end - s));
+                break;
+            }
+            f.push_back(text.substr(s, tab - s));
+            s = tab + 1;
+        }
+        if (f[0] == "state" && f.size() >= 5) {
+            q.position = std::atoi(f[1].c_str());
+            q.seconds = std::atof(f[2].c_str());
+            q.shuffle = f[3] == "1";
+            const int repeat = std::atoi(f[4].c_str());
+            q.repeat = repeat == 1 ? Repeat::All : (repeat == 2 ? Repeat::One : Repeat::Off);
+            haveState = true;
+        } else if (f[0] == "t" && f.size() >= 13 && !f[1].empty() &&
+                   static_cast<int>(q.tracks.size()) < kSavedQueueMaxTracks) {
+            Track t;
+            t.id = f[1];
+            t.title = f[2];
+            t.album = f[3];
+            t.albumId = f[4];
+            t.artist = f[5];
+            t.artistId = f[6];
+            t.albumArtist = f[7];
+            t.imageTag = f[8];
+            t.albumImageTag = f[9];
+            t.trackNumber = std::atoi(f[10].c_str());
+            t.discNumber = std::atoi(f[11].c_str());
+            t.runTimeTicks = std::strtoll(f[12].c_str(), nullptr, 10);
+            q.tracks.push_back(std::move(t));
+        }
+        pos = end;
+    }
+    if (!haveState || q.tracks.empty())
+        return false;
+    q.position = std::max(0, std::min(q.position, static_cast<int>(q.tracks.size()) - 1));
+    if (q.seconds < 0)
+        q.seconds = 0;
+    out = std::move(q);
+    return true;
 }
 
 void MusicQueue::wrapToStart()

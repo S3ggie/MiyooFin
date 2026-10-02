@@ -86,9 +86,14 @@ fi
 REQUEST_ITEM_ID=$(read_kv playback-request.txt item_id)
 REQUEST_ITEM_TYPE=$(read_kv playback-request.txt item_type)
 REQUEST_RESUME_TICKS=$(read_kv playback-request.txt resume_ticks)
+REQUEST_DURATION_TICKS=$(read_kv playback-request.txt duration_ticks)
 REQUEST_SOURCE_MODE=$(read_kv playback-request.txt source_mode)
 REQUEST_DOWNLOAD_SCOPE=$(read_kv playback-request.txt download_scope)
 [ -z "$REQUEST_SOURCE_MODE" ] && REQUEST_SOURCE_MODE=jellyfin
+
+case "$REQUEST_DURATION_TICKS" in
+    ''|*[!0-9]*) REQUEST_DURATION_TICKS=0 ;;
+esac
 
 # Keep ticks as a validated decimal string.  Shell arithmetic may not be
 # 64-bit on the target device.
@@ -356,13 +361,23 @@ if [ "$PLAYBACK_MODE" = onion ]; then
     # missing, when MIYOOFIN_PLAYER=stock, or when the fork fails to start.
     PLAYER_KIND=stock
     PLAYER_BIN=./bin/ffplay
+    PLAYER_EXTRA_ARGS=
     if [ "${MIYOOFIN_PLAYER:-fork}" != stock ] && [ -x "$APP_DIR/miyoofin-player" ]; then
         PLAYER_KIND=fork
         PLAYER_BIN="$APP_DIR/miyoofin-player"
+        # The vflip,hflip filter below means the viewer sees the picture
+        # rotated; the fork draws its on-screen display pre-rotated to match.
+        PLAYER_EXTRA_ARGS="-osd_rot180"
+        # Library runtime (informational): the local HLS playlist cannot report
+        # a trustworthy duration, so the on-screen progress bar uses this.
+        if [ "${#REQUEST_DURATION_TICKS}" -gt 7 ]; then
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -osd_duration $(printf '%s' "$REQUEST_DURATION_TICKS" | sed 's/.\{7\}$//')"
+        fi
     fi
     playback_log "player_kind=$PLAYER_KIND"
     PLAYER_STARTED=$(date +%s)
-    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" "$PLAYER_BIN" \
+    # shellcheck disable=SC2086
+    LD_PRELOAD="$PLAYBACK_FFPLAY_PRELOAD" "$PLAYER_BIN" $PLAYER_EXTRA_ARGS \
         -stats \
         -autoexit \
         -fs \

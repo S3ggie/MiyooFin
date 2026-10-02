@@ -633,3 +633,27 @@ static void testFormatPlaybackTimeZeroPosition()
 // Tests exercise the shared shouldShowClockError() decision helper
 // directly, with no conceptual/indirect assertions.
 // -------------------------------------------------------------------
+
+static void testPlaybackRequestRecordsDuration()
+{
+    std::printf("[test] playback request duration_ticks\n");
+    const std::string path = "/tmp/miyoofin-req-" + std::to_string((long long)getpid());
+    std::string err;
+    auto slurp = [&]() {
+        std::ifstream in(path);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    CHECK(PlaybackRequest::writeWithSourceAndDurationTo(path, "item1", "movie", 5, "jellyfin", "",
+                                                        36000000000LL, err));
+    std::string body = slurp();
+    CHECK(body.find("duration_ticks=36000000000\n") != std::string::npos);
+    CHECK(body.find("resume_ticks=5\n") != std::string::npos);
+    // Unknown runtime writes no line; the legacy writer is unchanged.
+    CHECK(PlaybackRequest::writeWithSourceAndDurationTo(path, "item1", "movie", 0, "jellyfin", "", 0,
+                                                        err));
+    CHECK(slurp().find("duration_ticks") == std::string::npos);
+    CHECK(PlaybackRequest::writeWithSourceTo(path, "item1", "movie", 0, "jellyfin", "", err));
+    CHECK(slurp().find("duration_ticks") == std::string::npos);
+    std::remove(path.c_str());
+    std::printf("[test] playback request duration_ticks OK\n");
+}

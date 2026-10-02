@@ -167,10 +167,10 @@ bool MovieDetailsScreen::handleAction(Action action)
             if (source == PlaybackSource::UnavailableOffline)
                 return true;
             const std::string mode = source == PlaybackSource::Local ? "local" : "jellyfin";
-            if (PlaybackRequest::writeWithSourceTo(PlaybackRequest::defaultPath(), m_movie.id,
-                                                   "movie", m_movie.playbackPositionTicks, mode,
-                                                   mode == "local" ? m_downloads->scope() : "",
-                                                   error)) {
+            if (PlaybackRequest::writeWithSourceAndDurationTo(
+                    PlaybackRequest::defaultPath(), m_movie.id, "movie",
+                    m_movie.playbackPositionTicks, mode,
+                    mode == "local" ? m_downloads->scope() : "", m_movie.runTimeTicks, error)) {
                 m_playbackResultPending = true;
                 m_playbackResultDelayUpdates = 1;
                 printf("[MovieDetailsScreen] Playback request written, "

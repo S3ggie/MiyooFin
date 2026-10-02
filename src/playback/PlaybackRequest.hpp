@@ -53,6 +53,14 @@ class PlaybackRequest
                                   const std::string& sourceMode, const std::string& scope,
                                   std::string& error);
 
+    /// As writeWithSourceTo, also recording the item's runtime (informational:
+    /// the player's on-screen display uses it for the progress bar; 0 = unknown).
+    static bool writeWithSourceAndDurationTo(const std::string& path, const std::string& itemId,
+                                             const std::string& itemType, long long resumeTicks,
+                                             const std::string& sourceMode,
+                                             const std::string& scope, long long durationTicks,
+                                             std::string& error);
+
     /// Check whether a playback request file exists at an explicit path.
     static bool existsAt(const std::string& path);
 

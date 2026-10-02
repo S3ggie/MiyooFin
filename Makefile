@@ -221,7 +221,7 @@ MODULE_BOUNDARIES_TEST := tests/test_module_boundaries.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot
+               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -315,6 +315,7 @@ $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	@echo "  [LINK] $@"
 
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
+$(TEST_DIR)/test_player: player/osd.h player/osd_font.h
 $(TEST_DIR)/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc
 $(TEST_DIR)/test_api_core: tests/cases/test_api_core.inc
 $(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc

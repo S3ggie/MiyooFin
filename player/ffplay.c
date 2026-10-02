@@ -24,6 +24,8 @@
  */
 
 #include "config.h"
+#include "osd.h"
+#include <unistd.h>
 #include <inttypes.h>
 #include <math.h>
 #include <limits.h>
@@ -131,6 +133,7 @@ typedef struct VideoPicture {
     int allocated;
     int reallocate;
     int serial;
+    uint64_t frame_id; /* miyoofin: identifies the decoded frame (OSD save/restore) */
 
     AVRational sar;
 } VideoPicture;
@@ -839,6 +842,222 @@ static void calculate_display_rect(SDL_Rect *rect,
     rect->h = FFMAX(height, 1);
 }
 
+
+/* ---- miyoofin: on-screen display ------------------------------------- */
+static double get_master_clock(VideoState *is);
+
+static double osd_duration;       /* library runtime (s); overrides the demuxer duration when > 0 */
+static int osd_rot180;            /* viewer sees the picture rotated 180 degrees */
+static int osd_keylog;            /* log SDL key symbols (MIYOOFIN_PLAYER_KEYLOG=1) */
+static int64_t osd_bar_until;     /* transport bar visible until (av_gettime_relative us) */
+static char osd_toast[48];
+static int64_t osd_toast_until;
+static uint64_t osd_frame_counter;
+static int64_t osd_last_shot_check;
+static int64_t osd_shot_not_before; /* test hook: dump the next frame shown after this time */
+
+/* Clean copy of the pixels the OSD covers, so showing the SAME frame again
+ * (paused redraw) never blends the translucent panel twice. */
+static struct {
+    int valid;
+    uint64_t frame_id;
+    SDL_Overlay *bmp;
+    int rects[OSD_FOOTPRINT_RECTS][4];
+    uint8_t *plane[OSD_FOOTPRINT_RECTS][3];
+    size_t cap[OSD_FOOTPRINT_RECTS][3];
+} osd_saved;
+
+static void osd_activity(void)
+{
+    osd_bar_until = av_gettime_relative() + 4000000;
+}
+
+static void osd_set_toast(const char *msg)
+{
+    av_strlcpy(osd_toast, msg, sizeof(osd_toast));
+    osd_toast_until = av_gettime_relative() + 1500000;
+    osd_activity();
+}
+
+/* Copies a rect of all three planes between the picture and the save buffers. */
+static void osd_copy_rect(const OsdPicture *pic, int idx, int save)
+{
+    int i, plane;
+    for (plane = 0; plane < 3; plane++) {
+        int sub = plane ? 2 : 1;
+        int x0 = osd_saved.rects[idx][0] / sub, y0 = osd_saved.rects[idx][1] / sub;
+        int x1 = (osd_saved.rects[idx][0] + osd_saved.rects[idx][2] + sub - 1) / sub;
+        int y1 = (osd_saved.rects[idx][1] + osd_saved.rects[idx][3] + sub - 1) / sub;
+        int pw = plane ? (pic->w + 1) / 2 : pic->w, ph = plane ? (pic->h + 1) / 2 : pic->h;
+        size_t need;
+        int w;
+        if (x1 > pw) x1 = pw;
+        if (y1 > ph) y1 = ph;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 <= x0 || y1 <= y0)
+            continue;
+        w = x1 - x0;
+        need = (size_t)w * (size_t)(y1 - y0);
+        if (save && osd_saved.cap[idx][plane] < need) {
+            av_freep(&osd_saved.plane[idx][plane]);
+            osd_saved.plane[idx][plane] = av_malloc(need);
+            osd_saved.cap[idx][plane] = osd_saved.plane[idx][plane] ? need : 0;
+        }
+        if (!osd_saved.plane[idx][plane])
+            continue;
+        for (i = y0; i < y1; i++) {
+            uint8_t *row = pic->data[plane] + i * pic->linesize[plane] + x0;
+            uint8_t *copy = osd_saved.plane[idx][plane] + (size_t)(i - y0) * w;
+            if (save)
+                memcpy(copy, row, w);
+            else
+                memcpy(row, copy, w);
+        }
+    }
+}
+
+/* Writes the picture as the viewer sees it to a 24-bit BMP (device screenshots
+ * of the OSD: nothing else can read the root-only framebuffer). */
+static void osd_dump_bmp(const OsdPicture *pic, const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    int x, y, rowbytes, w = pic->w, h = pic->h;
+    uint8_t hdr[54] = { 'B', 'M' };
+    uint32_t size;
+    if (!f)
+        return;
+    rowbytes = (w * 3 + 3) & ~3;
+    size = 54 + rowbytes * h;
+    memcpy(hdr + 2, &size, 4);
+    hdr[10] = 54; hdr[14] = 40;
+    memcpy(hdr + 18, &w, 4);
+    memcpy(hdr + 22, &h, 4);
+    hdr[26] = 1; hdr[28] = 24;
+    fwrite(hdr, 1, 54, f);
+    for (y = h - 1; y >= 0; y--) {
+        uint8_t *row = av_malloc(rowbytes);
+        if (!row)
+            break;
+        memset(row, 0, rowbytes);
+        for (x = 0; x < w; x++) {
+            int px = pic->rot180 ? w - 1 - x : x, py = pic->rot180 ? h - 1 - y : y;
+            int Y = pic->data[0][py * pic->linesize[0] + px] - 16;
+            int U = pic->data[1][(py / 2) * pic->linesize[1] + px / 2] - 128;
+            int V = pic->data[2][(py / 2) * pic->linesize[2] + px / 2] - 128;
+            int r = (298 * Y + 409 * V + 128) >> 8;
+            int g = (298 * Y - 100 * U - 208 * V + 128) >> 8;
+            int b = (298 * Y + 516 * U + 128) >> 8;
+            row[x * 3 + 0] = av_clip_uint8(b);
+            row[x * 3 + 1] = av_clip_uint8(g);
+            row[x * 3 + 2] = av_clip_uint8(r);
+        }
+        fwrite(row, 1, rowbytes, f);
+        av_free(row);
+    }
+    fclose(f);
+}
+
+/* Test hook: /tmp/miyoofin-player-cmd holds lines "key <SDLKey>"; each becomes a
+ * real SDL key press, so remote tests drive the exact production key paths. */
+static void osd_poll_commands(void)
+{
+    static int64_t last;
+    int64_t now = av_gettime_relative();
+    char line[64];
+    FILE *f;
+    if (now - last < 250000)
+        return;
+    last = now;
+    f = fopen("/tmp/miyoofin-player-cmd", "r");
+    if (!f)
+        return;
+    while (fgets(line, sizeof(line), f)) {
+        int sym;
+        if (!strncmp(line, "shot", 4)) {
+            osd_shot_not_before = av_gettime_relative() + 400000;
+        } else if (sscanf(line, "key %d", &sym) == 1) {
+            SDL_Event e;
+            memset(&e, 0, sizeof(e));
+            e.type = SDL_KEYDOWN;
+            e.key.state = SDL_PRESSED;
+            e.key.keysym.sym = (SDLKey)sym;
+            SDL_PushEvent(&e);
+        }
+    }
+    fclose(f);
+    unlink("/tmp/miyoofin-player-cmd");
+}
+
+/* Draws the OSD onto the picture about to be displayed. Called from
+ * video_image_display(); the picture is shown once per decoded frame, except
+ * while paused or redrawing, where the same frame comes back. */
+static void osd_apply(VideoState *is, VideoPicture *vp)
+{
+    int64_t now = av_gettime_relative();
+    int want_bar = now < osd_bar_until;
+    int want_toast = osd_toast[0] && now < osd_toast_until;
+    int want = want_bar || want_toast || is->paused;
+    int shot = 0;
+    OsdPicture pic;
+    OsdModel m;
+    double pos;
+
+    if (osd_shot_not_before && now >= osd_shot_not_before) {
+        osd_shot_not_before = 0;
+        shot = 1;
+    } else if (now - osd_last_shot_check > 500000) {
+        osd_last_shot_check = now;
+        shot = access("/tmp/miyoofin-player-shot", F_OK) == 0;
+    }
+    if (!want && !osd_saved.valid && !shot)
+        return;
+
+    SDL_LockYUVOverlay(vp->bmp);
+    pic.data[0] = vp->bmp->pixels[0];
+    pic.data[1] = vp->bmp->pixels[2];
+    pic.data[2] = vp->bmp->pixels[1];
+    pic.linesize[0] = vp->bmp->pitches[0];
+    pic.linesize[1] = vp->bmp->pitches[2];
+    pic.linesize[2] = vp->bmp->pitches[1];
+    pic.w = vp->bmp->w;
+    pic.h = vp->bmp->h;
+    pic.rot180 = osd_rot180;
+
+    if (osd_saved.valid && osd_saved.frame_id == vp->frame_id && osd_saved.bmp == vp->bmp) {
+        int i;
+        for (i = 0; i < OSD_FOOTPRINT_RECTS; i++)
+            osd_copy_rect(&pic, i, 0);
+    }
+    osd_saved.valid = 0;
+
+    if (want) {
+        int i;
+        pos = get_master_clock(is);
+        if (is->ic->start_time != AV_NOPTS_VALUE)
+            pos -= is->ic->start_time / (double)AV_TIME_BASE;
+        m.pos_sec = isnan(pos) ? 0.0 : pos;
+        m.dur_sec = osd_duration > 0 ? osd_duration
+                : (is->ic->duration > 0 ? is->ic->duration / (double)AV_TIME_BASE : 0.0);
+        m.paused = is->paused;
+        m.bar_visible = want_bar;
+        m.toast = want_toast ? osd_toast : NULL;
+        osd_footprint(&pic, osd_saved.rects);
+        for (i = 0; i < OSD_FOOTPRINT_RECTS; i++)
+            osd_copy_rect(&pic, i, 1);
+        osd_saved.valid = 1;
+        osd_saved.frame_id = vp->frame_id;
+        osd_saved.bmp = vp->bmp;
+        osd_render(&pic, &m);
+    }
+    if (shot) {
+        osd_dump_bmp(&pic, "/tmp/miyoofin-player-shot.bmp");
+        unlink("/tmp/miyoofin-player-shot");
+    }
+    SDL_UnlockYUVOverlay(vp->bmp);
+}
+/* ---------------------------------------------------------------------- */
+
 static void video_image_display(VideoState *is)
 {
     VideoPicture *vp;
@@ -872,6 +1091,8 @@ static void video_image_display(VideoState *is)
                 }
             }
         }
+
+        osd_apply(is, vp);
 
         calculate_display_rect(&rect, is->xleft, is->ytop, is->width, is->height, vp->width, vp->height, vp->sar);
 
@@ -1268,6 +1489,8 @@ static void toggle_pause(VideoState *is)
 {
     stream_toggle_pause(is);
     is->step = 0;
+    osd_activity();
+    is->force_refresh = 1; /* redraw the paused frame with/without the OSD */
 }
 
 static void step_to_next_frame(VideoState *is)
@@ -1359,6 +1582,7 @@ static void video_refresh(void *opaque, double *remaining_time)
 {
     VideoState *is = opaque;
     double time;
+
 
     SubPicture *sp, *sp2;
 
@@ -1627,6 +1851,8 @@ static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, double 
         if (is->videoq.abort_request)
             return -1;
     }
+
+    vp->frame_id = ++osd_frame_counter;
 
     /* if the frame is not skipped, then display it */
     if (vp->bmp) {
@@ -3226,6 +3452,7 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0));
         remaining_time = REFRESH_RATE;
+        osd_poll_commands(); /* also while paused: tests must always be able to quit */
         if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
             video_refresh(is, &remaining_time);
         SDL_PumpEvents();
@@ -3274,6 +3501,10 @@ static void event_loop(VideoState *cur_stream)
                 do_exit(cur_stream);
                 break;
             }
+            if (osd_keylog)
+                fprintf(stderr, "MFKEY sym=%d\n", (int)event.key.keysym.sym);
+            osd_activity();
+            cur_stream->force_refresh = cur_stream->paused ? 1 : cur_stream->force_refresh;
             switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
             case SDLK_q:
@@ -3343,6 +3574,11 @@ static void event_loop(VideoState *cur_stream)
             case SDLK_DOWN:
                 incr = -60.0;
             do_seek:
+                    {
+                        char t[32];
+                        snprintf(t, sizeof(t), "%s%d%s", incr < 0 ? "-" : "+", (int)(incr < 0 ? -incr : incr) >= 60 ? (int)(incr < 0 ? -incr : incr) / 60 : (int)(incr < 0 ? -incr : incr), (int)(incr < 0 ? -incr : incr) >= 60 ? "m" : "s");
+                        osd_set_toast(t);
+                    }
                     if (seek_by_bytes) {
                         if (cur_stream->video_stream >= 0 && cur_stream->video_current_pos >= 0) {
                             pos = cur_stream->video_current_pos;
@@ -3573,6 +3809,8 @@ static const OptionDef options[] = {
     { "lowres", OPT_INT | HAS_ARG | OPT_EXPERT, { &lowres }, "", "" },
     { "sync", HAS_ARG | OPT_EXPERT, { .func_arg = opt_sync }, "set audio-video sync. type (type=audio/video/ext)", "type" },
     { "autoexit", OPT_BOOL | OPT_EXPERT, { &autoexit }, "exit at the end", "" },
+    { "osd_duration", OPT_DOUBLE | HAS_ARG | OPT_EXPERT, { &osd_duration }, "runtime in seconds for the on-screen progress bar", "seconds" },
+    { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },
     { "exitonmousedown", OPT_BOOL | OPT_EXPERT, { &exit_on_mousedown }, "exit on mouse down", "" },
     { "loop", OPT_INT | HAS_ARG | OPT_EXPERT, { &loop }, "set number of times the playback shall be looped", "loop count" },
@@ -3655,6 +3893,7 @@ static int lockmgr(void **mtx, enum AVLockOp op)
 /* Called from the main */
 int main(int argc, char **argv)
 {
+    osd_keylog = getenv("MIYOOFIN_PLAYER_KEYLOG") != NULL;
     int flags;
     VideoState *is;
     char dummy_videodriver[] = "SDL_VIDEODRIVER=dummy";

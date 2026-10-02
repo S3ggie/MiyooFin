@@ -67,6 +67,18 @@ bool PlaybackRequest::writeWithSourceTo(const std::string& path, const std::stri
                                         const std::string& sourceMode, const std::string& scope,
                                         std::string& error)
 {
+    return writeWithSourceAndDurationTo(path, itemId, itemType, resumeTicks, sourceMode, scope, 0,
+                                        error);
+}
+
+bool PlaybackRequest::writeWithSourceAndDurationTo(const std::string& path,
+                                                   const std::string& itemId,
+                                                   const std::string& itemType,
+                                                   long long resumeTicks,
+                                                   const std::string& sourceMode,
+                                                   const std::string& scope,
+                                                   long long durationTicks, std::string& error)
+{
     if (!safePlaybackField(itemId)) {
         error = "item_id is unsafe";
         return false;
@@ -95,6 +107,8 @@ bool PlaybackRequest::writeWithSourceTo(const std::string& path, const std::stri
     fprintf(f, "item_type=%s\n", itemType.c_str());
     fprintf(f, "resume_ticks=%lld\n", resumeTicks < 0 ? 0LL : resumeTicks);
     fprintf(f, "source_mode=%s\n", sourceMode.c_str());
+    if (durationTicks > 0)
+        fprintf(f, "duration_ticks=%lld\n", durationTicks);
     if (sourceMode == "local")
         fprintf(f, "download_scope=%s\n", scope.c_str());
 

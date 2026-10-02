@@ -16,11 +16,12 @@ void EpisodeBrowserScreen::startSelectedEpisodePlayback()
                                 : PlaybackSource::Jellyfin;
     if (source == PlaybackSource::UnavailableOffline)
         return;
-    if (PlaybackRequest::writeWithSourceTo(
+    if (PlaybackRequest::writeWithSourceAndDurationTo(
             PlaybackRequest::defaultPath(), m_episodes[m_selectedEpisode].id, "episode",
             m_episodes[m_selectedEpisode].playbackPositionTicks,
             source == PlaybackSource::Local ? "local" : "jellyfin",
-            source == PlaybackSource::Local ? m_downloads->scope() : "", error)) {
+            source == PlaybackSource::Local ? m_downloads->scope() : "",
+            m_episodes[m_selectedEpisode].runTimeTicks, error)) {
         {
             std::lock_guard<std::mutex> lock(m_workerMutex);
             m_workerPaused = true;

@@ -149,5 +149,6 @@ void MovieDetailsScreen::renderContent(SDL_Surface* fb)
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Scroll bio"});
     ui::footer(fb, footer);
+    m_audioMenu.render(fb);
 }
 }

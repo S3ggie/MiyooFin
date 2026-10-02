@@ -238,6 +238,7 @@ void EpisodeBrowserScreen::render(SDL_Surface* fb)
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});
     ui::footer(fb, footer);
+    m_audioMenu.render(fb);
 }
 
 } // namespace miyoofin

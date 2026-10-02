@@ -86,6 +86,8 @@ struct DownloadMediaSource
     int width = 0, height = 0;
     bool supportsDirectPlay = false, supportsDirectStream = false, supportsTranscoding = false;
     bool hasExternalSubtitles = false;
+    /// Audio tracks as (ISO language, display label); commentary tracks excluded.
+    std::vector<std::pair<std::string, std::string>> audioTracks;
 };
 
 /// Minimal Jellyfin API helper.

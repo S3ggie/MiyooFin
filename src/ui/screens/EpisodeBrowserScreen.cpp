@@ -219,6 +219,11 @@ void EpisodeBrowserScreen::clampListScroll()
 // -------------------------------------------------------------------
 bool EpisodeBrowserScreen::handleAction(Action action)
 {
+    if (m_audioMenu.active()) {
+        if (m_audioMenu.handle(action) == AudioChoiceMenu::Result::Picked && m_downloads)
+            m_downloads->enqueue(m_audioMenu.takeItems());
+        return true;
+    }
     if (m_loadState == LoadState::Loading) {
         if (action == Action::Back) {
             m_stack->pop();

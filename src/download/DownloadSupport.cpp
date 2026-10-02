@@ -27,6 +27,7 @@ DownloadItem makeDownloadItem(const MediaItem& m, const DownloadMediaSource& s,
     i.hlsStorage = true;
     i.hlsProfile = HLS_PROFILE_NAME;
     i.externalSubtitles = s.hasExternalSubtitles;
+    i.audioTracks = s.audioTracks;
     estimateHlsBytes(i.runtimeTicks, i.expectedSize);
     return i;
 }

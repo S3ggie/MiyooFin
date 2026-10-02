@@ -6,7 +6,8 @@ void EpisodeBrowserScreen::handleDownloadConfirmation(Action action)
 {
     if (action == Action::Confirm && m_downloads && m_planId) {
         auto p = m_downloads->planSnapshot(m_planId);
-        if (p.state == DownloadPlanState::Ready && p.plan.canFit)
+        if (p.state == DownloadPlanState::Ready && p.plan.canFit &&
+            !m_audioMenu.begin(p.plan.items))
             m_downloads->enqueue(p.plan.items);
         m_confirmDownload = false;
     }
@@ -29,7 +30,8 @@ void EpisodeBrowserScreen::handleDownloadButtonAction()
     if (m_confirmDownload) {
         if (m_downloads && m_planId) {
             auto p = m_downloads->planSnapshot(m_planId);
-            if (p.state == DownloadPlanState::Ready && p.plan.canFit)
+            if (p.state == DownloadPlanState::Ready && p.plan.canFit &&
+                !m_audioMenu.begin(p.plan.items))
                 m_downloads->enqueue(p.plan.items);
         }
         m_confirmDownload = false;

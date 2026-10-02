@@ -15,8 +15,7 @@ enum class HomeSettingsRowAction
     LocalAddress,
     PublicAddress,
     Logout,
-    CheckForUpdates,
-    DownloadAudio
+    CheckForUpdates
 };
 struct HomeSettingsAddressRow
 {
@@ -27,7 +26,7 @@ struct HomeSettingsAddressRow
 
 constexpr int homeSettingsBaseRowCount()
 {
-    return 11;
+    return 10;
 }
 std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session);
 int homeSettingsRowCount(const Session& session);

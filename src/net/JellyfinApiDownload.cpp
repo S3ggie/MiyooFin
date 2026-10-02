@@ -4,6 +4,7 @@
 #include "HlsPlaylist.hpp"
 #include "HlsProfile.hpp"
 #include "../diagnostics/TelemetryGuards.hpp"
+#include <cctype>
 #include <cstdio>
 
 namespace miyoofin {
@@ -74,10 +75,19 @@ bool JellyfinApi::getDownloadMediaSources(const std::string& baseUrl,
         s.supportsDirectPlay = jsonBoolField(obj, "SupportsDirectPlay");
         s.supportsDirectStream = jsonBoolField(obj, "SupportsDirectStream");
         s.supportsTranscoding = jsonBoolField(obj, "SupportsTranscoding");
-        for (const auto& stream : jsonExtractArray(obj, "MediaStreams"))
-            if (jsonStringField(stream, "Type") == "Subtitle" &&
-                jsonBoolField(stream, "IsExternal"))
+        for (const auto& stream : jsonExtractArray(obj, "MediaStreams")) {
+            const std::string type = jsonStringField(stream, "Type");
+            if (type == "Subtitle" && jsonBoolField(stream, "IsExternal"))
                 s.hasExternalSubtitles = true;
+            if (type == "Audio") {
+                std::string title = jsonStringField(stream, "DisplayTitle");
+                std::string lower = title + jsonStringField(stream, "Title");
+                for (char& c : lower)
+                    c = (char)std::tolower((unsigned char)c);
+                if (lower.find("commentary") == std::string::npos)
+                    s.audioTracks.emplace_back(jsonStringField(stream, "Language"), title);
+            }
+        }
         if (!s.id.empty())
             sources.push_back(std::move(s));
     }

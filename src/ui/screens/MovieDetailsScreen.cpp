@@ -122,6 +122,11 @@ void MovieDetailsScreen::leave()
 // -------------------------------------------------------------------
 bool MovieDetailsScreen::handleAction(Action action)
 {
+    if (m_audioMenu.active()) {
+        if (m_audioMenu.handle(action) == AudioChoiceMenu::Result::Picked && m_downloads)
+            m_downloads->enqueue(m_audioMenu.takeItems());
+        return true;
+    }
     switch (action) {
     case Action::Back:
         m_stack->pop();
@@ -154,7 +159,7 @@ bool MovieDetailsScreen::handleAction(Action action)
     case Action::Confirm:
         if (m_confirmDownload) {
             if (m_downloads && m_planId && m_planSnapshot.state == DownloadPlanState::Ready &&
-                m_planSnapshot.plan.canFit)
+                m_planSnapshot.plan.canFit && !m_audioMenu.begin(m_planSnapshot.plan.items))
                 m_downloads->enqueue(m_planSnapshot.plan.items);
             m_confirmDownload = false;
             return true;

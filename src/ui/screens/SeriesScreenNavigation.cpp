@@ -16,6 +16,11 @@ namespace miyoofin {
 
 bool SeriesScreen::handleAction(Action action)
 {
+    if (m_audioMenu.active()) {
+        if (m_audioMenu.handle(action) == AudioChoiceMenu::Result::Picked && m_downloads)
+            m_downloads->enqueue(m_audioMenu.takeItems());
+        return true;
+    }
     if (m_loadState == LoadState::Loading) {
         if (action == Action::Back) {
             m_stack->pop();
@@ -48,7 +53,8 @@ bool SeriesScreen::handleAction(Action action)
         }
         if (action == Action::Confirm && m_downloads && m_planId) {
             auto p = m_downloads->planSnapshot(m_planId);
-            if (p.state == DownloadPlanState::Ready && p.plan.canFit)
+            if (p.state == DownloadPlanState::Ready && p.plan.canFit &&
+                !m_audioMenu.begin(p.plan.items))
                 m_downloads->enqueue(p.plan.items);
             m_confirmDownload = false;
         }

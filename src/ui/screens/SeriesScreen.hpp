@@ -6,6 +6,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
+#include "AudioChoiceMenu.hpp"
 #include "../../library/LibraryCoordinator.hpp"
 #include "../../library/LibraryQuery.hpp"
 #include <memory>
@@ -97,6 +98,7 @@ class SeriesScreen : public Screen
     std::shared_ptr<library::LibraryQuery> m_libraryQuery;
     bool m_networkOffline = false, m_downloadedOnly = false;
     std::uint64_t m_planId = 0;
+    AudioChoiceMenu m_audioMenu;
     bool m_confirmDownload = false;
     bool m_planWholeSeries = false;
     std::vector<MediaItem> m_seasons;

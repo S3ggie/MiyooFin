@@ -1200,18 +1200,19 @@ static void testDownloadAudioChoice()
 {
     std::printf("[test] download audio choice\n");
     using namespace miyoofin;
-    // Cycling visits every language once and wraps back to the server default.
-    std::string lang = "";
-    int steps = 0;
-    do {
-        lang = nextDownloadAudioLang(lang);
-        ++steps;
-    } while (!lang.empty() && steps < 50);
-    CHECK(steps == 11 && lang.empty());
-    CHECK(nextDownloadAudioLang("eng") == "jpn");
-    CHECK(nextDownloadAudioLang("zzz") == ""); // unknown value starts over
-    CHECK(downloadAudioLabel("") == "Server default" && downloadAudioLabel("jpn") == "Japanese" &&
-          downloadAudioLabel("xyz") == "xyz");
+    // The menu offers the default plus each language found, most common first.
+    DownloadItem a, b, c;
+    a.audioTracks = {{"jpn", "Japanese - AAC"}, {"eng", "English - AAC"}, {"eng", "dup"}};
+    b.audioTracks = {{"eng", "English"}};
+    c.audioTracks = {{"", "Unknown"}};
+    auto opts = downloadAudioOptions({a, b, c});
+    CHECK(opts.size() == 3 && opts[0].lang.empty() && opts[0].label == "Default audio");
+    CHECK(opts[1].lang == "eng" && opts[1].label == "English" && opts[2].lang == "jpn");
+    CHECK(downloadAudioOptions({c}).size() == 1); // nothing to choose
+    std::vector<DownloadItem> chosen = {a, b};
+    applyDownloadAudio(chosen, "jpn");
+    CHECK(chosen[0].audioLang == "jpn" && chosen[1].audioLang == "jpn");
+    CHECK(audioLanguageName("xyz") == "xyz");
     // The request asks the server for that exact stream; the default URL is unchanged.
     const std::string plain = JellyfinApi::buildHlsMasterUrl("http://h", "i", "m");
     const std::string jp = JellyfinApi::buildHlsMasterUrl("http://h", "i", "m", "", 5);

@@ -1,5 +1,4 @@
 #include "../UiKit.hpp"
-#include "../../download/DownloadPrefs.hpp"
 #include <cctype>
 #include <algorithm>
 #include "HomeScreen.hpp"
@@ -73,7 +72,6 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                  {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
                  {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
-                 {"DOWNLOAD AUDIO", downloadAudioLabel(downloadAudioLang()) + "   (A: change)"},
                  {"DIAGNOSTICS", "UI Stall Logger Enabled"}});
     // UPDATES row — directly above ABOUT.
     {

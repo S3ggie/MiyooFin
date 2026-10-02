@@ -69,7 +69,8 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/library/LibraryCoordinator.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadSubtitles.cpp \
-    $(SRC_DIR)/download/DownloadPrefs.cpp \
+    $(SRC_DIR)/download/DownloadAudio.cpp \
+    $(SRC_DIR)/ui/screens/AudioChoiceMenu.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \
     $(SRC_DIR)/download/DownloadManagerReconcileWorker.cpp \

@@ -6,6 +6,7 @@
 #include "../../image/ImageDecoder.hpp"
 #include "../../net/Session.hpp"
 #include "../../download/DownloadManager.hpp"
+#include "AudioChoiceMenu.hpp"
 #include <memory>
 #include <string>
 #include <atomic>
@@ -58,6 +59,7 @@ class MovieDetailsScreen : public Screen
     MediaItem m_movie;
     std::shared_ptr<DownloadManager> m_downloads;
     std::uint64_t m_planId = 0;
+    AudioChoiceMenu m_audioMenu;
     bool m_confirmDownload = false;
 
     // ----- Movie poster artwork -----

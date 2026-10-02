@@ -135,6 +135,8 @@ class App
     void logout();
     void startSavedSessionValidation();
     void finishSavedSessionValidation();
+    void saveRouteMemory() const;
+    void loadRouteMemory();
     bool ingestPlaybackResult(bool removeAfterIngest);
     void recoverPlaybackResult();
     void scheduleJournalSync();

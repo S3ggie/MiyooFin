@@ -130,6 +130,7 @@ void App::configureCatalogScopeForSession()
 
 void App::loadSavedSession()
 {
+    loadRouteMemory();
     m_session = Session::load();
     m_session.makeRoutesExplicit(); // older session files: derive the two addresses once
     if (m_session.valid()) {
@@ -315,12 +316,49 @@ void App::goToLogin(const std::string& initialMessage)
                                                initialMessage));
 }
 
+// Signing out (or the server dropping the sign-in) must not lose the addresses the user set up:
+// they are kept in routes-memory.txt and come back when the same server is signed in to again.
+void App::saveRouteMemory() const
+{
+    if (m_routeMemory.identity.empty())
+        return;
+    if (FILE* f = std::fopen("routes-memory.txt.tmp", "w")) {
+        std::fprintf(f, "identity=%s\nlan=%s\npublic=%s\n", m_routeMemory.identity.c_str(),
+                     m_routeMemory.lan.c_str(), m_routeMemory.pub.c_str());
+        std::fclose(f);
+        std::rename("routes-memory.txt.tmp", "routes-memory.txt");
+    }
+}
+
+void App::loadRouteMemory()
+{
+    FILE* f = std::fopen("routes-memory.txt", "r");
+    if (!f)
+        return;
+    char line[1100];
+    RouteMemory memory;
+    while (std::fgets(line, sizeof(line), f)) {
+        std::string l(line);
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r'))
+            l.pop_back();
+        if (l.compare(0, 9, "identity=") == 0)
+            memory.identity = l.substr(9);
+        else if (l.compare(0, 4, "lan=") == 0)
+            memory.lan = l.substr(4);
+        else if (l.compare(0, 7, "public=") == 0)
+            memory.pub = l.substr(7);
+    }
+    std::fclose(f);
+    m_routeMemory = memory;
+}
+
 void App::logout()
 {
     printf("[App] Logging out\n");
     {
         const Session::Routes routes = m_session.routes();
         m_routeMemory = {m_session.serverUrl, routes.lan, routes.pub};
+        saveRouteMemory();
     }
     if (m_music)
         m_music->stop();

@@ -26,6 +26,9 @@ struct DisplayArtwork
     std::string tag;
     int width = 0;
     int height = 0;
+    /// Item the image belongs to; empty means the item itself (an episode that
+    /// falls back to its show's poster names the series here).
+    std::string itemId;
     bool valid() const
     {
         return !tag.empty() && width > 0 && height > 0;
@@ -56,6 +59,12 @@ inline DisplayArtwork displayArtworkForItem(const MediaItem& item, bool landscap
         // Episode stills are 16:9 even when only a Primary image exists.
         return {ImageType::Primary, primary->second, episode ? ARTWORK_THUMB_W : ARTWORK_POSTER_W,
                 episode ? ARTWORK_THUMB_H : ARTWORK_POSTER_H};
+    }
+    if (episode) {
+        auto series = item.imageTags.find("SeriesPrimary");
+        if (series != item.imageTags.end() && !series->second.empty() && !item.seriesId.empty())
+            return {ImageType::Primary, series->second, ARTWORK_POSTER_W, ARTWORK_POSTER_H,
+                    item.seriesId};
     }
     return {};
 }
@@ -296,7 +305,8 @@ inline std::string buildRowArtworkKey(const MediaItem& item, bool landscape = fa
     if (!artwork.valid())
         return {};
     char buf[512];
-    std::snprintf(buf, sizeof(buf), "%s:%s:%s:%dx%d", item.id.c_str(),
+    std::snprintf(buf, sizeof(buf), "%s:%s:%s:%dx%d",
+                  (artwork.itemId.empty() ? item.id : artwork.itemId).c_str(),
                   imageTypeName(artwork.imageType), artwork.tag.c_str(), artwork.width,
                   artwork.height);
     return std::string(buf);

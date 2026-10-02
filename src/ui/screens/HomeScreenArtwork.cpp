@@ -142,7 +142,8 @@ void HomeScreen::submitDecode(const MediaItem& item, bool highPriority, bool sho
         shows ? ArtworkContext::HomeShows
               : (highPriority ? ArtworkContext::HomeSelected : ArtworkContext::HomeGrid);
     HomeArtworkController::DecodeRequest request;
-    request.identity = {item.id, a.imageType, a.tag, a.width, a.height};
+    request.identity = {a.itemId.empty() ? item.id : a.itemId, a.imageType, a.tag, a.width,
+                        a.height};
     request.highPriority = highPriority;
     request.context = context;
     request.showsWorkingSetGeneration = shows ? m_showsArtworkGeneration : 0;

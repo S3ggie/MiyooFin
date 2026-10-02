@@ -291,6 +291,26 @@ static void testArtworkIdentityKeyParses()
     std::printf("[test] artwork identity key parsing OK\n");
 }
 
+static void testEpisodeFallsBackToSeriesPoster()
+{
+    std::printf("[test] episode falls back to the show poster\n");
+    MediaItem ep = makeHomeItem("ep9", "Ep", "episode");
+    ep.seriesId = "show7";
+    ep.imageTags["SeriesPrimary"] = "stag";
+    DisplayArtwork a = displayArtworkForItem(ep);
+    CHECK(a.valid() && a.itemId == "show7" && a.tag == "stag" && a.imageType == ImageType::Primary);
+    CHECK_EQ(homeArtworkKey(ep), "show7:Primary:stag:128x192");
+    const auto jobs = planHomeRailPosterJobs({}, {ep});
+    CHECK(jobs.size() == 1 && jobs[0].itemId == "show7");
+    // Its own image always wins, and without a series id there is no fallback.
+    ep.imageTags["Primary"] = "own";
+    CHECK(displayArtworkForItem(ep).itemId.empty() && displayArtworkForItem(ep).tag == "own");
+    MediaItem orphan = makeHomeItem("ep10", "Ep", "episode");
+    orphan.imageTags["SeriesPrimary"] = "stag";
+    CHECK(!displayArtworkForItem(orphan).valid());
+    std::printf("[test] episode falls back to the show poster OK\n");
+}
+
 static void testHomeRowIndexByLabel()
 {
     std::printf("[test] homeRowIndexByLabel identity search\n");

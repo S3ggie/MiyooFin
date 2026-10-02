@@ -29,7 +29,8 @@ std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem>&
         const std::string key = homeArtworkKey(*item);
         if (!seen.insert(key).second)
             continue;
-        out.push_back({item->id, artwork.imageType, artwork.tag, artwork.width, artwork.height});
+        out.push_back({artwork.itemId.empty() ? item->id : artwork.itemId, artwork.imageType,
+                       artwork.tag, artwork.width, artwork.height});
     }
     return out;
 }
@@ -46,7 +47,8 @@ std::vector<HomePosterJob> planHomeRailPosterJobs(const std::vector<MediaItem>& 
         const std::string key = homeArtworkKey(item, landscape);
         if (!seen.insert(key).second)
             return;
-        out.push_back({item.id, artwork.imageType, artwork.tag, artwork.width, artwork.height});
+        out.push_back({artwork.itemId.empty() ? item.id : artwork.itemId, artwork.imageType,
+                       artwork.tag, artwork.width, artwork.height});
     };
     for (const auto& item : continueWatching)
         add(item, true); // Continue Watching cards are landscape
@@ -63,7 +65,8 @@ std::vector<HomePosterJob> planHomePosterJobs(const LibrarySnapshot& snapshot)
         DisplayArtwork a = displayArtworkForItem(item);
         if (!a.valid())
             return;
-        HomePosterJob j{item.id, a.imageType, a.tag, a.width, a.height};
+        HomePosterJob j{a.itemId.empty() ? item.id : a.itemId, a.imageType, a.tag, a.width,
+                        a.height};
         std::string key = homeArtworkKey(item);
         if (seen.insert(key).second)
             out.push_back(std::move(j));

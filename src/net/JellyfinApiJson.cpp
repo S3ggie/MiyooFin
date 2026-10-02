@@ -497,6 +497,13 @@ MediaItem JellyfinApi::jsonToMediaItem(const std::string& obj)
         }
     }
 
+    // An episode with no image of its own falls back to its show's poster.
+    {
+        const std::string seriesTag = jsonStringField(obj, "SeriesPrimaryImageTag");
+        if (!seriesTag.empty() && !item.seriesId.empty())
+            item.imageTags["SeriesPrimary"] = seriesTag;
+    }
+
     // ImageTags
     std::string ir = jsonRawValue(obj, "ImageTags");
     if (!ir.empty() && ir[0] == '{') {

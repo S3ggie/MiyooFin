@@ -967,6 +967,11 @@ static void osd_dump_bmp(const OsdPicture *pic, const char *path)
 static const char *subs_dir;          /* app dir holding playback-tracks.txt and subs/<index>.srt */
 static const char *osd_font_path = "/mnt/SDCARD/miyoo/app/wqy-microhei.ttc";
 static int osd_screen_rot180;         /* the SCREEN (not the overlay) is upside down for the viewer */
+/* After an in-place seek the demuxer lands on the next keyframe (up to a segment later
+ * than asked): decoded video and audio before this absolute time are dropped so
+ * playback resumes at the exact target. -1 = not skipping. */
+static double skip_until = -1.0;
+static int64_t skip_started_us;
 static int osd_next;                 /* a next episode is queued: offer it near the end */
 static int next_requested, next_cancelled, next_prompt_active;
 static int osd_local;                /* downloaded playback: the stream cannot be reopened with other parameters */
@@ -1435,6 +1440,7 @@ static void sub_screen_draw(const SDL_Rect *video, int cue, int force)
  * real SDL key press, so remote tests drive the exact production key paths. */
 #define FF_SEEK_EVENT (SDL_USEREVENT + 7)
 static int64_t seek_deadline;
+static int seek_landing_report; /* print where playback landed after the next seek */
 static int64_t restart_last_us; /* when the last stream restart began (for pacing seeks) */
 static int64_t restart_t0; /* av_gettime_relative() when the last restart began, until its first frame */
 
@@ -1444,6 +1450,8 @@ static void osd_poll_commands(void)
     int64_t now = av_gettime_relative();
     char line[64];
     FILE *f;
+    if (skip_until >= 0 && now - skip_started_us > 8000000)
+        skip_until = -1.0; /* never leave playback skipping frames */
     if (seek_target >= 0 && now >= seek_deadline) {
         SDL_Event e;
         memset(&e, 0, sizeof(e));
@@ -1516,6 +1524,14 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
     double pos;
     double media_sec;
 
+    if (seek_landing_report) {
+        fprintf(stderr, "MFLANDED clock=%.2f\n", get_master_clock(is));
+        seek_landing_report = 0;
+    }
+    if (skip_until >= 0 && vp->pts >= skip_until - 0.05) {
+        fprintf(stderr, "MFEXACT first_frame=%.2f wanted=%.2f\n", vp->pts, skip_until);
+        skip_until = -1.0; /* the first frame at the exact target reached the screen */
+    }
     if (restart_t0) {
         fprintf(stderr, "MFRESTART first_frame_ms=%lld\n", (long long)((av_gettime_relative() - restart_t0) / 1000));
         restart_t0 = 0;
@@ -2807,6 +2823,10 @@ static int video_thread(void *arg)
 #endif
             duration = (frame_rate.num && frame_rate.den ? av_q2d((AVRational){frame_rate.den, frame_rate.num}) : 0);
             pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+            if (skip_until >= 0 && !isnan(pts) && pts < skip_until - 0.02) {
+                av_frame_unref(frame); /* still before the exact seek target */
+                continue;
+            }
             ret = queue_picture(is, frame, pts, duration, av_frame_get_pkt_pos(frame), serial);
             av_frame_unref(frame);
 #if CONFIG_AVFILTER
@@ -3078,6 +3098,10 @@ static int audio_decode_frame(VideoState *is)
             }
             is->audio_buf_frames_pending = 1;
             tb = is->out_audio_filter->inputs[0]->time_base;
+            if (skip_until >= 0 && is->frame->pts != AV_NOPTS_VALUE &&
+                is->frame->pts * av_q2d(tb) + (double)is->frame->nb_samples / is->frame->sample_rate <
+                    skip_until)
+                continue; /* still before the exact seek target */
 #endif
 
             data_size = av_samples_get_buffer_size(NULL, av_frame_get_channels(is->frame),
@@ -4106,21 +4130,13 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
 static void remote_seek_request(VideoState *is, double incr)
 {
     char label[40];
-    /* Each restart costs a few seconds, so taps made while a jump is pending
-     * speed up: 1x, 1x, 2x, 3x, 6x of the key's step. */
-    static int taps;
-    static double last_dir;
-    if (seek_target < 0 || (incr < 0) != (last_dir < 0))
-        taps = 0;
-    last_dir = incr;
-    ++taps;
-    incr *= taps <= 2 ? 1 : (taps == 3 ? 2 : (taps == 4 ? 3 : 6));
+    double base, target;
     if (!is->ic) { /* the stream is still opening after a restart: nothing to seek in yet */
         osd_set_toast("Still loading...");
         return;
     }
-    double base = seek_target >= 0 ? seek_target : media_seconds_now(is);
-    double target = base + incr;
+    base = seek_target >= 0 ? seek_target : media_seconds_now(is);
+    target = base + incr;
     if (target < 0)
         target = 0;
     if (osd_duration > 0 && target > osd_duration - 5)
@@ -4495,8 +4511,29 @@ static void event_loop(VideoState *cur_stream)
                 const double st = cur_stream->ic && cur_stream->ic->start_time != AV_NOPTS_VALUE
                                       ? cur_stream->ic->start_time / (double)AV_TIME_BASE
                                       : 0.0;
-                stream_seek(cur_stream, (int64_t)((seek_target + st) * AV_TIME_BASE), 0, 0);
+                fprintf(stderr, "MFSEEK clock=%.2f start=%.2f dur_ic=%.2f target=%.2f\n",
+                        get_master_clock(cur_stream), st,
+                        cur_stream->ic ? cur_stream->ic->duration / (double)AV_TIME_BASE : -1.0,
+                        seek_target);
+                {
+                    /* Stay clear of both ends: seeking to exactly the start (or past the
+                     * end) makes the HLS demuxer fail and stall the stream for good. */
+                    double length = osd_duration > 0 ? osd_duration
+                                    : (cur_stream->ic && cur_stream->ic->duration > 0
+                                           ? cur_stream->ic->duration / (double)AV_TIME_BASE
+                                           : 0.0);
+                    double target = seek_target < 1.0 ? 1.0 : seek_target;
+                    if (length > 8 && target > length - 4.0)
+                        target = length - 4.0;
+                    /* Ask for a point before the target so the landing keyframe is at or
+                     * before it, then drop frames up to the exact target. */
+                    double ask = target - 3.5 < 1.0 ? 1.0 : target - 3.5;
+                    skip_until = target + st;
+                    skip_started_us = av_gettime_relative();
+                    stream_seek(cur_stream, (int64_t)((ask + st) * AV_TIME_BASE), 0, 0);
+                }
                 seek_target = -1.0;
+                seek_landing_report = 1;
             } else if (seek_target >= 0) {
                 char toast[48], t[32];
                 osd_format_time(seek_target, t, sizeof(t));

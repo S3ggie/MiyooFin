@@ -1,0 +1,21 @@
+# Downloaded playback (device): no server load. Opens the first downloaded episode from
+# the Downloads tab (series -> episode) and starts local playback, then stays resident
+# while the playback is driven from outside (the player's command file).
+WAIT_LOG [HomeScreen] Library loaded 90000
+SETTLE 8000
+KEY NextTab 3
+KEY NextTab 3
+KEY NextTab 3
+SETTLE 6000
+KEY Confirm 3 1500
+SETTLE 1500
+SCREENSHOT expanded
+KEY Down 3 800
+KEY Confirm 3 1500
+SETTLE 1500
+SCREENSHOT second
+KEY Down 3 800
+KEY Confirm 3 1500
+WAIT_LOG [App] Starting external playback handoff 20000
+SETTLE 150000
+QUIT

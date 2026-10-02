@@ -48,6 +48,8 @@ void writeHex(int fd, unsigned long value)
 
 void handler(int sig, siginfo_t* info, void* context)
 {
+    // Opened here (open() is async-signal-safe) so a healthy run leaves no empty file behind.
+    g_fd = open("crash.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     if (g_fd >= 0) {
 #if defined(__arm__)
         // The faulting instruction and caller: the backtrace cannot unwind past the signal.
@@ -88,7 +90,6 @@ void handler(int sig, siginfo_t* info, void* context)
 
 void installCrashLog()
 {
-    g_fd = open("crash.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     void* warm[2];
     (void)backtrace(warm, 2); // loads libgcc now, not inside the handler
     struct sigaction action

@@ -1477,7 +1477,8 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
 
     if (want) {
         int i;
-        m.pos_sec = media_sec;
+        /* while a jump is pending, show where it will land */
+        m.pos_sec = seek_target >= 0 ? seek_target : media_sec;
         m.dur_sec = osd_duration > 0 ? osd_duration
                 : (is->ic && is->ic->duration > 0 ? is->ic->duration / (double)AV_TIME_BASE : 0.0);
         m.paused = is->paused;
@@ -3984,6 +3985,14 @@ static VideoState *restart_stream(VideoState *is, double media, int audio_index,
         snprintf(query + n, sizeof(query) - n, "&sub=%d", sub_index);
     snprintf(url, sizeof(url), "%s%s", input_filename, query);
     stream_close(is);
+    /* A read thread aborted while still opening reports failure with an
+     * FF_QUIT_EVENT; the stream it belonged to is gone, so that must not end
+     * playback. (stream_close joined the thread, so the event is already queued.) */
+    {
+        SDL_Event stale;
+        while (SDL_PeepEvents(&stale, 1, SDL_GETEVENT, SDL_EVENTMASK(FF_QUIT_EVENT)) > 0)
+            ;
+    }
     osd_saved.valid = 0;
     osd_base = media;
     seek_target = -1.0;
@@ -4012,7 +4021,7 @@ static void remote_seek_request(VideoState *is, double incr)
     if (osd_duration > 0 && target > osd_duration - 5)
         target = osd_duration - 5 > 0 ? osd_duration - 5 : 0;
     seek_target = target;
-    seek_deadline = av_gettime_relative() + 700000;
+    seek_deadline = av_gettime_relative() + 1000000;
     osd_format_time(target, label, sizeof(label));
     {
         char toast[64];

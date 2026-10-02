@@ -76,7 +76,7 @@ app)
         start)
             app_running && { echo "already running"; exit 0; }
             need_free_menu
-            sh "$ROOT/tools/miyoo/onion-remote-launch.sh" > "$OUT/launch.log" 2>&1 || { echo "launch failed: $OUT/launch.log" >&2; exit 5; }
+            MIYOO_SSH_KEY="$KEY" MIYOO_SSH_TARGET="onion@$HOST" MIYOO_HOST="$HOST" MIYOO_SSH_PORT=2222 sh "$ROOT/tools/miyoo/onion-remote-launch.sh" > "$OUT/launch.log" 2>&1 || { echo "launch failed: $OUT/launch.log" >&2; exit 5; }
             for _ in $(seq 1 60); do app_running && break; sleep 1; done
             app_running && echo "MiyooFin started (give it ~10 s to load the library)" || { echo "did not start" >&2; exit 5; }
             ;;
@@ -154,8 +154,15 @@ key)
     ;;
 shot)
     name=${1:-shot}
-    r 'rm -f /tmp/miyoofin-player-shot.bmp 2>/dev/null; printf "shot\n" > /tmp/miyoofin-player-cmd'
-    for _ in $(seq 1 10); do sleep 1; r 'test -s /tmp/miyoofin-player-shot.bmp' && break; done
+    # The bmp is root-owned (cannot be deleted), so wait for its timestamp to change.
+    # A harmless key makes a paused player redraw, and shows the progress bar.
+    before=$(r 'stat -c %Y /tmp/miyoofin-player-shot.bmp 2>/dev/null || echo 0')
+    r 'printf "key 1\nshot\n" > /tmp/miyoofin-player-cmd'
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        now=$(r 'stat -c %Y /tmp/miyoofin-player-shot.bmp 2>/dev/null || echo 0')
+        [ "$now" != "$before" ] && break
+    done
     scp -q -P 2222 -i "$KEY" -o BatchMode=yes "onion@$HOST:/tmp/miyoofin-player-shot.bmp" "$OUT/$name.bmp"
     python3 -c "from PIL import Image;Image.open('$OUT/$name.bmp').save('$OUT/$name.png')"
     echo "$OUT/$name.png"

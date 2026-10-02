@@ -187,6 +187,19 @@ bool JellyfinApi::getItemJson(const std::string& baseUrl, const std::string& acc
     return true;
 }
 
+bool JellyfinApi::downloadSubtitleAss(const std::string& baseUrl, const std::string& accessToken,
+                                      const std::string& deviceId, const std::string& itemId,
+                                      const std::string& mediaSourceId, int streamIndex,
+                                      const std::string& destPath, std::string& error)
+{
+    HttpClient client;
+    const std::string url = baseUrl + "/Videos/" + itemId + "/" + mediaSourceId + "/Subtitles/" +
+                            std::to_string(streamIndex) + "/0/Stream.ass";
+    std::uint64_t bytes = 0;
+    return client.downloadToFile(url, buildAuthHeaders(accessToken, deviceId), destPath, error,
+                                 &bytes, {}, nullptr, 90, 10);
+}
+
 bool JellyfinApi::getSubtitleSrt(const std::string& baseUrl, const std::string& accessToken,
                                  const std::string& deviceId, const std::string& itemId,
                                  const std::string& mediaSourceId, int streamIndex,

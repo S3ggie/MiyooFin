@@ -10,6 +10,8 @@
 #include "../tools/playback_clock_parser.hpp"
 #include "../tools/playback_resume.hpp"
 #include "../include/miyoofin/playback_tracks.hpp"
+#include "../include/miyoofin/subtitle_text.hpp"
+#include <unistd.h>
 #include "../tools/playback_route.hpp"
 
 static int g_failures = 0;
@@ -752,6 +754,49 @@ static void testParseMfBase()
     std::printf("[test] MFBASE marker parsing OK\n");
 }
 
+static void testAssToSrtFilter()
+{
+    std::printf("[test] ASS to compact SRT filter\n");
+    const std::string in = "/tmp/miyoofin-ass-in-" + std::to_string((long long)getpid());
+    const std::string out = in + ".srt";
+    FILE* f = std::fopen(in.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    const char* ass =
+        "[Script Info]\nTitle: x\n\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:07.32,0:00:11.99,Default,,0,0,0,,It's a {\\i1}hazy{\\i0} "
+        "memory.\\NSecond, line\n"
+        "Dialogue: 4,0:01:53.38,0:01:53.68,OP14,,0,0,0,fx,{\\an7\\pos(0,-68)}karaoke\n"
+        "Dialogue: 1,0:01:54.00,0:01:55.00,Sign,,0,0,0,,{\\p1}m 0 0 l 10 10{\\p0}\n"
+        "Dialogue: 0,0:02:00.00,0:02:00.05,Default,,0,0,0,,too short\n"
+        "Dialogue: 0,0:02:10.00,0:02:12.00,Default,,0,0,0,,{\\b1}{\\b0}\n"
+        "Dialogue: 0,0:03:00.00,0:03:02.50,Default,,0,0,0,,Hello\\hthere\n"
+        "Dialogue: 0,0:03:00.00,0:03:02.50,Default,,0,0,0,,Hello\\hthere\n"
+        "Comment: 0,0:03:30.00,0:03:32.00,Default,,0,0,0,,ignored\n";
+    std::fputs(ass, f);
+    std::fclose(f);
+    CHECK(subtitle_ass_file_to_srt(in, out) ==
+          2); // dialogue + the "Hello there" (duplicate dropped)
+    std::string srt;
+    if (FILE* r = std::fopen(out.c_str(), "rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), r)) > 0)
+            srt.append(buf, n);
+        std::fclose(r);
+    }
+    CHECK(srt.find("1\n00:00:07,320 --> 00:00:11,990\nIt's a hazy memory.\nSecond, line\n\n") == 0);
+    CHECK(srt.find("00:03:00,000 --> 00:03:02,500\nHello there\n") != std::string::npos);
+    CHECK(srt.find("karaoke") == std::string::npos && srt.find("m 0 0") == std::string::npos &&
+          srt.find("too short") == std::string::npos);
+    CHECK(subtitle_ass_file_to_srt("/nonexistent/file.ass", out) == -1);
+    std::remove(in.c_str());
+    std::remove(out.c_str());
+    std::printf("[test] ASS to compact SRT filter OK\n");
+}
+
 int main()
 {
     std::printf("B5f3b Playback Reporter Tests\n");
@@ -834,6 +879,7 @@ int main()
     testReplaceResumeTicks();
     testParseTracks();
     testParseMfBase();
+    testAssToSrtFilter();
 
     std::printf("\n");
     if (g_failures == 0) {

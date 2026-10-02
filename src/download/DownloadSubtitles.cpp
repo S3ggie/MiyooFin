@@ -3,6 +3,7 @@
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include "miyoofin/playback_tracks.hpp"
+#include "miyoofin/subtitle_text.hpp"
 
 #include <cstdio>
 #include <sys/stat.h>
@@ -64,14 +65,35 @@ bool fetchSubtitleSidecars(const Session& session, const std::string& itemDir,
     PlaybackTracks saved;
     saved.mediaSourceId = source;
     for (const PlaybackTrack& t : subtitles.tracks) {
-        std::string srt;
-        const bool ok = RouteRequest(session).run(
-            [&](const std::string& base) {
-                return JellyfinApi::getSubtitleSrt(base, session.accessToken, session.deviceId,
-                                                   itemId, source, t.index, srt, error);
-            },
-            error);
-        if (ok && writeAtomic(itemDir + "/subs/" + std::to_string(t.index) + ".srt", srt))
+        // Raw ASS streamed to disk and reduced to its readable lines (see subtitle_text.hpp);
+        // fall back to Jellyfin's own SRT conversion when the ASS route is unavailable.
+        const std::string base = itemDir + "/subs/" + std::to_string(t.index);
+        const std::string assPath = base + ".ass.tmp", srtTmp = base + ".srt.tmp";
+        bool ok = false;
+        if (RouteRequest(session).run(
+                [&](const std::string& baseUrl) {
+                    return JellyfinApi::downloadSubtitleAss(baseUrl, session.accessToken,
+                                                            session.deviceId, itemId, source,
+                                                            t.index, assPath, error);
+                },
+                error)) {
+            ok = subtitle_ass_file_to_srt(assPath, srtTmp) > 0 &&
+                 std::rename(srtTmp.c_str(), (base + ".srt").c_str()) == 0;
+            std::remove(srtTmp.c_str());
+        }
+        std::remove(assPath.c_str());
+        if (!ok) {
+            std::string srt;
+            ok = RouteRequest(session).run(
+                     [&](const std::string& baseUrl) {
+                         return JellyfinApi::getSubtitleSrt(baseUrl, session.accessToken,
+                                                            session.deviceId, itemId, source,
+                                                            t.index, srt, error);
+                     },
+                     error) &&
+                 writeAtomic(base + ".srt", srt);
+        }
+        if (ok)
             saved.tracks.push_back(t);
     }
     if (saved.tracks.empty())

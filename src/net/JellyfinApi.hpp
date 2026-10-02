@@ -246,6 +246,11 @@ class JellyfinApi
     static bool getItemJson(const std::string& baseUrl, const std::string& accessToken,
                             const std::string& userId, const std::string& deviceId,
                             const std::string& itemId, std::string& body, std::string& error);
+    /// Streams the track's raw ASS to `destPath` (for files too large to hold in memory).
+    static bool downloadSubtitleAss(const std::string& baseUrl, const std::string& accessToken,
+                                    const std::string& deviceId, const std::string& itemId,
+                                    const std::string& mediaSourceId, int streamIndex,
+                                    const std::string& destPath, std::string& error);
     static bool getSubtitleSrt(const std::string& baseUrl, const std::string& accessToken,
                                const std::string& deviceId, const std::string& itemId,
                                const std::string& mediaSourceId, int streamIndex, std::string& body,

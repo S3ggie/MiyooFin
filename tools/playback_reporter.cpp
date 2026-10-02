@@ -39,6 +39,7 @@
 #include "playback_clock_parser.hpp"
 #include "playback_resume.hpp"
 #include "../include/miyoofin/playback_tracks.hpp"
+#include "../include/miyoofin/subtitle_text.hpp"
 #include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
 
@@ -359,6 +360,62 @@ static GetResult get_body(const std::string& url, const std::vector<std::string>
     return result;
 }
 
+// Streams a GET response to `destPath` (at most maxBytes), for files too big to hold in memory.
+struct FileSink
+{
+    FILE* f = nullptr;
+    size_t written = 0, limit = 0;
+};
+static size_t file_write(void* ptr, size_t size, size_t nmemb, void* userdata)
+{
+    FileSink* sink = static_cast<FileSink*>(userdata);
+    const size_t bytes = size * nmemb;
+    if (sink->written + bytes > sink->limit)
+        return 0;
+    sink->written += bytes;
+    return std::fwrite(ptr, 1, bytes, sink->f) == bytes ? bytes : 0;
+}
+
+static bool get_file(const std::string& url, const std::vector<std::string>& headers,
+                     const std::string& cacertPath, const std::string& destPath, size_t maxBytes,
+                     long timeoutSec, long& httpStatus)
+{
+    httpStatus = 0;
+    FileSink sink;
+    sink.f = std::fopen(destPath.c_str(), "wb");
+    sink.limit = maxBytes;
+    if (!sink.f)
+        return false;
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::fclose(sink.f);
+        return false;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, file_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSec);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // TLS verification MUST remain enabled
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    if (!cacertPath.empty())
+        curl_easy_setopt(curl, CURLOPT_CAINFO, cacertPath.c_str());
+    struct curl_slist* hdrList = nullptr;
+    for (const auto& h : headers)
+        hdrList = curl_slist_append(hdrList, h.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrList);
+    const CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK)
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpStatus);
+    curl_slist_free_all(hdrList);
+    curl_easy_cleanup(curl);
+    const bool closed = std::fclose(sink.f) == 0;
+    const bool ok = res == CURLE_OK && httpStatus >= 200 && httpStatus < 300 && closed;
+    if (!ok)
+        std::remove(destPath.c_str());
+    return ok;
+}
+
 // Ids end up in a URL path; accept only the characters Jellyfin ids use.
 static bool safe_path_id(const std::string& id)
 {
@@ -555,6 +612,37 @@ static int fetch_subs(const std::string& appDir)
             break;
         const std::string path = "/Videos/" + ctx.itemId + "/" + tracks.mediaSourceId +
                                  "/Subtitles/" + std::to_string(t.index) + "/0/Stream.srt";
+        // Preferred route: the raw ASS streamed to disk and reduced to its readable lines
+        // (fansub tracks can be 20+ MB of karaoke effects around a few hundred real lines).
+        {
+            const std::string base = subsDir + "/" + std::to_string(t.index);
+            const std::string assPath = base + ".ass.tmp", srtTmp = base + ".srt.tmp";
+            const std::string assUrlPath = "/Videos/" + ctx.itemId + "/" + tracks.mediaSourceId +
+                                           "/Subtitles/" + std::to_string(t.index) +
+                                           "/0/Stream.ass";
+            long status = 0;
+            bool done = false;
+            for (int attempt = 0; attempt < 2 && g_running && !done; ++attempt) {
+                bool got = get_file(ctx.route.primary + assUrlPath, ctx.headers, ctx.cacertPath,
+                                    assPath, 80u * 1024u * 1024u, 60, status);
+                if (!got && !ctx.route.fallback.empty())
+                    got = get_file(ctx.route.fallback + assUrlPath, ctx.headers, ctx.cacertPath,
+                                   assPath, 80u * 1024u * 1024u, 60, status);
+                if (!got)
+                    continue;
+                const int cues = subtitle_ass_file_to_srt(assPath, srtTmp);
+                std::remove(assPath.c_str());
+                if (cues > 0 && std::rename(srtTmp.c_str(), (base + ".srt").c_str()) == 0) {
+                    ++saved;
+                    done = true;
+                    std::printf("subs_fetch track=%d ass_cues=%d\n", t.index, cues);
+                } else {
+                    std::remove(srtTmp.c_str());
+                }
+            }
+            if (done)
+                continue;
+        }
         GetResult srt;
         for (int attempt = 0; attempt < 2 && g_running; ++attempt) {
             srt = get_with_fallback(ctx, path);

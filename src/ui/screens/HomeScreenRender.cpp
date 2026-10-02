@@ -445,7 +445,7 @@ void HomeScreen::drawCard(SDL_Surface* fb, int x, int y, int w, int h, const Med
     const int radius = w >= 100 ? 5 : 4;
 
     bool drawn = false;
-    const std::string key = rowArtworkKey(item);
+    const std::string key = rowArtworkKey(item, w > h); // wide cards use wide art
     if (!key.empty()) {
         auto it = m_rowArtworkCache.entries.find(key);
         if (it != m_rowArtworkCache.entries.end() &&

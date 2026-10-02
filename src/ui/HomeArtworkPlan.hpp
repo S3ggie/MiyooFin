@@ -17,7 +17,7 @@ struct HomePosterJob
     int height;
 };
 
-std::string homeArtworkKey(const MediaItem& item);
+std::string homeArtworkKey(const MediaItem& item, bool landscape = false);
 std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem>& items);
 std::vector<HomePosterJob> planHomeRailPosterJobs(const std::vector<MediaItem>& continueWatching,
                                                   const std::vector<MediaItem>& recentlyAdded);

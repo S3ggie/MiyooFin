@@ -6,6 +6,7 @@
 #include "../cache/ImageCache.hpp"
 #include <cstdio>
 #include <memory>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -39,24 +40,57 @@ inline constexpr int ARTWORK_POSTER_H = 192;
 inline constexpr int ARTWORK_THUMB_W = 192;
 inline constexpr int ARTWORK_THUMB_H = 108;
 
-inline DisplayArtwork displayArtworkForItem(const MediaItem& item)
+/// `landscape` asks for wide art: any item with a Thumb image shows that (the
+/// Continue Watching rail uses landscape cards, so a movie there gets its wide
+/// still instead of a cropped poster). Episodes always prefer their Thumb.
+inline DisplayArtwork displayArtworkForItem(const MediaItem& item, bool landscape = false)
 {
-    const int w = item.type == "episode" ? ARTWORK_THUMB_W : ARTWORK_POSTER_W;
-    const int h = item.type == "episode" ? ARTWORK_THUMB_H : ARTWORK_POSTER_H;
-    if (item.type == "episode") {
+    const bool episode = item.type == "episode";
+    if (episode || landscape) {
         auto thumb = item.imageTags.find("Thumb");
         if (thumb != item.imageTags.end() && !thumb->second.empty())
-            return {ImageType::Thumb, thumb->second, w, h};
+            return {ImageType::Thumb, thumb->second, ARTWORK_THUMB_W, ARTWORK_THUMB_H};
     }
     auto primary = item.imageTags.find("Primary");
-    if (primary != item.imageTags.end() && !primary->second.empty())
-        return {ImageType::Primary, primary->second, w, h};
+    if (primary != item.imageTags.end() && !primary->second.empty()) {
+        // Episode stills are 16:9 even when only a Primary image exists.
+        return {ImageType::Primary, primary->second, episode ? ARTWORK_THUMB_W : ARTWORK_POSTER_W,
+                episode ? ARTWORK_THUMB_H : ARTWORK_POSTER_H};
+    }
     return {};
 }
 
 inline const char* imageTypeName(ImageType type)
 {
     return type == ImageType::Thumb ? "Thumb" : "Primary";
+}
+
+/// Splits an artwork identity key "itemId:Type:tag:WxH" (the layout of
+/// HomeArtworkController::identityKey) back into its parts. False when malformed.
+inline bool parseArtworkIdentityKey(const std::string& key, std::string& itemId, ImageType& type,
+                                    std::string& tag, int& width, int& height)
+{
+    const std::size_t a = key.find(':');
+    if (a == std::string::npos || a == 0)
+        return false;
+    const std::size_t b = key.find(':', a + 1);
+    const std::size_t c = key.rfind(':');
+    if (b == std::string::npos || c <= b)
+        return false;
+    const std::size_t x = key.find('x', c + 1);
+    if (x == std::string::npos)
+        return false;
+    const std::string typeName = key.substr(a + 1, b - a - 1);
+    if (typeName != "Thumb" && typeName != "Primary")
+        return false;
+    width = std::atoi(key.c_str() + c + 1);
+    height = std::atoi(key.c_str() + x + 1);
+    if (width <= 0 || height <= 0)
+        return false;
+    itemId = key.substr(0, a);
+    type = typeName == "Thumb" ? ImageType::Thumb : ImageType::Primary;
+    tag = key.substr(b + 1, c - b - 1);
+    return true;
 }
 
 /// Maximum decoded row-artwork images kept in RAM (B5d2a).
@@ -256,9 +290,9 @@ inline int clampHomeCardScroll(int itemCount, int activeCard, int curScroll, int
 
 /// Build the row-artwork identity key for a media item (B5d2a).
 /// Format: "itemId:imageType:imageTag:WxH".
-inline std::string buildRowArtworkKey(const MediaItem& item)
+inline std::string buildRowArtworkKey(const MediaItem& item, bool landscape = false)
 {
-    DisplayArtwork artwork = displayArtworkForItem(item);
+    DisplayArtwork artwork = displayArtworkForItem(item, landscape);
     if (!artwork.valid())
         return {};
     char buf[512];

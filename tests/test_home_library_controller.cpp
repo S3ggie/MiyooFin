@@ -470,13 +470,13 @@ static void testInitialPopulationOnlyFirstPagesScheduleArtwork()
     }
     // Home rails still schedule their own artwork.
     CHECK(artworkIds.count("art-rail") == 1);
-    // The first page of each Movies/Shows view schedules artwork.
+    // Every page of the full-population walk schedules artwork, so the art
+    // percentage covers the whole library, not just what was scrolled to.
     CHECK(artworkIds.count("art-movie-1") == 1);
     CHECK(artworkIds.count("art-show-1") == 1);
-    // Later population pages must not create artwork jobs.
-    CHECK(artworkIds.count("art-movie-2") == 0);
-    CHECK(artworkIds.count("art-show-2") == 0);
-    CHECK(jobCount == 3);
+    CHECK(artworkIds.count("art-movie-2") == 1);
+    CHECK(artworkIds.count("art-show-2") == 1);
+    CHECK(jobCount == 5);
 
     coordinator.stop();
     ::shutdown(listener, SHUT_RDWR);

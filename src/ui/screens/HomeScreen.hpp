@@ -168,7 +168,7 @@ class HomeScreen : public Screen
 
     /// Build the row-artwork identity key for a media item.
     /// Format: "itemId:Primary:imageTag:WxH"
-    static std::string rowArtworkKey(const MediaItem& item);
+    static std::string rowArtworkKey(const MediaItem& item, bool landscape = false);
     static bool acceptsShowsArtworkResult(const HomeArtworkController::DecodeResult& result,
                                           std::uint64_t currentGeneration,
                                           const std::set<std::string>& activeKeys,
@@ -377,7 +377,8 @@ class HomeScreen : public Screen
     void consumeHierarchyResults();
     std::string syncStatusText() const;
     void drainDecodedArtwork();
-    void submitDecode(const MediaItem& item, bool highPriority = false, bool shows = false);
+    void submitDecode(const MediaItem& item, bool highPriority = false, bool shows = false,
+                      bool landscape = false);
 
     // DownloadManager may hold its mutex while reconciling/persisting on slow
     // SD storage.  Snapshot and playback-journal reads are therefore published
@@ -467,6 +468,11 @@ class HomeScreen : public Screen
     // Row artwork loading (B5d2a)
     void tryLoadOneRowArtwork();
     void evictRowArtworkIfNeeded();
+    /// A poster that was not downloaded yet when its decode attempts ran out is
+    /// tombstoned as Failed; once the file lands, make it eligible again.
+    void reviveArrivedArtwork(unsigned dtMs);
+    unsigned m_reviveMs = 0;
+    std::string m_reviveCursor;
     std::set<std::string> protectedRowArtworkKeys() const;
     void touchRowArtwork(const std::string& key);
     void storeDecodedRowArtwork(const std::string& key, DecodedImage image);

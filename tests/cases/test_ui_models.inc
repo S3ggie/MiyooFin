@@ -269,6 +269,28 @@ static void testRailWatchStateReachesMovieGrid()
     std::printf("[test] rail watch state reaches Movies grid OK\n");
 }
 
+static void testArtworkIdentityKeyParses()
+{
+    std::printf("[test] artwork identity key parsing\n");
+    std::string id, tag;
+    ImageType type = ImageType::Thumb;
+    int w = 0, h = 0;
+    CHECK(parseArtworkIdentityKey("abc123:Primary:t4g:128x192", id, type, tag, w, h));
+    CHECK(id == "abc123" && type == ImageType::Primary && tag == "t4g" && w == 128 && h == 192);
+    CHECK(parseArtworkIdentityKey("e9:Thumb:x:192x108", id, type, tag, w, h));
+    CHECK(type == ImageType::Thumb && w == 192 && h == 108);
+    // Round trip with the controller's own key builder.
+    HomeArtworkController::RequestIdentity ident{"item", ImageType::Primary, "tag", 64, 96};
+    CHECK(parseArtworkIdentityKey(HomeArtworkController::identityKey(ident), id, type, tag, w, h));
+    CHECK(id == "item" && tag == "tag" && w == 64 && h == 96);
+    CHECK(!parseArtworkIdentityKey("", id, type, tag, w, h));
+    CHECK(!parseArtworkIdentityKey("item:Primary:tag", id, type, tag, w, h));
+    CHECK(!parseArtworkIdentityKey("item:Logo:tag:64x96", id, type, tag, w, h));
+    CHECK(!parseArtworkIdentityKey(":Primary:tag:64x96", id, type, tag, w, h));
+    CHECK(!parseArtworkIdentityKey("item:Primary:tag:0x96", id, type, tag, w, h));
+    std::printf("[test] artwork identity key parsing OK\n");
+}
+
 static void testHomeRowIndexByLabel()
 {
     std::printf("[test] homeRowIndexByLabel identity search\n");
@@ -345,9 +367,18 @@ static void testHomeArtworkPlan()
     CHECK(seasonJobs[0].width == 128 && seasonJobs[0].height == 192);
     CHECK_EQ(seasonJobs[1].itemId, "season-2");
 
-    // Rails deduplicate across both source rows.
+    // Rails deduplicate across both source rows (a movie without a Thumb image
+    // uses the same poster in both, so it is fetched once).
     const auto railJobs = planHomeRailPosterJobs({movie, episode}, {movie});
     CHECK(railJobs.size() == 2);
+    // A Continue Watching movie WITH a Thumb image gets the wide still there and
+    // its poster in Recently Added: two distinct fetches.
+    MediaItem wideMovie = movie;
+    wideMovie.imageTags["Thumb"] = "wide-tag";
+    const auto wideJobs = planHomeRailPosterJobs({wideMovie}, {wideMovie});
+    CHECK(wideJobs.size() == 2);
+    CHECK(wideJobs[0].imageType == ImageType::Thumb && wideJobs[0].width == 192);
+    CHECK(wideJobs[1].imageType == ImageType::Primary && wideJobs[1].width == 128);
 
     // Snapshot planning deduplicates shared keys across views and rails.
     LibrarySnapshot snap;

@@ -6,9 +6,9 @@
 
 namespace miyoofin {
 
-std::string homeArtworkKey(const MediaItem& item)
+std::string homeArtworkKey(const MediaItem& item, bool landscape)
 {
-    return buildRowArtworkKey(item);
+    return buildRowArtworkKey(item, landscape);
 }
 
 std::vector<HomePosterJob> planMediaPagePosterJobs(const std::vector<MediaItem>& items)
@@ -39,19 +39,19 @@ std::vector<HomePosterJob> planHomeRailPosterJobs(const std::vector<MediaItem>& 
 {
     std::vector<HomePosterJob> out;
     std::set<std::string> seen;
-    const auto add = [&](const MediaItem& item) {
-        const DisplayArtwork artwork = displayArtworkForItem(item);
+    const auto add = [&](const MediaItem& item, bool landscape) {
+        const DisplayArtwork artwork = displayArtworkForItem(item, landscape);
         if (!artwork.valid())
             return;
-        const std::string key = homeArtworkKey(item);
+        const std::string key = homeArtworkKey(item, landscape);
         if (!seen.insert(key).second)
             return;
         out.push_back({item.id, artwork.imageType, artwork.tag, artwork.width, artwork.height});
     };
     for (const auto& item : continueWatching)
-        add(item);
+        add(item, true); // Continue Watching cards are landscape
     for (const auto& item : recentlyAdded)
-        add(item);
+        add(item, false);
     return out;
 }
 

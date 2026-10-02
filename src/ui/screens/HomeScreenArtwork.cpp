@@ -1,5 +1,6 @@
 #include "HomeScreen.hpp"
 #include "../ArtworkLayout.hpp"
+#include "../../cache/ImageCache.hpp"
 #include "../../diagnostics/PerformanceTelemetry.hpp"
 #include "../../diagnostics/TelemetryGuards.hpp"
 
@@ -19,7 +20,9 @@ void HomeScreen::tryLoadSelectedArtwork()
         return;
     }
 
-    DisplayArtwork artwork = displayArtworkForItem(*item);
+    const MediaRow* selectedRow = activeTabNamed("Home") ? currentRow() : nullptr;
+    const bool landscape = selectedRow && homeRailIsLandscape(selectedRow->label);
+    DisplayArtwork artwork = displayArtworkForItem(*item, landscape);
     if (!artwork.valid()) {
         // No Primary tag — clear artwork, keep placeholder
         m_selectedArtwork = {};
@@ -28,7 +31,7 @@ void HomeScreen::tryLoadSelectedArtwork()
         return;
     }
 
-    std::string key = rowArtworkKey(*item);
+    std::string key = rowArtworkKey(*item, landscape);
 
     // A terminal worker tombstone applies to the selected preview as well as
     // its row card; do not resubmit the same identity every UI frame.
@@ -65,16 +68,16 @@ void HomeScreen::tryLoadSelectedArtwork()
     // Cache probing, reads and JPEG decode run on the existing bounded decode
     // worker.  A missing poster remains retryable on the existing update
     // cadence until the controller's bounded tombstone is reached.
-    submitDecode(*item, true, false);
+    submitDecode(*item, true, false, landscape);
 }
 
 // -------------------------------------------------------------------
 // B5d2a: Row card artwork — loading state only (no rendering)
 // -------------------------------------------------------------------
 
-std::string HomeScreen::rowArtworkKey(const MediaItem& item)
+std::string HomeScreen::rowArtworkKey(const MediaItem& item, bool landscape)
 {
-    return homeArtworkKey(item);
+    return homeArtworkKey(item, landscape);
 }
 
 bool HomeScreen::acceptsShowsArtworkResult(const HomeArtworkController::DecodeResult& result,
@@ -93,6 +96,39 @@ bool HomeScreen::acceptsShowsArtworkResult(const HomeArtworkController::DecodeRe
 void HomeScreen::evictRowArtworkIfNeeded()
 {
     m_rowArtworkCache.evictIfNeeded(protectedRowArtworkKeys());
+}
+
+void HomeScreen::reviveArrivedArtwork(unsigned dtMs)
+{
+    constexpr unsigned kPeriodMs = 1000;
+    constexpr int kChecksPerPass = 64;
+    m_reviveMs += dtMs;
+    if (m_reviveMs < kPeriodMs || !m_artworkController)
+        return;
+    m_reviveMs = 0;
+    auto it = m_rowArtworkCache.entries.upper_bound(m_reviveCursor);
+    for (int checked = 0; checked < kChecksPerPass; ++checked) {
+        if (it == m_rowArtworkCache.entries.end()) {
+            m_reviveCursor.clear();
+            return;
+        }
+        m_reviveCursor = it->first;
+        if (it->second.status != RowArtworkStatus::Failed) {
+            ++it;
+            continue;
+        }
+        std::string itemId, tag;
+        ImageType type = ImageType::Primary;
+        int w = 0, h = 0;
+        const bool arrived = parseArtworkIdentityKey(it->first, itemId, type, tag, w, h) &&
+                             ImageCache::isCached(itemId, type, tag, w, h);
+        if (arrived) {
+            m_artworkController->resetDecodeAttempts(it->first);
+            it = m_rowArtworkCache.entries.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void HomeScreen::touchRowArtwork(const std::string& key)
@@ -116,10 +152,10 @@ void HomeScreen::freeAllCardSurfaces()
     m_rowArtworkCache.clearCardSurfaces();
 }
 
-void HomeScreen::submitDecode(const MediaItem& item, bool highPriority, bool shows)
+void HomeScreen::submitDecode(const MediaItem& item, bool highPriority, bool shows, bool landscape)
 {
-    std::string key = rowArtworkKey(item);
-    DisplayArtwork a = displayArtworkForItem(item);
+    std::string key = rowArtworkKey(item, landscape);
+    DisplayArtwork a = displayArtworkForItem(item, landscape);
     if (key.empty() || !a.valid() || !m_artworkController)
         return;
     const ArtworkContext context =
@@ -209,17 +245,19 @@ std::set<std::string> HomeScreen::protectedRowArtworkKeys() const
             break;
         int cardX = HOME_RAIL_MARGIN;
         const ArtworkBox box = homeRailCardSize(homeRailIsLandscape(rows[rowIdx].label));
+        const bool landscape = homeRailIsLandscape(rows[rowIdx].label);
         for (const auto& item : rows[rowIdx].items) {
             const int screenX = cardX - rowCardScrollOffset(rowIdx, m_activeRow, m_cardScroll);
-            if (screenX + box.w >= HOME_RAIL_MARGIN && screenX <= 640 - HOME_RAIL_MARGIN)
-                add(item);
+            if (screenX + box.w >= HOME_RAIL_MARGIN && screenX <= 640 - HOME_RAIL_MARGIN) {
+                const std::string key = rowArtworkKey(item, landscape);
+                if (!key.empty())
+                    keys.insert(key);
+            }
             if (screenX > 640 - HOME_RAIL_MARGIN)
                 break;
             cardX += box.w + HOME_RAIL_GAP;
         }
     }
-    if (const MediaItem* item = currentItem())
-        add(*item);
     return keys;
 }
 
@@ -312,10 +350,11 @@ void HomeScreen::tryLoadOneRowArtwork()
             }
             if (screenX > 640 - HOME_RAIL_MARGIN)
                 break;
-            std::string key = rowArtworkKey(row.items[ci]);
+            const bool landscape = homeRailIsLandscape(row.label);
+            std::string key = rowArtworkKey(row.items[ci], landscape);
             if (!key.empty() &&
                 m_rowArtworkCache.entries.find(key) == m_rowArtworkCache.entries.end())
-                submitDecode(row.items[ci], false, false);
+                submitDecode(row.items[ci], false, false, landscape);
             cardAccumX += sz.w + HOME_RAIL_GAP;
         }
     }

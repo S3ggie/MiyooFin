@@ -274,7 +274,10 @@ void HomeScreen::update(Uint32 dt)
             m_logoutTimer -= dt;
         }
     }
-    consumeHierarchyResults();
+    {
+        UiDiagnostics::Scope scope("HomeScreen::consumeHierarchyResults");
+        consumeHierarchyResults();
+    }
     if (m_artworkController)
         m_artworkController->setLowPriorityDeferred(m_libraryFetch &&
                                                     m_libraryFetch->initialPopulationInProgress());
@@ -283,7 +286,10 @@ void HomeScreen::update(Uint32 dt)
         finishFetch();
     }
     if (m_loadState == LoadState::Ready) {
-        updateLiveLibraryChanges();
+        {
+            UiDiagnostics::Scope scope("HomeScreen::updateLiveLibraryChanges");
+            updateLiveLibraryChanges();
+        }
         if (m_homeRailRefreshInFlight && m_libraryFetch) {
             HomeLibraryController::RailPresentation rail;
             if (m_libraryFetch->takeHomeRailRefresh(rail)) {
@@ -298,12 +304,17 @@ void HomeScreen::update(Uint32 dt)
                 finishHomeRailRefresh();
             }
         }
-        finishSafetyReconcile();
+        {
+            UiDiagnostics::Scope scope("HomeScreen::finishSafetyReconcile");
+            finishSafetyReconcile();
+        }
         if (m_libraryCoordinator && m_libraryCoordinator->requestMaintenance())
             m_safetyReconcileInFlight = true;
     }
-    if (m_loadState == LoadState::Ready)
+    if (m_loadState == LoadState::Ready) {
+        UiDiagnostics::Scope scope("HomeScreen::updateMediaPaging");
         updateMediaPaging();
+    }
     if (m_downloadRefreshTimer > dt) {
         m_downloadRefreshTimer -= dt;
     } else {
@@ -311,6 +322,10 @@ void HomeScreen::update(Uint32 dt)
     }
     m_battery.update(dt);
     m_link->update(dt);
+    {
+        UiDiagnostics::Scope scope("HomeScreen::reviveArrivedArtwork");
+        reviveArrivedArtwork(dt);
+    }
     if (m_loadState == LoadState::Ready &&
         (activeTabNamed("Downloads") || activeTabNamed("Settings"))) {
         refreshDownloads();

@@ -51,6 +51,12 @@ void HomeArtworkController::setLowPriorityDeferred(bool deferred)
     m_posterWake.notify_all();
 }
 
+void HomeArtworkController::resetDecodeAttempts(const std::string& identityKey)
+{
+    std::lock_guard<std::mutex> lock(m_decodeMutex);
+    m_decodeAttempts.erase(identityKey);
+}
+
 void HomeArtworkController::queuePosterJobs(std::vector<HomePosterJob> jobs, bool highPriority)
 {
     std::lock_guard<std::mutex> lock(m_posterMutex);

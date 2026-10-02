@@ -102,6 +102,10 @@ class HomeArtworkController
         return highPriority || !lowPriorityDeferred;
     }
 
+    /// Forgets the bounded decode-attempt count for `identityKey`; used when a
+    /// poster that was missing at decode time has since been downloaded.
+    void resetDecodeAttempts(const std::string& identityKey);
+
     void queuePosterJobs(std::vector<HomePosterJob> jobs, bool highPriority = false);
     void setLowPriorityDeferred(bool deferred);
 

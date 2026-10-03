@@ -141,6 +141,20 @@ class MusicScreen : public Screen
         m_lyrics = std::move(lines);
         m_lyricsLoading = false;
     }
+    /// Tests: pretend a "keep in sync" listing request is outstanding under `ticket`, and feed the
+    /// screen an answer to it (as the library worker would).
+    void expectSyncForTest(std::uint64_t ticket, const music::DownloadCollection& collection,
+                           std::vector<music::Track> loaded = {}, int expected = 0)
+    {
+        m_pending[ticket] =
+            Pending{PendingKind::SyncDownload, 0, collection, std::move(loaded), expected};
+    }
+    void deliverListResultForTest(const music::ListResult& result)
+    {
+        const auto it = m_pending.find(result.ticket);
+        if (it != m_pending.end())
+            applyPending(result, Pending(it->second));
+    }
     bool menuOpenForTest() const
     {
         return m_menu.open;

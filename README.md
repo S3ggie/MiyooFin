@@ -102,7 +102,7 @@ Stated up front rather than discovered later:
   device's 640x480 screen (music has 128 / 192 / 320 kbps).
 - **Skip intro needs server support** — Jellyfin 10.10 or later with intro
   detection (the Intro Skipper plugin or built-in segments).
-- **No favourites, collections or lyrics** from the device yet.
+- **No collections, instant mix or sleep timer** yet. (Favorites, playlists and lyrics are in Music; video has no favorites yet.)
 
 ## Installation
 

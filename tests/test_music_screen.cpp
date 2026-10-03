@@ -126,6 +126,58 @@ bool hasNonBlack(SDL_Surface* fb, int x, int y, int w, int h)
     return false;
 }
 
+// "Keep in sync": an answer that is a successful empty list empties the copy; a failed answer, or
+// one that arrives after only some pages loaded, must change nothing.
+void testSyncedPlaylistEmptyAndPartialAnswers()
+{
+    std::printf("[test] music screen sync: empty playlist vs failed or partial answers\n");
+    Rig rig;
+    auto s = rig.screen();
+    DownloadCollection pl;
+    pl.id = "pl-sync";
+    pl.kind = "playlist";
+    pl.name = "Synced";
+    pl.sync = true;
+    rig.downloads->enqueue(pl, {track("s1", "One"), track("s2", "Two"), track("s3", "Three")});
+    auto total = [&] {
+        for (const DownloadStatus& st : rig.downloads->snapshot())
+            if (st.collection.id == "pl-sync")
+                return st.total;
+        return -1;
+    };
+    CHECK(total() == 3);
+
+    // Page 2 of 3 failed after page 1 loaded: the playlist is NOT known to be shorter.
+    ListResult failed;
+    failed.ticket = 41;
+    failed.ok = false;
+    failed.final = true;
+    failed.error = "HTTP 500";
+    s->expectSyncForTest(41, pl, {track("s1", "One"), track("s2", "Two")}, 3);
+    s->deliverListResultForTest(failed);
+    CHECK(total() == 3);
+
+    // A failed first page changes nothing either.
+    failed.ticket = 42;
+    s->expectSyncForTest(42, pl);
+    s->deliverListResultForTest(failed);
+    CHECK(total() == 3);
+
+    // A successful answer that is an empty playlist: the copy follows it (nothing else uses the
+    // songs, so they go too).
+    ListResult empty;
+    empty.ticket = 43;
+    empty.ok = true;
+    empty.final = true;
+    empty.request.kind = Listing::PlaylistTracks;
+    empty.request.parentId = "pl-sync";
+    empty.tracks.total = 0;
+    s->expectSyncForTest(43, pl);
+    s->deliverListResultForTest(empty);
+    CHECK(total() == 0);
+    std::printf("[test] music screen sync: empty playlist vs failed or partial answers OK\n");
+}
+
 void testBrowseAndDrill()
 {
     std::printf("[test] music screen browse and drill-down\n");
@@ -263,6 +315,7 @@ void testNowPlayingAndResume()
 int main()
 {
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
+    testSyncedPlaylistEmptyAndPartialAnswers();
     testBrowseAndDrill();
     testTabsSectionsAndLetters();
     testMenuSettingsAndRestore();

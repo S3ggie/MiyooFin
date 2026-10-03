@@ -18,7 +18,7 @@ A mini-player strip sits above the footer on every screen while something plays;
 full **Now Playing** view; SELECT opens the queue.
 
 Every tab remembers its own cursor, scroll and drill-down stack (album/artist/playlist pages) in
-`music-ui-state.txt`, so leaving a page and coming back (or restarting the app) lands on the same
+`music/<account>/ui-state.txt`, so leaving a page and coming back (or restarting the app) lands on the same
 row. Only ids and cursors are kept; rows reload from the on-disk cache.
 
 ### Controls
@@ -72,7 +72,7 @@ started by the app, never over SSH.
 
 ### Where a track's audio comes from
 
-In order: a finished **download**, a file in the **stream cache** (`music-cache/stream`, 64 MB,
+In order: a finished **download**, a file in the **stream cache** (`music/<account>/cache/stream`, 64 MB,
 oldest evicted), or a fresh fetch into that cache. A fetch requests
 `/Audio/<id>/stream.mp3?audioCodec=mp3&audioBitRate=<kbps>` (128/192/320, default 192) and checks the
 result looks like audio before it is used. Offline mode never touches the network.
@@ -81,7 +81,7 @@ result looks like audio before it is used. Offline mode never touches the networ
 
 `MusicDownloads` is deliberately separate from the video `DownloadManager`: tracks are small
 single files with nothing to resume, and music must never be able to disturb video downloads.
-Files live in `music-downloads/tracks/<id>.mp3` with `music-downloads/index.tsv` listing tracks
+Files live in `music/<account>/downloads/tracks/<id>.mp3` with `index.tsv` beside them listing tracks
 and the albums/playlists/tracks that own them. One worker downloads sequentially with three
 attempts and backoff, refuses to fill the card (keeps 200 MB free), pauses while offline mode is
 on, notices files deleted behind its back, and shares a track between collections (removing one
@@ -92,20 +92,32 @@ tab shows progress and works with no network at all.
 
 Start / progress (every 10 s) / stopped reports go to the Sessions API from the report thread.
 A play that cannot be reported (offline, server down) but counts as played (half the track or four
-minutes) is written to `music-plays.journal` and sent later with `POST /Users/<id>/PlayedItems/<id>
+minutes) is written to the account's `plays.journal` and sent later, by the account that played it, with `POST /Users/<id>/PlayedItems/<id>
 ?DatePlayed=...`, so play counts and "recently played" stay right.
 
 ### Resume
 
-The queue (play order, position, shuffle, repeat, seconds) is saved to `music-queue.txt`
+The queue (play order, position, shuffle, repeat, seconds) is saved to `music/<account>/queue.txt`
 every 5 s while it changes and when playback stops, and cleared when the queue finishes. On the next
 run it comes back paused as a "Continue listening" row at the top of Home.
 
 ## Files written next to the app
 
-`app-mode.txt`, `music-ui-state.txt`, `music-settings.txt`, `music-queue.txt`,
-`music-plays.journal`, `music-engine.log`, `crash.log` (fatal-signal backtraces for the whole app),
-and the directories `music-cache/` (`lists`, `covers`, `stream`) and `music-downloads/`.
+Everything music keeps about a person lives under `music/<account>/`, where `<account>` is the
+server + user identity (the same scope key the video catalog uses): `cache/` (`lists`, `covers`,
+`stream`), `downloads/` (audio + `index.tsv`), `plays.journal`, `queue.txt` and `ui-state.txt`. Two
+accounts, or two servers, never see each other's lists, downloads, queue or history, and a play
+that is still waiting to be reported is sent by the account that made it, not whoever is signed
+in later. Signing out stops the player and closes the account's downloads; signing back in
+reopens them. Data from before accounts were separated (`music-cache/`, `music-downloads/`,
+`music-queue.txt`, `music-plays.journal`, `music-ui-state.txt`) is moved into the folder of the
+first account that opens Music after the upgrade.
+
+Device-wide files stay at the top: `app-mode.txt`, `music-settings.txt`, `clock-settings.txt`,
+`music-engine.log`, `crash.log` (fatal-signal backtraces for the whole app).
+
+The download index is written by a storage thread (temp file, fsync, rename, directory sync), never
+by the caller, so a slow SD card cannot stall the screen.
 
 ## Testing
 

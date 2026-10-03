@@ -1421,6 +1421,15 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
     const bool syncing = pending.kind == PendingKind::SyncDownload;
     if (syncing && r.fromCache)
         return; // only the server's list says what the playlist holds now
+    // A playlist the server successfully reports as empty is empty: the copy follows it. That is
+    // not the same as a failed or partial answer (handled below), which must change nothing.
+    if (syncing && r.ok && r.final && !r.fromCache && pending.loaded.empty() &&
+        r.tracks.items.empty() && r.tracks.total == 0 && r.request.start == 0) {
+        m_pending.erase(r.ticket);
+        if (m_downloads)
+            m_downloads->enqueue(pending.collection, {});
+        return;
+    }
     // Later pages of a long list (the server answers one page at a time) only count from the
     // network; the first page may come from the cache when that holds the whole list.
     if (r.request.start > 0 && r.fromCache)

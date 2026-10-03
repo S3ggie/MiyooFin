@@ -252,7 +252,18 @@ class MusicScreen : public Screen
     bool miniPlayerVisible() const;
     int contentBottom() const;
     int visibleRows(const MusicPane& pane) const;
-    bool isGrid(const MusicPane& pane) const; ///< Albums tab shown as a cover grid
+    bool isGrid(const MusicPane& pane) const;
+    // Home as cover rails: a "Continue listening" card, then one rail per heading.
+    struct HomeSegment
+    {
+        int first = 0, count = 0;
+        bool card = false;
+    };
+    std::vector<HomeSegment> homeSegments(const MusicPane& pane) const;
+    int homeSegmentHeight(const HomeSegment& s) const;
+    bool handleHomeNav(Action action);
+    void renderHome(SDL_Surface* fb, const MusicPane& pane, int top,
+                    int bottom); ///< Albums tab shown as a cover grid
     void renderSettingsCards(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
     void renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
     int detailHeaderHeight(const MusicPane& pane) const;

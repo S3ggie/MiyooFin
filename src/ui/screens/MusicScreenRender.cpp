@@ -193,6 +193,10 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
         renderSettingsCards(fb, pane, listTop, bottom);
         return;
     }
+    if (pane.frame.kind == MusicPaneKind::Home) {
+        renderHome(fb, pane, listTop, bottom);
+        return;
+    }
     const int visible = std::max(1, (bottom - listTop) / kRowHeight);
     int y = listTop;
     for (int i = pane.frame.scroll; i < static_cast<int>(pane.rows.size()) && y + 26 <= bottom;
@@ -216,7 +220,11 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
         }
         const int thumb = kRowHeight - 10;
         int textX = d::kMargin + 10;
-        if (row.kind != MusicRow::Kind::Action || !row.artId.empty()) {
+        // An album's own page shows the cover once, in its header, not on every track.
+        const bool numberedRow = pane.frame.kind == MusicPaneKind::AlbumTracks;
+        if (numberedRow) {
+            textX = d::kMargin + 14;
+        } else if (row.kind != MusicRow::Kind::Action || !row.artId.empty()) {
             drawCover(fb, row.artId, row.artTag, d::kMargin + 10, y + 1, thumb, 128, row.title);
             textX += thumb + 10;
         }
@@ -263,6 +271,71 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
 
 // ---- mini player, now playing
 // ---------------------------------------------------------------------
+
+void MusicScreen::renderHome(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
+{
+    const auto segs = homeSegments(pane);
+    const int rowW = d::kScreenW - 2 * d::kMargin;
+    int y = top + 4;
+    for (int s = pane.frame.scroll; s < static_cast<int>(segs.size()); ++s) {
+        const HomeSegment& seg = segs[s];
+        const int h = homeSegmentHeight(seg);
+        if (y + h > bottom + 4)
+            break;
+        if (seg.card) { // Continue listening
+            const MusicRow& row = pane.rows[seg.first];
+            const bool selected = pane.frame.selected == seg.first;
+            if (selected)
+                ui::focusRing(fb, d::kMargin, y, rowW, 60);
+            ui::roundFill(fb, d::kMargin, y, rowW, 60, d::kRadius,
+                          selected ? d::kRaised : d::kPanel);
+            ui::roundOutline(fb, d::kMargin, y, rowW, 60, d::kRadius,
+                             selected ? d::kAccent : d::kBorder);
+            drawCover(fb, row.artId, row.artTag, d::kMargin + 6, y + 6, 48, 128, row.title);
+            ui::text(fb, d::kMargin + 66, y + 8, row.title, d::kAccentHi);
+            ui::textClamped(fb, d::kMargin + 66, y + 32, rowW - 150, row.subtitle,
+                            selected ? d::kText : d::kTextSecondary);
+            ui::iconPlay(fb, d::kMargin + rowW - 40, y + 18, 22, d::kText);
+            y += h;
+            continue;
+        }
+        // A rail: the heading above, then covers side by side.
+        const MusicRow& heading = pane.rows[seg.first - 1];
+        ui::text(fb, d::kMargin + 4, y + 2, heading.title, d::kAccentHi);
+        ui::fill(fb, d::kMargin + 4 + ui::textWidth(heading.title) + 8, y + 10,
+                 rowW - ui::textWidth(heading.title) - 20, 1, d::kDivider);
+        constexpr int kTileW = 120, kCover = 104;
+        const int cols = rowW / kTileW;
+        const int offset = pane.frame.selected - seg.first;
+        const bool railSelected = offset >= 0 && offset < seg.count;
+        const int firstCol = railSelected && offset >= cols ? offset - cols + 1 : 0;
+        for (int c = 0; c < cols && firstCol + c < seg.count; ++c) {
+            const int index = seg.first + firstCol + c;
+            const MusicRow& row = pane.rows[index];
+            const bool selected = index == pane.frame.selected;
+            const int x = d::kMargin + c * kTileW + 4, ty = y + 22;
+            drawCover(fb, row.artId, row.artTag, x, ty, kCover, 128, row.title);
+            if (selected) {
+                ui::roundOutline(fb, x - 2, ty - 2, kCover + 4, kCover + 4, 5, d::kAccentHi);
+                ui::roundOutline(fb, x - 1, ty - 1, kCover + 2, kCover + 2, 4, d::kAccent);
+            }
+            const bool playing = row.kind == MusicRow::Kind::Track && m_player &&
+                                 m_playerView.track.id == row.track.id &&
+                                 m_playerView.state != music::PlayState::Idle;
+            ui::textClamped(fb, x, ty + kCover + 4, kCover, row.title,
+                            playing ? d::kAccentHi : d::kText);
+            ui::textClamped(fb, x, ty + kCover + 22, kCover,
+                            row.kind == MusicRow::Kind::Album ? row.album.artist : row.track.artist,
+                            selected ? d::kTextSecondary : d::kTextMuted);
+            if (isDownloaded(row))
+                ui::iconDownload(fb, x + kCover - 14, ty + 4, 12, d::kAccentHi);
+        }
+        // More to the right of the visible part.
+        if (firstCol + cols < seg.count)
+            ui::text(fb, d::kScreenW - d::kMargin - 8, y + 2, ">", d::kTextMuted);
+        y += h;
+    }
+}
 
 // The same cards as MiyooFin's Settings tab. "Enter MiyooFin" wears the video side's blue.
 void MusicScreen::renderSettingsCards(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
@@ -448,11 +521,21 @@ void MusicScreen::renderNowPlaying(SDL_Surface* fb)
     if (!m_queueView) {
         drawCover(fb, v.track.artId(), v.track.artTag(), 24, top, 216, 256, v.track.title);
         const int x = 268, w = d::kScreenW - x - 20;
-        const auto lines = ui::wrap(v.track.title, w / 2, 2, 2);
+        // Big title when it fits on two lines, otherwise smaller type on up to three.
+        int titleScale = 2, lineStep = 34;
+        auto lines = ui::wrap(v.track.title, w, 2, 2);
+        if (!lines.empty() && lines.back().size() >= 2 &&
+            lines.back().compare(lines.back().size() - 2, 2, "..") == 0 &&
+            v.track.title.compare(v.track.title.size() >= 2 ? v.track.title.size() - 2 : 0, 2,
+                                  "..") != 0) {
+            titleScale = 1;
+            lineStep = 20;
+            lines = ui::wrap(v.track.title, w, 3, 1);
+        }
         int y = top;
         for (const std::string& line : lines) {
-            ui::text(fb, x, y, line, d::kText, 2);
-            y += 34;
+            ui::text(fb, x, y, line, d::kText, titleScale);
+            y += lineStep;
         }
         if (!v.track.artist.empty()) {
             ui::textClamped(fb, x, y + 2, w, v.track.artist, d::kTextSecondary);
@@ -518,9 +601,9 @@ void MusicScreen::renderNowPlaying(SDL_Surface* fb)
             const bool current = first + i == q.position();
             ui::text(fb, d::kMargin + 10, y + 8, std::to_string(first + i + 1) + ".",
                      d::kTextMuted);
-            ui::textClamped(fb, d::kMargin + 50, y + 8, 400, t->title,
+            ui::textClamped(fb, d::kMargin + 50, y + 8, 330, t->title,
                             current ? d::kAccentHi : d::kText);
-            ui::textClamped(fb, d::kMargin + 460, y + 8, 120, t->artist, d::kTextMuted);
+            ui::textClamped(fb, d::kMargin + 400, y + 8, 180, t->artist, d::kTextMuted);
         }
     }
 }

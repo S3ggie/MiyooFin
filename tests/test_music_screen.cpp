@@ -129,9 +129,16 @@ void testBrowseAndDrill()
     CHECK(rig.until(*s, [&] { return s->rowCountForTest() == 5; }));
     CHECK(s->activeTabForTest() == 0 && s->paneKindForTest() == MusicPaneKind::Home);
     CHECK(s->selectedTitleForTest() == "First Album"); // lands on the first selectable row
-    s->handleAction(Action::Down);
+    s->handleAction(Action::Right); // Home is cover rails: Left/Right move along a rail
     CHECK(s->selectedTitleForTest() == "Second Album");
+    s->handleAction(Action::Down); // Up/Down change rail, keeping the column where possible
+    CHECK(s->selectedTitleForTest() != "Second Album" &&
+          s->selectedTitleForTest() != "First Album");
     s->handleAction(Action::Up);
+    CHECK(s->selectedTitleForTest() == "First Album" ||
+          s->selectedTitleForTest() == "Second Album");
+    s->handleAction(Action::Left);
+    CHECK(s->selectedTitleForTest() == "First Album");
     s->handleAction(Action::Confirm); // open the album
     CHECK(s->drillDepthForTest() == 1 && s->paneKindForTest() == MusicPaneKind::AlbumTracks);
     CHECK(rig.until(*s, [&] { return s->rowCountForTest() == 2; }));

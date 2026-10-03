@@ -73,7 +73,8 @@ MusicRow trackRow(const music::Track& t, bool numbered)
     r.id = t.id;
     r.track = t;
     r.title = (numbered && t.trackNumber > 0 ? std::to_string(t.trackNumber) + ". " : "") + t.title;
-    r.subtitle = t.artist;
+    // On an album's page the artist is only worth a line when it differs from the album's.
+    r.subtitle = numbered && t.artist == t.albumArtist ? std::string() : t.artist;
     if (!t.album.empty() && !numbered)
         r.subtitle += (r.subtitle.empty() ? "" : " - ") + t.album;
     r.right = music::formatDuration(t.durationSeconds());
@@ -357,6 +358,35 @@ void MusicScreen::requestPane(MusicPane& pane, bool nextPage)
     }
 }
 
+std::vector<MusicScreen::HomeSegment> MusicScreen::homeSegments(const MusicPane& pane) const
+{
+    std::vector<HomeSegment> segs;
+    const int count = static_cast<int>(pane.rows.size());
+    for (int i = 0; i < count;) {
+        const MusicRow& row = pane.rows[i];
+        if (row.kind == MusicRow::Kind::Heading) {
+            HomeSegment s;
+            s.first = i + 1;
+            int j = i + 1;
+            while (j < count && pane.rows[j].kind != MusicRow::Kind::Heading)
+                ++j;
+            s.count = j - (i + 1);
+            if (s.count > 0)
+                segs.push_back(s);
+            i = j;
+        } else { // "Continue listening"
+            segs.push_back({i, 1, true});
+            ++i;
+        }
+    }
+    return segs;
+}
+
+int MusicScreen::homeSegmentHeight(const HomeSegment& s) const
+{
+    return s.card ? 72 : 24 + 104 + 44;
+}
+
 void MusicScreen::clampPane(MusicPane& pane)
 {
     const int count = static_cast<int>(pane.rows.size());
@@ -366,6 +396,26 @@ void MusicScreen::clampPane(MusicPane& pane)
         return;
     }
     f.selected = std::max(0, std::min(f.selected, count - 1));
+    if (f.kind == MusicPaneKind::Home) { // scroll counts rails here, not rows
+        while (f.selected < count - 1 && !pane.rows[f.selected].selectable())
+            ++f.selected;
+        const auto segs = homeSegments(pane);
+        int sel = 0;
+        for (int i = 0; i < static_cast<int>(segs.size()); ++i)
+            if (f.selected >= segs[i].first && f.selected < segs[i].first + segs[i].count)
+                sel = i;
+        f.scroll = std::max(0, std::min(f.scroll, sel));
+        const int avail = contentBottom() - 76;
+        for (;;) { // scroll down until the selected rail fits
+            int used = 0;
+            for (int i = f.scroll; i <= sel && i < static_cast<int>(segs.size()); ++i)
+                used += homeSegmentHeight(segs[i]);
+            if (used <= avail || f.scroll >= sel)
+                break;
+            ++f.scroll;
+        }
+        return;
+    }
     // Land on a selectable row.
     while (f.selected < count - 1 && !pane.rows[f.selected].selectable())
         ++f.selected;
@@ -1040,6 +1090,11 @@ void MusicScreen::requestVisibleCovers()
     if (m_view != View::Browse)
         return;
     const MusicPane& pane = activePane();
+    if (pane.frame.kind == MusicPaneKind::Home) {
+        for (const MusicRow& row : pane.rows) // a short list: all of its covers
+            cover(row.artId, row.artTag, 128, true);
+        return;
+    }
     const int visible = visibleRows(pane);
     for (int i = pane.frame.scroll;
          i < pane.frame.scroll + visible + 1 && i < static_cast<int>(pane.rows.size()); ++i)
@@ -1105,6 +1160,37 @@ void MusicScreen::cycleLetter(int delta)
     markDirty();
 }
 
+bool MusicScreen::handleHomeNav(Action action)
+{
+    MusicPane& pane = activePane();
+    const auto segs = homeSegments(pane);
+    int seg = -1;
+    for (int i = 0; i < static_cast<int>(segs.size()); ++i)
+        if (pane.frame.selected >= segs[i].first &&
+            pane.frame.selected < segs[i].first + segs[i].count)
+            seg = i;
+    if (seg < 0)
+        return true;
+    int target = pane.frame.selected;
+    const int offset = pane.frame.selected - segs[seg].first;
+    if (action == Action::Left || action == Action::Right) {
+        const int o = offset + (action == Action::Left ? -1 : 1);
+        if (o >= 0 && o < segs[seg].count)
+            target = segs[seg].first + o;
+    } else {
+        const int next = seg + (action == Action::Up ? -1 : 1);
+        if (next >= 0 && next < static_cast<int>(segs.size()))
+            target = segs[next].first + std::min(offset, segs[next].count - 1);
+    }
+    if (target != pane.frame.selected) {
+        pane.frame.selected = target;
+        pane.frame.selectedId = pane.rows[target].id;
+        clampPane(pane);
+        markDirty();
+    }
+    return true;
+}
+
 bool MusicScreen::handleBrowse(Action action)
 {
     MusicPane& pane = activePane();
@@ -1137,6 +1223,8 @@ bool MusicScreen::handleBrowse(Action action)
     case Action::Down: {
         if (count == 0)
             return true;
+        if (pane.frame.kind == MusicPaneKind::Home)
+            return handleHomeNav(action);
         int i = pane.frame.selected + (action == Action::Up ? -1 : 1);
         if (isGrid(pane)) { // a row of covers up or down; the last row stops at the last cover
             i = pane.frame.selected + (action == Action::Up ? -kGridCols : kGridCols);
@@ -1155,6 +1243,8 @@ bool MusicScreen::handleBrowse(Action action)
     }
     case Action::Left:
     case Action::Right:
+        if (pane.frame.kind == MusicPaneKind::Home)
+            return handleHomeNav(action);
         if (isGrid(pane)) {
             const int i = pane.frame.selected + (action == Action::Left ? -1 : 1);
             if (i >= 0 && i < count) {

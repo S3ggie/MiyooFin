@@ -29,6 +29,19 @@ Built with C++17, SDL2, libcurl, and json-c.
   shuffle/repeat, gapless playback in a separate audio engine while you keep
   browsing, album-art Now Playing, offline album/playlist downloads, and plays
   reported back to Jellyfin. See [docs/music.md](docs/music.md).
+- **Subtitles and languages** — text and DVD/PGS subtitle tracks, a track menu in
+  the player (SELECT), and default audio / subtitle languages in Settings.
+- **Skip intro / credits** — the player offers a skip button when your Jellyfin
+  server (10.10+) has marked the segment.
+- **Mark watched / unwatched** — movies, episodes, seasons and series (with a
+  confirmation for seasons and series); changes made offline sync later.
+- **Playlists** — in Music: add to a playlist, create, remove from and delete
+  playlists, or save the play queue as a playlist.
+- **Screen-off listening** — START + SELECT together darken the screen and lock
+  the buttons while music plays; press them together again to unlock.
+- **Signing in** — a username and password, or **Quick Connect** (approve the
+  Miyoo from another Jellyfin client). Two server addresses (Home network and
+  Internet) with a **Test connection** row in Settings.
 - **Over-the-air updates** — check for and install new versions from the Settings
   screen (0.2.0 and later), with SHA-256 verification and rollback on failure.
 - **Small** — the client is about 1.7 MB; the release download is ~3.4 MB.
@@ -51,18 +64,27 @@ Built with C++17, SDL2, libcurl, and json-c.
 |---|---|
 | ![Downloads with live progress and pause/resume](docs/screenshots/downloads.png) | |
 
+| Settings | Music playlists |
+|---|---|
+| ![Settings with Test connection](docs/screenshots/settings.png) | ![Music playlists](docs/screenshots/music-playlists.png) |
+
+| A playlist | Music settings |
+|---|---|
+| ![A playlist with the mini-player](docs/screenshots/music-playlist.png) | ![Music settings](docs/screenshots/music-settings.png) |
+
+See the [user guide](docs/user-guide.md) for the buttons and settings.
+
 ## Known limitations
 
 Stated up front rather than discovered later:
 
-- **No text search** — you can only move through the library with the alphabet
-  rail on the left of the Movies and Shows tabs.
-- **No subtitles** — external subtitle tracks are not fetched or displayed.
-- **Movies and TV only** — no music, albums, or audio playback.
-- **No quality picker** — downloads use one fixed profile tuned for the device's
-  640x480 screen.
-- **No mark-as-played/unplayed**, favourites, playlists or collections from the
-  device.
+- **No text search** — you move through the library with the alphabet rail
+  (video) or the A-Z filter (music).
+- **No quality picker for video** — downloads use one fixed profile tuned for the
+  device's 640x480 screen (music has 128 / 192 / 320 kbps).
+- **Skip intro needs server support** — Jellyfin 10.10 or later with intro
+  detection (the Intro Skipper plugin or built-in segments).
+- **No favourites, collections or lyrics** from the device yet.
 
 ## Installation
 

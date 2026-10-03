@@ -12,7 +12,7 @@ successful soak.
 | Field | Value |
 |---|---|
 | Date | 2026-09-08 |
-| Device | Miyoo Mini Plus at `192.168.1.197` |
+| Device | Miyoo Mini Plus at `192.168.1.50` |
 | OnionOS / firmware | Existing device image; exact versions not captured |
 | Storage | `/mnt/SDCARD`; approximately 51.3–51.5 GiB free during normal runs |
 | Network/server/media | Same configured Wi-Fi, Jellyfin server, and representative media throughout |

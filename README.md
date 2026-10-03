@@ -49,31 +49,48 @@ Built with C++17, SDL2, libcurl, and json-c.
 
 ## Screenshots
 
+All screenshots are rendered from made-up libraries (the UI test server and a fake music
+library), so they show no real server, account, playlists or cover art.
+
+### Video
+
 | Home | Movies |
 |---|---|
-| ![Home rails](docs/screenshots/home.png) | ![Movies grid with alphabet rail](docs/screenshots/movies.png) |
-
-| Movie preview | Episode list |
-|---|---|
-| ![Movie details with synopsis and download size](docs/screenshots/movie-preview.png) | ![Episode list for a season](docs/screenshots/episodes.png) |
+| ![Home rails](docs/screenshots/video-home.png) | ![Movies grid with alphabet rail](docs/screenshots/video-movies.png) |
 
 | Shows | Seasons |
 |---|---|
-| ![Shows grid with a separate Anime section](docs/screenshots/shows.png) | ![Season list](docs/screenshots/seasons.png) |
+| ![Shows grid](docs/screenshots/video-shows.png) | ![Season list](docs/screenshots/video-seasons.png) |
 
-| Downloads | |
+| Episodes | Movie page |
 |---|---|
-| ![Downloads with live progress and pause/resume](docs/screenshots/downloads.png) | |
+| ![Episode list with watched marks](docs/screenshots/video-episodes.png) | ![Movie page with Play, Download and Watched](docs/screenshots/video-movie.png) |
 
-| Settings | Music playlists |
+| Settings | |
 |---|---|
-| ![Settings with Test connection](docs/screenshots/settings.png) | ![Music playlists](docs/screenshots/music-playlists.png) |
+| ![Settings, grouped into Library, Playback, Display, Connection, App and Account](docs/screenshots/video-settings.png) | |
 
-| A playlist | Music settings |
+### Music
+
+| Home | Albums (grid) |
 |---|---|
-| ![A playlist with the mini-player](docs/screenshots/music-playlist.png) | ![Music settings](docs/screenshots/music-settings.png) |
+| ![Music Home: continue listening and cover rails](docs/screenshots/music-home.png) | ![Album grid](docs/screenshots/music-albums.png) |
+
+| Album page | Now Playing |
+|---|---|
+| ![An album's tracks](docs/screenshots/music-album.png) | ![Now Playing with the mini-player controls](docs/screenshots/music-nowplaying.png) |
+
+| Lyrics | Queue |
+|---|---|
+| ![Synced lyrics, the current line in white](docs/screenshots/music-lyrics.png) | ![Play queue](docs/screenshots/music-queue.png) |
+
+| Playlists | Settings |
+|---|---|
+| ![Playlists tab](docs/screenshots/music-playlists.png) | ![Music settings](docs/screenshots/music-settings.png) |
 
 See the [user guide](docs/user-guide.md) for the buttons and settings.
+
+<sub>To regenerate: `sh tools/ui-script/run.sh tour` and `tour-detail` (video), `make shots-music` (music).</sub>
 
 ## Known limitations
 

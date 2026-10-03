@@ -132,6 +132,14 @@ class MusicScreen : public Screen
     {
         return m_picker.active();
     }
+    /// Screenshot generator: shows these lyrics for the playing song.
+    void showLyricsForTest(std::vector<music::LyricLine> lines)
+    {
+        m_lyricsView = true;
+        m_lyricsFor = m_playerView.track.id;
+        m_lyrics = std::move(lines);
+        m_lyricsLoading = false;
+    }
     bool menuOpenForTest() const
     {
         return m_menu.open;

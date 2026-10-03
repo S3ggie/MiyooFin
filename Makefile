@@ -321,6 +321,17 @@ $(TEST_GROUP_TARGETS): $(TEST_DIR)/test_%: tests/test_%.cpp $(TEST_PROD_LIB) $(S
 	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(TEST_PCH_USE) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
 	@echo "  [LINK] $@"
 
+# README screenshots of the music screens, rendered from a made-up library (no server, no
+# personal data): `make shots-music` writes BMPs to output/shots/.
+$(TEST_DIR)/shots_music: tests/shots_music.cpp $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) $(TEST_PCH_GCH) | $(TEST_DIR)
+	$(CXX) $(TEST_CXXFLAGS) $(INCLUDES) $(SDL_CFLAGS) $(TEST_PCH_USE) -o $@ $< -Wl,--start-group $(TEST_PROD_LIB) $(SQLITE_HOST_OBJ) -Wl,--end-group $(LDFLAGS) $(CURL_LIBS) $(SDL_LIBS)
+	@echo "  [LINK] $@"
+
+.PHONY: shots-music
+shots-music: $(TEST_DIR)/shots_music
+	@mkdir -p output/shots
+	@$(TEST_DIR)/shots_music output/shots
+
 $(TEST_GROUP_TARGETS): tests/test_support.hpp
 $(TEST_DIR)/test_player: player/osd.h player/osd_font.h player/subs.h player/menu_guard.h
 $(TEST_DIR)/test_api_session: tests/cases/test_session.inc tests/cases/test_api_core.inc tests/cases/test_api_events.inc

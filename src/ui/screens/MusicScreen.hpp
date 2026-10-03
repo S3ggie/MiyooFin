@@ -320,6 +320,14 @@ class MusicScreen : public Screen
     Uint32 m_toastUntil = 0;
 
     // cover surfaces: "id:tag:size" -> surface, bounded LRU
+    // Covers already scaled to the size they are drawn at (scaling a cover on every frame is
+    // the most expensive thing the list screens do on the device's CPU).
+    struct ScaledCover
+    {
+        const SDL_Surface* source = nullptr;
+        SDL_Surface* scaled = nullptr;
+    };
+    std::map<std::string, ScaledCover> m_scaledCovers;
     std::map<std::string, SDL_Surface*> m_covers;
     std::deque<std::string> m_coverOrder;
     std::set<std::string> m_coverRequested;

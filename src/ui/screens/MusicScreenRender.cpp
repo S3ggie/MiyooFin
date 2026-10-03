@@ -47,8 +47,36 @@ void MusicScreen::drawCover(SDL_Surface* fb, const std::string& id, const std::s
 {
     SDL_Surface* s = cover(id, tag, requestSize, true);
     if (s) {
+        SDL_Surface* shown = s;
+        if (s->w != size || s->h != size) {
+            const std::string key = id + "|" + tag + "|" + std::to_string(size);
+            ScaledCover& entry = m_scaledCovers[key];
+            if (entry.source != s) { // first use, or the cover behind it was replaced
+                if (entry.scaled)
+                    SDL_FreeSurface(entry.scaled);
+                entry.scaled = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32, s->format->format);
+                if (entry.scaled)
+                    SDL_BlitScaled(s, nullptr, entry.scaled, nullptr);
+                entry.source = s;
+                if (m_scaledCovers.size() > 160) { // keep memory bounded; they rebuild on demand
+                    for (auto it = m_scaledCovers.begin(); it != m_scaledCovers.end();) {
+                        if (it->first == key) {
+                            ++it;
+                            continue;
+                        }
+                        SDL_FreeSurface(it->second.scaled);
+                        it = m_scaledCovers.erase(it);
+                    }
+                }
+            }
+            if (entry.scaled)
+                shown = entry.scaled;
+        }
         SDL_Rect dst = {x, y, size, size};
-        SDL_BlitScaled(s, nullptr, fb, &dst);
+        if (shown == s)
+            SDL_BlitScaled(shown, nullptr, fb, &dst);
+        else
+            SDL_BlitSurface(shown, nullptr, fb, &dst);
         ui::roundCorners(fb, x, y, size, size, std::min(4, size / 8), d::kCanvas);
     } else {
         ui::placeholderTile(fb, x, y, size, size, label, std::min(4, size / 8));

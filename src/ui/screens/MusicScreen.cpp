@@ -198,6 +198,8 @@ MusicScreen::~MusicScreen()
 {
     for (auto& entry : m_covers)
         SDL_FreeSurface(entry.second);
+    for (auto& entry : m_scaledCovers)
+        SDL_FreeSurface(entry.second.scaled);
 }
 
 void MusicScreen::enter() {}

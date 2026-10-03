@@ -51,6 +51,12 @@ std::string urlOrigin(const std::string& url);
 /// True when a request carrying credentials may follow a redirect from `fromUrl` to
 /// `locationUrl`: same origin, a relative location, or an http -> https upgrade of the same
 /// host. Anything else would hand the credentials to another server.
+/// The absolute URL a `Location` header value points to when the response came from `baseUrl`
+/// (RFC 3986 resolution, as libcurl does it); empty when the value is unusable or suspicious
+/// (control characters, backslashes, user-info tricks, encoded hosts, malformed ports, no
+/// authority, other schemes). Only the scheme and authority are authoritative: the path is not
+/// normalised.
+std::string resolveRedirectTarget(const std::string& baseUrl, const std::string& location);
 bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string& locationUrl);
 
 /// Makes a libcurl transfer that carries credentials (X-Emby-Token and friends) refuse any
@@ -58,7 +64,8 @@ bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string&
 /// holding a token: `HttpClient` does, and so does the segment downloader (it uses raw curl).
 struct RedirectGuard
 {
-    std::string requestUrl;
+    std::string requestUrl; // where the credentials were first sent
+    std::string currentUrl; // the URL being redirected right now (moves along a chain)
     bool credentials = false;
     bool refused = false;
     /// Installs the header callback and limits redirects to http(s). `url` is the request URL;

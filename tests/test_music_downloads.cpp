@@ -135,12 +135,15 @@ void testSharedTracksAndRemoval()
     const std::string pathB = rig.dl->pathFor("b"), pathA = rig.dl->pathFor("a");
     const std::uint64_t revision = rig.dl->revision();
     rig.dl->removeCollection("al1");
-    CHECK(rig.until([&] { return !rig.dl->hasTrack("a"); }));
+    CHECK(rig.until([&] { return !rig.dl->hasTrack("a") && !exists(pathA); }));
     CHECK(!exists(pathA) && exists(pathB)); // the playlist still needs "b"
     CHECK(!rig.dl->hasCollection("al1") && rig.dl->hasCollection("pl1"));
     CHECK(rig.dl->revision() > revision);
     rig.dl->removeCollection("pl1");
-    CHECK(rig.until([&] { return !rig.dl->hasTrack("b") && !rig.dl->hasTrack("c"); }));
+    CHECK(rig.until([&] {
+        return !rig.dl->hasTrack("b") && !rig.dl->hasTrack("c") && !exists(pathB) &&
+               rig.dl->snapshot().empty();
+    }));
     CHECK(!exists(pathB) && rig.dl->snapshot().empty() && rig.dl->totalBytes() == 0);
     std::printf("[test] music downloads: shared tracks and removal OK\n");
 }
@@ -153,7 +156,7 @@ void testCollectionShrinks()
     CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("c"); }));
     const std::string pathC = rig.dl->pathFor("c");
     rig.dl->enqueue(collection("al1"), tracks({"a", "b"})); // the album lost a track
-    CHECK(rig.until([&] { return !rig.dl->hasTrack("c"); }));
+    CHECK(rig.until([&] { return !rig.dl->hasTrack("c") && !exists(pathC); }));
     CHECK(!exists(pathC) && rig.dl->tracksOf("al1").size() == 2 && rig.dl->totalBytes() == 6000);
     std::printf("[test] music downloads: a collection that shrinks drops its files OK\n");
 }

@@ -27,17 +27,20 @@ struct WriteCtx
     std::uint64_t generation = 0;
     std::uint64_t baseDownloaded = 0;
 };
-// Makes a rename durable. Filesystems that cannot sync a directory (FAT among them) report
-// EINVAL; that is not an error worth failing a segment for.
-void syncParentDir(const std::string& path)
+// Makes a rename durable; false only for a real I/O error.
+bool syncParentDir(const std::string& path)
 {
     const std::size_t slash = path.rfind('/');
     const std::string dir = slash == std::string::npos ? "." : path.substr(0, slash);
     const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
-    if (fd >= 0) {
-        (void)::fsync(fd);
-        ::close(fd);
-    }
+    if (fd < 0)
+        return false;
+    const int rc = ::fsync(fd);
+    const int err = errno;
+    ::close(fd);
+    // A filesystem that cannot sync a directory says so with EINVAL/ENOTSUP (FAT, some network
+    // mounts): not a failure. An actual I/O error means the rename may not have reached the disk.
+    return rc == 0 || err == EINVAL || err == ENOTSUP || err == EROFS;
 }
 bool nonemptyFile(const std::string& path, std::uint64_t& size)
 {
@@ -65,7 +68,9 @@ bool segmentAcceptable(const std::string& path, std::uint64_t& size, curl_off_t 
         return false;
     if (announced >= 0 && static_cast<std::uint64_t>(announced) != size)
         return false;
-    return DownloadStore::plausibleHlsSegment(path, size);
+    // Every packet, once, before the segment is accepted (the library check later is the quick
+    // one).
+    return DownloadStore::validHlsSegment(path, size, true);
 }
 size_t writeCb(char* p, size_t a, size_t b, void* u)
 {
@@ -686,6 +691,21 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             if (!willRetry)
                 break;
         }
+        if (good) {
+            // Publish it: rename to the final name, then make the rename durable. A rename or a
+            // directory sync that really fails means this segment cannot be trusted to be there
+            // after a power cut, so it counts as a failed segment (not silently as a good one).
+            if (std::rename(part.c_str(), done.c_str()) != 0) {
+                good = false;
+            } else if (!syncParentDir(done)) {
+                std::remove(done.c_str());
+                good = false;
+            }
+            if (!good) {
+                rc = CURLE_WRITE_ERROR;
+                code = 0;
+            }
+        }
         if (!good) {
             std::string detail = "segment=" + std::to_string(k) +
                                  " curl=" + std::to_string((int)rc) + " " + curl_easy_strerror(rc) +
@@ -721,9 +741,6 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             publishDownloadGauges(m_items, m_planJobs.size());
             return false;
         }
-        if (std::rename(part.c_str(), done.c_str()))
-            return false;
-        syncParentDir(done); // the rename must be durable before the manifest says it happened
         performanceTelemetry().addDownloadSegmentCompleted();
         // The segment file just renamed to its final name is the source of
         // truth: account for its bytes incrementally instead of rescanning

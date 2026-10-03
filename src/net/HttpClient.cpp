@@ -72,23 +72,108 @@ std::string urlOrigin(const std::string& url)
     return scheme + "://" + lowerCase(host) + ":" + port;
 }
 
-bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string& locationUrl)
+namespace {
+
+// "scheme://authority" of an absolute http(s) URL, or empty. The authority must be well formed:
+// no user-info, no encoded or exotic host characters, a purely numeric port.
+bool splitHttpUrl(const std::string& url, std::string& scheme, std::string& authority,
+                  std::string& rest)
 {
-    // A relative Location (no scheme) stays on the same server by definition.
-    if (locationUrl.find("://") == std::string::npos)
-        return true;
-    const std::string from = urlOrigin(fromUrl), to = urlOrigin(locationUrl);
+    const std::size_t colon = url.find(':');
+    if (colon == std::string::npos || colon == 0)
+        return false;
+    scheme = lowerCase(url.substr(0, colon));
+    if (scheme != "http" && scheme != "https")
+        return false;
+    if (url.compare(colon, 3, "://") != 0)
+        return false; // "http:host/x" and friends have no authority marker
+    const std::size_t start = colon + 3;
+    const std::size_t end = url.find_first_of("/?#", start);
+    authority = url.substr(start, end == std::string::npos ? end : end - start);
+    rest = end == std::string::npos ? std::string() : url.substr(end);
+    if (authority.empty() || authority.find('@') != std::string::npos)
+        return false; // user-info: "http://a@b/" has host b, which is not what it looks like
+    std::string host = authority, port;
+    const std::size_t portColon = authority.rfind(':');
+    if (portColon != std::string::npos && authority.find(']', portColon) == std::string::npos) {
+        host = authority.substr(0, portColon);
+        port = authority.substr(portColon + 1);
+        if (port.empty() || port.size() > 5 ||
+            port.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+    }
+    if (host.empty())
+        return false;
+    for (const char ch : host) {
+        const unsigned char u = static_cast<unsigned char>(ch);
+        const bool ok = std::isalnum(u) || ch == '.' || ch == '-' || ch == '_' || ch == '[' ||
+                        ch == ']' || ch == ':';
+        if (!ok)
+            return false; // '%', '\\', spaces, control characters ...
+    }
+    return true;
+}
+
+} // namespace
+
+std::string resolveRedirectTarget(const std::string& baseUrl, const std::string& location)
+{
+    // Nothing that could be read two ways: control characters, whitespace inside, backslashes.
+    for (const char ch : location) {
+        const unsigned char u = static_cast<unsigned char>(ch);
+        if (u < 0x21 || u == 0x7f || ch == '\\')
+            return {};
+    }
+    std::string scheme, authority, rest;
+    if (!splitHttpUrl(baseUrl, scheme, authority, rest))
+        return {};
+    const std::string baseRoot = scheme + "://" + authority;
+    if (location.empty())
+        return baseUrl;
+    // An absolute URL (it names its own scheme).
+    const std::size_t colon = location.find(':');
+    const std::size_t firstSep = location.find_first_of("/?#");
+    if (colon != std::string::npos && (firstSep == std::string::npos || colon < firstSep)) {
+        std::string s, a, r;
+        return splitHttpUrl(location, s, a, r) ? location : std::string();
+    }
+    // Scheme-relative: "//host/path" keeps the scheme and replaces the authority.
+    if (location.compare(0, 2, "//") == 0) {
+        const std::string absolute = scheme + ":" + location;
+        std::string s, a, r;
+        return splitHttpUrl(absolute, s, a, r) ? absolute : std::string();
+    }
+    // Everything else stays on the same server.
+    if (location[0] == '/')
+        return baseRoot + location;
+    if (location[0] == '?' || location[0] == '#')
+        return baseRoot + rest.substr(0, rest.find_first_of("?#")) + location;
+    const std::size_t slash = rest.find_last_of('/', rest.find_first_of("?#"));
+    return baseRoot + (slash == std::string::npos ? std::string("/") : rest.substr(0, slash + 1)) +
+           location;
+}
+
+// Whether credentials sent to `fromUrl` may also go to `toUrl`: the same origin, or an http ->
+// https upgrade of the same host (default ports on both sides).
+static bool originAllowed(const std::string& fromUrl, const std::string& toUrl)
+{
+    const std::string from = urlOrigin(fromUrl), to = urlOrigin(toUrl);
     if (from.empty() || to.empty())
         return false;
     if (from == to)
         return true;
-    // http -> https upgrade of the same host (default ports on both sides).
     const std::size_t fromScheme = from.find("://"), toScheme = to.find("://");
     const std::string fromHost = from.substr(fromScheme + 3, from.rfind(':') - fromScheme - 3);
     const std::string toHost = to.substr(toScheme + 3, to.rfind(':') - toScheme - 3);
     return from.compare(0, 7, "http://") == 0 && to.compare(0, 8, "https://") == 0 &&
            fromHost == toHost && from.substr(from.rfind(':') + 1) == "80" &&
            to.substr(to.rfind(':') + 1) == "443";
+}
+
+bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string& locationUrl)
+{
+    const std::string resolved = resolveRedirectTarget(fromUrl, locationUrl);
+    return !resolved.empty() && originAllowed(fromUrl, resolved);
 }
 
 static bool isCredentialHeader(const std::string& header)
@@ -121,10 +206,14 @@ static size_t redirectGuardCallback(char* buffer, size_t size, size_t nitems, vo
         value.erase(value.begin());
     while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' '))
         value.pop_back();
-    if (!redirectKeepsCredentialsSafe(guard->requestUrl, value)) {
+    // Resolve against the URL being redirected (a chain moves it) and compare with where the
+    // credentials were first sent.
+    const std::string resolved = resolveRedirectTarget(guard->currentUrl, value);
+    if (resolved.empty() || !originAllowed(guard->requestUrl, resolved)) {
         guard->refused = true;
         return 0; // abort: the credentials never leave their server
     }
+    guard->currentUrl = resolved;
     return total;
 }
 
@@ -136,14 +225,19 @@ void RedirectGuard::attach(CURL* curl, const std::string& url,
                            const std::vector<std::string>& headers)
 {
     requestUrl = url;
+    currentUrl = url;
     credentials = carriesCredentials(headers);
     refused = false;
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, redirectGuardCallback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
-#if LIBCURL_VERSION_NUM >= 0x075500 // 7.85.0 added the string form; the numeric one is deprecated
-    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-#else
+    // The numeric form works on every libcurl (the Miyoo ships 7.79.1, which predates the string
+    // form); where the headers are new enough the string form is set as well.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#pragma GCC diagnostic pop
+#if LIBCURL_VERSION_NUM >= 0x075500
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 #endif
 }
 

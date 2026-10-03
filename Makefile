@@ -221,7 +221,7 @@ MODULE_BOUNDARIES_TEST := tests/test_module_boundaries.sh
 TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
                artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player music_downloads music_screen watched_sync player_prefs screen_lock crash_report http_methods clock_settings http_security websocket
+               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player music_downloads music_screen watched_sync player_prefs screen_lock crash_report http_methods clock_settings http_security websocket mpeg_ts
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -558,8 +558,8 @@ $(BRIDGE_TEST): $(BRIDGE_TEST_SRC) tools/https_bridge_parse.hpp | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -I. -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 
-$(BRIDGE_LOCAL_TEST): $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/DownloadStore.hpp | $(TEST_DIR)
-	$(CXX) $(CXXFLAGS) -DMIYOOFIN_BRIDGE_BIN='"$(BRIDGE_HOST)"' -I. -o $@ $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp
+$(BRIDGE_LOCAL_TEST): $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/DownloadStore.hpp src/download/MpegTsValidator.cpp src/download/MpegTsValidator.hpp | $(TEST_DIR)
+	$(CXX) $(CXXFLAGS) -DMIYOOFIN_BRIDGE_BIN='"$(BRIDGE_HOST)"' -I. -o $@ $(BRIDGE_LOCAL_TEST_SRC) src/download/DownloadStore.cpp src/download/MpegTsValidator.cpp
 	@echo "  [LINK] $@"
 
 # -------------------------------------------------------------------

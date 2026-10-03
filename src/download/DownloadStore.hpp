@@ -26,8 +26,12 @@ class DownloadStore
     std::string segmentPath(const std::string& scope, const std::string& itemId,
                             std::uint64_t index, bool part = false) const;
     bool ensureHlsDirectories(const std::string& scope, const std::string& itemId) const;
-    /// True for a finished segment file that is plausibly media (see the .cpp), not just non-empty.
-    static bool plausibleHlsSegment(const std::string& path, std::uint64_t size);
+    /// Structural MPEG-TS validation of a segment file (see MpegTsValidator.hpp for what that does
+    /// and does not guarantee). `full` checks every packet (used once, on a freshly downloaded
+    /// segment); otherwise the opening packets plus a sample (used whenever the library is
+    /// checked).
+    static bool validHlsSegment(const std::string& path, std::uint64_t size, bool full,
+                                std::string* why = nullptr);
     bool isCompleteSegment(const std::string& scope, const std::string& itemId,
                            std::uint64_t index) const;
     std::uint64_t firstIncompleteSegment(const std::string& scope, const DownloadItem& item) const;

@@ -3,6 +3,7 @@
 #include "test_support.hpp"
 
 #include "../src/net/HttpClient.hpp"
+#include <curl/curl.h>
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -128,6 +129,59 @@ void testOriginRules()
     CHECK(!redirectKeepsCredentialsSafe("https://a/x", "https://a.evil.example/y"));
 }
 
+// Locations that change origin without containing "://", and chains that get there in steps.
+void testRelativeLookingRedirectsCannotChangeOrigin()
+{
+    // scheme-relative and path-confusion forms
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "//b:2/stolen"));
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "//b/stolen"));
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "//a:2/stolen")); // same host, other port
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "//a:1/same"));    // same origin
+    CHECK(redirectKeepsCredentialsSafe("http://a/x", "//a/same"));        // default ports agree
+    CHECK(redirectKeepsCredentialsSafe("http://a:80/x", "//a:443/up") ==
+          false); // scheme-relative keeps http
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "/\\b:2/stolen")); // backslash tricks
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "\\\\b:2/stolen"));
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x",
+                                        "http://a:1@b:2/stolen")); // user-info is not the host
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "http:b:2/stolen")); // no authority marker
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "ftp://a:1/x"));     // other scheme
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x",
+                                        "//b:2/x\r\nX-Evil: 1"));           // control characters
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "//%62:2/stolen")); // encoded host
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "//b:2x/stolen"));  // malformed port
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "/next?y=1#z"));
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "next/page"));
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "?q=1"));
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "../up"));
+    CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "http://a:1/abs"));
+    CHECK(redirectKeepsCredentialsSafe("http://a/x", "https://a/up")); // upgrade of the same host
+    CHECK(!redirectKeepsCredentialsSafe("http://a/x", "https://b/up"));
+    // The resolved target is what libcurl will request: it must agree with libcurl's own resolver
+    // on the origin of every form above.
+    const char* const bases[] = {"http://a:1/x/y", "https://a.example/p?q"};
+    const char* const locations[] = {
+        "//b:2/s",    "//a:1/s",          "/p",  "p",     "../p", "?z", "#f",
+        "http://c/d", "https://c:8443/d", "//c", "///c/d"};
+    for (const char* base : bases)
+        for (const char* location : locations) {
+            CURLU* u = curl_url();
+            if (curl_url_set(u, CURLUPART_URL, base, 0) == CURLUE_OK &&
+                curl_url_set(u, CURLUPART_URL, location, 0) == CURLUE_OK) {
+                char* resolved = nullptr;
+                CHECK(curl_url_get(u, CURLUPART_URL, &resolved, 0) == CURLUE_OK);
+                // Where the two resolvers disagree the guard may only be stricter (it refuses
+                // oddities such as "///c/d"), never target a different server than libcurl will.
+                const std::string mine = resolveRedirectTarget(base, location);
+                CHECK(mine.empty() || urlOrigin(mine) == urlOrigin(resolved));
+                if (std::string(location) != "///c/d")
+                    CHECK(!mine.empty()); // every ordinary form does resolve
+                curl_free(resolved);
+            }
+            curl_url_cleanup(u);
+        }
+}
+
 void testCredentialsStayOnTheirServer()
 {
     Server target([](const std::string&) { return ok("target"); });
@@ -164,6 +218,59 @@ void testCredentialsStayOnTheirServer()
         CHECK(client.perform("GET", origin.base() + "/public", {}, "", response, error));
         CHECK(response.body == "target" && target.hits() == 1);
     }
+}
+
+// The same, end to end: every Location form below is sent by a real server; the other server and
+// every transfer path must see nothing.
+void testSchemeRelativeAndChainedRedirectsAreRefused()
+{
+    std::atomic<int> targetPort{0};
+    Server target([](const std::string&) { return ok("target"); });
+    targetPort = std::stoi(target.base().substr(target.base().rfind(':') + 1));
+    const std::vector<std::string> forms = {
+        "//127.0.0.1:" + std::to_string(targetPort.load()) + "/stolen",
+        "//localhost:" + std::to_string(targetPort.load()) + "/stolen",
+        "/\\127.0.0.1:" + std::to_string(targetPort.load()) + "/stolen",
+    };
+    for (const std::string& form : forms) {
+        Server origin([&](const std::string&) { return redirectTo(form); });
+        HttpClient client;
+        HttpResponse response;
+        std::string error;
+        CHECK(!client.perform("GET", origin.base() + "/Items", kToken, "", response, error));
+        BinaryHttpResponse bin;
+        std::string error2;
+        CHECK(!client.getBinary(origin.base() + "/img", kToken, bin, error2, 1024));
+        std::string error3;
+        CHECK(!client.downloadToFile(origin.base() + "/seg", kToken, "http-sec-dl2.part", error3));
+        ::unlink("http-sec-dl2.part");
+        // The raw-curl path the HLS segment downloader uses (and its LAN-fallback handle).
+        CURL* curl = curl_easy_init();
+        RedirectGuard guard;
+        guard.attach(curl, origin.base() + "/segment", kToken);
+        curl_easy_setopt(curl, CURLOPT_URL, (origin.base() + "/segment").c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(
+            curl, CURLOPT_WRITEFUNCTION, +[](char*, size_t s, size_t n, void*) { return s * n; });
+        struct curl_slist* headers = curl_slist_append(nullptr, kToken[0].c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        CHECK(curl_easy_perform(curl) != CURLE_OK && guard.refused);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        CHECK(target.hits() == 0); // never reached, by any path
+    }
+    // A chain: same-origin hop first, then the escape.
+    Server chain([&](const std::string& request) {
+        if (request.compare(0, 8, "GET /hop") == 0)
+            return redirectTo("//127.0.0.1:" + std::to_string(targetPort.load()) + "/stolen");
+        return redirectTo("/hop");
+    });
+    HttpClient client;
+    HttpResponse response;
+    std::string error;
+    CHECK(!client.perform("GET", chain.base() + "/Items", kToken, "", response, error));
+    CHECK(target.hits() == 0);
+    CHECK(target.lastRequest().find("secret-token") == std::string::npos);
 }
 
 void testSameOriginRedirectKeepsTheToken()
@@ -212,6 +319,8 @@ void testResponseSizesAreBounded()
 int main()
 {
     testOriginRules();
+    testRelativeLookingRedirectsCannotChangeOrigin();
+    testSchemeRelativeAndChainedRedirectsAreRefused();
     testCredentialsStayOnTheirServer();
     testSameOriginRedirectKeepsTheToken();
     testResponseSizesAreBounded();

@@ -1,4 +1,5 @@
 #include "DownloadStore.hpp"
+#include "MpegTsValidator.hpp"
 #include "../cache/LibraryCache.hpp"
 #include <atomic>
 #include <cstdio>
@@ -322,24 +323,15 @@ bool DownloadStore::ensureHlsDirectories(const std::string& s, const std::string
 {
     return safeId(s) && safeId(i) && mkdirs(itemPath(s, i) + "/segments");
 }
-bool DownloadStore::plausibleHlsSegment(const std::string& path, std::uint64_t size)
+bool DownloadStore::validHlsSegment(const std::string& path, std::uint64_t size, bool full,
+                                    std::string* why)
 {
-    // Not empty is not enough ("x" is not a media segment). An MPEG-TS segment is a whole number
-    // of 188-byte packets each starting with 0x47; other containers just need to be more than a
-    // few bytes. This is a cheap sanity check, not a decode.
-    constexpr std::uint64_t kPacket = 188;
-    if (size < kPacket)
-        return false;
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f)
-        return false;
-    unsigned char head[kPacket + 1] = {};
-    const std::size_t got = std::fread(head, 1, size >= 2 * kPacket ? kPacket + 1 : kPacket, f);
-    std::fclose(f);
-    if (got == 0)
-        return false;
-    const bool looksLikeTs = head[0] == 0x47 && (size < 2 * kPacket || head[kPacket] == 0x47);
-    return !looksLikeTs || size % kPacket == 0;
+    // The pipeline asks the server for H.264 + AAC in MPEG-TS, so that is the one container a
+    // segment can legitimately be. See MpegTsValidator.hpp for exactly what a pass guarantees.
+    const TsVerdict v = validateMpegTsFile(path, size, full ? TsDepth::Full : TsDepth::Quick);
+    if (!v.ok && why)
+        *why = v.reason;
+    return v.ok;
 }
 
 bool DownloadStore::isCompleteSegment(const std::string& s, const std::string& i,
@@ -347,7 +339,7 @@ bool DownloadStore::isCompleteSegment(const std::string& s, const std::string& i
 {
     const std::string path = segmentPath(s, i, n);
     std::uint64_t z = 0;
-    return fileSize(path, z) && plausibleHlsSegment(path, z);
+    return fileSize(path, z) && validHlsSegment(path, z, false);
 }
 std::uint64_t DownloadStore::firstIncompleteSegment(const std::string& s,
                                                     const DownloadItem& i) const
@@ -504,15 +496,19 @@ bool DownloadStore::validateCompletedDownload(const std::string& s, const Downlo
 bool DownloadStore::reconcile(const std::string& s, DownloadItem& i, std::string* e) const
 {
     if (i.hlsStorage) {
-        std::uint64_t got = 0;
-        for (std::uint64_t k = 0; k < i.hlsSegmentCount; k++) {
+        // Count only segments that are really media (the same quick structural check that
+        // completeness uses), so a damaged or fake file is neither "downloaded bytes" nor a
+        // reason to call the item complete; the download resumes from the first bad segment.
+        std::uint64_t got = 0, k = 0;
+        for (; k < i.hlsSegmentCount; k++) {
             std::uint64_t z = 0;
-            if (!fileSize(segmentPath(s, i.itemId, k), z) || !z)
+            const std::string path = segmentPath(s, i.itemId, k);
+            if (!fileSize(path, z) || !z || !validHlsSegment(path, z, false))
                 break;
             got = saturatingAdd(got, z);
         }
         i.downloadedBytes = got;
-        if (validateCompletedDownload(s, i, nullptr)) {
+        if (i.hlsSegmentCount > 0 && k == i.hlsSegmentCount) {
             if (i.state != DownloadState::UpdateAvailable && i.state != DownloadState::LocalOnly)
                 i.state = DownloadState::Complete;
         } else if (i.state == DownloadState::Downloading)

@@ -40,6 +40,7 @@ test_http_methods
 test_clock_settings
 test_http_security
 test_websocket
+test_mpeg_ts
 '
 pids=
 failed=

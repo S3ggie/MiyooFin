@@ -20,7 +20,7 @@ Checked items are done and pushed. Order is the build order.
 ## Quality and housekeeping
 - [x] Home tab missing after turning offline mode off (safety net; not reproduced on host)
 - [x] Crash report screen (shows `crash.log`)
-- [ ] Scripted on-device smoke test
+- [x] Scripted on-device smoke test (`tools/miyoo/mfctl.sh smoke`)
 - [ ] README screenshots and a short user guide
 - [ ] Release: version bump, changelog, package, update test
 - [ ] Architecture-map doc (when the app is called done)

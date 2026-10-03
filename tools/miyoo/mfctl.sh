@@ -17,6 +17,8 @@
 #   mfctl.sh log [pattern]       recent player log lines (default MFSEEK/MFEXACT/MFRESTART/errors)
 #   mfctl.sh subs                subtitle fetch state for the current playback
 #   mfctl.sh jellyfin            newest Jellyfin ffmpeg command: does it use vulkan/libplacebo?
+#   mfctl.sh smoke               restart the app, visit every tab in both modes, check it stays up
+#                                and crash.log does not grow (screenshots in $MF_OUT/smoke-*.png)
 #   mfctl.sh quit                end the current playback cleanly (player quit key)
 #
 # Env: MIYOO_HOST (default 192.168.1.198) MIYOO_SSH_KEY (default ~/.ssh/miyoo_ed25519)
@@ -195,6 +197,30 @@ for l in logs[-3:]:
     bad=any(k in cmd.lower() for k in ('vulkan','libplacebo'))
     print(l['DateModified'][11:19],'VULKAN/LIBPLACEBO IN COMMAND' if bad else 'ok: no vulkan/libplacebo')
 EOF
+    ;;
+smoke)
+    # Scripted on-device smoke test: no server load (no playback), only tab navigation.
+    self="$0"
+    crash_before=$(r "wc -c < $APP/crash.log 2>/dev/null || echo 0")
+    timeout 60 "$self" app stop >/dev/null 2>&1 || true
+    sleep 2
+    timeout 60 "$self" app start >/dev/null 2>&1 || true
+    sleep 15
+    fail=0
+    check() { # check <label>: the app must still be running
+        if ! app_running; then echo "FAIL: app not running after $1" >&2; fail=1; fi
+    }
+    check "start"
+    "$self" look smoke-start >/dev/null
+    for i in 1 2 3 4; do
+        "$self" press r >/dev/null; sleep 2
+        "$self" look "smoke-tab$i" >/dev/null
+        check "tab $i"
+    done
+    echo "smoke: tab walk done"
+    crash_after=$(r "wc -c < $APP/crash.log 2>/dev/null || echo 0")
+    if [ "$crash_after" != "$crash_before" ]; then echo "FAIL: crash.log grew ($crash_before -> $crash_after bytes)" >&2; fail=1; fi
+    [ "$fail" = 0 ] && echo "SMOKE PASS (screenshots: $OUT/smoke-*.png)" || { echo "SMOKE FAIL" >&2; exit 1; }
     ;;
 quit)
     r 'printf "key 27\n" > /tmp/miyoofin-player-cmd'

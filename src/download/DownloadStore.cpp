@@ -128,8 +128,13 @@ bool atomic(const std::string& p, const std::string& body)
     FILE* f = std::fopen(t.c_str(), "wb");
     if (!f)
         return false;
-    bool ok = std::fwrite(body.data(), 1, body.size(), f) == body.size() && std::fflush(f) == 0 &&
-              ::fsync(fileno(f)) == 0 && std::fclose(f) == 0;
+    // Close the stream whatever happened (a short-circuited && chain skipped fclose on a write,
+    // flush or sync error and leaked a descriptor per failure), keeping each error.
+    const bool wrote = std::fwrite(body.data(), 1, body.size(), f) == body.size();
+    const bool flushed = std::fflush(f) == 0;
+    const bool synced = flushed && ::fsync(fileno(f)) == 0;
+    const bool closed = std::fclose(f) == 0;
+    const bool ok = wrote && flushed && synced && closed;
     if (!ok || std::rename(t.c_str(), p.c_str())) {
         std::remove(t.c_str());
         return false;
@@ -317,11 +322,32 @@ bool DownloadStore::ensureHlsDirectories(const std::string& s, const std::string
 {
     return safeId(s) && safeId(i) && mkdirs(itemPath(s, i) + "/segments");
 }
+bool DownloadStore::plausibleHlsSegment(const std::string& path, std::uint64_t size)
+{
+    // Not empty is not enough ("x" is not a media segment). An MPEG-TS segment is a whole number
+    // of 188-byte packets each starting with 0x47; other containers just need to be more than a
+    // few bytes. This is a cheap sanity check, not a decode.
+    constexpr std::uint64_t kPacket = 188;
+    if (size < kPacket)
+        return false;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+    unsigned char head[kPacket + 1] = {};
+    const std::size_t got = std::fread(head, 1, size >= 2 * kPacket ? kPacket + 1 : kPacket, f);
+    std::fclose(f);
+    if (got == 0)
+        return false;
+    const bool looksLikeTs = head[0] == 0x47 && (size < 2 * kPacket || head[kPacket] == 0x47);
+    return !looksLikeTs || size % kPacket == 0;
+}
+
 bool DownloadStore::isCompleteSegment(const std::string& s, const std::string& i,
                                       std::uint64_t n) const
 {
+    const std::string path = segmentPath(s, i, n);
     std::uint64_t z = 0;
-    return fileSize(segmentPath(s, i, n), z) && z > 0;
+    return fileSize(path, z) && plausibleHlsSegment(path, z);
 }
 std::uint64_t DownloadStore::firstIncompleteSegment(const std::string& s,
                                                     const DownloadItem& i) const

@@ -38,6 +38,7 @@ test_screen_lock
 test_crash_report
 test_http_methods
 test_clock_settings
+test_http_security
 '
 pids=
 failed=

@@ -9,6 +9,7 @@ int main()
     testCacheFilename();
     testCacheWriteRead();
     testJpegDecodeValid();
+    testJpegDecodeMemoryBudget();
     testJpegDecodeInvalid();
     testBinaryHttpResponse();
     testNoPrimaryTagNoArtwork();

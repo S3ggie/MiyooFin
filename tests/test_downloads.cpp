@@ -2,6 +2,9 @@
 #include "../src/download/DownloadSubtitles.hpp"
 #include "../src/download/DownloadAudio.hpp"
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <csignal>
+#include <dirent.h>
 
 static std::string readFixture(const std::string& path)
 {
@@ -25,6 +28,8 @@ int main()
     testSubtitleSidecars();
     testDownloadAudioChoice();
     testHlsDownloadStore();
+    testHlsSegmentIntegrity();
+    testStorageWriteFailureDoesNotLeakDescriptors();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();
     testDownloadHierarchy();

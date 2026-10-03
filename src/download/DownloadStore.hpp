@@ -26,6 +26,8 @@ class DownloadStore
     std::string segmentPath(const std::string& scope, const std::string& itemId,
                             std::uint64_t index, bool part = false) const;
     bool ensureHlsDirectories(const std::string& scope, const std::string& itemId) const;
+    /// True for a finished segment file that is plausibly media (see the .cpp), not just non-empty.
+    static bool plausibleHlsSegment(const std::string& path, std::uint64_t size);
     bool isCompleteSegment(const std::string& scope, const std::string& itemId,
                            std::uint64_t index) const;
     std::uint64_t firstIncompleteSegment(const std::string& scope, const DownloadItem& item) const;

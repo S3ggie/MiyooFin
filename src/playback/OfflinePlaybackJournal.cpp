@@ -101,8 +101,12 @@ bool OfflinePlaybackJournal::save(const std::string& p, const std::vector<Offlin
             x.itemId.c_str(), x.itemType.c_str(), (long long)x.baseServerTicks,
             (long long)x.finalTicks, (unsigned long long)x.localTimestamp, x.conflict,
             x.serverMissing);
-    bool ok = fflush(f) == 0 && fsync(fileno(f)) == 0 && fclose(f) == 0 &&
-              rename(t.c_str(), p.c_str()) == 0;
+    // Every step runs and the stream is always closed: a short-circuited chain left the
+    // descriptor open whenever a flush or sync failed.
+    const bool flushed = fflush(f) == 0;
+    const bool synced = flushed && fsync(fileno(f)) == 0;
+    const bool closed = fclose(f) == 0;
+    bool ok = flushed && synced && closed && rename(t.c_str(), p.c_str()) == 0;
     if (!ok) {
         remove(t.c_str());
         if (e)

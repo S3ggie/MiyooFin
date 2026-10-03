@@ -97,6 +97,23 @@ static void testJpegDecodeValid()
 }
 
 // -------------------------------------------------------------------
+// A 3000x3000 picture (36 MB of pixels) is refused from its header without being decoded; a
+// 1600x1200 one (7.7 MB) is within budget. Without the budget the first would decode.
+static void testJpegDecodeMemoryBudget()
+{
+    std::printf("[test] JPEG decode memory budget\n");
+    auto big = ImageDecoder::decodeJpegFile("tests/fixtures/oversized-3000x3000.jpg");
+    CHECK(big.empty());
+    auto medium = ImageDecoder::decodeJpegFile("tests/fixtures/medium-1600x1200.jpg");
+    CHECK(!medium.empty() && medium.width == 1600 && medium.height == 1200);
+    CHECK(medium.pixels.size() == 1600u * 1200u * 4u);
+    // A header that only claims an enormous size is refused too (no allocation, no decode).
+    const unsigned char claim[] = {0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x4E, 0x20, 0x4E,
+                                   0x20, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01};
+    CHECK(ImageDecoder::decodeJpeg(claim, sizeof(claim)).empty());
+    std::printf("[test] JPEG decode memory budget OK\n");
+}
+
 // B5a Test: JPEG decode fails safely on invalid data
 // -------------------------------------------------------------------
 static void testJpegDecodeInvalid()

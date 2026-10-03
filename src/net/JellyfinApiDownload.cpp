@@ -157,6 +157,12 @@ bool JellyfinApi::getHlsSegmentUrls(const std::string& b, const std::string& t,
     }
     std::printf("[Download] HLS master HTTP %ld\n", r.status);
     auto v = HlsPlaylist::variants(r.body, u);
+    if (!HlsPlaylist::allSameOrigin(v, b)) { // never send the token to a server the playlist names
+        if (failure)
+            *failure = HlsFailure::Playlist;
+        e = "HLS playlist points to another server";
+        return false;
+    }
     if (!v.empty()) {
         u = v.front();
         std::printf("[Download] HLS variant request...\n");
@@ -170,6 +176,13 @@ bool JellyfinApi::getHlsSegmentUrls(const std::string& b, const std::string& t,
         std::printf("[Download] HLS variant HTTP %ld\n", r.status);
     }
     out = HlsPlaylist::segments(r.body, u);
+    if (!HlsPlaylist::allSameOrigin(out, b)) {
+        out.clear();
+        if (failure)
+            *failure = HlsFailure::Playlist;
+        e = "HLS playlist points to another server";
+        return false;
+    }
     if (out.empty()) {
         if (failure)
             *failure = HlsFailure::Playlist;

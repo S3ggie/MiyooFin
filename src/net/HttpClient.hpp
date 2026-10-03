@@ -13,6 +13,12 @@ namespace miyoofin {
 /// Progress callback for streaming downloads.
 using DownloadProgress = std::function<void(std::uint64_t received, std::uint64_t total)>;
 
+/// The most a text (JSON, playlist, subtitle) response may hold. The device has ~128 MB for
+/// everything, so an unbounded body is a way to run it out of memory. A bigger response fails
+/// with a stable "Response too large" error (transportCode CURLE_FILESIZE_EXCEEDED), not a
+/// retryable network error.
+constexpr std::size_t kMaxTextResponseBytes = 16u * 1024u * 1024u;
+
 /// Result of a single HTTP request. The HTTP status code is always
 /// reported even for error responses so callers can distinguish
 /// transport failures from HTTP-level failures (401, 403, 500, ...).
@@ -39,6 +45,28 @@ struct BinaryHttpResponse
         return status >= 200 && status < 300 && !truncated;
     }
 };
+
+/// "scheme://host:port" (default port made explicit), lower-cased; empty if unparseable.
+std::string urlOrigin(const std::string& url);
+/// True when a request carrying credentials may follow a redirect from `fromUrl` to
+/// `locationUrl`: same origin, a relative location, or an http -> https upgrade of the same
+/// host. Anything else would hand the credentials to another server.
+bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string& locationUrl);
+
+/// Makes a libcurl transfer that carries credentials (X-Emby-Token and friends) refuse any
+/// redirect to another origin. Attach it to every easy handle that follows redirects while
+/// holding a token: `HttpClient` does, and so does the segment downloader (it uses raw curl).
+struct RedirectGuard
+{
+    std::string requestUrl;
+    bool credentials = false;
+    bool refused = false;
+    /// Installs the header callback and limits redirects to http(s). `url` is the request URL;
+    /// `headers` are the request's header lines.
+    void attach(CURL* curl, const std::string& url, const std::vector<std::string>& headers);
+};
+/// What to tell the user/log when a guard refused a redirect.
+extern const char* const kRedirectRefusedMessage;
 
 /// Minimal synchronous HTTP client wrapping libcurl.
 /// Supports GET and POST with optional custom headers and a JSON body.

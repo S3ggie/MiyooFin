@@ -1,4 +1,5 @@
 #include "HlsPlaylist.hpp"
+#include "HttpClient.hpp"
 #include <sstream>
 namespace miyoofin {
 namespace {
@@ -34,6 +35,16 @@ std::string HlsPlaylist::resolve(const std::string& u, const std::string& e)
         return origin + e;
     auto b = u.find_last_of('/');
     return (b == std::string::npos ? origin : u.substr(0, b + 1)) + e;
+}
+bool HlsPlaylist::allSameOrigin(const std::vector<std::string>& urls, const std::string& baseUrl)
+{
+    const std::string origin = urlOrigin(baseUrl);
+    if (origin.empty())
+        return false;
+    for (const std::string& u : urls)
+        if (urlOrigin(u) != origin)
+            return false;
+    return true;
 }
 std::vector<std::string> HlsPlaylist::variants(const std::string& b, const std::string& u)
 {

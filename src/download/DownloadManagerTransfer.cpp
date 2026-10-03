@@ -1,6 +1,7 @@
 #include "DownloadManager.hpp"
 #include "DownloadSubtitles.hpp"
 #include "miyoofin/playback_tracks.hpp"
+#include "../net/HttpClient.hpp"
 #include "../net/JellyfinApi.hpp"
 #include "../net/RouteRequest.hpp"
 #include "../net/TlsConfig.hpp"
@@ -9,7 +10,9 @@
 #include "../diagnostics/PerformanceTelemetry.hpp"
 #include "../diagnostics/TelemetryGuards.hpp"
 #include <curl/curl.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <cstdio>
 #include <chrono>
 #include <limits>
@@ -24,6 +27,18 @@ struct WriteCtx
     std::uint64_t generation = 0;
     std::uint64_t baseDownloaded = 0;
 };
+// Makes a rename durable. Filesystems that cannot sync a directory (FAT among them) report
+// EINVAL; that is not an error worth failing a segment for.
+void syncParentDir(const std::string& path)
+{
+    const std::size_t slash = path.rfind('/');
+    const std::string dir = slash == std::string::npos ? "." : path.substr(0, slash);
+    const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd >= 0) {
+        (void)::fsync(fd);
+        ::close(fd);
+    }
+}
 bool nonemptyFile(const std::string& path, std::uint64_t& size)
 {
     struct stat st
@@ -32,6 +47,25 @@ bool nonemptyFile(const std::string& path, std::uint64_t& size)
         return false;
     size = (std::uint64_t)st.st_size;
     return true;
+}
+// Flushes, syncs and closes a segment file; false when any of them failed, in which case the
+// bytes cannot be trusted to be on disk (curl succeeding says nothing about the write-back).
+bool finalizeSegmentFile(FILE* f)
+{
+    const bool flushed = std::fflush(f) == 0;
+    const bool synced = flushed && ::fsync(::fileno(f)) == 0;
+    const bool closed = std::fclose(f) == 0;
+    return flushed && synced && closed;
+}
+// A finished transfer is acceptable when the bytes written match what the server announced (when
+// it announced a length) and the file looks like media.
+bool segmentAcceptable(const std::string& path, std::uint64_t& size, curl_off_t announced)
+{
+    if (!nonemptyFile(path, size))
+        return false;
+    if (announced >= 0 && static_cast<std::uint64_t>(announced) != size)
+        return false;
+    return DownloadStore::plausibleHlsSegment(path, size);
 }
 size_t writeCb(char* p, size_t a, size_t b, void* u)
 {
@@ -503,6 +537,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                 (!lanUrl.empty() && segmentUrl.compare(0, lanUrl.size(), lanUrl) == 0)
                     ? RouteKind::Lan
                     : RouteKind::Public;
+            RedirectGuard redirectGuard; // the token must not follow a redirect to another server
+            redirectGuard.attach(c, segmentUrl, headers);
             curl_easy_setopt(c, CURLOPT_URL, segmentUrl.c_str());
             curl_easy_setopt(c, CURLOPT_HTTPHEADER, sl);
             curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
@@ -532,11 +568,13 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             primaryMeasured = primaryTimer.active();
             code = 0;
             curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
-            std::fflush(f);
-            std::fclose(f);
+            curl_off_t announced = -1;
+            curl_easy_getinfo(c, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &announced);
+            const bool primaryWritten = finalizeSegmentFile(f);
             curl_slist_free_all(sl);
             curl_easy_cleanup(c);
-            good = rc == CURLE_OK && code >= 200 && code < 300 && nonemptyFile(part, bytes);
+            good = rc == CURLE_OK && code >= 200 && code < 300 && primaryWritten &&
+                   segmentAcceptable(part, bytes, announced);
             primaryRc = rc;
             primaryCode = code;
             primaryBytes = good ? bytes : 0;
@@ -544,6 +582,7 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             if (!good && rc != CURLE_OK && !lanUrl.empty() && !publicBase.empty() &&
                 segmentUrl.compare(0, lanUrl.size(), lanUrl) == 0) {
                 fallbackAttempted = true;
+                curl_off_t fallbackAnnounced = -1;
                 std::printf("[Route] LAN failed; public fallback\n");
                 std::remove(part.c_str());
                 FILE* fallback = std::fopen(part.c_str(), "wb");
@@ -563,6 +602,10 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                                       item.downloadedBytes};
                         std::string publicUrl =
                             RouteRequest::replaceBase(segmentUrl, lanUrl, publicBase);
+                        RedirectGuard fallbackGuard;
+                        fallbackGuard.attach(
+                            pc, publicUrl,
+                            JellyfinApi::buildAuthHeaders(session.accessToken, session.deviceId));
                         curl_easy_setopt(pc, CURLOPT_URL, publicUrl.c_str());
                         curl_easy_setopt(pc, CURLOPT_HTTPHEADER, ps);
                         curl_easy_setopt(pc, CURLOPT_FOLLOWLOCATION, 1L);
@@ -587,15 +630,18 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                             fallbackMeasured = fallbackTimer.active();
                             code = 0;
                             curl_easy_getinfo(pc, CURLINFO_RESPONSE_CODE, &code);
+                            fallbackAnnounced = -1;
+                            curl_easy_getinfo(pc, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T,
+                                              &fallbackAnnounced);
                             fallbackRc = rc;
                             fallbackCode = code;
                             curl_slist_free_all(ps);
                             curl_easy_cleanup(pc);
                         }
                     }
-                    std::fflush(fallback);
-                    std::fclose(fallback);
-                    good = rc == CURLE_OK && code >= 200 && code < 300 && nonemptyFile(part, bytes);
+                    const bool fallbackWritten = finalizeSegmentFile(fallback);
+                    good = rc == CURLE_OK && code >= 200 && code < 300 && fallbackWritten &&
+                           segmentAcceptable(part, bytes, fallbackAnnounced);
                 }
             }
             if (fallbackAttempted) {
@@ -677,6 +723,7 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         }
         if (std::rename(part.c_str(), done.c_str()))
             return false;
+        syncParentDir(done); // the rename must be durable before the manifest says it happened
         performanceTelemetry().addDownloadSegmentCompleted();
         // The segment file just renamed to its final name is the source of
         // truth: account for its bytes incrementally instead of rescanning

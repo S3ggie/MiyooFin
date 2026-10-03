@@ -1,6 +1,7 @@
 #ifndef MIYOOFIN_IMAGE_DECODER_HPP
 #define MIYOOFIN_IMAGE_DECODER_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -18,6 +19,14 @@ struct DecodedImage
         return width == 0 || height == 0 || pixels.empty();
     }
 };
+
+/// Memory budget for one decoded image (the target has ~128 MB for everything). Artwork is
+/// requested at a few hundred pixels, so this is generous (1920x1080 fits); a server that
+/// ignores the requested size cannot make a 64 MB bitmap. The header is read first and the pixel
+/// buffer is only allocated when the dimensions fit.
+inline constexpr std::size_t kMaxDecodedPixels = 2'500'000;
+inline constexpr int kMaxImageDimension = 8192;
+inline constexpr std::size_t kMaxCompressedImageBytes = 16u * 1024u * 1024u;
 
 /// JPEG decoding using stb_image.
 /// All methods are synchronous and stateless.

@@ -2,6 +2,9 @@
 #include "../../src/library/LibraryCoordinator.hpp"
 #include "../../src/net/TlsConfig.hpp"
 
+// "Complete" must mean more than non-empty: a one-byte or torn file is not a finished segment.
+static void testHlsSegmentIntegrity();
+static void testStorageWriteFailureDoesNotLeakDescriptors();
 static void testDownloadInterruptStates()
 {
     std::printf("[test] download interrupt state mapping\n");
@@ -16,6 +19,9 @@ static DownloadItem planItem(const std::string &id, std::uint64_t size, std::uin
 }
 
 static void writeFixture(const std::string &path,const char *data,size_t size){FILE *f=fopen(path.c_str(),"wb");CHECK(f!=nullptr);if(f){CHECK(fwrite(data,1,size,f)==size);fclose(f);}}
+// A segment fixture that looks like MPEG-TS: `packets` 188-byte packets, each starting with 0x47.
+static std::string tsFixture(size_t packets){std::string s(packets*188,'\0');for(size_t i=0;i<packets;i++)s[i*188]=0x47;return s;}
+static void writeTs(const std::string &path,size_t packets){const std::string d=tsFixture(packets);writeFixture(path,d.data(),d.size());}
 static void testHlsDownloadStore(){
     std::printf("[test] HLS manifest and segment storage\n");
     std::string root="/tmp/miyoofin-hls-"+std::to_string((long long)getpid()); DownloadStore store(root); DownloadItem h;
@@ -25,16 +31,16 @@ static void testHlsDownloadStore(){
     CHECK(store.ensureHlsDirectories("scope",h.itemId)); CHECK(store.saveManifest("scope",h)); DownloadItem loaded; CHECK(store.loadManifest("scope",h.itemId,loaded));
     CHECK(loaded.hlsStorage&&loaded.itemId==h.itemId&&loaded.mediaSourceId=="source"&&loaded.hlsSegmentCount==3&&loaded.hlsProfile=="test-profile");
     DownloadItem legacy=h;legacy.itemId="legacy";legacy.hlsStorage=false;legacy.expectedSize=1; CHECK(store.saveManifest("scope",legacy)); CHECK(readFixture(store.manifestPath("scope",h.itemId)).rfind("MFDM=2\n",0)==0); CHECK(readFixture(store.manifestPath("scope",legacy.itemId)).rfind("MFDM=1\n",0)==0);
-    writeFixture(store.segmentPath("scope",h.itemId,0),"abc",3); writeFixture(store.segmentPath("scope",h.itemId,1),"de",2); writeFixture(store.segmentPath("scope",h.itemId,2,true),"x",1);
+    writeTs(store.segmentPath("scope",h.itemId,0),1); writeTs(store.segmentPath("scope",h.itemId,1),2); writeFixture(store.segmentPath("scope",h.itemId,2,true),"x",1);
     CHECK(store.isCompleteSegment("scope",h.itemId,0)); CHECK(!store.isCompleteSegment("scope",h.itemId,2)); CHECK(store.firstIncompleteSegment("scope",h)==2); CHECK(::access(store.segmentPath("scope",h.itemId,2,true).c_str(),F_OK)==0); // interrupted part is retained
     // A retry starts the same incomplete segment from a fresh .part and must
     // not alter media that was already completed before the failed attempt.
     writeFixture(store.segmentPath("scope",h.itemId,2,true),"proxy error body",16);
     writeFixture(store.segmentPath("scope",h.itemId,2,true),"retry-media",11);
     CHECK(readFixture(store.segmentPath("scope",h.itemId,2,true))=="retry-media");
-    CHECK(readFixture(store.segmentPath("scope",h.itemId,0))=="abc");
-    store.reconcile("scope",h); CHECK(h.downloadedBytes==5); CHECK(!store.validateCompletedDownload("scope",h)); // missing segment prevents completion
-    writeFixture(store.segmentPath("scope",h.itemId,2),"fghi",4); CHECK(store.firstIncompleteSegment("scope",h)==3); store.reconcile("scope",h); CHECK(h.downloadedBytes==9); CHECK(store.validateCompletedDownload("scope",h)); CHECK(h.state==DownloadState::Complete);
+    CHECK(readFixture(store.segmentPath("scope",h.itemId,0))==tsFixture(1));
+    store.reconcile("scope",h); CHECK(h.downloadedBytes==564); CHECK(!store.validateCompletedDownload("scope",h)); // missing segment prevents completion
+    writeTs(store.segmentPath("scope",h.itemId,2),1); CHECK(store.firstIncompleteSegment("scope",h)==3); store.reconcile("scope",h); CHECK(h.downloadedBytes==752); CHECK(store.validateCompletedDownload("scope",h)); CHECK(h.state==DownloadState::Complete);
     std::printf("[test] HLS manifest and segment storage OK\n");
 }
 static DownloadItem restartFixture(const std::string &id, DownloadState state=DownloadState::Queued) {
@@ -61,7 +67,7 @@ static void testDownloadRestartPersistence(){
     // rebuilds from a clean vector; it cannot duplicate the first item.
     DownloadItem active=restartFixture("active",DownloadState::Downloading), queued=restartFixture("queued",DownloadState::Queued);
     CHECK(store.ensureHlsDirectories("fixture",active.itemId)); CHECK(store.ensureHlsDirectories("fixture",queued.itemId));
-    writeFixture(store.segmentPath("fixture",active.itemId,0),"partial",7);
+    writeTs(store.segmentPath("fixture",active.itemId,0),1);
     CHECK(store.saveManifest("fixture",active)); CHECK(store.saveManifest("fixture",queued));
     DownloadItem recovered, stillQueued; CHECK(store.loadManifest("fixture","active",recovered)); CHECK(store.reconcile("fixture",recovered)); CHECK(recovered.state==DownloadState::Queued);
     CHECK(store.loadManifest("fixture","queued",stillQueued)); CHECK(store.reconcile("fixture",stillQueued)); CHECK(stillQueued.state==DownloadState::Queued);
@@ -725,19 +731,19 @@ static void testSegmentRecoveryMatchesIncremental()
     item.state=DownloadState::Downloading;
     CHECK(store.ensureHlsDirectories("scope",item.itemId));
     CHECK(store.saveManifest("scope",item));
-    writeFixture(store.segmentPath("scope",item.itemId,0),"01234567",8);
-    writeFixture(store.segmentPath("scope",item.itemId,1),"0123456789abcdef",16);
+    writeTs(store.segmentPath("scope",item.itemId,0),1);
+    writeTs(store.segmentPath("scope",item.itemId,1),2);
     writeFixture(store.segmentPath("scope",item.itemId,2,true),"partial",7);
     // Kill mid-download: relaunch rebuilds counters from segment files only.
     DownloadItem recovered;
     CHECK(store.loadManifest("scope",item.itemId,recovered));
     CHECK(store.reconcile("scope",recovered));
-    CHECK(recovered.downloadedBytes==24);
+    CHECK(recovered.downloadedBytes==564);
     CHECK(store.firstIncompleteSegment("scope",recovered)==2);
     // The per-segment incremental path must agree exactly with the scan.
     DownloadItem incremental; incremental.itemId="seginc"; incremental.hlsStorage=true; incremental.hlsSegmentCount=3;
-    applyHlsSegmentCompleted(incremental,0,8);
-    applyHlsSegmentCompleted(incremental,1,16);
+    applyHlsSegmentCompleted(incremental,0,188);
+    applyHlsSegmentCompleted(incremental,1,376);
     CHECK(incremental.downloadedBytes==recovered.downloadedBytes);
     CHECK(incremental.hlsCompletedSegments==store.firstIncompleteSegment("scope",recovered));
     // downloadedBytes is durable in the manifest (crash between segments keeps
@@ -745,7 +751,7 @@ static void testSegmentRecoveryMatchesIncremental()
     CHECK(store.saveManifest("scope",incremental));
     DownloadItem reloaded;
     CHECK(store.loadManifest("scope",incremental.itemId,reloaded));
-    CHECK(reloaded.downloadedBytes==24);
+    CHECK(reloaded.downloadedBytes==564);
     CHECK(store.removeItem("scope",item.itemId,nullptr));
     std::printf("[test] crash recovery matches incremental accounting OK\n");
 }
@@ -1228,4 +1234,58 @@ static void testDownloadAudioChoice()
     CHECK(store.loadManifest("scope", "audio-item", back, nullptr) && back.audioLang == "jpn");
     store.removeItem("scope", "audio-item", nullptr);
     std::printf("[test] download audio choice OK\n");
+}
+
+static void testHlsSegmentIntegrity()
+{
+    std::printf("[test] HLS segment plausibility (not merely non-empty)\n");
+    const std::string root="/tmp/miyoofin-segcheck-"+std::to_string((long long)getpid());
+    DownloadStore store(root);
+    DownloadItem item; item.itemId="segcheck"; item.hlsStorage=true; item.hlsSegmentCount=1;
+    CHECK(store.ensureHlsDirectories("scope",item.itemId));
+    const std::string path=store.segmentPath("scope",item.itemId,0);
+    writeFixture(path,"x",1);
+    CHECK(!store.isCompleteSegment("scope",item.itemId,0));          // the audit's one-byte "segment"
+    CHECK(store.firstIncompleteSegment("scope",item)==0);
+    CHECK(!store.validateCompletedDownload("scope",item));
+    std::string torn=tsFixture(3); torn.resize(torn.size()-50);      // a TS file cut mid-packet
+    writeFixture(path,torn.data(),torn.size());
+    CHECK(!store.isCompleteSegment("scope",item.itemId,0));
+    writeTs(path,3);
+    CHECK(store.isCompleteSegment("scope",item.itemId,0));          // whole packets are accepted
+    std::string fmp4(4096,'a'); fmp4.replace(4,4,"ftyp");            // a non-TS container just needs substance
+    writeFixture(path,fmp4.data(),fmp4.size());
+    CHECK(store.isCompleteSegment("scope",item.itemId,0));
+    CHECK(store.removeItem("scope",item.itemId,nullptr));
+    std::printf("[test] HLS segment plausibility OK\n");
+}
+
+// A write that fails at flush time (here: the file-size limit) must not leak the descriptor.
+static int openFdCount(){int n=0;if(DIR *d=opendir("/proc/self/fd")){while(readdir(d))n++;closedir(d);}return n;}
+static void testStorageWriteFailureDoesNotLeakDescriptors()
+{
+    std::printf("[test] failed metadata/journal writes do not leak descriptors\n");
+    const std::string root="/tmp/miyoofin-fdleak-"+std::to_string((long long)getpid());
+    DownloadStore store(root);
+    DownloadItem item; item.itemId="leak"; item.mediaSourceId="s"; item.hlsStorage=true; item.hlsSegmentCount=9;
+    item.hlsProfile=std::string(4096,'p'); // large enough that the write cannot fit under the limit
+    CHECK(store.ensureHlsDirectories("scope",item.itemId));
+    std::vector<OfflinePlaybackEntry> entries(40);
+    for(size_t i=0;i<entries.size();i++){entries[i].itemId="item-"+std::to_string(i);entries[i].itemType="movie";}
+    const std::string journal=root+"/journal.txt";
+    signal(SIGXFSZ,SIG_IGN);
+    struct rlimit saved{}; CHECK(getrlimit(RLIMIT_FSIZE,&saved)==0);
+    struct rlimit tight=saved; tight.rlim_cur=64; CHECK(setrlimit(RLIMIT_FSIZE,&tight)==0);
+    const int before=openFdCount();
+    int failures=0;
+    for(int i=0;i<32;i++){
+        if(!store.saveManifest("scope",item))failures++;
+        if(!OfflinePlaybackJournal::save(journal,entries,nullptr))failures++;
+    }
+    const int after=openFdCount();
+    CHECK(setrlimit(RLIMIT_FSIZE,&saved)==0);
+    CHECK(failures==64);   // every write really failed ...
+    CHECK(after==before);  // ... and none of them left a descriptor behind
+    CHECK(store.removeItem("scope",item.itemId,nullptr));
+    std::printf("[test] failed metadata/journal writes do not leak descriptors OK\n");
 }

@@ -5,6 +5,7 @@
 #include "miyoofin/version.hpp"
 #include <curl/curl.h>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -14,12 +15,142 @@ namespace miyoofin {
 // -------------------------------------------------------------------
 // libcurl write callback — appends data to a std::string.
 // -------------------------------------------------------------------
+struct TextWriteContext
+{
+    std::string* body;
+    bool exceeded = false;
+};
+
 static size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp)
 {
     size_t total = size * nmemb;
-    auto* s = static_cast<std::string*>(userp);
-    s->append(static_cast<const char*>(contents), total);
+    auto* ctx = static_cast<TextWriteContext*>(userp);
+    if (ctx->body->size() + total > kMaxTextResponseBytes) {
+        ctx->exceeded = true;
+        return 0; // abort the transfer: do not keep growing
+    }
+    ctx->body->append(static_cast<const char*>(contents), total);
     return total;
+}
+
+// -------------------------------------------------------------------
+// Credential safety on redirects. libcurl re-sends custom headers (X-Emby-Token) to wherever a
+// redirect points, so a response from the server (or a misconfigured proxy) could send the
+// token to a third party. A request carrying credentials may only be redirected within its own
+// origin (an http -> https upgrade of the same host is fine); anything else is refused.
+// -------------------------------------------------------------------
+static std::string lowerCase(std::string s)
+{
+    for (char& c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+/// "scheme://host:port" with the default port made explicit; empty when it cannot be parsed.
+std::string urlOrigin(const std::string& url)
+{
+    const std::size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos || schemeEnd == 0)
+        return {};
+    const std::string scheme = lowerCase(url.substr(0, schemeEnd));
+    const std::size_t start = schemeEnd + 3;
+    const std::size_t end = url.find_first_of("/?#", start);
+    std::string authority = url.substr(start, end == std::string::npos ? end : end - start);
+    const std::size_t at = authority.rfind('@');
+    if (at != std::string::npos)
+        authority = authority.substr(at + 1);
+    if (authority.empty())
+        return {};
+    std::string host = authority, port;
+    const std::size_t colon = authority.rfind(':');
+    if (colon != std::string::npos && authority.find(']', colon) == std::string::npos) {
+        host = authority.substr(0, colon);
+        port = authority.substr(colon + 1);
+    }
+    if (port.empty())
+        port = scheme == "https" ? "443" : (scheme == "http" ? "80" : "");
+    return scheme + "://" + lowerCase(host) + ":" + port;
+}
+
+bool redirectKeepsCredentialsSafe(const std::string& fromUrl, const std::string& locationUrl)
+{
+    // A relative Location (no scheme) stays on the same server by definition.
+    if (locationUrl.find("://") == std::string::npos)
+        return true;
+    const std::string from = urlOrigin(fromUrl), to = urlOrigin(locationUrl);
+    if (from.empty() || to.empty())
+        return false;
+    if (from == to)
+        return true;
+    // http -> https upgrade of the same host (default ports on both sides).
+    const std::size_t fromScheme = from.find("://"), toScheme = to.find("://");
+    const std::string fromHost = from.substr(fromScheme + 3, from.rfind(':') - fromScheme - 3);
+    const std::string toHost = to.substr(toScheme + 3, to.rfind(':') - toScheme - 3);
+    return from.compare(0, 7, "http://") == 0 && to.compare(0, 8, "https://") == 0 &&
+           fromHost == toHost && from.substr(from.rfind(':') + 1) == "80" &&
+           to.substr(to.rfind(':') + 1) == "443";
+}
+
+static bool isCredentialHeader(const std::string& header)
+{
+    const std::string h = lowerCase(header);
+    return h.compare(0, 12, "x-emby-token") == 0 || h.compare(0, 19, "x-mediabrowser-token") == 0 ||
+           h.compare(0, 14, "authorization:") == 0 ||
+           (h.compare(0, 20, "x-emby-authorization") == 0 && h.find("token=") != std::string::npos);
+}
+
+static bool carriesCredentials(const std::vector<std::string>& headers)
+{
+    for (const std::string& h : headers)
+        if (isCredentialHeader(h))
+            return true;
+    return false;
+}
+
+static size_t redirectGuardCallback(char* buffer, size_t size, size_t nitems, void* userp)
+{
+    const size_t total = size * nitems;
+    auto* guard = static_cast<RedirectGuard*>(userp);
+    if (!guard->credentials || total < 10)
+        return total;
+    std::string line(buffer, total);
+    if (lowerCase(line.substr(0, 9)) != "location:")
+        return total;
+    std::string value = line.substr(9);
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+        value.erase(value.begin());
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' '))
+        value.pop_back();
+    if (!redirectKeepsCredentialsSafe(guard->requestUrl, value)) {
+        guard->refused = true;
+        return 0; // abort: the credentials never leave their server
+    }
+    return total;
+}
+
+const char* const kRedirectRefusedMessage =
+    "Refused a redirect to another server (credentials were not sent)";
+static const char* const kRedirectRefused = kRedirectRefusedMessage;
+
+void RedirectGuard::attach(CURL* curl, const std::string& url,
+                           const std::vector<std::string>& headers)
+{
+    requestUrl = url;
+    credentials = carriesCredentials(headers);
+    refused = false;
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, redirectGuardCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
+#if LIBCURL_VERSION_NUM >= 0x075500 // 7.85.0 added the string form; the numeric one is deprecated
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#else
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+}
+
+static void installRedirectGuard(CURL* curl, RedirectGuard& guard, const std::string& url,
+                                 const std::vector<std::string>& headers)
+{
+    guard.attach(curl, url, headers);
 }
 static int cancelCallback(void* userp, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 {
@@ -155,6 +286,8 @@ bool HttpClient::getBinary(const std::string& url, const std::vector<std::string
     ctx.maxSize = maxSize;
     ctx.exceeded = false;
 
+    RedirectGuard guard;
+    installRedirectGuard(curl, guard, url, headers);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, binaryWriteCallback);
@@ -193,10 +326,23 @@ bool HttpClient::getBinary(const std::string& url, const std::vector<std::string
     CURLcode res = curl_easy_perform(curl);
     response.transportCode = static_cast<int>(res);
 
+    // Over the size limit the write callback aborted the transfer, which curl reports as a write
+    // error. That is an oversized response, not a network failure: keep the status and flag it
+    // (callers read `truncated`) instead of passing it off as a transport error.
+    if (ctx.exceeded) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
+        response.truncated = true;
+        response.data.clear();
+        recordNetworkRequest(timer, 1, response.status, res, 0, 0, false, true);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
+        curl_slist_free_all(headerList);
+        return true;
+    }
     if (res != CURLE_OK) {
         recordNetworkRequest(timer, 1, response.status, res, response.data.size(), 0,
-                             res == CURLE_ABORTED_BY_CALLBACK, ctx.exceeded);
-        error = std::string("Transport: ") + curl_easy_strerror(res);
+                             res == CURLE_ABORTED_BY_CALLBACK, false);
+        error =
+            guard.refused ? kRedirectRefused : std::string("Transport: ") + curl_easy_strerror(res);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
         curl_slist_free_all(headerList);
         return false;
@@ -234,9 +380,12 @@ bool HttpClient::perform(const std::string& method, const std::string& url,
     }
 
     // Configure the request
+    TextWriteContext textCtx{&response.body};
+    RedirectGuard guard;
+    installRedirectGuard(curl, guard, url, headers);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &textCtx);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeoutSec);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, m_connectTimeoutSec);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -287,8 +436,14 @@ bool HttpClient::perform(const std::string& method, const std::string& url,
     if (res != CURLE_OK) {
         recordNetworkRequest(timer, method == "POST" ? 2 : 1, response.status, res,
                              response.body.size(), postBody.size(),
-                             res == CURLE_ABORTED_BY_CALLBACK, false);
-        error = classifyTransportError(res);
+                             res == CURLE_ABORTED_BY_CALLBACK, textCtx.exceeded);
+        error = guard.refused
+                    ? kRedirectRefused
+                    : (textCtx.exceeded ? "Response too large" : classifyTransportError(res));
+        if (textCtx.exceeded) {
+            response.transportCode = CURLE_FILESIZE_EXCEEDED; // stable: do not retry
+            response.body.clear();
+        }
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, nullptr);
         curl_slist_free_all(headerList);
         return false;
@@ -388,7 +543,8 @@ bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::s
     }
 
     FileWriteContext writeCtx{f, outBytes, 0};
-
+    RedirectGuard guard;
+    installRedirectGuard(curl, guard, url, headers);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
@@ -444,7 +600,8 @@ bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::s
     bool ok = true;
 
     if (res != CURLE_OK) {
-        error = std::string("Transport: ") + curl_easy_strerror(res);
+        error =
+            guard.refused ? kRedirectRefused : std::string("Transport: ") + curl_easy_strerror(res);
         ok = false;
     } else if (resumeFrom > 0 && httpStatus == 200) {
         // Server ignored Range and sent full body — truncate and restart.
@@ -466,6 +623,7 @@ bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::s
         if (headerList)
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
+        guard.refused = false;
         res = curl_easy_perform(curl);
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpStatus);
         if (headerList) {
@@ -474,7 +632,8 @@ bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::s
             headerList = nullptr;
         }
         if (res != CURLE_OK) {
-            error = std::string("Transport: ") + curl_easy_strerror(res);
+            error = guard.refused ? kRedirectRefused
+                                  : std::string("Transport: ") + curl_easy_strerror(res);
             ok = false;
         }
     }
@@ -508,17 +667,21 @@ bool HttpClient::downloadToFile(const std::string& url, const std::vector<std::s
         ::unlink(destTmpPath.c_str());
     }
 
-    // Flush and fsync before close
+    // Flush, fsync and close: any of them failing means the bytes are not safely on disk, so the
+    // download is not complete (a short or lost write used to be reported as success).
     if (f) {
-        std::fflush(f);
-        if (ok) {
-            int fd = ::fileno(f);
-            if (::fsync(fd) != 0 && errno == ENOSPC) {
-                error = "Disk full (ENOSPC)";
-                ok = false;
-            }
+        if (std::fflush(f) != 0 && ok) {
+            error = errno == ENOSPC ? "Disk full (ENOSPC)" : "Write failed (flush)";
+            ok = false;
         }
-        std::fclose(f);
+        if (ok && ::fsync(::fileno(f)) != 0) {
+            error = errno == ENOSPC ? "Disk full (ENOSPC)" : "Write failed (sync)";
+            ok = false;
+        }
+        if (std::fclose(f) != 0 && ok) {
+            error = errno == ENOSPC ? "Disk full (ENOSPC)" : "Write failed (close)";
+            ok = false;
+        }
     }
 
     if (outBytes)

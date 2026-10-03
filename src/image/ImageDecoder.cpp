@@ -37,6 +37,17 @@ DecodedImage ImageDecoder::decodeJpeg(const unsigned char* data, size_t size)
 
     int w = 0, h = 0, channels = 0;
 
+    // Look at the header before decoding: refuse what would not fit in the memory budget without
+    // ever allocating the pixel buffer. (stb would otherwise allocate w*h*4 up front.)
+    if (size > kMaxCompressedImageBytes ||
+        size > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+        !stbi_info_from_memory(data, static_cast<int>(size), &w, &h, &channels) || w <= 0 ||
+        h <= 0 || w > kMaxImageDimension || h > kMaxImageDimension ||
+        static_cast<size_t>(w) * static_cast<size_t>(h) > kMaxDecodedPixels) {
+        recordDecodeTelemetry(timer, size, false, 0);
+        return {};
+    }
+
     // Request 4 channels (RGBA) regardless of source format.
     unsigned char* pixels =
         stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &channels, 4);
@@ -83,7 +94,7 @@ DecodedImage ImageDecoder::decodeJpegFile(const char* path)
     long fileSize = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
 
-    if (fileSize <= 0) {
+    if (fileSize <= 0 || static_cast<std::size_t>(fileSize) > kMaxCompressedImageBytes) {
         std::fclose(f);
         return {};
     }

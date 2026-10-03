@@ -26,4 +26,4 @@ Checked items are done and pushed. Order is the build order.
 - [ ] Architecture-map doc (when the app is called done)
 
 ## Later
-Music and video search, favorites, filters, lyrics, instant mix, sleep timer, storage manager, playing a long track while it downloads.
+Music and video search, favorites, filters, instant mix, sleep timer, storage manager, playing a long track while it downloads.

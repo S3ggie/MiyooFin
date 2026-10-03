@@ -350,7 +350,7 @@ void MusicScreen::renderLyrics(SDL_Surface* fb)
     for (int i = 0; i < rows && first + i < static_cast<int>(m_lyrics.size()); ++i) {
         const bool now = first + i == current;
         ui::textClamped(fb, left, areaTop + i * lineH, width, m_lyrics[first + i].text,
-                        now ? d::kText : d::kTextMuted, now ? 2 : 1);
+                        now ? d::kAccentHi : d::kTextMuted);
     }
 }
 

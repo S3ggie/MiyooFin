@@ -37,6 +37,7 @@ Built with C++17, SDL2, libcurl, and json-c.
   confirmation for seasons and series); changes made offline sync later.
 - **Playlists** — in Music: add to a playlist, create, remove from and delete
   playlists, or save the play queue as a playlist.
+- **Lyrics** — Up on Now Playing shows the song's lyrics, following along when they are time-synced.
 - **Screen-off listening** — START + SELECT together darken the screen and lock
   the buttons while music plays; press them together again to unlock.
 - **Signing in** — a username and password, or **Quick Connect** (approve the

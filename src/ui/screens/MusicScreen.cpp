@@ -17,6 +17,7 @@ constexpr const char* kStateFile = "music-ui-state.txt";
 constexpr const char* kSettingsFile = "music-settings.txt";
 constexpr const char* kCacheRoot = "music-cache";
 constexpr int kRowHeight = 44;
+constexpr int kGridCols = 4, kGridCellH = 156;
 constexpr int kPrefetchRows = 12;
 constexpr Uint32 kStateSaveMs = 2000;
 constexpr std::size_t kMaxCovers = 80;
@@ -311,9 +312,16 @@ int MusicScreen::contentBottom() const
     return miniPlayerVisible() ? 404 : 456;
 }
 
+bool MusicScreen::isGrid(const MusicPane& pane) const
+{
+    return m_settings && m_settings->albumGrid.load() && pane.frame.kind == MusicPaneKind::Albums;
+}
+
 int MusicScreen::visibleRows(const MusicPane& pane) const
 {
     const int top = 76 + detailHeaderHeight(pane);
+    if (isGrid(pane))
+        return kGridCols * std::max(1, (contentBottom() - top) / kGridCellH);
     return std::max(1, (contentBottom() - top) / kRowHeight);
 }
 
@@ -359,6 +367,14 @@ void MusicScreen::clampPane(MusicPane& pane)
     while (f.selected > 0 && !pane.rows[f.selected].selectable())
         --f.selected;
     const int visible = visibleRows(pane);
+    if (isGrid(pane)) { // scroll moves a whole row of covers at a time
+        const int firstRow = f.scroll / kGridCols, row = f.selected / kGridCols,
+                  rowsShown = visible / kGridCols;
+        const int newFirst =
+            row < firstRow ? row : (row >= firstRow + rowsShown ? row - rowsShown + 1 : firstRow);
+        f.scroll = newFirst * kGridCols;
+        return;
+    }
     if (f.selected < f.scroll)
         f.scroll = f.selected;
     if (f.selected >= f.scroll + visible)
@@ -883,6 +899,8 @@ void MusicScreen::refreshSettingsRows(MusicPane& pane)
         action("Streaming quality", "Used when playing from the server",
                std::to_string(stream) + " kbps"),
         action("Download quality", "Used for offline music", std::to_string(download) + " kbps"),
+        action("Album view", "Albums as a list or a grid of covers",
+               m_settings && m_settings->albumGrid.load() ? "Grid" : "List"),
         action("Clear music cache", "Streamed tracks and covers (downloads stay)",
                m_cacheClearArmed ? "Press A again" : ""),
         action("Server",
@@ -1048,6 +1066,11 @@ bool MusicScreen::handleBrowse(Action action)
         if (count == 0)
             return true;
         int i = pane.frame.selected + (action == Action::Up ? -1 : 1);
+        if (isGrid(pane)) { // a row of covers up or down; the last row stops at the last cover
+            i = pane.frame.selected + (action == Action::Up ? -kGridCols : kGridCols);
+            if (i >= count && pane.frame.selected / kGridCols < (count - 1) / kGridCols)
+                i = count - 1;
+        }
         while (i >= 0 && i < count && !pane.rows[i].selectable())
             i += action == Action::Up ? -1 : 1;
         if (i >= 0 && i < count) {
@@ -1059,12 +1082,24 @@ bool MusicScreen::handleBrowse(Action action)
         return true;
     }
     case Action::Left:
+    case Action::Right:
+        if (isGrid(pane)) {
+            const int i = pane.frame.selected + (action == Action::Left ? -1 : 1);
+            if (i >= 0 && i < count) {
+                pane.frame.selected = i;
+                pane.frame.selectedId = pane.rows[i].id;
+                clampPane(pane);
+                markDirty();
+            }
+            return true;
+        }
+        if (action == Action::Right) {
+            if (isAlphabetical(pane.frame.kind))
+                cycleLetter(1);
+            return true;
+        }
         if (isAlphabetical(pane.frame.kind))
             cycleLetter(-1);
-        return true;
-    case Action::Right:
-        if (isAlphabetical(pane.frame.kind))
-            cycleLetter(1);
         return true;
     case Action::PrevPage:
     case Action::NextPage: {
@@ -1557,7 +1592,13 @@ void MusicScreen::settingsAction(int index)
         m_settings->downloadKbps.store(
             music::MusicSettings::nextKbps(m_settings->downloadKbps.load()));
         m_settings->save(kSettingsFile);
-    } else if (index == 3) {
+    } else if (index == 3 && m_settings) {
+        m_settings->albumGrid.store(!m_settings->albumGrid.load());
+        m_settings->save(kSettingsFile);
+        for (MusicPane& p : m_tabs[static_cast<int>(MusicTab::Library)].roots)
+            clampPane(p);
+        markDirty();
+    } else if (index == 4) {
         if (!m_cacheClearArmed) {
             m_cacheClearArmed = true;
             m_toast = "Press A again to clear the music cache";

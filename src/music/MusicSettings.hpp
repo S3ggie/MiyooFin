@@ -13,6 +13,7 @@ struct MusicSettings
 {
     std::atomic<int> streamKbps{192};
     std::atomic<int> downloadKbps{192};
+    std::atomic<bool> albumGrid{false}; ///< Albums tab as a cover grid instead of a list
 
     /// Cycles 128 -> 192 -> 320 -> 128.
     static int nextKbps(int kbps)

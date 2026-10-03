@@ -10,7 +10,7 @@ Checked items are done and pushed. Order is the build order.
 ## Music
 - [x] Playlist maker: add to playlist, new playlist, remove from playlist, delete playlist (music only)
 - [x] Save the current queue as a playlist
-- [ ] Album grid view
+- [x] Album grid view (Music Settings → Album view)
 - [ ] Screen-off listening, with the buttons locked after a combo
 
 ## Signing in

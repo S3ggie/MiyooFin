@@ -18,6 +18,7 @@ bool isAlphabetical(MusicPaneKind k)
 
 constexpr int kSubBarTop = 44, kSubBarH = 28;
 constexpr int kRowHeight = 44;
+constexpr int kGridCols = 4, kGridCellH = 156;
 constexpr int kMiniTop = 404, kMiniH = 52;
 
 // Horizontal purple -> magenta gradient (focus markers, progress bars).
@@ -183,6 +184,10 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
                      ui::fit(detail, 560), d::kTextMuted);
         return;
     }
+    if (isGrid(pane)) {
+        renderGrid(fb, pane, listTop, bottom);
+        return;
+    }
     const int visible = std::max(1, (bottom - listTop) / kRowHeight);
     int y = listTop;
     for (int i = pane.frame.scroll; i < static_cast<int>(pane.rows.size()) && y + 26 <= bottom;
@@ -253,6 +258,37 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
 
 // ---- mini player, now playing
 // ---------------------------------------------------------------------
+
+void MusicScreen::renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
+{
+    const int cellW = (d::kScreenW - 2 * d::kMargin) / kGridCols, cover = cellW - 16;
+    const int total = static_cast<int>(pane.rows.size());
+    for (int i = pane.frame.scroll; i < total; ++i) {
+        const int slot = i - pane.frame.scroll;
+        const int x = d::kMargin + (slot % kGridCols) * cellW;
+        const int y = top + (slot / kGridCols) * kGridCellH;
+        if (y + kGridCellH > bottom + 2)
+            break;
+        const MusicRow& row = pane.rows[i];
+        const bool selected = i == pane.frame.selected;
+        if (selected)
+            ui::roundFill(fb, x + 2, y, cellW - 4, kGridCellH - 4, d::kRadius, d::kRaised);
+        drawCover(fb, row.artId, row.artTag, x + 8, y + 6, cover, 128, row.title);
+        if (selected)
+            ui::roundOutline(fb, x + 8, y + 6, cover, cover, 4, d::kAccentHi);
+        ui::textClamped(fb, x + 8, y + cover + 8, cellW - 16, row.title, d::kText);
+        ui::textClamped(fb, x + 8, y + cover + 26, cellW - 16, row.subtitle,
+                        selected ? d::kTextSecondary : d::kTextMuted);
+    }
+    const int rows = (total + kGridCols - 1) / kGridCols, shown = (bottom - top) / kGridCellH;
+    if (rows > shown) {
+        const int trackH = bottom - top - 4, thumbH = std::max(14, trackH * shown / rows);
+        const int thumbY =
+            top + (trackH - thumbH) * (pane.frame.scroll / kGridCols) / std::max(1, rows - shown);
+        ui::fill(fb, d::kScreenW - 8, top, 3, trackH, d::kDivider);
+        ui::roundFill(fb, d::kScreenW - 8, thumbY, 3, thumbH, 1, d::kAccentDim);
+    }
+}
 
 void MusicScreen::renderMiniPlayer(SDL_Surface* fb, int top)
 {
@@ -421,7 +457,9 @@ void MusicScreen::renderFooter(SDL_Surface* fb, bool miniShown)
             pane.rows[pane.frame.selected].kind != MusicRow::Kind::Action &&
             pane.rows[pane.frame.selected].kind != MusicRow::Kind::Artist)
             footer.hints.push_back({ui::Key::Y, "Options"});
-        if (isAlphabetical(pane.frame.kind))
+        if (isGrid(pane))
+            footer.hints[0].label = "Move";
+        else if (isAlphabetical(pane.frame.kind))
             footer.hints[0].label = "Move, A-Z";
         if (miniShown)
             footer.hints.push_back({ui::Key::Start, "Now playing"});

@@ -247,6 +247,8 @@ class MusicScreen : public Screen
     bool miniPlayerVisible() const;
     int contentBottom() const;
     int visibleRows(const MusicPane& pane) const;
+    bool isGrid(const MusicPane& pane) const; ///< Albums tab shown as a cover grid
+    void renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
     int detailHeaderHeight(const MusicPane& pane) const;
 
     Session m_session;

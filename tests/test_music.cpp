@@ -5,6 +5,7 @@
 #include "../src/music/MusicParse.hpp"
 #include "../src/music/MusicLibrary.hpp"
 #include "../src/music/MusicQueue.hpp"
+#include "../src/music/MusicSettings.hpp"
 #include "../src/music/MusicTracks.hpp"
 #include "../src/music/PlaysJournal.hpp"
 #include "../src/ui/MusicUiState.hpp"
@@ -461,6 +462,20 @@ void testQueuePersistence()
     std::printf("[test] saved queue OK\n");
 }
 
+void testSettingsAlbumGrid()
+{
+    const std::string path = "music-settings-test.txt";
+    MusicSettings a;
+    a.albumGrid.store(true);
+    a.streamKbps.store(320);
+    CHECK(a.save(path));
+    MusicSettings b;
+    CHECK(!b.albumGrid.load());
+    b.load(path);
+    CHECK(b.albumGrid.load() && b.streamKbps.load() == 320);
+    std::remove(path.c_str());
+}
+
 void testPlaysJournal()
 {
     std::printf("[test] plays journal\n");
@@ -590,6 +605,7 @@ void testScreenRequests()
 
 int main()
 {
+    testSettingsAlbumGrid();
     testParsing();
     testUrls();
     testCache();

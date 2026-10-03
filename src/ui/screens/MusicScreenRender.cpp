@@ -337,20 +337,41 @@ void MusicScreen::renderLyrics(SDL_Surface* fb)
         return;
     }
     const bool synced = m_lyrics.front().startMs >= 0;
-    const int areaTop = top + 52, lineH = 30;
+    constexpr int kScale = 2;
+    const int areaTop = top + 52, lineH = 34;
     const int rows = (d::kScreenH - d::kFooterH - areaTop - 6) / lineH;
-    int first = m_lyricsScroll, current = -1;
-    if (synced) { // follow the song: the line being sung stays in the middle
+    // Each lyric wraps onto up to two big lines.
+    struct Visual
+    {
+        int lyric;
+        std::string text;
+    };
+    std::vector<Visual> visual;
+    for (int i = 0; i < static_cast<int>(m_lyrics.size()); ++i) {
+        const auto parts = ui::wrap(m_lyrics[i].text, width, 2, kScale);
+        if (parts.empty())
+            visual.push_back({i, ""}); // an instrumental gap keeps its space
+        for (const std::string& part : parts)
+            visual.push_back({i, part});
+    }
+    int current = -1;
+    if (synced) {
         const long long now = static_cast<long long>(v.position * 1000);
         for (int i = 0; i < static_cast<int>(m_lyrics.size()); ++i)
             if (m_lyrics[i].startMs <= now)
                 current = i;
-        first = std::max(0, current - rows / 2);
     }
-    for (int i = 0; i < rows && first + i < static_cast<int>(m_lyrics.size()); ++i) {
-        const bool now = first + i == current;
-        ui::textClamped(fb, left, areaTop + i * lineH, width, m_lyrics[first + i].text,
-                        now ? d::kAccentHi : d::kTextMuted);
+    int firstVisual = 0;
+    const int anchor = synced ? current : m_lyricsScroll;
+    for (int i = 0; i < static_cast<int>(visual.size()); ++i)
+        if (visual[i].lyric == anchor) {
+            firstVisual = synced ? std::max(0, i - rows / 2) : i;
+            break;
+        }
+    for (int i = 0; i < rows && firstVisual + i < static_cast<int>(visual.size()); ++i) {
+        const Visual& line = visual[firstVisual + i];
+        ui::text(fb, left, areaTop + i * lineH, line.text,
+                 line.lyric == current ? d::kText : d::kTextMuted, kScale);
     }
 }
 

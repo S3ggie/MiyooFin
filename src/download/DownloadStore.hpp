@@ -31,6 +31,9 @@ class DownloadStore
     bool isCompleteSegment(const std::string& scope, const std::string& itemId,
                            std::uint64_t index) const;
     std::uint64_t firstIncompleteSegment(const std::string& scope, const DownloadItem& item) const;
+    /// The exact bytes saveManifest() would write for `item` (lets a caller check later whether the
+    /// item changed since it was written).
+    static std::string manifestText(const DownloadItem& item);
     bool saveManifest(const std::string& scope, const DownloadItem& item,
                       std::string* error = nullptr) const;
     bool loadManifest(const std::string& scope, const std::string& itemId, DownloadItem& item,

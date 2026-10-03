@@ -67,7 +67,7 @@ void testFramesBytewise()
 void testFragmentedMessage()
 {
     WebSocketFrameReader reader(1024);
-    Bytes wire = frame(0x01, "Hel");         // text, not final
+    Bytes wire = frame(0x01, "Hel");        // text, not final
     append(wire, frame(0x89, "ping-data")); // a ping may arrive between fragments
     append(wire, frame(0x80, "lo"));        // continuation, final
     auto r = reader.next(wire);
@@ -99,7 +99,8 @@ void testProtocolViolations()
 {
     WebSocketFrameReader reader(1024);
     Bytes masked = frame(0x81, "x", true);
-    CHECK(reader.next(masked).status == WebSocketFrameReader::Status::Error); // server frames are unmasked
+    CHECK(reader.next(masked).status ==
+          WebSocketFrameReader::Status::Error); // server frames are unmasked
     WebSocketFrameReader r2(1024);
     Bytes reserved = frame(0xC1, "x");
     CHECK(r2.next(reserved).status == WebSocketFrameReader::Status::Error);

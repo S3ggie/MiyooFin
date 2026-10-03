@@ -28,6 +28,7 @@ void publishDownloadGauges(const std::vector<DownloadItem>& items, std::size_t p
 DownloadManager::DownloadManager(const Session& s, const std::string& r) : m_store(r)
 {
     configure(s);
+    m_persisterThread = std::thread(&DownloadManager::persisterLoop, this);
     m_thread = std::thread(&DownloadManager::worker, this);
     m_planThread = std::thread(&DownloadManager::planner, this);
     m_reconcileThread = std::thread(&DownloadManager::reconciler, this);
@@ -35,6 +36,7 @@ DownloadManager::DownloadManager(const Session& s, const std::string& r) : m_sto
 
 DownloadManager::~DownloadManager()
 {
+    flushPersistence(); // owed writes land before the final whole-library convergence below
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stop = true;
@@ -55,6 +57,9 @@ DownloadManager::~DownloadManager()
     m_wake.notify_all();
     m_planWake.notify_all();
     m_reconcileWake.notify_all();
+    m_persisterWake.notify_all();
+    if (m_persisterThread.joinable())
+        m_persisterThread.join();
     if (m_thread.joinable())
         m_thread.join();
     if (m_planThread.joinable())
@@ -68,7 +73,10 @@ DownloadManager::~DownloadManager()
 // see persistLocked()).  Steady-state transitions never take this path.
 void DownloadManager::configure(const Session& s)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // A write that the storage thread has already started belongs to the old account; let it
+    // finish before the whole library is converged below, or it could land after and win.
+    m_persisterWake.wait(lock, [this] { return !m_persisterBusy; });
     if (m_activePlanCancellation)
         m_activePlanCancellation->store(true);
     const auto hierarchyRequest = m_activePlanHierarchyRequest.load(std::memory_order_acquire);
@@ -79,6 +87,8 @@ void DownloadManager::configure(const Session& s)
             job.cancellation->store(true);
     }
     persistLocked();
+    m_asyncPersistIds.clear(); // persistLocked() wrote everything
+    m_asyncIndexDue = false;
     ++m_generation;
     m_session = s;
     m_scope = s.valid() ? DownloadStore::scopeKey(s.serverUrl, s.userId) : "anonymous";
@@ -133,6 +143,109 @@ void DownloadManager::saveIndexLocked()
     m_store.saveIndex(m_scope, indexed, nullptr);
 }
 
+void DownloadManager::requestAsyncPersistLocked(const std::string& itemId)
+{
+    m_asyncPersistIds.insert(itemId);
+    m_asyncIndexDue = true;
+    m_persisterWake.notify_all();
+}
+
+void DownloadManager::flushPersistence()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_persisterWake.wait(lock, [this] {
+        return m_stop || (m_asyncPersistIds.empty() && !m_asyncIndexDue && !m_persisterBusy);
+    });
+}
+
+// Writes `itemId`'s manifest from a copy taken under the lock, with the lock released for the
+// disk I/O, then checks the live item did not change meanwhile (or get overwritten by a
+// synchronous writer's newer state): if it did, the newer state is written too. The file therefore
+// always converges to the live state, and an older copy can never be what stays on disk.
+void DownloadManager::persistManifestAsync(const std::string& scope, std::uint64_t generation,
+                                           const std::string& itemId)
+{
+    for (int round = 0; round < 8; ++round) {
+        DownloadItem copy;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_stop || generation != m_generation || scope != m_scope)
+                return;
+            auto it = std::find_if(m_items.begin(), m_items.end(),
+                                   [&](const DownloadItem& i) { return i.itemId == itemId; });
+            if (it == m_items.end())
+                return; // erased meanwhile
+            copy = *it;
+        }
+        if (beforeAsyncWriteForTest)
+            beforeAsyncWriteForTest();
+        const bool ok = m_store.saveManifest(scope, copy, nullptr);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (generation != m_generation || scope != m_scope)
+            return;
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+                               [&](const DownloadItem& i) { return i.itemId == itemId; });
+        if (it == m_items.end())
+            return;
+        if (ok)
+            m_indexedIds.insert(itemId);
+        if (DownloadStore::manifestText(*it) == DownloadStore::manifestText(copy))
+            return; // what is on disk is the live state
+    }
+}
+
+void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t generation)
+{
+    for (int round = 0; round < 8; ++round) {
+        std::vector<DownloadItem> indexed;
+        std::set<std::string> idsWritten;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_stop || generation != m_generation || scope != m_scope)
+                return;
+            for (const auto& i : m_items)
+                if (m_indexedIds.count(i.itemId)) {
+                    indexed.push_back(i);
+                    idsWritten.insert(i.itemId);
+                }
+        }
+        m_store.saveIndex(scope, indexed, nullptr);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (generation != m_generation || scope != m_scope)
+            return;
+        std::set<std::string> now;
+        for (const auto& i : m_items)
+            if (m_indexedIds.count(i.itemId))
+                now.insert(i.itemId);
+        if (now == idsWritten)
+            return; // the index lists exactly the live set
+    }
+}
+
+void DownloadManager::persisterLoop()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    for (;;) {
+        m_persisterWake.wait(
+            lock, [this] { return m_stop || !m_asyncPersistIds.empty() || m_asyncIndexDue; });
+        if (m_stop)
+            return;
+        std::set<std::string> ids;
+        ids.swap(m_asyncPersistIds);
+        m_asyncIndexDue = false;
+        const std::string scope = m_scope;
+        const std::uint64_t generation = m_generation;
+        m_persisterBusy = true;
+        lock.unlock();
+        for (const std::string& id : ids)
+            persistManifestAsync(scope, generation, id);
+        persistIndexAsync(scope, generation);
+        lock.lock();
+        m_persisterBusy = false;
+        m_persisterWake.notify_all();
+    }
+}
+
 void DownloadManager::persistLocked()
 {
     for (const auto& i : m_items) {
@@ -179,12 +292,10 @@ void DownloadManager::setPlaybackActive(bool v)
                 i.state = stateAfterInterrupt(DownloadInterrupt::Playback);
                 i.recentBytesPerSec = 0;
                 m_progressSamples.erase(i.itemId);
-                if (m_store.saveManifest(m_scope, i, nullptr))
-                    m_indexedIds.insert(i.itemId);
+                requestAsyncPersistLocked(i.itemId);
             } else if (!v && i.state == DownloadState::PausedForPlayback) {
                 i.state = DownloadState::Queued;
-                if (m_store.saveManifest(m_scope, i, nullptr))
-                    m_indexedIds.insert(i.itemId);
+                requestAsyncPersistLocked(i.itemId);
             }
         }
         publishDownloadGauges(m_items, m_planJobs.size());
@@ -240,15 +351,10 @@ void DownloadManager::pause(const std::string& id)
             m_progressSamples.erase(id);
         }
     }
-    persistItemLocked(id);
-    // Crash durability (uniform with the worker pass via
-    // m_indexedIds/saveIndexLocked): the pausing transition durably
-    // wrote this manifest above, so its index write travels with it.
-    // Unconditional on purpose: between the pass's pending-swap and its
-    // final index write the id is no longer "pending", yet the pass's index
-    // is not durable — skipping here would still orphan the manifest on a
-    // crash in that window.
-    saveIndexLocked();
+    // The transition is in memory now; the storage thread writes the manifest and then the
+    // index (a durable manifest always travels with its index write, as before), without the
+    // caller or the snapshot lock waiting for the disk.
+    requestAsyncPersistLocked(id);
     publishDownloadGauges(m_items, m_planJobs.size());
     m_wake.notify_all();
 }
@@ -260,12 +366,7 @@ void DownloadManager::resume(const std::string& id)
         if (i.itemId == id && i.state != DownloadState::Complete)
             i.state = DownloadState::Queued;
     }
-    persistItemLocked(id);
-    // Same crash-durability argument as pause() above: a durably written
-    // manifest always carries its index write, so no pending-set check
-    // can leave a manifest orphaned by a crash before the worker's pass
-    // index lands.
-    saveIndexLocked();
+    requestAsyncPersistLocked(id); // same as pause(): memory now, disk via the storage thread
     publishDownloadGauges(m_items, m_planJobs.size());
     m_wake.notify_one();
 }

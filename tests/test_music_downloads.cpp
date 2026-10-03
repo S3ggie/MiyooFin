@@ -3,6 +3,8 @@
 #include "../src/music/MusicDownloads.hpp"
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstdlib>
 #include <sys/stat.h>
 #include <thread>
@@ -156,6 +158,97 @@ void testCollectionShrinks()
     std::printf("[test] music downloads: a collection that shrinks drops its files OK\n");
 }
 
+// Re-adding a track while the worker is deleting its file used to leave "done" set for a file that
+// no longer existed, and nothing queued to fetch it. A barrier holds the worker exactly between
+// removing the file and re-taking the lock, so the interleaving is deterministic.
+// A stalled disk must not stall the caller. The index write is held on the storage thread; the UI
+// side (enqueue, setSync, snapshot, removeCollection) has to keep returning promptly, and once the
+// disk answers the final state is what ends up in the file.
+void testSlowDiskDoesNotBlockCallers()
+{
+    std::printf("[test] music downloads: a stalled index write does not block callers\n");
+    Rig rig;
+    DownloadCollection pl = collection("pl1");
+    pl.kind = "playlist";
+    rig.dl->enqueue(pl, tracks({"a", "b"}));
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("b"); }));
+    rig.dl->flushPersistence();
+
+    std::mutex m;
+    std::condition_variable cv;
+    bool reached = false, release = false;
+    rig.dl->beforeIndexWriteForTest = [&] {
+        std::unique_lock<std::mutex> lock(m);
+        reached = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release; });
+    };
+    const auto start = std::chrono::steady_clock::now();
+    rig.dl->setSync("pl1", true); // triggers an index write that now hangs on the "disk"
+    {
+        std::unique_lock<std::mutex> lock(m);
+        CHECK(cv.wait_for(lock, std::chrono::seconds(4), [&] { return reached; }));
+    }
+    // The write is stuck. None of these may wait for it.
+    rig.dl->enqueue(collection("al9"), tracks({"x"}));
+    rig.dl->setSync("pl1", false);
+    rig.dl->removeCollection("al9");
+    const auto snapshot = rig.dl->snapshot();
+    CHECK(!snapshot.empty());
+    CHECK(rig.dl->hasCollection("pl1") && !rig.dl->syncOf("pl1"));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    CHECK(elapsed < std::chrono::seconds(2)); // would exceed the 4 s hold if it waited on the disk
+    {
+        std::lock_guard<std::mutex> lock(m);
+        release = true;
+    }
+    cv.notify_all();
+    rig.dl->beforeIndexWriteForTest = nullptr;
+    rig.dl->flushPersistence();
+    rig.dl.reset(); // restart: what was changed during the stall is what was saved
+    rig.start();
+    CHECK(rig.dl->hasCollection("pl1") && !rig.dl->syncOf("pl1") && !rig.dl->hasCollection("al9"));
+    std::printf("[test] music downloads: a stalled index write does not block callers OK\n");
+}
+
+void testReAddDuringDelete()
+{
+    std::printf("[test] music downloads: re-adding a track while it is being deleted\n");
+    Rig rig;
+    rig.dl->enqueue(collection("al1"), tracks({"a"}));
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("a"); }));
+    const std::string path = rig.dl->pathFor("a");
+    const int fetchesBefore = rig.fetches;
+
+    std::mutex m;
+    std::condition_variable cv;
+    bool reached = false, release = false;
+    rig.dl->afterFilesRemovedForTest = [&](const std::string&) {
+        std::unique_lock<std::mutex> lock(m);
+        reached = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release; });
+    };
+    rig.dl->removeCollection("al1");
+    {
+        std::unique_lock<std::mutex> lock(m);
+        CHECK(cv.wait_for(lock, std::chrono::seconds(4), [&] { return reached; }));
+    }
+    CHECK(!exists(path));                              // the file is gone ...
+    rig.dl->enqueue(collection("al2"), tracks({"a"})); // ... and the track is added again
+    {
+        std::lock_guard<std::mutex> lock(m);
+        release = true;
+    }
+    cv.notify_all();
+    rig.dl->afterFilesRemovedForTest = nullptr;
+    // It must be fetched again: finished means the file exists.
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("a"); }));
+    CHECK(exists(rig.dl->pathFor("a")));
+    CHECK(rig.fetches == fetchesBefore + 1);
+    std::printf("[test] music downloads: re-adding a track while it is being deleted OK\n");
+}
+
 void testSyncFlag()
 {
     std::printf("[test] music downloads: keep-in-sync survives asking again and a restart\n");
@@ -259,6 +352,8 @@ int main()
     testDownloadsAlbum();
     testSharedTracksAndRemoval();
     testCollectionShrinks();
+    testSlowDiskDoesNotBlockCallers();
+    testReAddDuringDelete();
     testSyncFlag();
     testPersistence();
     testRetryAndFailure();

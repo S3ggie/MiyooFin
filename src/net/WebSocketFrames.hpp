@@ -38,8 +38,8 @@ class WebSocketFrameReader
 
   private:
     std::size_t m_max;
-    std::string m_message;     // the data message being reassembled
-    bool m_inMessage = false;  // a fragmented message is in progress
+    std::string m_message;    // the data message being reassembled
+    bool m_inMessage = false; // a fragmented message is in progress
     bool m_messageIsText = false;
 };
 

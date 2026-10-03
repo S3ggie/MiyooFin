@@ -84,10 +84,19 @@ class MusicDownloads
     }
     /// Test hook: true when nothing is queued or downloading.
     bool idle() const;
+    /// Waits until everything changed so far is on disk (the index is written by a storage
+    /// thread, never by the caller). Tests use it; the destructor does the same.
+    void flushPersistence();
+    /// Test seam: runs on the storage thread just before an index write, so a test can stall
+    /// the disk and show that callers and snapshots do not wait for it.
+    std::function<void()> beforeIndexWriteForTest;
 
     static constexpr int kMaxAttempts = 3;
     /// Never fill the card: stop when less than this is left.
     static constexpr std::uint64_t kReserveBytes = 200ull * 1024 * 1024;
+    /// Test seam: called on the worker after a doomed track's files were removed and before the
+    /// lock is taken again, so a test can re-add the track in exactly that window.
+    std::function<void(const std::string& trackId)> afterFilesRemovedForTest;
     /// Seconds to wait before attempt n (1-based). Overridable so tests do not sleep.
     std::function<int(int attempt)> backoffSeconds = [](int attempt) { return attempt * 4; };
 
@@ -101,8 +110,12 @@ class MusicDownloads
         std::string error;
     };
     void workerLoop();
+    void persistLoop();
     void load();
-    void saveLocked() const;
+    /// Marks the index as changed; the storage thread writes it (coalescing bursts of changes).
+    void saveLocked();
+    std::string serializeLocked() const;
+    static bool writeIndexFile(const std::string& path, const std::string& text);
     std::string trackPath(const std::string& id) const;
     bool referencedLocked(const std::string& trackId) const;
     void bumpLocked()
@@ -122,6 +135,11 @@ class MusicDownloads
     std::atomic<bool> m_cancelCurrent{false};
     std::atomic<std::uint64_t> m_revision{1};
     std::thread m_thread;
+    // Durable index writes: a storage thread serialises the state and does the slow file I/O
+    // with no lock held, so UI-thread callers never wait on the disk.
+    std::condition_variable m_persistWake;
+    bool m_indexDirty = false, m_persistWriting = false, m_persistStop = false;
+    std::thread m_persistThread;
 };
 
 } // namespace music

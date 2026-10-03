@@ -4,6 +4,9 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <csignal>
+#include <condition_variable>
+#include <mutex>
+#include <chrono>
 #include <dirent.h>
 
 static std::string readFixture(const std::string& path)
@@ -30,6 +33,7 @@ int main()
     testHlsDownloadStore();
     testHlsSegmentIntegrity();
     testStorageWriteFailureDoesNotLeakDescriptors();
+    testPauseResumeDoNotWaitForTheDisk();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();
     testDownloadHierarchy();

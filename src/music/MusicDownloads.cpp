@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -70,6 +71,7 @@ MusicDownloads::MusicDownloads(std::string dir, Hooks hooks)
 {
     makeDirs(m_dir + "/tracks");
     load();
+    m_persistThread = std::thread([this] { persistLoop(); });
     m_thread = std::thread([this] { workerLoop(); });
 }
 
@@ -81,7 +83,13 @@ MusicDownloads::~MusicDownloads()
         m_cancelCurrent.store(true);
     }
     m_wake.notify_all();
-    m_thread.join();
+    m_thread.join(); // the worker's last changes are requested before it ends ...
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_persistStop = true; // ... and the storage thread writes them before it ends
+    }
+    m_persistWake.notify_all();
+    m_persistThread.join();
 }
 
 std::string MusicDownloads::trackPath(const std::string& id) const
@@ -92,32 +100,109 @@ std::string MusicDownloads::trackPath(const std::string& id) const
 // ---- persistence
 // ----------------------------------------------------------------------------------
 
-void MusicDownloads::saveLocked() const
+std::string MusicDownloads::serializeLocked() const
 {
-    const std::string path = m_dir + "/index.tsv", tmp = path + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::trunc);
-        out << kMagic << '\n';
-        for (const auto& entry : m_tracks) {
-            const Track& t = entry.second.track;
-            out << "T\t" << clean(t.id) << '\t' << clean(t.title) << '\t' << clean(t.album) << '\t'
-                << clean(t.albumId) << '\t' << clean(t.artist) << '\t' << clean(t.artistId) << '\t'
-                << clean(t.albumArtist) << '\t' << clean(t.imageTag) << '\t'
-                << clean(t.albumImageTag) << '\t' << t.trackNumber << '\t' << t.discNumber << '\t'
-                << t.runTimeTicks << '\t' << entry.second.bytes << '\t'
-                << (entry.second.done ? 1 : 0) << '\n';
-        }
-        for (const DownloadCollection& c : m_collections) {
-            out << "C\t" << clean(c.id) << '\t' << clean(c.kind) << '\t' << clean(c.name) << '\t'
-                << clean(c.artist) << '\t' << clean(c.artId) << '\t' << clean(c.artTag) << '\t';
-            for (std::size_t i = 0; i < c.trackIds.size(); ++i)
-                out << (i ? "," : "") << clean(c.trackIds[i]);
-            out << '\t' << (c.sync ? 1 : 0) << '\n';
-        }
-        if (!out.good())
-            return;
+    std::string out;
+    out += kMagic;
+    out += '\n';
+    for (const auto& entry : m_tracks) {
+        const Track& t = entry.second.track;
+        out += "T\t" + clean(t.id) + '\t' + clean(t.title) + '\t' + clean(t.album) + '\t' +
+               clean(t.albumId) + '\t' + clean(t.artist) + '\t' + clean(t.artistId) + '\t' +
+               clean(t.albumArtist) + '\t' + clean(t.imageTag) + '\t' + clean(t.albumImageTag) +
+               '\t' + std::to_string(t.trackNumber) + '\t' + std::to_string(t.discNumber) + '\t' +
+               std::to_string(t.runTimeTicks) + '\t' + std::to_string(entry.second.bytes) + '\t' +
+               (entry.second.done ? "1" : "0") + '\n';
     }
-    std::rename(tmp.c_str(), path.c_str());
+    for (const DownloadCollection& c : m_collections) {
+        out += "C\t" + clean(c.id) + '\t' + clean(c.kind) + '\t' + clean(c.name) + '\t' +
+               clean(c.artist) + '\t' + clean(c.artId) + '\t' + clean(c.artTag) + '\t';
+        for (std::size_t i = 0; i < c.trackIds.size(); ++i) {
+            if (i)
+                out += ',';
+            out += clean(c.trackIds[i]);
+        }
+        out += '\t';
+        out += c.sync ? '1' : '0';
+        out += '\n';
+    }
+    return out;
+}
+
+// Writes the file the durable way: temp file, fsync, rename, fsync of the folder.
+bool MusicDownloads::writeIndexFile(const std::string& path, const std::string& text)
+{
+    const std::string tmp = path + ".tmp";
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0)
+        return false;
+    bool ok = true;
+    std::size_t done = 0;
+    while (ok && done < text.size()) {
+        const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+        if (n <= 0)
+            ok = false;
+        else
+            done += static_cast<std::size_t>(n);
+    }
+    ok = ok && ::fsync(fd) == 0;
+    ok = (::close(fd) == 0) && ok;
+    if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    const std::size_t slash = path.rfind('/');
+    const int dirFd = ::open(slash == std::string::npos ? "." : path.substr(0, slash).c_str(),
+                             O_RDONLY | O_DIRECTORY);
+    if (dirFd >= 0) {
+        (void)::fsync(dirFd); // FAT cannot sync a folder; nothing to do about that
+        ::close(dirFd);
+    }
+    return true;
+}
+
+void MusicDownloads::saveLocked()
+{
+    m_indexDirty = true;
+    m_persistWake.notify_all();
+}
+
+void MusicDownloads::persistLoop()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    for (;;) {
+        m_persistWake.wait(lock, [this] { return m_indexDirty || m_persistStop; });
+        if (!m_indexDirty) {
+            if (m_persistStop)
+                return;
+            continue;
+        }
+        // Take the state while holding the lock (cheap, in memory) ...
+        m_indexDirty = false;
+        m_persistWriting = true;
+        const std::string text = serializeLocked();
+        lock.unlock();
+        // ... and do the slow part with no lock held: callers and snapshots carry on meanwhile.
+        if (beforeIndexWriteForTest)
+            beforeIndexWriteForTest();
+        const bool written = writeIndexFile(m_dir + "/index.tsv", text);
+        lock.lock();
+        m_persistWriting = false;
+        if (!written)
+            m_indexDirty = true; // try again with whatever the state is by then
+        m_persistWake.notify_all();
+        if (!written) {
+            if (m_persistStop)
+                return; // shutting down on a failing disk: nothing more can be done
+            m_persistWake.wait_for(lock, std::chrono::milliseconds(200));
+        }
+    }
+}
+
+void MusicDownloads::flushPersistence()
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_persistWake.wait(lock, [this] { return !m_indexDirty && !m_persistWriting; });
 }
 
 void MusicDownloads::load()
@@ -386,15 +471,28 @@ void MusicDownloads::workerLoop()
                 if (!m_deleteQueue.empty()) {
                     const std::string doomed = m_deleteQueue.back();
                     m_deleteQueue.pop_back();
-                    if (m_tracks.count(doomed) && !referencedLocked(doomed)) {
+                    auto doomedEntry = m_tracks.find(doomed);
+                    if (doomedEntry != m_tracks.end() && !referencedLocked(doomed)) {
+                        // The file is about to disappear, so the entry stops claiming it is
+                        // there *before* the lock is released: if the track is added again while
+                        // the files are being removed, it is a track that still has to be
+                        // fetched, not a finished one whose file is gone.
+                        doomedEntry->second.done = false;
+                        doomedEntry->second.bytes = 0;
                         // Files first, then the entry: once the track is gone from the index
                         // its file is gone too.
                         lock.unlock();
                         std::remove(trackPath(doomed).c_str());
                         std::remove((trackPath(doomed) + ".part").c_str());
+                        if (afterFilesRemovedForTest)
+                            afterFilesRemovedForTest(doomed);
                         lock.lock();
                         if (!referencedLocked(doomed)) {
                             m_tracks.erase(doomed);
+                            saveLocked();
+                            bumpLocked();
+                        } else {
+                            // Added again meanwhile: it is queued for a fresh download.
                             saveLocked();
                             bumpLocked();
                         }

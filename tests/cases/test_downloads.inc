@@ -5,6 +5,7 @@
 // "Complete" must mean more than non-empty: a one-byte or torn file is not a finished segment.
 static void testHlsSegmentIntegrity();
 static void testStorageWriteFailureDoesNotLeakDescriptors();
+static void testPauseResumeDoNotWaitForTheDisk();
 static void testDownloadInterruptStates()
 {
     std::printf("[test] download interrupt state mapping\n");
@@ -920,6 +921,7 @@ static void testWorkerPersistMatchesLiveState()
             // Wait until the pass is in flight (head persisted, tail not yet).
             for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
             manager.pause("race-item");
+            manager.flushPersistence();
             usleep(200000); // settle: any in-flight worker write has landed
             DownloadItem manifest;CHECK(store.loadManifest("anonymous","race-item",manifest,nullptr));
             CHECK(manifest.state==DownloadState::Paused);
@@ -1004,6 +1006,7 @@ static void testPersistTouchesOnlyAffectedItem()
     const std::string bContentBefore=readFixture(store.manifestPath("anonymous","item-b"));
     // pause() rewrites only item-a's manifest.
     manager.pause("item-a");
+    manager.flushPersistence(); // the storage thread writes it; wait for the disk
     DownloadItem a;CHECK(store.loadManifest("anonymous","item-a",a,nullptr));CHECK(a.state==DownloadState::Paused);
     CHECK(readFixture(store.manifestPath("anonymous","item-a"))!=aContentBefore);
     CHECK(manifestIdentity(store,"anonymous","item-b")==bBefore);
@@ -1032,7 +1035,7 @@ static void testPersistPendingCrashDurabilityAndTmpSweep()
         manager.setPlaybackActive(true); // worker runs persist passes only, never dequeues
         DownloadStore store(root);
         manager.enqueue(restartFixture("pending-one"));
-        manager.pause("pending-one");
+        manager.pause("pending-one"); manager.flushPersistence();
         usleep(200000); // settle: any in-flight worker write has landed
         std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
         bool listed=false;for(const auto&i:idx)if(i.itemId=="pending-one")listed=true;
@@ -1111,7 +1114,7 @@ static void testIndexNeverNamesMissingManifest()
     // transitions used to be exactly the window that indexed manifestless
     // ids or orphaned durable manifests.
     for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
-    manager.pause("race-item");
+    manager.pause("race-item"); manager.flushPersistence();
     manager.resume("bulk-1");
     usleep(300000); // settle: any in-flight worker write has landed
     const std::vector<std::string> ids=checkInvariant("bulk race");
@@ -1124,7 +1127,7 @@ static void testIndexNeverNamesMissingManifest()
     // same invariant: the paused id is durable AND listed, never one without
     // the other.
     manager.enqueue(restartFixture("late-one"));
-    manager.pause("late-one");
+    manager.pause("late-one"); manager.flushPersistence();
     usleep(300000);
     const std::vector<std::string> ids2=checkInvariant("late pause");
     bool lateListed=false;for(const auto&id:ids2)if(id=="late-one")lateListed=true;
@@ -1145,6 +1148,7 @@ static void testPlaybackToggleTouchesOnlyAffectedItems()
     manager.enqueue(restartFixture("dl-x"));
     for(unsigned n=0;n<400;++n){bool downloading=false;for(const auto&i:manager.snapshot().items)if(i.itemId=="dl-x"&&i.state==DownloadState::Downloading)downloading=true;if(downloading)break;usleep(5000);}
     manager.setPlaybackActive(true); // interrupts only dl-x
+    manager.flushPersistence();
     DownloadItem x;CHECK(store.loadManifest("anonymous","dl-x",x,nullptr));CHECK(x.state==DownloadState::PausedForPlayback);
     // A later enqueue stays Queued (playback held); pausing it makes it
     // undequeueable, so the release path below can never touch it — the
@@ -1154,6 +1158,7 @@ static void testPlaybackToggleTouchesOnlyAffectedItems()
     manager.enqueue(restartFixture("idle-y"));
     for(unsigned n=0;n<400;++n){std::vector<DownloadItem> items;if(store.loadIndex("anonymous",items,nullptr)&&items.size()==2)break;usleep(5000);}
     manager.pause("idle-y");
+    manager.flushPersistence();
     DownloadItem yPaused;CHECK(store.loadManifest("anonymous","idle-y",yPaused,nullptr));CHECK(yPaused.state==DownloadState::Paused);
     const std::string yBefore=manifestIdentity(store,"anonymous","idle-y");
     CHECK(!yBefore.empty());
@@ -1168,6 +1173,7 @@ static void testPlaybackToggleTouchesOnlyAffectedItems()
     for(const auto&i:manager.snapshot().items){if(i.itemId=="dl-x")xDownloading=(i.state==DownloadState::Downloading);if(i.itemId=="idle-y")yPausedLive=(i.state==DownloadState::Paused);}
     CHECK(xDownloading);
     CHECK(yPausedLive);
+    manager.flushPersistence();
     DownloadItem back;CHECK(store.loadManifest("anonymous","dl-x",back,nullptr));CHECK(back.state!=DownloadState::PausedForPlayback);
     CHECK(manifestIdentity(store,"anonymous","idle-y")==yBefore);
     CHECK(readFixture(store.manifestPath("anonymous","idle-y"))==yContentBefore);
@@ -1288,4 +1294,37 @@ static void testStorageWriteFailureDoesNotLeakDescriptors()
     CHECK(after==before);  // ... and none of them left a descriptor behind
     CHECK(store.removeItem("scope",item.itemId,nullptr));
     std::printf("[test] failed metadata/journal writes do not leak descriptors OK\n");
+}
+
+// pause()/resume() change memory and return: a stalled disk must not stall the UI thread or the
+// snapshot lock, and once it answers the live state is what ends up on disk.
+static void testPauseResumeDoNotWaitForTheDisk()
+{
+    std::printf("[test] pause/resume do not wait for the disk\n");
+    const std::string root="/tmp/miyoofin-asyncpause-"+std::to_string((long long)getpid());
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true); // keep the worker from dequeuing
+    DownloadStore store(root);
+    manager.enqueue(restartFixture("slow-a"));
+    for(unsigned n=0;n<400;++n){std::vector<DownloadItem> idx;if(store.loadIndex("anonymous",idx,nullptr)&&idx.size()==1)break;usleep(5000);}
+    manager.flushPersistence();
+
+    std::mutex m; std::condition_variable cv; bool reached=false, release=false;
+    manager.beforeAsyncWriteForTest=[&]{std::unique_lock<std::mutex> l(m);reached=true;cv.notify_all();cv.wait(l,[&]{return release;});};
+    const auto start=std::chrono::steady_clock::now();
+    manager.pause("slow-a");
+    {std::unique_lock<std::mutex> l(m);CHECK(cv.wait_for(l,std::chrono::seconds(4),[&]{return reached;}));}
+    // The write is stuck on the "disk". Pause again, resume, and read the snapshot: none may wait.
+    manager.resume("slow-a");
+    manager.pause("slow-a");
+    DownloadState live=DownloadState::Queued;for(const auto&i:manager.snapshot().items)if(i.itemId=="slow-a")live=i.state;
+    CHECK(live==DownloadState::Paused);
+    CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));
+    {std::lock_guard<std::mutex> l(m);release=true;}
+    cv.notify_all();
+    manager.beforeAsyncWriteForTest=nullptr;
+    manager.flushPersistence();
+    DownloadItem onDisk;CHECK(store.loadManifest("anonymous","slow-a",onDisk,nullptr));
+    CHECK(onDisk.state==DownloadState::Paused); // the newest state won, not the one the stalled write held
+    std::printf("[test] pause/resume do not wait for the disk OK\n");
 }

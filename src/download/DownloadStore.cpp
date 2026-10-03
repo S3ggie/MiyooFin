@@ -357,6 +357,10 @@ std::uint64_t DownloadStore::firstIncompleteSegment(const std::string& s,
             return n;
     return i.hlsSegmentCount;
 }
+std::string DownloadStore::manifestText(const DownloadItem& i)
+{
+    return serialize(i);
+}
 bool DownloadStore::saveManifest(const std::string& s, const DownloadItem& i, std::string* e) const
 {
     if (!safeId(s) || !safeId(i.itemId) || !atomic(manifestPath(s, i.itemId), serialize(i))) {

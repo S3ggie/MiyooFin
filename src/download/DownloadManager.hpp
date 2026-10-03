@@ -65,6 +65,10 @@ class DownloadManager
     /// UI-safe non-blocking snapshot.  A busy manager leaves the caller's
     /// previously published state intact instead of stalling a frame.
     bool tryPlanSnapshot(std::uint64_t id, DownloadPlanSnapshot& snapshot) const;
+    /// Waits until every requested write has reached the disk (shutdown and tests).
+    void flushPersistence();
+    /// Test seam: runs on the storage thread before each manifest write.
+    std::function<void()> beforeAsyncWriteForTest;
     static bool acceptsPlanResult(std::uint64_t jobGeneration, std::uint64_t currentGeneration)
     {
         return jobGeneration == currentGeneration;
@@ -98,6 +102,13 @@ class DownloadManager
     void persistLocked();
     void persistItemLocked(const std::string& itemId);
     void saveIndexLocked();
+    // UI-thread transitions (pause/resume/retry, playback interrupt) change memory only and ask
+    // the storage thread to write: fsyncs never run on the caller, never under m_mutex.
+    void requestAsyncPersistLocked(const std::string& itemId);
+    void persisterLoop();
+    void persistManifestAsync(const std::string& scope, std::uint64_t generation,
+                              const std::string& itemId);
+    void persistIndexAsync(const std::string& scope, std::uint64_t generation);
     std::uint64_t freeBytes() const;
     static bool statvfsFreeBytes(const DownloadStore& store, const std::string& scope,
                                  std::uint64_t& out);
@@ -106,7 +117,10 @@ class DownloadManager
     std::string m_scope;
     mutable std::mutex m_mutex;
     std::condition_variable m_wake, m_planWake, m_reconcileWake;
-    std::thread m_thread, m_planThread, m_reconcileThread;
+    std::thread m_thread, m_planThread, m_reconcileThread, m_persisterThread;
+    std::condition_variable m_persisterWake;
+    std::set<std::string> m_asyncPersistIds; // manifests the storage thread owes the disk
+    bool m_asyncIndexDue = false, m_persisterBusy = false;
     bool m_stop = false, m_playback = false, m_reconcileRequested = false,
          m_persistRequested = false, m_startupReconcile = false;
     std::uint64_t m_generation = 0, m_nextPlanId = 1;

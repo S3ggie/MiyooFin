@@ -522,6 +522,10 @@ static const char* const kThreadAuditFiles[] = {
     "src/library/LibraryCoordinator.cpp",
     "src/library/LibraryQuery.cpp",
     "src/library/LibrarySyncEvents.cpp",
+    "src/music/MusicDownloads.cpp",
+    "src/music/MusicLibrary.cpp",
+    "src/music/MusicPlayer.cpp",
+    "src/net/WatchedSync.cpp",
     "src/ui/WorkerSlot.hpp",
     "src/ui/screens/AuthCheckScreen.cpp",
     "src/ui/screens/ConnectScreen.cpp",
@@ -549,6 +553,16 @@ static const ThreadAuditAllow kThreadSingleShot[] = {
     {"src/download/DownloadManager.cpp", "m_thread"},
     {"src/download/DownloadManager.cpp", "m_planThread"},
     {"src/download/DownloadManager.cpp", "m_reconcileThread"},
+    {"src/download/DownloadManager.cpp", "m_persisterThread"},
+    // Music and sync workers are started by their owner's constructor and joined by its destructor.
+    {"src/music/MusicDownloads.cpp", "m_thread"},
+    {"src/music/MusicDownloads.cpp", "m_persistThread"},
+    {"src/music/MusicLibrary.cpp", "m_listThread"},
+    {"src/music/MusicLibrary.cpp", "m_coverThread"},
+    {"src/music/MusicLibrary.cpp", "m_jobThread"},
+    {"src/music/MusicPlayer.cpp", "m_fetchThread"},
+    {"src/music/MusicPlayer.cpp", "m_reportThread"},
+    {"src/net/WatchedSync.cpp", "m_thread"},
     // start() returns early once running or stopped, and stop is terminal, so
     // each of these is assigned once per coordinator lifetime.
     {"src/library/LibraryCoordinator.cpp", "m_liveChangeThread"},

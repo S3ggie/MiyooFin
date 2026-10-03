@@ -17,8 +17,16 @@
   or removed without signing out, and a **Test connection** row.
 - Player: B shows or hides the bar; MENU quits only on a plain tap so the brightness combo is safe.
 - **Crash report** screen (Settings → Diagnostics).
+- **Lyrics** in Now Playing (Up), following the song when they are time-synced.
+- **Keep in sync** for downloaded playlists: new songs are downloaded, removed ones deleted unless
+  another download still uses them.
+- **Clock:** 12/24-hour setting and a time zone that is found automatically from the network (or
+  chosen by hand).
+- **Redesigned screens:** Settings grouped into Library / Playback / Display / Connection / App /
+  Account, music Home as cover rails, cleaner album pages, better Now Playing title fit.
 
 ### Fixed
+- Long playlists and albums were cut off at 500 songs when playing, queueing or downloading.
 - DELETE requests were sent as GET (unmarking watched, deleting playlists, removing from a playlist).
 - Music history reported the wrong stopped song after a queue jump; clearing the cache could delete
   files that were playing or queued.

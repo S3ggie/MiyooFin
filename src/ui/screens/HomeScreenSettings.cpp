@@ -218,8 +218,9 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                       selected ? (musicRow ? tone.raised : d::kRaised) : d::kPanel);
         ui::roundOutline(fb, d::kMargin, y, W, ROW_H, d::kRadius,
                          selected ? (musicRow ? tone.edge : d::kAccent) : d::kBorder);
-        if (musicRow) { // "Miyoo" purple, "Fin" and "Music" white
-            ui::brandWord(fb, d::kMargin + 14, y + 10, tone.main, d::kText, " MUSIC", d::kText);
+        if (musicRow) { // "Miyoo" white, "Fin" blue, "Music" purple
+            ui::brandWord(fb, d::kMargin + 14, y + 10, d::kText, ui::kVideoTone.main, " MUSIC",
+                          tone.main);
             ui::textClamped(fb, d::kMargin + 14, y + 30, W - 28, rows[index].value,
                             selected ? d::kText : d::kTextSecondary);
             continue;

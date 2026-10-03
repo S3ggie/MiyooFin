@@ -22,6 +22,7 @@ struct DownloadCollection
     std::string kind; // "album" | "playlist" | "track"
     std::string name, artist, artId, artTag;
     std::vector<std::string> trackIds;
+    bool sync = false; // playlists only: follow the server's list (see MusicScreen)
 };
 
 struct DownloadStatus
@@ -62,6 +63,8 @@ class MusicDownloads
     void enqueue(DownloadCollection collection, const std::vector<Track>& tracks);
     /// Forgets a collection; files no other collection uses are deleted (by the worker).
     void removeCollection(const std::string& id);
+    /// Turns "keep in sync" on or off for a collection.
+    void setSync(const std::string& id, bool sync);
     /// Puts a failed collection back in the queue.
     void retry(const std::string& id);
 
@@ -69,6 +72,7 @@ class MusicDownloads
     std::string pathFor(const std::string& trackId) const;
     bool hasTrack(const std::string& trackId) const;
     bool hasCollection(const std::string& id) const;
+    bool syncOf(const std::string& id) const;
     /// Finished tracks of a collection, in collection order.
     std::vector<Track> tracksOf(const std::string& id) const;
     std::vector<DownloadStatus> snapshot() const;

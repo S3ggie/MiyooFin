@@ -112,7 +112,7 @@ void MusicDownloads::saveLocked() const
                 << clean(c.artist) << '\t' << clean(c.artId) << '\t' << clean(c.artTag) << '\t';
             for (std::size_t i = 0; i < c.trackIds.size(); ++i)
                 out << (i ? "," : "") << clean(c.trackIds[i]);
-            out << '\n';
+            out << '\t' << (c.sync ? 1 : 0) << '\n';
         }
         if (!out.good())
             return;
@@ -159,6 +159,7 @@ void MusicDownloads::load()
             c.artTag = f[6];
             if (!f[7].empty())
                 c.trackIds = split(f[7], ',');
+            c.sync = f.size() >= 9 && f[8] == "1";
             m_collections.push_back(std::move(c));
         }
     }
@@ -186,6 +187,13 @@ bool MusicDownloads::hasCollection(const std::string& id) const
     std::lock_guard<std::mutex> lock(m_mutex);
     return std::any_of(m_collections.begin(), m_collections.end(),
                        [&](const DownloadCollection& c) { return c.id == id; });
+}
+
+bool MusicDownloads::syncOf(const std::string& id) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return std::any_of(m_collections.begin(), m_collections.end(),
+                       [&](const DownloadCollection& c) { return c.id == id && c.sync; });
 }
 
 std::vector<Track> MusicDownloads::tracksOf(const std::string& id) const
@@ -292,6 +300,7 @@ void MusicDownloads::enqueue(DownloadCollection collection, const std::vector<Tr
                 if (std::find(collection.trackIds.begin(), collection.trackIds.end(), old) ==
                     collection.trackIds.end())
                     dropped.push_back(old);
+            collection.sync = existing->sync; // asking again keeps the user's choice
             *existing = collection;
         } else {
             m_collections.push_back(collection);
@@ -327,6 +336,17 @@ void MusicDownloads::removeCollection(const std::string& id)
         bumpLocked();
     }
     m_wake.notify_all();
+}
+
+void MusicDownloads::setSync(const std::string& id, bool sync)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (DownloadCollection& c : m_collections)
+        if (c.id == id && c.sync != sync) {
+            c.sync = sync;
+            saveLocked();
+            bumpLocked();
+        }
 }
 
 void MusicDownloads::retry(const std::string& id)

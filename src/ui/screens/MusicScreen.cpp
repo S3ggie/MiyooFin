@@ -26,7 +26,8 @@ constexpr std::size_t kMaxCovers = 80;
 constexpr int kMenuPlay = 1, kMenuShuffle = 2, kMenuPlayNext = 3, kMenuAppend = 4, kMenuGoAlbum = 5,
               kMenuGoArtist = 6, kMenuDownload = 7, kMenuRemove = 8, kMenuRetry = 9,
               kMenuDownloadPage = 10, kMenuPlayDownloaded = 11, kMenuShuffleDownloaded = 12,
-              kMenuAddToPlaylist = 13, kMenuRemoveFromPlaylist = 14, kMenuDeletePlaylist = 15;
+              kMenuAddToPlaylist = 13, kMenuRemoveFromPlaylist = 14, kMenuDeletePlaylist = 15,
+              kMenuSync = 16;
 constexpr const char* kDownloadPrefix = "dl:";
 constexpr const char* kNewPlaylistId = "__newplaylist__";
 
@@ -516,6 +517,10 @@ void MusicScreen::update(Uint32 dt)
         m_playerView = m_player->view();
     m_battery.update(dt);
 
+    if (!m_syncStarted) { // once per visit: playlists marked "keep in sync" catch up
+        m_syncStarted = true;
+        syncDownloadedPlaylists();
+    }
     for (const music::ListResult& r : m_library->takeLists()) {
         auto pending = m_pending.find(r.ticket);
         if (pending != m_pending.end()) {
@@ -722,6 +727,21 @@ void MusicScreen::syncNewPlaylistRow(MusicPane& pane)
     pane.rows.insert(pane.rows.begin(), row);
     pane.frame.selected = hadRows ? pane.frame.selected + 1 : 0;
     clampPane(pane);
+}
+
+void MusicScreen::syncDownloadedPlaylists()
+{
+    if (!m_downloads || m_session.manualOfflineMode)
+        return;
+    for (const music::DownloadStatus& s : m_downloads->snapshot()) {
+        if (!s.collection.sync || s.collection.kind != "playlist")
+            continue;
+        music::ListingRequest r;
+        r.kind = music::Listing::PlaylistTracks;
+        r.parentId = s.collection.id;
+        r.limit = 500;
+        m_pending[m_library->requestList(r)] = Pending{PendingKind::SyncDownload, 0, s.collection};
+    }
 }
 
 void MusicScreen::startPlaylistPicker(std::vector<music::Track> tracks)
@@ -1220,6 +1240,9 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         openPickerFor(r.playlists.items);
         return;
     }
+    const bool syncing = pending.kind == PendingKind::SyncDownload;
+    if (syncing && r.fromCache)
+        return; // only the server's list says what the playlist holds now
     // Later pages of a long list (the server answers one page at a time) only count from the
     // network; the first page may come from the cache when that holds the whole list.
     if (r.request.start > 0 && r.fromCache)
@@ -1240,6 +1263,11 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
     }
     // A cached answer is trimmed to its first rows: act on it only when it is complete.
     const bool complete = !r.fromCache || static_cast<int>(all.size()) >= r.tracks.total;
+    if (syncing && (all.empty() || !complete)) {
+        if (r.final)
+            m_pending.erase(r.ticket); // offline or empty: the copy stays as it is
+        return;
+    }
     if (all.empty() || !complete) {
         if (r.final) {
             m_pending.erase(r.ticket);
@@ -1249,11 +1277,17 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         return;
     }
     m_pending.erase(r.ticket); // a cached answer is good enough to act on
+    if (syncing) {
+        if (m_downloads)
+            m_downloads->enqueue(pending.collection, all);
+        return;
+    }
     if (!m_player && pending.kind != PendingKind::Download &&
         pending.kind != PendingKind::AddToPlaylist)
         return;
     switch (pending.kind) {
     case PendingKind::PickPlaylist:
+    case PendingKind::SyncDownload:
         break;
     case PendingKind::AddToPlaylist:
         startPlaylistPicker(all);
@@ -1374,6 +1408,10 @@ void MusicScreen::openMenu(const MusicRow& row)
                 row.playlist.trackCount >
                     static_cast<int>(m_downloads->tracksOf(row.playlist.id).size()))
                 m_menu.items.push_back({"Download the rest", kMenuDownload});
+            if (isDownloaded(row) && row.kind == MusicRow::Kind::Playlist)
+                m_menu.items.push_back(
+                    {m_downloads->syncOf(row.playlist.id) ? "Stop keeping in sync" : "Keep in sync",
+                     kMenuSync});
             m_menu.items.push_back(isDownloaded(row) ? MenuItem{"Remove download", kMenuRemove}
                                                      : MenuItem{"Download", kMenuDownload});
         }
@@ -1458,6 +1496,17 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
             if (r.kind == MusicRow::Kind::Track)
                 tracks.push_back(r.track);
         downloadTracks(collectionForPane(pane), tracks);
+        break;
+    }
+    case kMenuSync: {
+        if (!m_downloads)
+            break;
+        const bool on = !m_downloads->syncOf(row.id);
+        m_downloads->setSync(row.id, on);
+        m_toast = on ? "Keeping " + row.title + " in sync" : "No longer syncing " + row.title;
+        m_toastUntil = m_clock + 2500;
+        if (on)
+            syncDownloadedPlaylists();
         break;
     }
     case kMenuRemove: {

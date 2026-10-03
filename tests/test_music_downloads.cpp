@@ -156,6 +156,31 @@ void testCollectionShrinks()
     std::printf("[test] music downloads: a collection that shrinks drops its files OK\n");
 }
 
+void testSyncFlag()
+{
+    std::printf("[test] music downloads: keep-in-sync survives asking again and a restart\n");
+    Rig rig;
+    DownloadCollection pl = collection("pl1");
+    pl.kind = "playlist";
+    rig.dl->enqueue(pl, tracks({"a", "b"}));
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("b"); }));
+    CHECK(!rig.dl->syncOf("pl1"));
+    rig.dl->setSync("pl1", true);
+    // A sync refresh passes the collection as it was first downloaded (flag off): still on.
+    rig.dl->enqueue(pl, tracks({"a", "b", "c"}));
+    CHECK(rig.until([&] { return rig.dl->idle() && rig.dl->hasTrack("c"); }));
+    CHECK(rig.dl->syncOf("pl1"));
+    rig.dl.reset();
+    rig.start();
+    CHECK(rig.dl->syncOf("pl1") && rig.dl->tracksOf("pl1").size() == 3);
+    // A song dropped from the playlist stays while an album still holds it.
+    rig.dl->enqueue(collection("al1"), tracks({"c"}));
+    rig.dl->enqueue(pl, tracks({"a", "b"}));
+    CHECK(rig.until([&] { return rig.dl->idle(); }));
+    CHECK(rig.dl->hasTrack("c") && rig.dl->tracksOf("pl1").size() == 2);
+    std::printf("[test] music downloads: keep-in-sync survives asking again and a restart OK\n");
+}
+
 void testPersistence()
 {
     std::printf("[test] music downloads: survives a restart\n");
@@ -234,6 +259,7 @@ int main()
     testDownloadsAlbum();
     testSharedTracksAndRemoval();
     testCollectionShrinks();
+    testSyncFlag();
     testPersistence();
     testRetryAndFailure();
     testOfflineAndSpace();

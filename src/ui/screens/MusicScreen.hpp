@@ -147,6 +147,7 @@ class MusicScreen : public Screen
     };
     enum class PendingKind
     {
+        SyncDownload,
         PlayAll,
         ShuffleAll,
         PlayNext,
@@ -194,6 +195,8 @@ class MusicScreen : public Screen
     void syncResumeRow(MusicPane& pane);
     void syncNewPlaylistRow(MusicPane& pane);
     // playlists
+    void syncDownloadedPlaylists(); // refresh the copies marked "keep in sync"
+    bool m_syncStarted = false;
     void startPlaylistPicker(std::vector<music::Track> tracks);
     void openPickerFor(const std::vector<music::Playlist>& playlists);
     void chosePlaylist(int index);

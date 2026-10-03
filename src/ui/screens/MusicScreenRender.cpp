@@ -235,6 +235,10 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
                      selected ? d::kTextSecondary : d::kTextMuted);
             rightEdge -= rw + 12;
         }
+        if (row.kind == MusicRow::Kind::Track && isFavorite(row.track)) {
+            ui::iconHeart(fb, rightEdge - 18, y + 14, 9, d::kAccentHi);
+            rightEdge -= 26;
+        }
         if (isDownloaded(row) && row.kind != MusicRow::Kind::Action) {
             ui::iconDownload(fb, rightEdge - 12, y + 13, 12, d::kAccentHi);
             rightEdge -= 20;
@@ -538,7 +542,9 @@ void MusicScreen::renderNowPlaying(SDL_Surface* fb)
             y += lineStep;
         }
         if (!v.track.artist.empty()) {
-            ui::textClamped(fb, x, y + 2, w, v.track.artist, d::kTextSecondary);
+            ui::textClamped(fb, x, y + 2, w - 24, v.track.artist, d::kTextSecondary);
+            if (isFavorite(v.track))
+                ui::iconHeart(fb, x + w - 18, y + 4, 9, d::kAccentHi);
             y += 22;
         }
         if (!v.track.album.empty())
@@ -644,7 +650,7 @@ void MusicScreen::renderFooter(SDL_Surface* fb, bool miniShown)
             footer.hints = {{ui::Key::A, "Pause"}, {ui::Key::Dpad, "Scroll"}, {ui::Key::B, "Back"}};
         else
             footer.hints = {{ui::Key::A, "Pause"},
-                            {ui::Key::Dpad, "Seek, Up: lyrics"},
+                            {ui::Key::Dpad, "Seek / Lyrics / Menu"},
                             {ui::Key::L2, "Skip"},
                             {ui::Key::X, "Shuffle"},
                             {ui::Key::Y, "Repeat"}};

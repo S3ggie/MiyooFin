@@ -372,6 +372,18 @@ void iconDownload(SDL_Surface* fb, int x, int y, int size, Rgb c)
     fill(fb, x, y + size - std::max(2, size / 6), size, std::max(2, size / 6), c);
 }
 
+void iconHeart(SDL_Surface* fb, int x, int y, int size, Rgb c)
+{
+    // Two lobes and a point, built from rows of a 9-wide pattern scaled to `size`.
+    static const char* const kRows[] = {".##...##.", "####.####", "#########", "#########",
+                                        ".#######.", "..#####..", "...###...", "....#...."};
+    const int unit = std::max(1, size / 9);
+    for (int row = 0; row < 8; ++row)
+        for (int col = 0; col < 9; ++col)
+            if (kRows[row][col] == '#')
+                fill(fb, x + col * unit, y + row * unit, unit, unit, c);
+}
+
 void iconCheck(SDL_Surface* fb, int x, int y, int size, Rgb c)
 {
     const int third = std::max(2, size / 3);

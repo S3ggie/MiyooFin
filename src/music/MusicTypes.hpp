@@ -53,6 +53,9 @@ struct LyricLine
     std::string text;
 };
 
+/// The pseudo-playlist of hearted songs (a server-side filter, not a real playlist).
+inline constexpr const char* kFavoritesId = "__favorites__";
+
 struct Playlist
 {
     std::string id, title, imageTag;

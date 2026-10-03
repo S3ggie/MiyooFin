@@ -156,6 +156,11 @@ std::string buildListingUrl(const std::string& baseUrl, const std::string& userI
                "&Fields=AlbumArtists" +
                kImageFields + pageParams(r);
     case Listing::PlaylistTracks:
+        if (r.parentId == kFavoritesId)
+            return items +
+                   "&IncludeItemTypes=Audio&Filters=IsFavorite&SortBy=SortName&SortOrder=Ascending"
+                   "&Fields=AlbumArtists" +
+                   kImageFields + pageParams(r);
         return baseUrl + "/Playlists/" + percentEncode(r.parentId) + "/Items?" + user +
                "&Fields=AlbumArtists" + kImageFields + pageParams(r);
     }
@@ -381,6 +386,15 @@ bool deletePlaylist(const Connection& c, const std::string& playlistId, std::str
     std::string body;
     return simpleRequest(c, "DELETE", c.baseUrl + "/Items/" + percentEncode(playlistId), "", body,
                          error);
+}
+
+bool setFavorite(const Connection& c, const std::string& trackId, bool on, std::string& error)
+{
+    std::string body;
+    return simpleRequest(c, on ? "POST" : "DELETE",
+                         c.baseUrl + "/Users/" + percentEncode(c.userId) + "/FavoriteItems/" +
+                             percentEncode(trackId),
+                         "", body, error);
 }
 
 bool fetchLyrics(const Connection& c, const std::string& trackId, std::string& packed,

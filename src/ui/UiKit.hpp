@@ -88,6 +88,8 @@ void inputField(SDL_Surface* fb, int x, int y, int w, int h, const std::string& 
 void iconBattery(SDL_Surface* fb, int x, int y, int percent, bool charging);
 void iconPlay(SDL_Surface* fb, int x, int y, int size, Rgb c);
 void iconDownload(SDL_Surface* fb, int x, int y, int size, Rgb c);
+// A small filled heart (favorites); `size` is its width.
+void iconHeart(SDL_Surface* fb, int x, int y, int size, Rgb c);
 void iconCheck(SDL_Surface* fb, int x, int y, int size, Rgb c);
 void iconChevron(SDL_Surface* fb, int x, int y, int size, bool pointRight, Rgb c);
 void statusDot(SDL_Surface* fb, int x, int y, int size, Rgb c);

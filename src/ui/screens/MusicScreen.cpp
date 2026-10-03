@@ -28,7 +28,7 @@ constexpr int kMenuPlay = 1, kMenuShuffle = 2, kMenuPlayNext = 3, kMenuAppend = 
               kMenuGoArtist = 6, kMenuDownload = 7, kMenuRemove = 8, kMenuRetry = 9,
               kMenuDownloadPage = 10, kMenuPlayDownloaded = 11, kMenuShuffleDownloaded = 12,
               kMenuAddToPlaylist = 13, kMenuRemoveFromPlaylist = 14, kMenuDeletePlaylist = 15,
-              kMenuSync = 16;
+              kMenuSync = 16, kMenuFavorite = 17;
 constexpr const char* kDownloadPrefix = "dl:";
 constexpr const char* kNewPlaylistId = "__newplaylist__";
 
@@ -769,6 +769,21 @@ void MusicScreen::downloadTracks(const music::DownloadCollection& collection,
 void MusicScreen::syncNewPlaylistRow(MusicPane& pane)
 {
     const bool have = !pane.rows.empty() && pane.rows.front().id == kNewPlaylistId;
+    // "Favorite songs" is always the second row, right after "+ New playlist".
+    const bool haveFavorites = pane.rows.size() > 1 && pane.rows[1].id == music::kFavoritesId;
+    if (have && !haveFavorites) {
+        MusicRow fav;
+        fav.kind = MusicRow::Kind::Playlist;
+        fav.id = music::kFavoritesId;
+        fav.title = "Favorite songs";
+        fav.subtitle = "Songs you have hearted";
+        fav.playlist.id = music::kFavoritesId;
+        fav.playlist.title = fav.title;
+        pane.rows.insert(pane.rows.begin() + 1, fav);
+        if (pane.frame.selected >= 1)
+            ++pane.frame.selected;
+        clampPane(pane);
+    }
     if (have)
         return;
     MusicRow row;
@@ -916,6 +931,24 @@ void MusicScreen::refreshPlaylists()
     }
 }
 
+bool MusicScreen::isFavorite(const music::Track& track) const
+{
+    const auto it = m_favOverride.find(track.id);
+    return it != m_favOverride.end() ? it->second : track.favorite;
+}
+
+void MusicScreen::toggleFavorite(const music::Track& track)
+{
+    const bool on = !isFavorite(track);
+    const std::string id = track.id;
+    m_library->runJob("fav|" + id + "|" + (on ? "1" : "0"),
+                      [id, on](const music::Connection& c, std::string&, std::string& error) {
+                          return music::setFavorite(c, id, on, error);
+                      });
+    m_toast = on ? "Adding to favorites..." : "Removing from favorites...";
+    m_toastUntil = m_clock + 1500;
+}
+
 void MusicScreen::requestLyrics()
 {
     const std::string id = m_playerView.track.id;
@@ -934,6 +967,29 @@ void MusicScreen::requestLyrics()
 void MusicScreen::applyJobResults()
 {
     for (const music::JobResult& r : m_library->takeJobs()) {
+        if (r.label.compare(0, 4, "fav|") == 0) {
+            const std::size_t bar = r.label.find('|', 4);
+            const std::string id = r.label.substr(4, bar - 4);
+            const bool on = r.label.compare(bar + 1, 1, "1") == 0;
+            if (r.ok) {
+                m_favOverride[id] = on;
+                music::ListingRequest favorites;
+                favorites.kind = music::Listing::PlaylistTracks;
+                favorites.parentId = music::kFavoritesId;
+                m_library->eraseListCache(favorites);
+                MusicPane& pane = activePane();
+                if (pane.frame.kind == MusicPaneKind::PlaylistTracks &&
+                    pane.frame.id == music::kFavoritesId) {
+                    pane.requested = false; // show the changed list
+                    pane.ticket = 0;
+                }
+                m_toast = on ? "Added to favorites" : "Removed from favorites";
+            } else {
+                m_toast = "Couldn't change the favorite: " + r.error;
+            }
+            m_toastUntil = m_clock + 2500;
+            continue;
+        }
         if (r.label.compare(0, 7, "lyrics|") == 0) {
             if (r.label.substr(7, r.label.find('|', 7) - 7) == m_lyricsFor) {
                 m_lyricsLoading = false;
@@ -1492,12 +1548,15 @@ void MusicScreen::openMenu(const MusicRow& row)
         row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0;
     switch (row.kind) {
     case MusicRow::Kind::Track:
-        m_menu.items = {{"Play next", kMenuPlayNext},
-                        {"Add to queue", kMenuAppend},
-                        {"Add to playlist...", kMenuAddToPlaylist}};
-        if (pane.frame.kind == MusicPaneKind::PlaylistTracks && !row.track.entryId.empty())
+        m_menu.items = {
+            {"Play next", kMenuPlayNext},
+            {"Add to queue", kMenuAppend},
+            {"Add to playlist...", kMenuAddToPlaylist},
+            {isFavorite(row.track) ? "Remove from favorites" : "Add to favorites", kMenuFavorite}};
+        if (m_view == View::Browse && pane.frame.kind == MusicPaneKind::PlaylistTracks &&
+            !row.track.entryId.empty())
             m_menu.items.push_back({"Remove from this playlist", kMenuRemoveFromPlaylist});
-        if (inCollection)
+        if (inCollection && m_view == View::Browse)
             m_menu.items.push_back({pane.frame.kind == MusicPaneKind::PlaylistTracks
                                         ? "Download playlist"
                                         : "Download album",
@@ -1516,7 +1575,7 @@ void MusicScreen::openMenu(const MusicRow& row)
                         {"Play next", kMenuPlayNext},
                         {"Add to queue", kMenuAppend},
                         {"Add to playlist...", kMenuAddToPlaylist}};
-        if (row.kind == MusicRow::Kind::Playlist)
+        if (row.kind == MusicRow::Kind::Playlist && row.id != music::kFavoritesId)
             m_menu.items.push_back({"Delete playlist", kMenuDeletePlaylist});
         if (m_downloads) {
             // A copy made when lists were cut at 500 songs (or a playlist that has grown) is
@@ -1668,10 +1727,15 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
     case kMenuRemoveFromPlaylist:
         removeFromPlaylist(row.track);
         break;
+    case kMenuFavorite:
+        toggleFavorite(row.track);
+        break;
     case kMenuDeletePlaylist:
         deletePlaylistById(row.id, row.title);
         break;
     case kMenuGoAlbum: {
+        m_view = View::Browse; // from Now Playing: leave it for the album's page
+        m_lyricsView = false;
         MusicFrame f;
         f.kind = MusicPaneKind::AlbumTracks;
         f.id = row.track.albumId;
@@ -1683,6 +1747,8 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
         break;
     }
     case kMenuGoArtist: {
+        m_view = View::Browse;
+        m_lyricsView = false;
         MusicFrame f;
         f.kind = MusicPaneKind::ArtistAlbums;
         f.id = row.track.artistId;
@@ -1769,6 +1835,8 @@ bool MusicScreen::handleNowPlaying(Action action)
         } else if (m_lyricsView) {
             m_lyricsScroll =
                 std::min(std::max(0, static_cast<int>(m_lyrics.size()) - 1), m_lyricsScroll + 1);
+        } else {
+            openMenu(trackRow(m_playerView.track, false)); // the playing song's options
         }
         return true;
     case Action::Left:

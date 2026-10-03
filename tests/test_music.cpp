@@ -462,6 +462,19 @@ void testQueuePersistence()
     std::printf("[test] saved queue OK\n");
 }
 
+void testFavoritesUrl()
+{
+    ListingRequest r;
+    r.kind = Listing::PlaylistTracks;
+    r.parentId = kFavoritesId;
+    const std::string url = buildListingUrl("http://s", "u1", r);
+    CHECK(url.find("Filters=IsFavorite") != std::string::npos);
+    CHECK(url.find("/Playlists/") == std::string::npos);
+    r.parentId = "real-playlist";
+    CHECK(buildListingUrl("http://s", "u1", r).find("/Playlists/real-playlist/Items") !=
+          std::string::npos);
+}
+
 void testLyrics()
 {
     const auto synced = parseLyrics("{\"Lyrics\":[{\"Text\":\"Hello\",\"Start\":125000000},{"
@@ -620,6 +633,7 @@ int main()
 {
     testSettingsAlbumGrid();
     testLyrics();
+    testFavoritesUrl();
     testParsing();
     testUrls();
     testCache();

@@ -113,6 +113,8 @@ bool deletePlaylist(const Connection& c, const std::string& playlistId, std::str
 
 /// Marks a track as played at `isoTime` (offline plays synced later). `gone` is set when the
 /// server no longer has the item, so the caller can drop the entry for good.
+/// Hearts or un-hearts a song for the signed-in user.
+bool setFavorite(const Connection& c, const std::string& trackId, bool on, std::string& error);
 /// Lyrics of a song as packed text (see packLyrics); empty when it has none (not an error).
 bool fetchLyrics(const Connection& c, const std::string& trackId, std::string& packed,
                  std::string& error);

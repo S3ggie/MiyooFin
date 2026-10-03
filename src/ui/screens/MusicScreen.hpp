@@ -303,6 +303,10 @@ class MusicScreen : public Screen
     bool m_lyricsLoading = false;
     std::vector<music::LyricLine> m_lyrics;
     int m_lyricsScroll = 0; // first line shown when the lyrics are not synced
+    std::map<std::string, bool>
+        m_favOverride; // hearts changed this session, before the lists reload
+    bool isFavorite(const music::Track& track) const;
+    void toggleFavorite(const music::Track& track);
     void requestLyrics();
     void renderLyrics(SDL_Surface* fb);
     bool m_queueView = false; // Now Playing shows the queue instead of the art

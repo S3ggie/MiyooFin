@@ -242,8 +242,11 @@ void SeriesScreen::render(SDL_Surface* fb)
         footer.message = m_toast;
         footer.messageColor = d::kAccentHi;
     }
-    footer.hints = {{ui::Key::Dpad, "Move"}, {ui::Key::A, "Open"},   {ui::Key::B, "Back"},
-                    {ui::Key::Y, "Season"},  {ui::Key::X, "Series"}, {ui::Key::Select, "Watched"}};
+    footer.hints = {{ui::Key::A, "Open"},
+                    {ui::Key::B, "Back"},
+                    {ui::Key::Y, "Get season"},
+                    {ui::Key::X, "Get series"},
+                    {ui::Key::Select, "Watched"}};
     if (overviewScrollable)
         footer.hints.push_back({ui::Key::LR, "Bio"});
     ui::footer(fb, footer);

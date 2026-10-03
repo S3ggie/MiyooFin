@@ -205,6 +205,11 @@ bool LoginScreen::handleAction(Action action)
         return false;
     }
 
+    if (action == Action::Menu) { // SELECT: sign in from another Jellyfin client
+        startQuickConnect();
+        return true;
+    }
+
     // --- Field-select mode ---
     if (m_inFields) {
         switch (action) {
@@ -361,13 +366,14 @@ void LoginScreen::drawHints(SDL_Surface* fb)
     footer.showLink = false;
     using ui::Key;
     if (m_inFields)
-        footer.hints = {
-            {Key::Dpad, "Switch field / keys"}, {Key::X, "Quick Connect"}, {Key::Start, "Sign in"}};
+        footer.hints = {{Key::Dpad, "Switch field / keys"},
+                        {Key::Select, "Quick Connect"},
+                        {Key::Start, "Sign in"}};
     else
         footer.hints = {{Key::A, "Type"},
                         {Key::B, "Delete"},
                         {Key::X, "Clear"},
-                        {Key::L2, "Caps"},
+                        {Key::Select, "Quick Connect"},
                         {Key::Start, "Sign in"}};
     ui::footer(fb, footer);
 }

@@ -7,7 +7,7 @@ The app reopens in the mode you last used.
 ## Signing in
 
 1. Type your Jellyfin address (for example `http://192.168.1.10:8096`) and press START.
-2. Sign in with a username and password, or press **X** for **Quick Connect**: the Miyoo shows a
+2. Sign in with a username and password, or press **SELECT** for **Quick Connect**: the Miyoo shows a
    code; on a phone or computer already signed in to Jellyfin open Settings → Quick Connect and
    enter it.
 
@@ -32,6 +32,9 @@ them).
 
 ## Music
 
+Music Home shows your *Continue listening* card and rails of recently added albums and recently
+played songs: Left/Right move along a rail, Up/Down change rail.
+
 | Context | Buttons |
 |---|---|
 | Lists | D-pad move, A open / play, B back, Y options, X play/pause, START now playing, SELECT queue, L2/R2 switch Library section |
@@ -45,6 +48,13 @@ and a cover grid.
 
 **Screen-off listening:** press START and SELECT together while music is loaded. The screen goes
 dark and every button is ignored; press them together again to wake it.
+
+## Clock
+
+The header clock follows your time zone. *Settings → Time zone* is **Automatic** by default: the app
+asks a public IP lookup service (ip-api.com, zone name only) once per start while online and
+remembers the answer; you can also pick a zone by hand, or use the device's own setting.
+*Settings → Clock format* switches between 24-hour (`21:05`) and 12-hour (`9:05p`).
 
 ## Updates and problems
 

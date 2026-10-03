@@ -168,6 +168,8 @@ void LoginScreen::finishLogin()
 
     if (m_loginSuccess) {
         m_success = true;
+        m_finished =
+            true; // hand over now; no extra button press (Quick Connect has no key to press)
         m_result = m_loginResult;
         printf("[LoginScreen] Sign-in successful for user '%s'\n", m_result.userName.c_str());
         return;

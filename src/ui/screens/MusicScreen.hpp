@@ -170,6 +170,7 @@ class MusicScreen : public Screen
         int startIndex = 0;
         music::DownloadCollection collection; // for Download
         std::vector<music::Track> loaded;     // pages of a long list fetched so far
+        int expected = 0;                     // the whole list's size, once the first page said
     };
     struct MenuItem
     {

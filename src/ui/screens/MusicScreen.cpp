@@ -1426,6 +1426,7 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
     all.insert(all.end(), r.tracks.items.begin(), r.tracks.items.end());
     if (!r.fromCache && !r.tracks.items.empty() && static_cast<int>(all.size()) < r.tracks.total) {
         Pending next = pending;
+        next.expected = r.tracks.total;
         next.loaded = std::move(all);
         music::ListingRequest more = r.request;
         more.start = static_cast<int>(next.loaded.size());
@@ -1436,8 +1437,10 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         m_pending[m_library->requestList(more)] = std::move(next);
         return;
     }
-    // A cached answer is trimmed to its first rows: act on it only when it is complete.
-    const bool complete = !r.fromCache || static_cast<int>(all.size()) >= r.tracks.total;
+    // Act only on the whole list: a cached answer is trimmed to its first rows, and a page that
+    // failed halfway leaves a partial list (syncing a partial list would delete downloads).
+    const int expected = std::max(pending.expected, r.tracks.total);
+    const bool complete = !(r.final && !r.ok) && static_cast<int>(all.size()) >= expected;
     if (syncing && (all.empty() || !complete)) {
         if (r.final)
             m_pending.erase(r.ticket); // offline or empty: the copy stays as it is

@@ -57,8 +57,10 @@ struct MusicPaths
         {
             const char* from;
             const std::string* to;
-        } moves[] = {{"music-cache", &cache},      {"music-downloads", &downloads},
-                     {"music-queue.txt", &queue},  {"music-plays.journal", &journal},
+        } moves[] = {{"music-cache", &cache},
+                     {"music-downloads", &downloads},
+                     {"music-queue.txt", &queue},
+                     {"music-plays.journal", &journal},
                      {"music-ui-state.txt", &uiState}};
         for (const auto& m : moves)
             if (::stat(m.from, &st) == 0)

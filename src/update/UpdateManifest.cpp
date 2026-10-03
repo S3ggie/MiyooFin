@@ -1,4 +1,5 @@
 #include "UpdateManifest.hpp"
+#include "UpdateVersion.hpp"
 #include <cctype>
 #include <algorithm>
 
@@ -260,6 +261,30 @@ static bool normalizeSha256(const std::string& in, std::string& out)
 }
 
 // -------------------------------------------------------------------
+bool isTrustedAssetUrl(const std::string& url)
+{
+    // https://<authority><path...> where the authority is exactly a trusted host: no user-info,
+    // and no port other than 443. (A substring test would accept
+    // https://evil.example/github.com/x.)
+    static const char kScheme[] = "https://";
+    if (url.compare(0, sizeof(kScheme) - 1, kScheme) != 0)
+        return false;
+    const std::size_t start = sizeof(kScheme) - 1;
+    const std::size_t end = url.find_first_of("/?#", start);
+    std::string authority = url.substr(start, end == std::string::npos ? end : end - start);
+    if (authority.empty() || authority.find('@') != std::string::npos)
+        return false;
+    const std::size_t colon = authority.find(':');
+    if (colon != std::string::npos) {
+        if (authority.substr(colon + 1) != "443")
+            return false;
+        authority.resize(colon);
+    }
+    for (char& c : authority)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return authority == "github.com" || authority == "objects.githubusercontent.com";
+}
+
 bool parseUpdateManifest(const std::string& json, UpdateManifest& out, bool allowNonHttpsAssets)
 {
     out = UpdateManifest{};
@@ -271,8 +296,8 @@ bool parseUpdateManifest(const std::string& json, UpdateManifest& out, bool allo
     out.minVersion = topString(json, "min_version");
     out.notes = topString(json, "notes");
 
-    // Required: version must be non-empty
-    if (out.version.empty())
+    // Required: a valid, path-safe version (it names download and backup files).
+    if (!isSafeVersionString(out.version))
         return false;
 
     // --- assets.tar_gz (required) ---
@@ -304,19 +329,8 @@ bool parseUpdateManifest(const std::string& json, UpdateManifest& out, bool allo
     if (!allowNonHttpsAssets) {
         if (tarUrl.compare(0, 8, "https://") != 0)
             return false;
-        {
-            // Must be hosted on github.com or objects.githubusercontent.com
-            bool okHost = false;
-            static const char* trusted[] = {"github.com/", "objects.githubusercontent.com/"};
-            for (auto* h : trusted) {
-                if (tarUrl.find(h) != std::string::npos) {
-                    okHost = true;
-                    break;
-                }
-            }
-            if (!okHost)
-                return false;
-        }
+        if (!isTrustedAssetUrl(tarUrl))
+            return false;
     }
 
     std::string shaNorm;

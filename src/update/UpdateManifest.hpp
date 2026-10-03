@@ -26,6 +26,9 @@ struct UpdateManifest
     UpdateAsset zip;
 };
 
+/// True for an https URL whose host is exactly github.com or objects.githubusercontent.com.
+bool isTrustedAssetUrl(const std::string& url);
+
 /// Parse the OTA manifest JSON.
 ///
 /// Required fields: `version`, `assets.tar_gz.url`, `assets.tar_gz.sha256`,

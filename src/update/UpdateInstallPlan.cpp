@@ -29,6 +29,8 @@ static bool hasUnsafeComponent(const std::string& rel)
         size_t len = end - start;
         if (len == 0)
             return true; // empty component (double slash)
+        if (len == 1 && rel[start] == '.')
+            return true; // "." component: MiyooFin/./session.txt must not dodge the checks
         if (len == 2 && rel[start] == '.' && rel[start + 1] == '.')
             return true; // ".." component
         start = end + 1;
@@ -41,12 +43,24 @@ static bool hasUnsafeComponent(const std::string& rel)
 ///            *.log, *.bmp, *.bak, update-*
 static bool isBlacklisted(const std::string& rel)
 {
-    // Exact matches
-    if (rel == "session.txt")
-        return true;
+    // Exact matches: the files the app writes about the user and the device. (A release never
+    // ships any of them; an archive that does is refused outright.)
+    static const char* exact[] = {
+        "session.txt",         "routes-memory.txt",    "app-mode.txt",
+        "device.txt",          "download-prefs.txt",   "player-prefs.txt",
+        "clock-settings.txt",  "screen-lock.txt",      "music-settings.txt",
+        "music-queue.txt",     "music-ui-state.txt",   "music-plays.journal",
+        "watched-pending.txt", "playback-request.txt", "cache",
+        "downloads",           "telemetry-logs",       "music",
+        "music-cache",         "music-downloads"};
+    for (auto* e : exact) {
+        if (rel == e)
+            return true;
+    }
 
     // Prefix matches (directory blacklists)
-    static const char* prefixes[] = {"cache/", "downloads/", "telemetry-logs/"};
+    static const char* prefixes[] = {"cache/", "downloads/",   "telemetry-logs/",
+                                     "music/", "music-cache/", "music-downloads/"};
     for (auto* p : prefixes) {
         if (rel.compare(0, std::strlen(p), p) == 0)
             return true;

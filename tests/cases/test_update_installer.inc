@@ -5,6 +5,8 @@
 #include "../../src/net/HttpClient.hpp"
 #include "../../src/update/UpdateInstaller.hpp"
 #include "../../src/update/UpdateInstallPlan.hpp"
+#include "../../src/update/UpdateManifest.hpp"
+#include "../../src/update/UpdateVersion.hpp"
 #include "../../src/update/AppDir.hpp"
 #include <atomic>
 #include <chrono>
@@ -940,72 +942,185 @@ static void testDownloadToFileStaleResumeReset()
     std::printf("[test] downloadToFile stale resumeFrom reset OK\n");
 }
 
-/// Verify that a forced mid-install failure triggers rollback that
-/// restores every already-installed file from update-backup byte-identical.
+/// Runs `installUpdate` with a progress recorder; returns the highest percentage reached.
+static int installRecordingProgress(const std::string &appDir, const std::string &tar,
+                                    const std::string &version, std::string &error, bool &ok)
+{
+    int maxPct = 0;
+    ok = installUpdate(appDir, tar, version, error, nullptr,
+                       [&](int pct) { maxPct = std::max(maxPct, pct); });
+    return maxPct;
+}
+
+/// A late failure (the main binary cannot be installed) must undo what was already installed:
+/// replaced files come back byte-identical and files the update created are removed. The
+/// archive is valid, so the failure really happens during replacement, after earlier files
+/// were installed (the progress callback proves that), not at validation.
 static void testInstallUpdateRollbackOnFailure()
 {
     std::printf("[test] installUpdate rollback on mid-install failure\n");
 
-    // Set up a minimal appDir with existing files to be backed up
-    std::string appDir = "/tmp/miyoofin_test_rollback_" +
-                         std::to_string(std::time(nullptr));
+    std::string appDir = "/tmp/miyoofin_test_rollback_" + std::to_string(::getpid());
     testMkdirp(appDir + "/lib");
-
-    // Create existing files that should be backed up and restored
-    std::string origContentA = "ORIGINAL_CONTENT_ALPHA_12345";
-    std::string origContentB = "ORIGINAL_CONTENT_BETA_67890";
+    createElfStub(appDir + "/miyoofin");
+    const std::string origBinary = readTestBytes(appDir + "/miyoofin");
+    const std::string origLib = "ORIGINAL_LIB_CONTENT_12345";
     {
-        std::ofstream ofs(appDir + "/lib/test_a.so", std::ios::binary);
-        ofs << origContentA;
+        std::ofstream ofs(appDir + "/lib/libold.so");
+        ofs << origLib;
+    }
+    // The update's last step (replacing miyoofin) is made to fail: its temporary name is taken
+    // by a directory.
+    testMkdirp(appDir + "/miyoofin.tmp");
+
+    std::string staging = appDir + "-archive";
+    testMkdirp(staging + "/MiyooFin/lib");
+    createElfStub(staging + "/MiyooFin/miyoofin");
+    {
+        std::ofstream ofs(staging + "/MiyooFin/lib/libold.so");
+        ofs << "NEW_LIB_CONTENT";
     }
     {
-        std::ofstream ofs(appDir + "/lib/test_b.so", std::ios::binary);
-        ofs << origContentB;
+        std::ofstream ofs(staging + "/MiyooFin/brand-new-file.txt");
+        ofs << "created by the update";
     }
-
-    // Build a tar archive with MiyooFin/lib/test_a.so and
-    // MiyooFin/lib/test_c.so (test_c will be the one that fails).
-    std::string tarPath = "/tmp/miyoofin_test_rollback.tar.gz";
-    {
-        // Create staging dir with two files
-        std::string staging = "/tmp/miyoofin_test_rollback_staging";
-        testMkdirp(staging + "/MiyooFin/lib");
-        {
-            std::ofstream ofs(staging + "/MiyooFin/lib/test_a.so",
-                              std::ios::binary);
-            ofs << "NEW_CONTENT_ALPHA";
-        }
-        {
-            std::ofstream ofs(staging + "/MiyooFin/lib/test_c.so",
-                              std::ios::binary);
-            ofs << "NEW_CONTENT_GAMMA";
-        }
-
-        std::string cmd = "tar -czf " + tarPath + " -C " + staging +
-                          " MiyooFin/";
-        CHECK(::system(cmd.c_str()) == 0);
-        testRmrf(staging);
-    }
-
-    // Make test_c.so's destination unwritable by pre-creating it as a
-    // directory — atomicInstallFile will fail on the rename.
-    testMkdirp(appDir + "/lib/test_c.so");
+    const std::string tarPath = appDir + "-update.tar.gz";
+    CHECK(::system(("tar -czf " + tarPath + " -C " + staging + " MiyooFin/").c_str()) == 0);
+    testRmrf(staging);
 
     std::string error;
-    bool ok = installUpdate(appDir, tarPath, "9.9.9", error);
+    bool ok = true;
+    const int reached = installRecordingProgress(appDir, tarPath, "9.9.9", error, ok);
 
-    // Install should fail because test_c.so can't be installed
     CHECK(!ok);
-
-    // Rollback must have restored original files byte-identical
-    CHECK(testPathExists(appDir + "/lib/test_a.so"));
-    CHECK(testPathExists(appDir + "/lib/test_b.so"));
-    CHECK(readTestBytes(appDir + "/lib/test_a.so") == origContentA);
-    CHECK(readTestBytes(appDir + "/lib/test_b.so") == origContentB);
+    CHECK(error.find("failed to install: miyoofin") != std::string::npos); // the intended point
+    CHECK(reached > 50);                                  // earlier files really were installed
+    CHECK(readTestBytes(appDir + "/lib/libold.so") == origLib); // replaced file restored
+    CHECK(!testPathExists(appDir + "/brand-new-file.txt"));      // created file removed
+    CHECK(readTestBytes(appDir + "/miyoofin") == origBinary);    // binary untouched
+    CHECK(error.find("rollback incomplete") == std::string::npos);
 
     testRmrf(appDir);
     ::unlink(tarPath.c_str());
     std::printf("[test] installUpdate rollback on mid-install failure OK\n");
+}
+
+/// MiyooFin/./session.txt must be refused exactly like MiyooFin/session.txt, whatever the
+/// spelling, both by the entry check and by a full install (which must leave the file alone).
+static void testInstallUpdateDotComponentsCannotReachUserState()
+{
+    std::printf("[test] installUpdate refuses dot-component paths to user state\n");
+    std::string norm;
+    CHECK(!isSafeTarEntry("MiyooFin/./session.txt", norm));
+    CHECK(!isSafeTarEntry("MiyooFin/./downloads/foo.bin", norm));
+    CHECK(!isSafeTarEntry("MiyooFin/lib/./libx.so", norm));
+    CHECK(!isSafeTarEntry("MiyooFin/downloads/./x", norm));
+    CHECK(isSafeTarEntry("MiyooFin/lib/libx.so", norm) && norm == "lib/libx.so");
+    // The files the app keeps about the user and device are protected in every spelling.
+    std::string err;
+    for (const char *path : {"MiyooFin/session.txt", "MiyooFin/music/abc/queue.txt",
+                             "MiyooFin/music-downloads/index.tsv", "MiyooFin/clock-settings.txt",
+                             "MiyooFin/routes-memory.txt", "MiyooFin/downloads", "MiyooFin/cache"}) {
+        CHECK(buildInstallPlan({path, "MiyooFin/miyoofin"}, err).empty());
+    }
+
+    // End to end: a hostile archive carrying "MiyooFin/./session.txt" must not overwrite it.
+    const std::string appDir = createFakeAppDir();
+    const std::string staging = appDir + "/hostile";
+    testMkdirp(staging + "/MiyooFin");
+    createElfStub(staging + "/MiyooFin/miyoofin");
+    {
+        std::ofstream ofs(staging + "/MiyooFin/session.txt");
+        ofs << "overwritten-token";
+    }
+    const std::string tarPath = appDir + "/hostile.tar.gz";
+    CHECK(::system(("tar -czf " + tarPath + " -C " + staging +
+                    " MiyooFin/miyoofin MiyooFin/./session.txt")
+                       .c_str()) == 0);
+    std::string error;
+    CHECK(!installUpdate(appDir, tarPath, "9.9.9", error));
+    CHECK(readTestBytes(appDir + "/session.txt") == "session data");
+    testRmrf(appDir);
+    std::printf("[test] installUpdate refuses dot-component paths to user state OK\n");
+}
+
+/// A FIFO in the archive used to make the install block forever. It must be refused quickly, by
+/// the listing check; a pre-existing FIFO in the app folder must not hang the backup either.
+static void testInstallUpdateRejectsSpecialFiles()
+{
+    std::printf("[test] installUpdate rejects FIFOs and other special files\n");
+    const std::string appDir = createFakeAppDir();
+    const std::string staging = appDir + "/fifo-archive";
+    testMkdirp(staging + "/MiyooFin");
+    createElfStub(staging + "/MiyooFin/miyoofin");
+    CHECK(::system(("mkfifo " + staging + "/MiyooFin/fifo").c_str()) == 0);
+    const std::string tarPath = appDir + "/fifo.tar.gz";
+    CHECK(::system(("tar -czf " + tarPath + " -C " + staging + " MiyooFin/miyoofin MiyooFin/fifo")
+                       .c_str()) == 0);
+
+    ::alarm(20); // a hang fails the whole test run instead of stalling it
+    std::string error;
+    const bool ok = installUpdate(appDir, tarPath, "9.9.9", error);
+    ::alarm(0);
+    CHECK(!ok);
+    CHECK(error.find("special file") != std::string::npos);
+    CHECK(!testPathExists(appDir + "/fifo"));
+    testRmrf(appDir);
+
+    // A FIFO where the update wants to back up an existing file.
+    const std::string appDir2 = createFakeAppDir();
+    CHECK(::system(("rm " + appDir2 + "/launch.sh && mkfifo " + appDir2 + "/launch.sh").c_str()) == 0);
+    const std::string tar2 = createFakeArchive(appDir2);
+    ::alarm(20);
+    std::string error2;
+    const bool ok2 = installUpdate(appDir2, tar2, "9.9.9", error2);
+    ::alarm(0);
+    CHECK(!ok2);
+    CHECK(error2.find("failed to backup") != std::string::npos);
+    testRmrf(appDir2);
+    std::printf("[test] installUpdate rejects FIFOs and other special files OK\n");
+}
+
+/// The manifest's version and asset host come from the network: both are checked structurally.
+static void testManifestHostAndVersionValidation()
+{
+    std::printf("[test] manifest host and version validation\n");
+    CHECK(isTrustedAssetUrl("https://github.com/S3ggie/MiyooFin/releases/download/v1/a.tar.gz"));
+    CHECK(isTrustedAssetUrl("https://objects.githubusercontent.com/x/y"));
+    CHECK(isTrustedAssetUrl("https://GitHub.com:443/x"));
+    CHECK(!isTrustedAssetUrl("https://evil.example/github.com/x"));
+    CHECK(!isTrustedAssetUrl("https://github.com.evil.example/x"));
+    CHECK(!isTrustedAssetUrl("https://github.com@evil.example/x"));
+    CHECK(!isTrustedAssetUrl("https://evil.example/?u=github.com/"));
+    CHECK(!isTrustedAssetUrl("https://github.com:8443/x"));
+    CHECK(!isTrustedAssetUrl("http://github.com/x"));
+    CHECK(!isTrustedAssetUrl("https://"));
+
+    SemVer v;
+    CHECK(parseSemVer("1.2.3+build.5", v));
+    CHECK(parseSemVer("1.2.3-beta.1+sha-abc", v));
+    CHECK(!parseSemVer("99.0.0+../../outside", v));
+    CHECK(!parseSemVer("99.0.0+a\"b", v));
+    CHECK(!parseSemVer("99.0.0+", v));
+    CHECK(!parseSemVer("99.0.0+a..b", v));
+    CHECK(!parseSemVer("99.0.0+a.", v));
+    CHECK(isSafeVersionString("0.3.1"));
+    CHECK(!isSafeVersionString("1.0.0+../x"));
+    CHECK(!isSafeVersionString("1.0.0+a/b"));
+
+    const std::string good =
+        "{\"version\":\"1.2.3\",\"assets\":{\"tar_gz\":{\"url\":"
+        "\"https://github.com/S3ggie/MiyooFin/releases/download/v1.2.3/a.tar.gz\","
+        "\"sha256\":\"" + std::string(64, 'a') + "\",\"size\":10}}}";
+    UpdateManifest m;
+    CHECK(parseUpdateManifest(good, m));
+    std::string evilHost = good;
+    evilHost.replace(evilHost.find("https://github.com/S3ggie"), 22, "https://evil.example/");
+    CHECK(!parseUpdateManifest(evilHost, m));
+    std::string evilVersion = good;
+    evilVersion.replace(evilVersion.find("1.2.3"), 5, "9.9.9+../../outside");
+    CHECK(!parseUpdateManifest(evilVersion, m));
+    std::printf("[test] manifest host and version validation OK\n");
 }
 
 // ===================================================================

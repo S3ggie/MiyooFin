@@ -31,13 +31,31 @@ bool parseSemVer(const std::string& in, SemVer& out)
     if (s.empty())
         return false;
 
-    // Split off build metadata (after '+')
+    // Split off build metadata (after '+') and validate it: dot-separated, non-empty identifiers
+    // of [0-9A-Za-z-] (SemVer 2.0.0 section 10). It is ignored for ordering but the raw text is
+    // later used in file names and JSON, so nothing else may get through.
     std::string buildMeta;
     {
         auto plus = s.find('+');
         if (plus != std::string::npos) {
             buildMeta = s.substr(plus + 1);
             s = s.substr(0, plus);
+            if (buildMeta.empty())
+                return false;
+            bool atStart = true;
+            for (char c : buildMeta) {
+                if (c == '.') {
+                    if (atStart)
+                        return false;
+                    atStart = true;
+                } else if (std::isalnum(static_cast<unsigned char>(c)) || c == '-') {
+                    atStart = false;
+                } else {
+                    return false;
+                }
+            }
+            if (atStart)
+                return false; // ends with a dot
         }
     }
 
@@ -127,6 +145,18 @@ bool parseSemVer(const std::string& in, SemVer& out)
     out.patch = nums[2];
     out.prerelease = pre;
     return true;
+}
+
+// -------------------------------------------------------------------
+bool isSafeVersionString(const std::string& version)
+{
+    SemVer parsed;
+    if (version.empty() || version.size() > 64 || !parseSemVer(version, parsed))
+        return false;
+    for (char c : version)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '.' && c != '-' && c != '+')
+            return false;
+    return version.find("..") == std::string::npos;
 }
 
 // -------------------------------------------------------------------

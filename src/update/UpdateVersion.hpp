@@ -19,6 +19,9 @@ struct SemVer
 /// `-prerelease` and ignored `+build` metadata.  Returns false on malformed
 /// input.
 bool parseSemVer(const std::string& in, SemVer& out);
+/// True when `version` is a valid SemVer made only of [0-9A-Za-z.+-], safe to use in a file name
+/// and inside JSON. Anything else from a manifest is rejected, not sanitised.
+bool isSafeVersionString(const std::string& version);
 
 /// Compare two parsed SemVer values.
 ///   - Numeric triple compared first.

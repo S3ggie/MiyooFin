@@ -72,6 +72,9 @@ int main()
 
     // installUpdate additional
     testInstallUpdateRollbackOnFailure();
+    testInstallUpdateDotComponentsCannotReachUserState();
+    testInstallUpdateRejectsSpecialFiles();
+    testManifestHostAndVersionValidation();
 
     // parseTarListingLine
     testParseTarListingLineBusyBoxRegular();

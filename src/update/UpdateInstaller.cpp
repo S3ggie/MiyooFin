@@ -1,5 +1,6 @@
 #include "UpdateInstaller.hpp"
 #include "UpdateInstallPlan.hpp"
+#include "UpdateVersion.hpp"
 #include "miyoofin/version.hpp"
 #include <algorithm>
 #include <chrono>
@@ -223,6 +224,7 @@ struct TarEntry
     std::string filename; // normalized path (stripped MiyooFin/ prefix)
     bool isSymlink = false;
     bool isHardlink = false;
+    bool isSpecial = false; // device node or FIFO
 };
 
 /// Parse a single tar -tvzf verbose line.  Extracts the filename
@@ -278,6 +280,13 @@ static bool parseTarVerboseLine(const std::string& line, TarEntry& out)
 
     // Extract the full name portion
     std::string namePortion = line.substr(nameStart);
+
+    // Block/character devices and FIFOs: never part of a release, and a FIFO would hang the copy.
+    if (type == 'b' || type == 'c' || type == 'p') {
+        out.isSpecial = true;
+        out.filename = namePortion;
+        return true;
+    }
 
     // Check for symlink: " -> " anywhere in the name
     if (type == 'l') {
@@ -369,6 +378,12 @@ static bool tarListAndDetectLinks(const std::string& tarGzPath, std::vector<std:
         if (!entry.filename.empty() && entry.filename.back() == '/')
             continue;
 
+        // Devices and FIFOs are forbidden: only regular files and directories are installed.
+        if (entry.isSpecial) {
+            error = "archive contains a special file entry: " + entry.filename;
+            return false;
+        }
+
         // Symlinks and hardlinks are forbidden (M2)
         if (entry.isSymlink || entry.isHardlink) {
             error = "archive contains " + std::string(entry.isSymlink ? "symlink" : "hardlink") +
@@ -423,15 +438,18 @@ static bool tarExtract(const std::string& tarGzPath, const std::string& destDir,
 /// Checks stream errors and short writes (M6).
 static bool copyFile(const std::string& src, const std::string& dest)
 {
-    struct stat st
-    {};
-    if (::stat(src.c_str(), &st) != 0)
-        return false;
-    const auto expectedSize = static_cast<std::size_t>(st.st_size);
-
-    int fdIn = ::open(src.c_str(), O_RDONLY);
+    // Open without blocking or following links, then require a regular file: a FIFO or device
+    // would otherwise hang the update (or read forever).
+    int fdIn = ::open(src.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW);
     if (fdIn < 0)
         return false;
+    struct stat st
+    {};
+    if (::fstat(fdIn, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(fdIn);
+        return false;
+    }
+    const auto expectedSize = static_cast<std::size_t>(st.st_size);
 
     mkdirPForFile(dest);
     int fdOut = ::open(dest.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -463,9 +481,12 @@ static bool copyFile(const std::string& src, const std::string& dest)
         ok = false;
 
     ::close(fdIn);
-    if (::fchmod(fdOut, st.st_mode) != 0)
+    if (ok && ::fchmod(fdOut, st.st_mode) != 0)
         ok = false;
-    ::close(fdOut);
+    if (ok && ::fsync(fdOut) != 0) // the contents must be on disk before the rename publishes them
+        ok = false;
+    if (::close(fdOut) != 0)
+        ok = false;
 
     if (!ok) {
         ::unlink(dest.c_str());
@@ -486,16 +507,11 @@ static bool atomicInstallFile(const std::string& src, const std::string& dest, m
     if (!copyFile(src, tmpPath))
         return false;
 
-    // M6: fsync the write fd before rename.  Open for writing so we
-    // fsync the fd that matters (not a reopened read-only fd).
-    int fd = ::open(tmpPath.c_str(), O_WRONLY);
-    if (fd >= 0) {
-        ::fsync(fd);
-        ::close(fd);
+    // (copyFile already fsynced the contents before closing.)
+    if (::chmod(tmpPath.c_str(), mode) != 0) {
+        ::unlink(tmpPath.c_str());
+        return false;
     }
-
-    // chmod
-    ::chmod(tmpPath.c_str(), mode);
 
     // rename over destination
     if (::rename(tmpPath.c_str(), dest.c_str()) != 0) {
@@ -511,12 +527,15 @@ static bool fsyncDir(const std::string& filePath)
 {
     auto pos = filePath.rfind('/');
     std::string dir = (pos != std::string::npos) ? filePath.substr(0, pos) : ".";
-    DIR* d = ::opendir(dir.c_str());
-    if (!d)
+    const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
         return false;
-    ::fsync(::dirfd(d));
-    ::closedir(d);
-    return true;
+    const int rc = ::fsync(fd);
+    const int err = errno;
+    ::close(fd);
+    // Some filesystems (FAT on the SD card among them) do not support syncing a directory; that
+    // is not a failure. A real I/O error is.
+    return rc == 0 || err == EINVAL || err == ENOTSUP || err == EROFS;
 }
 
 /// Get the mode for a path (0755 for executables, 0644 otherwise).
@@ -538,6 +557,12 @@ bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
                    const std::function<void(int percent)>& progress)
 {
     error.clear();
+
+    // The version names the backup folder and goes into update-applied.json.
+    if (!isSafeVersionString(targetVersion)) {
+        error = "unsafe target version";
+        return false;
+    }
 
     auto report = [&](int pct) {
         if (progress)
@@ -591,6 +616,16 @@ bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
 
     if (!tarExtract(tarGzPath, stagingDir, plan, error))
         return false;
+    // Only regular files may have come out (belt and braces next to the listing check).
+    for (const std::string& rel : plan) {
+        struct stat st
+        {};
+        if (::lstat((stagingDir + "/MiyooFin/" + rel).c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+            error = "extracted entry is not a regular file: " + rel;
+            rmrf(stagingDir);
+            return false;
+        }
+    }
     report(30);
 
     if (checkCancelled()) {
@@ -657,7 +692,36 @@ bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
     // Step 6: Install each planned file — miyoofin LAST
     // ---------------------------------------------------------------
     // buildInstallPlan already guarantees miyoofin is last.
-    std::vector<std::string> installed; // track for rollback
+    std::vector<std::string> installed; // replaced or created so far, in order
+
+    // Undo everything installed so far, newest first: files that existed come back from the
+    // backup (atomically); files the update created are removed. Returns what could not be
+    // undone so the error can say so.
+    auto rollback = [&]() {
+        std::string failed;
+        for (auto it = installed.rbegin(); it != installed.rend(); ++it) {
+            const std::string dest = appDir + "/" + *it;
+            const auto bak = std::find_if(
+                backedUp.begin(), backedUp.end(),
+                [&](const std::pair<std::string, std::string>& b) { return b.first == *it; });
+            bool restored = true;
+            if (bak != backedUp.end()) {
+                struct stat bst
+                {};
+                const mode_t mode = ::stat(bak->second.c_str(), &bst) == 0 ? (bst.st_mode & 07777)
+                                                                           : installMode(*it);
+                restored = atomicInstallFile(bak->second, dest, mode);
+            } else {
+                restored = ::unlink(dest.c_str()) == 0 || errno == ENOENT;
+            }
+            if (!restored)
+                failed += (failed.empty() ? "" : ", ") + *it;
+            else
+                fsyncDir(dest);
+        }
+        if (!failed.empty())
+            error += " (rollback incomplete: " + failed + ")";
+    };
 
     for (auto& rel : plan) {
         std::string srcPath = stagingDir + "/MiyooFin/" + rel;
@@ -666,34 +730,22 @@ bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
 
         if (!pathExists(srcPath)) {
             error = "expected file missing from staging: " + rel;
-            // Rollback installed files in reverse order
-            for (auto it = installed.rbegin(); it != installed.rend(); ++it) {
-                for (auto& bak : backedUp) {
-                    if (bak.first == *it) {
-                        copyFile(bak.second, appDir + "/" + bak.first);
-                        break;
-                    }
-                }
-            }
+            rollback();
             return false;
         }
 
         if (!atomicInstallFile(srcPath, destPath, mode)) {
             error = "failed to install: " + rel;
-            // Rollback in reverse order
-            for (auto it = installed.rbegin(); it != installed.rend(); ++it) {
-                for (auto& bak : backedUp) {
-                    if (bak.first == *it) {
-                        copyFile(bak.second, appDir + "/" + bak.first);
-                        break;
-                    }
-                }
-            }
+            rollback();
             return false;
         }
+        installed.push_back(rel); // from here on it must be undone if a later step fails
 
-        fsyncDir(destPath);
-        installed.push_back(rel);
+        if (!fsyncDir(destPath)) {
+            error = "failed to sync the folder of: " + rel;
+            rollback();
+            return false;
+        }
         report(50 + (40 * static_cast<int>(installed.size())) / static_cast<int>(plan.size()));
         // NOTE: cancellation is intentionally NOT checked here (M5).
     }
@@ -721,18 +773,24 @@ bool installUpdate(const std::string& appDir, const std::string& tarGzPath,
                 << "}\n";
             ofs.close();
 
-            // fsync + rename
+            // fsync + rename (the files are installed already, so a failure here only warns)
+            bool wrote = !ofs.fail();
             int fd = ::open(tmpJson.c_str(), O_RDONLY);
             if (fd >= 0) {
-                ::fsync(fd);
+                if (::fsync(fd) != 0)
+                    wrote = false;
                 ::close(fd);
+            } else {
+                wrote = false;
             }
 
-            if (::rename(tmpJson.c_str(), jsonPath.c_str()) != 0) {
+            if (!wrote || ::rename(tmpJson.c_str(), jsonPath.c_str()) != 0) {
+                ::unlink(tmpJson.c_str());
                 std::fprintf(stderr, "[update] warning: failed to atomically write "
                                      "update-applied.json\n");
+            } else if (!fsyncDir(jsonPath)) {
+                std::fprintf(stderr, "[update] warning: could not sync update-applied.json\n");
             }
-            fsyncDir(jsonPath);
         } else {
             std::fprintf(stderr, "[update] warning: failed to create update-applied.json\n");
         }

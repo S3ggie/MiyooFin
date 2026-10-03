@@ -7,6 +7,7 @@
 #include "../../download/DownloadSupport.hpp"
 #include "miyoofin/version.hpp"
 #include <ctime>
+#include <unistd.h>
 
 namespace miyoofin {
 
@@ -173,7 +174,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                  {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
                  {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
-                 {"DIAGNOSTICS", "UI Stall Logger Enabled"},
+                 {"DIAGNOSTICS", access("crash.log", F_OK) == 0 ? "Crash report available - press A"
+                                                                : "No crashes recorded"},
                  {"Default audio language", languageValue(true)},
                  {"Default subtitles", languageValue(false)},
                  {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});

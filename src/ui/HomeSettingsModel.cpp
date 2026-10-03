@@ -29,6 +29,8 @@ HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
     if (row == static_cast<int>(addresses.size()) + 1)
         return HomeSettingsRowAction::TestConnection;
     const int count = homeSettingsRowCount(session);
+    if (row == count - 8)
+        return HomeSettingsRowAction::CrashReport;
     if (row == count - 7)
         return HomeSettingsRowAction::AudioLanguage;
     if (row == count - 6)

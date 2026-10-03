@@ -1,4 +1,5 @@
 #include "HomeScreen.hpp"
+#include "CrashReportScreen.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
@@ -492,6 +493,10 @@ bool HomeScreen::handleAction(Action action)
             }
             case SettingsRowAction::MusicMode:
                 m_musicModeRequested = true;
+                return true;
+            case SettingsRowAction::CrashReport:
+                if (m_stack)
+                    m_stack->push(std::make_unique<CrashReportScreen>());
                 return true;
             case SettingsRowAction::TestConnection:
                 startConnectionTest();

@@ -18,6 +18,7 @@ enum class HomeSettingsRowAction
     CheckForUpdates,
     MusicMode,
     TestConnection,
+    CrashReport,
     AudioLanguage,
     SubtitleLanguage
 };

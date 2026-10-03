@@ -551,6 +551,11 @@ void HomeScreen::applyFetchedPresentation(const PendingPresentation& presentatio
             if (m_session.manualOfflineMode)
                 applyPresentationProjection();
         }
+        // Turning offline mode OFF can finish with the offline tab set still showing (no
+        // rebuilt tabs when nothing changed): bring Home back from the last full snapshot.
+        if (!m_session.manualOfflineMode && !m_libraryOffline && tabIndex("Home") < 0 &&
+            m_haveCachedSnapshot)
+            restoreOnlinePresentation();
         updateContinueWatchingRow(m_tabs, m_remoteSnapshot.continueWatching);
         updateRecentlyAddedRow(m_tabs, m_remoteSnapshot.recentlyAdded);
         restoreHomeRowFocus(focusedLabel);

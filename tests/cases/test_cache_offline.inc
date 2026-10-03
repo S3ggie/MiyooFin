@@ -134,7 +134,7 @@ static void testSettingsRowActions(){
     CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::LocalAddress);
     CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::PublicAddress);
     CHECK(HomeScreen::settingsRowAction(4)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::CrashReport);
     CHECK(HomeScreen::settingsRowAction(11)==HomeScreen::SettingsRowAction::MusicMode);
     CHECK(HomeScreen::settingsRowAction(12)==HomeScreen::SettingsRowAction::CheckForUpdates);
     CHECK(HomeScreen::settingsRowAction(13)==HomeScreen::SettingsRowAction::None);

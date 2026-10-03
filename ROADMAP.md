@@ -18,8 +18,8 @@ Checked items are done and pushed. Order is the build order.
 - [x] Quick Connect sign-in (approve the Miyoo from a phone)
 
 ## Quality and housekeeping
-- [ ] Home tab missing after turning offline mode off
-- [ ] Crash report screen (shows `crash.log`)
+- [x] Home tab missing after turning offline mode off (safety net; not reproduced on host)
+- [x] Crash report screen (shows `crash.log`)
 - [ ] Scripted on-device smoke test
 - [ ] README screenshots and a short user guide
 - [ ] Release: version bump, changelog, package, update test

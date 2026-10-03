@@ -113,6 +113,27 @@ class JellyfinApi
                                    const std::string& password, const std::string& deviceId,
                                    AuthResult& result, AuthError& errCode, std::string& error);
 
+    /// Quick Connect: start a request (shows `code` to approve from another signed-in Jellyfin
+    /// client), poll until it is approved, then trade the secret for a session.
+    struct QuickConnectRequest
+    {
+        std::string secret, code;
+    };
+    static bool quickConnectInitiate(const std::string& baseUrl, const std::string& deviceId,
+                                     QuickConnectRequest& request, std::string& error,
+                                     const std::atomic<bool>* cancelled = nullptr);
+    static bool quickConnectApproved(const std::string& baseUrl, const std::string& deviceId,
+                                     const std::string& secret, bool& approved, std::string& error,
+                                     const std::atomic<bool>* cancelled = nullptr);
+    static bool quickConnectAuthenticate(const std::string& baseUrl, const std::string& deviceId,
+                                         const std::string& secret, AuthResult& result,
+                                         std::string& error,
+                                         const std::atomic<bool>* cancelled = nullptr);
+    /// Response parsers, public for focused tests.
+    static bool parseQuickConnectInitiate(const std::string& body, QuickConnectRequest& request);
+    static bool parseQuickConnectApproved(const std::string& body);
+    static bool parseAuthResult(const std::string& body, AuthResult& result);
+
     /// Validate an existing access token via GET /Users/{userId}.
     static bool validateToken(const std::string& baseUrl, const std::string& accessToken,
                               const std::string& userId, const std::string& deviceId,

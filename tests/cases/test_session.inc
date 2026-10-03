@@ -222,6 +222,23 @@ static void testSystemInfoParsing()
     CHECK_EQ(info.serverId, "server-id-42");
     CHECK_EQ(info.serverName, "Jellyfin");
     std::printf("[test] SystemInfo Id parsing OK\n");
+
+    JellyfinApi::QuickConnectRequest qc;
+    CHECK(JellyfinApi::parseQuickConnectInitiate(
+        "{\"Authenticated\":false,\"Secret\":\"abc123\",\"Code\":\"482913\"}", qc));
+    CHECK_EQ(qc.secret, "abc123");
+    CHECK_EQ(qc.code, "482913");
+    CHECK(!JellyfinApi::parseQuickConnectInitiate("{}", qc));
+    CHECK(JellyfinApi::parseQuickConnectApproved("{\"Authenticated\": true,\"Secret\":\"x\"}"));
+    CHECK(!JellyfinApi::parseQuickConnectApproved("{\"Authenticated\":false}"));
+    CHECK(!JellyfinApi::parseQuickConnectApproved("{}"));
+    AuthResult auth;
+    CHECK(JellyfinApi::parseAuthResult(
+        "{\"User\":{\"Name\":\"sam\",\"Id\":\"u1\"},\"AccessToken\":\"tok\",\"ServerId\":\"s1\"}",
+        auth));
+    CHECK_EQ(auth.userName, "sam");
+    CHECK_EQ(auth.accessToken, "tok");
+    CHECK(!JellyfinApi::parseAuthResult("{\"User\":{}}", auth));
 }
 
 // -------------------------------------------------------------------

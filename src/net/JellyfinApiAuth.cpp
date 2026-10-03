@@ -149,6 +149,113 @@ bool JellyfinApi::authenticateByName(const std::string& baseUrl, const std::stri
     return false;
 }
 
+// ---- Quick Connect
+
+namespace {
+std::vector<std::string> quickConnectHeaders(const std::string& deviceId)
+{
+    char authHeader[512];
+    std::snprintf(authHeader, sizeof(authHeader),
+                  "X-Emby-Authorization: MediaBrowser "
+                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
+                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
+    return {authHeader, "Content-Type: application/json"};
+}
+} // namespace
+
+bool JellyfinApi::parseQuickConnectInitiate(const std::string& body, QuickConnectRequest& request)
+{
+    request.secret = extractString(body, "Secret");
+    request.code = extractString(body, "Code");
+    return !request.secret.empty() && !request.code.empty();
+}
+
+bool JellyfinApi::parseQuickConnectApproved(const std::string& body)
+{
+    const std::size_t at = body.find("\"Authenticated\"");
+    if (at == std::string::npos)
+        return false;
+    const std::size_t colon = body.find(':', at);
+    if (colon == std::string::npos)
+        return false;
+    std::size_t p = colon + 1;
+    while (p < body.size() && body[p] == ' ')
+        ++p;
+    return body.compare(p, 4, "true") == 0;
+}
+
+bool JellyfinApi::parseAuthResult(const std::string& body, AuthResult& result)
+{
+    result.accessToken = extractString(body, "AccessToken");
+    result.userId = extractNestedString(body, "User", "Id");
+    result.userName = extractNestedString(body, "User", "Name");
+    result.serverId = extractString(body, "ServerId");
+    return !result.accessToken.empty() && !result.userId.empty();
+}
+
+bool JellyfinApi::quickConnectInitiate(const std::string& baseUrl, const std::string& deviceId,
+                                       QuickConnectRequest& request, std::string& error,
+                                       const std::atomic<bool>* cancelled)
+{
+    request = {};
+    HttpClient client;
+    client.setTimeoutSec(10);
+    HttpResponse response;
+    if (!client.perform("POST", baseUrl + "/QuickConnect/Initiate", quickConnectHeaders(deviceId),
+                        "", response, error, cancelled)) {
+        if (error.empty())
+            error = "Could not reach server";
+        return false;
+    }
+    if (response.status == 401 || response.status == 403 || response.status == 404) {
+        error = "Quick Connect is turned off on this server";
+        return false;
+    }
+    if (!response.ok() || !parseQuickConnectInitiate(response.body, request)) {
+        error = "Quick Connect did not start";
+        return false;
+    }
+    return true;
+}
+
+bool JellyfinApi::quickConnectApproved(const std::string& baseUrl, const std::string& deviceId,
+                                       const std::string& secret, bool& approved,
+                                       std::string& error, const std::atomic<bool>* cancelled)
+{
+    approved = false;
+    HttpClient client;
+    client.setTimeoutSec(10);
+    HttpResponse response;
+    if (!client.perform("GET", baseUrl + "/QuickConnect/Connect?secret=" + secret,
+                        quickConnectHeaders(deviceId), "", response, error, cancelled))
+        return false;
+    if (!response.ok()) {
+        error = "Quick Connect request expired";
+        return false;
+    }
+    approved = parseQuickConnectApproved(response.body);
+    return true;
+}
+
+bool JellyfinApi::quickConnectAuthenticate(const std::string& baseUrl, const std::string& deviceId,
+                                           const std::string& secret, AuthResult& result,
+                                           std::string& error, const std::atomic<bool>* cancelled)
+{
+    result = {};
+    HttpClient client;
+    client.setTimeoutSec(10);
+    HttpResponse response;
+    if (!client.perform("POST", baseUrl + "/Users/AuthenticateWithQuickConnect",
+                        quickConnectHeaders(deviceId), "{\"Secret\":\"" + secret + "\"}", response,
+                        error, cancelled))
+        return false;
+    if (!response.ok() || !parseAuthResult(response.body, result)) {
+        error = "Quick Connect sign-in failed";
+        return false;
+    }
+    return true;
+}
+
 bool JellyfinApi::validateToken(const std::string& baseUrl, const std::string& accessToken,
                                 const std::string& userId, const std::string& deviceId,
                                 std::string& error)

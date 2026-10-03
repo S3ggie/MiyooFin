@@ -15,7 +15,7 @@ Checked items are done and pushed. Order is the build order.
 
 ## Signing in
 - [x] Test connection for each server address
-- [ ] Quick Connect sign-in (approve the Miyoo from a phone)
+- [x] Quick Connect sign-in (approve the Miyoo from a phone)
 
 ## Quality and housekeeping
 - [ ] Home tab missing after turning offline mode off

@@ -3,7 +3,9 @@
 #include "../Theme.hpp"
 #include "../BitmapFont.hpp"
 #include "../../net/JellyfinApi.hpp"
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <cstring>
 #include <cctype>
 
@@ -71,6 +73,93 @@ void LoginScreen::submitLogin()
     });
 }
 
+void LoginScreen::startQuickConnect()
+{
+    if (m_loginWorker.busy() && !m_loginWorker.reap()) {
+        m_message = "Please wait a moment";
+        return;
+    }
+    m_qcActive = true;
+    m_loginSuccess = false;
+    m_loginError.clear();
+    m_message.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_qcMutex);
+        m_qcCode.clear();
+    }
+    const std::string url = m_serverUrl, devId = m_deviceId;
+    m_loginWorker.start([this, url, devId](const CancelToken& cancel) {
+        JellyfinApi::QuickConnectRequest request;
+        std::string error;
+        if (!JellyfinApi::quickConnectInitiate(url, devId, request, error, cancel.get())) {
+            m_loginError = error;
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_qcMutex);
+            m_qcCode = request.code;
+        }
+        // Ask every 2 seconds for up to 5 minutes.
+        for (int round = 0; round < 150 && !cancel->load(); ++round) {
+            bool approved = false;
+            const bool ok = JellyfinApi::quickConnectApproved(url, devId, request.secret, approved,
+                                                              error, cancel.get());
+            if (!ok && error == "Quick Connect request expired") { // the server dropped it
+                m_loginError = error;
+                return;
+            } // (a lost connection is simply asked again next round)
+            if (approved) {
+                AuthResult result;
+                if (JellyfinApi::quickConnectAuthenticate(url, devId, request.secret, result, error,
+                                                          cancel.get())) {
+                    m_loginResult = result;
+                    m_loginSuccess = true;
+                } else {
+                    m_loginError = error;
+                }
+                return;
+            }
+            for (int i = 0; i < 20 && !cancel->load(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (!cancel->load())
+            m_loginError = "Quick Connect timed out";
+    });
+}
+
+void LoginScreen::drawQuickConnect(SDL_Surface* fb)
+{
+    namespace d = design;
+    std::string code;
+    {
+        std::lock_guard<std::mutex> lock(m_qcMutex);
+        code = m_qcCode;
+    }
+    ui::fill(fb, 0, 0, d::kScreenW, d::kScreenH, d::kCanvas);
+    ui::HeaderSpec header;
+    header.title = "Quick Connect";
+    header.showStatus = false;
+    ui::header(fb, header);
+    int y = 90;
+    for (const std::string& line :
+         ui::wrap("On a phone or computer already signed in to Jellyfin, open Settings, then "
+                  "Quick Connect, and enter this code:",
+                  d::kScreenW - 2 * d::kMargin, 3)) {
+        ui::text(fb, d::kMargin, y, line, d::kTextSecondary);
+        y += 22;
+    }
+    const std::string shown = code.empty() ? "..." : code;
+    const int scale = 5;
+    ui::text(fb, (d::kScreenW - ui::textWidth(shown, scale)) / 2, 220, shown, d::kAccentHi, scale);
+    const int dots = static_cast<int>((SDL_GetTicks() / 400) % 4);
+    ui::text(fb, d::kMargin, 340,
+             "Waiting for approval" + std::string(static_cast<size_t>(dots), '.'), d::kTextMuted);
+    ui::FooterSpec footer;
+    footer.showLink = false;
+    footer.hints = {{ui::Key::B, "Cancel"}};
+    ui::footer(fb, footer);
+}
+
 void LoginScreen::finishLogin()
 {
     // update() reaped the finished worker, which also establishes the
@@ -104,6 +193,13 @@ bool LoginScreen::handleAction(Action action)
 {
     if (m_connecting)
         return true;
+    if (m_qcActive) { // only Back is accepted while waiting for approval
+        if (action == Action::Back) {
+            m_loginWorker.cancel();
+            m_qcActive = false;
+        }
+        return true;
+    }
     if (m_success) {
         m_finished = true;
         return false;
@@ -135,6 +231,10 @@ bool LoginScreen::handleAction(Action action)
         case Action::Settings:
             if (!m_connecting && !m_success)
                 submitLogin();
+            return true;
+        case Action::Search: // X
+            if (!m_success)
+                startQuickConnect();
             return true;
         default:
             return false;
@@ -189,11 +289,18 @@ void LoginScreen::update(Uint32 dt)
     (void)dt;
     if (m_connecting && m_loginWorker.reap()) {
         finishLogin();
+    } else if (m_qcActive && m_loginWorker.reap()) {
+        m_qcActive = false;
+        finishLogin();
     }
 }
 
 void LoginScreen::render(SDL_Surface* fb)
 {
+    if (m_qcActive) {
+        drawQuickConnect(fb);
+        return;
+    }
     ui::fill(fb, 0, 0, design::kScreenW, design::kScreenH, design::kCanvas);
     drawTitle(fb);
     drawInputFields(fb);
@@ -255,7 +362,7 @@ void LoginScreen::drawHints(SDL_Surface* fb)
     using ui::Key;
     if (m_inFields)
         footer.hints = {
-            {Key::Dpad, "Switch field / keys"}, {Key::L2, "Caps"}, {Key::Start, "Sign in"}};
+            {Key::Dpad, "Switch field / keys"}, {Key::X, "Quick Connect"}, {Key::Start, "Sign in"}};
     else
         footer.hints = {{Key::A, "Type"},
                         {Key::B, "Delete"},

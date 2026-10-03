@@ -6,6 +6,7 @@
 #include "../OnScreenKeyboard.hpp"
 #include <string>
 #include <atomic>
+#include <mutex>
 #include "../WorkerSlot.hpp"
 
 namespace miyoofin {
@@ -100,6 +101,12 @@ class LoginScreen : public Screen
     std::atomic<bool> m_loginSuccess{false};
     std::string m_loginError;
     AuthResult m_loginResult;
+    // Quick Connect: the code to approve elsewhere (written by the worker, drawn by the UI).
+    bool m_qcActive = false;
+    std::mutex m_qcMutex;
+    std::string m_qcCode;
+    void startQuickConnect();
+    void drawQuickConnect(SDL_Surface* fb);
     WorkerSlot m_loginWorker; // last member: destroyed (joined) first
 
     void submitLogin();

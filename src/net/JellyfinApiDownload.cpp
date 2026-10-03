@@ -119,6 +119,8 @@ JellyfinApi::HlsFailure JellyfinApi::classifyHlsFailure(long status, int transpo
         return HlsFailure::Unauthorized;
     if (status >= 400)
         return HlsFailure::Http;
+    if (transportCode == CURLE_FILESIZE_EXCEEDED)
+        return HlsFailure::Playlist; // an oversized playlist is a stable fault, not a flaky network
     if (transportCode == CURLE_OPERATION_TIMEDOUT)
         return HlsFailure::Timeout;
     return transportCode ? HlsFailure::Network : HlsFailure::Playlist;

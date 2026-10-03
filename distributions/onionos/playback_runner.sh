@@ -404,17 +404,17 @@ if [ "$PLAYBACK_MODE" = onion ]; then
         # server when they are missing and it is reachable.  The player picks
         # files up as they appear.
         if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -x "$APP_DIR/miyoofin-playback-reporter" ]; then
-            rm -rf "$APP_DIR/subs" "$APP_DIR/playback-tracks.txt"
+            rm -rf "$APP_DIR/subs" "$APP_DIR/playback-tracks.txt" "$APP_DIR/playback-segments.txt"
             "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --fetch-subs > "$APP_DIR/playback-subs.log" 2>&1 &
             SUBS_PID=$!
-            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $APP_DIR"
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $APP_DIR -segments $APP_DIR/playback-segments.txt"
         elif [ "$REQUEST_SOURCE_MODE" = local ]; then
             LOCAL_ITEM_DIR="$APP_DIR/downloads/$REQUEST_DOWNLOAD_SCOPE/items/$REQUEST_ITEM_ID"
             if [ ! -f "$LOCAL_ITEM_DIR/playback-tracks.txt" ] && [ -x "$APP_DIR/miyoofin-playback-reporter" ]; then
                 "$APP_DIR/miyoofin-playback-reporter" "$APP_DIR" --fetch-subs > "$APP_DIR/playback-subs.log" 2>&1 &
                 SUBS_PID=$!
             fi
-            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $LOCAL_ITEM_DIR -osd_local"
+            PLAYER_EXTRA_ARGS="$PLAYER_EXTRA_ARGS -subs_dir $LOCAL_ITEM_DIR -osd_local -segments $LOCAL_ITEM_DIR/playback-segments.txt"
         fi
         # A queued next episode (streamed playback only): the player offers it near the end.
         if [ "$REQUEST_SOURCE_MODE" = jellyfin ] && [ -n "$REQUEST_NEXT_ID" ]; then

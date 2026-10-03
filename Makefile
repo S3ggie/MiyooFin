@@ -575,7 +575,7 @@ REPORTER_TEST_SRC := tests/test_playback_reporter.cpp
 .PHONY: reporter
 reporter: $(REPORTER_HOST)
 
-$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp include/miyoofin/playback_tracks.hpp include/miyoofin/subtitle_text.hpp | $(BUILD_DIR)
+$(REPORTER_HOST): $(REPORTER_SRC) tools/playback_clock_parser.hpp tools/playback_route.hpp tools/playback_resume.hpp include/miyoofin/playback_tracks.hpp include/miyoofin/media_segments.hpp include/miyoofin/subtitle_text.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -Itools -Iinclude -o $@ $< $(CURL_LIBS)
 	@echo "  [LINK] $@"
 

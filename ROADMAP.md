@@ -5,7 +5,7 @@ Checked items are done and pushed. Order is the build order.
 ## Video
 - [x] Mark watched / unwatched for movies, episodes, seasons and series (confirm for seasons and series; offline changes sync later)
 - [x] Default audio and subtitle language in Settings
-- [ ] Skip intro / credits button in the player (Jellyfin media segments)
+- [x] Skip intro / credits button in the player (Jellyfin media segments)
 
 ## Music
 - [x] Playlist maker: add to playlist, new playlist, remove from playlist, delete playlist (music only)

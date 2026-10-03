@@ -39,6 +39,7 @@
 #include "playback_clock_parser.hpp"
 #include "playback_resume.hpp"
 #include "../include/miyoofin/playback_tracks.hpp"
+#include "../include/miyoofin/media_segments.hpp"
 #include "../include/miyoofin/subtitle_text.hpp"
 #include "playback_route.hpp"
 #include "../include/miyoofin/version.hpp"
@@ -606,6 +607,16 @@ static int fetch_subs(const std::string& appDir)
             if (t.type == 's')
                 subsOnly.tracks.push_back(t);
         tracks = std::move(subsOnly);
+    }
+    // Intro / credits ranges for the player's "Skip" prompt (older servers have none).
+    {
+        GetResult seg = get_with_fallback(ctx, "/MediaSegments/" + ctx.itemId);
+        if (!seg.transportFailure && seg.httpStatus >= 200 && seg.httpStatus < 300) {
+            const std::vector<MediaSegment> segments = media_segments_parse(seg.body);
+            if (!segments.empty())
+                write_atomic(outDir + "/playback-segments.txt", media_segments_format(segments));
+            std::printf("subs_fetch segments=%zu\n", segments.size());
+        }
     }
     // For a local item the list is only published once the files are in place.
     if (!local)

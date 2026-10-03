@@ -975,6 +975,45 @@ static double skip_until = -1.0;
 static int64_t skip_started_us;
 static int osd_next;                 /* a next episode is queued: offer it near the end */
 static int next_requested, next_cancelled, next_prompt_active;
+/* Skip intro / credits: ranges (media seconds) the app's reporter fetched into this file. */
+#define MAX_SEGMENTS 8
+static const char *segments_path;
+static struct { int outro; double start, end; int dismissed; } segments[MAX_SEGMENTS];
+static int segments_n, segments_loaded;
+static int64_t segments_next_try;
+static int skip_active = -1; /* index of the segment being offered, or -1 */
+
+static void segments_poll(int64_t now)
+{
+    FILE *f;
+    char kind[16];
+    double s, e;
+    if (!segments_path || segments_loaded || now < segments_next_try)
+        return;
+    segments_next_try = now + 2000000;
+    f = fopen(segments_path, "r");
+    if (!f)
+        return;
+    while (segments_n < MAX_SEGMENTS && fscanf(f, "%15s %lf %lf", kind, &s, &e) == 3) {
+        segments[segments_n].outro = !strcmp(kind, "outro");
+        segments[segments_n].start = s;
+        segments[segments_n].end = e;
+        segments_n++;
+    }
+    fclose(f);
+    segments_loaded = 1;
+}
+
+/* The segment containing `media_sec` that has not been dismissed (not in its last 2 s), or -1. */
+static int segment_at(double media_sec)
+{
+    int i;
+    for (i = 0; i < segments_n; i++)
+        if (!segments[i].dismissed && media_sec >= segments[i].start - 1 &&
+            media_sec < segments[i].end - 2)
+            return i;
+    return -1;
+}
 static MenuGuard menu_guard;
 static int osd_local;                /* downloaded playback: the stream cannot be reopened with other parameters */
 static int osd_stretch;               /* START: fill the whole display, ignoring aspect ratio */
@@ -1558,6 +1597,14 @@ static void osd_apply_inner(VideoState *is, VideoPicture *vp, int in_picture_sub
         osd_toast_until = now + 1000000;
         want_toast = 1;
         next_prompt_active = 1;
+    }
+    segments_poll(now);
+    skip_active = next_prompt_active ? -1 : segment_at(media_sec);
+    if (skip_active >= 0) {
+        snprintf(osd_toast, sizeof(osd_toast), "Skip %s  A skip  B hide",
+                 segments[skip_active].outro ? "credits" : "intro");
+        osd_toast_until = now + 1000000;
+        want_toast = 1;
     }
     want = want_bar || want_toast || is->paused || want_sub || menu_open;
 
@@ -4317,6 +4364,26 @@ static void event_loop(VideoState *cur_stream)
                     break;
                 }
             }
+            if (skip_active >= 0 && !menu_open) {
+                if (event.key.keysym.sym == SDLK_SPACE || event.key.keysym.sym == SDLK_RETURN) {
+                    const int seg = skip_active;
+                    skip_active = -1;
+                    segments[seg].dismissed = 1;
+                    if (segments[seg].outro && osd_next) {
+                        next_requested = 1;
+                        do_exit(cur_stream);
+                    } else {
+                        remote_seek_request(cur_stream,
+                                            segments[seg].end - media_seconds_now(cur_stream));
+                    }
+                    break;
+                }
+                if (event.key.keysym.sym == SDLK_LCTRL) {
+                    segments[skip_active].dismissed = 1;
+                    osd_toast_until = 0;
+                    break;
+                }
+            }
             if (menu_open) { /* the menu owns the keys while it is up */
                 cur_stream = menu_key(cur_stream, event.key.keysym.sym);
                 break;
@@ -4716,6 +4783,7 @@ static const OptionDef options[] = {
     { "osd_screen_rot180", OPT_BOOL | OPT_EXPERT, { &osd_screen_rot180 }, "the screen surface (subtitle bars) is upside down for the viewer", "" },
     { "osd_local", OPT_BOOL | OPT_EXPERT, { &osd_local }, "downloaded playback (no stream restarts)", "" },
     { "prefs", HAS_ARG | OPT_STRING | OPT_EXPERT, { &prefs_path }, "file remembering subtitle/audio language", "path" },
+    { "segments", HAS_ARG | OPT_STRING | OPT_EXPERT, { &segments_path }, "file with intro/credits ranges to offer to skip", "path" },
     { "osd_next", OPT_BOOL | OPT_EXPERT, { &osd_next }, "offer the queued next episode near the end", "" },
     { "osd_rot180", OPT_BOOL | OPT_EXPERT, { &osd_rot180 }, "the viewer sees the picture rotated 180 degrees (OSD is drawn pre-rotated)", "" },
     { "exitonkeydown", OPT_BOOL | OPT_EXPERT, { &exit_on_keydown }, "exit on key down", "" },

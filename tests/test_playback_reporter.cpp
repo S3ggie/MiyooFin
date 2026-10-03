@@ -10,6 +10,7 @@
 #include "../tools/playback_clock_parser.hpp"
 #include "../tools/playback_resume.hpp"
 #include "../include/miyoofin/playback_tracks.hpp"
+#include "../include/miyoofin/media_segments.hpp"
 #include "../include/miyoofin/subtitle_text.hpp"
 #include <unistd.h>
 #include "../tools/playback_route.hpp"
@@ -32,6 +33,19 @@ static int g_failures = 0;
             ++g_failures;                                                                          \
         }                                                                                          \
     } while (0)
+
+static void testMediaSegments()
+{
+    const auto s = media_segments_parse(
+        "{\"Items\":[{\"Id\":\"a\",\"Type\":\"Intro\",\"StartTicks\":300000000,"
+        "\"EndTicks\":900000000},{\"Type\":\"Recap\",\"StartTicks\":0,\"EndTicks\":50000000},"
+        "{\"Type\":\"Outro\",\"StartTicks\":13000000000,\"EndTicks\":14000000000}]}");
+    CHECK(s.size() == 2);
+    CHECK(s[0].kind == "intro" && s[0].start == 30.0 && s[0].end == 90.0);
+    CHECK(s[1].kind == "outro" && s[1].start == 1300.0);
+    CHECK(media_segments_parse("{\"Items\":[]}").empty());
+    CHECK(media_segments_parse("not json").empty());
+}
 
 static void testPlaybackRoutes()
 {
@@ -820,6 +834,7 @@ int main()
 
     std::printf("--- Route selection and fallback policy ---\n");
     testPlaybackRoutes();
+    testMediaSegments();
 
     std::printf("--- A: seconds_to_ticks ---\n");
     testTicksZero();

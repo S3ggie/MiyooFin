@@ -127,7 +127,8 @@ int main(int argc, char** argv)
     session.userId = "u";
     session.accessToken = "t";
     session.userName = "demo";
-    session.manualOfflineMode = false; // the cached lists stand in for a server; refreshes just fail
+    session.manualOfflineMode =
+        false; // the cached lists stand in for a server; refreshes just fail
     MusicScreen screen(session, &player, &settings, &downloads);
 
     auto settle = [&](int ms) {
@@ -177,8 +178,8 @@ int main(int argc, char** argv)
                               {32000, "Drifting out of view"}});
     screen.update(20);
     shot("music-lyrics");
-    press(Action::Back);   // leave the lyrics
-    press(Action::Menu);   // SELECT: the queue
+    press(Action::Back); // leave the lyrics
+    press(Action::Menu); // SELECT: the queue
     shot("music-queue");
     press(Action::Back);
     press(Action::Back);

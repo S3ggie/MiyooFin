@@ -36,6 +36,8 @@ int main()
     testPauseResumeDoNotWaitForTheDisk();
     testErasureAndRedownloadDoNotWaitForTheDisk();
     testConfigureDoesNotWaitForTheDisk();
+    testRemovalSurvivesAccountSwitch();
+    testAccountLibraryLoadIsAsynchronous();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();
     testDownloadHierarchy();

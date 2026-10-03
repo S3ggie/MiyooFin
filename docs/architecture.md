@@ -139,10 +139,13 @@ and download reconciliation.
 Download storage is single-threaded by design. Memory (`m_items`) is the authority; UI callers
 (`enqueue`, `pause`, `resume`, `erase`, `redownload`, `configure`, `snapshot`, `hasComplete`) only
 change memory and *request* disk work. One storage thread writes manifests and the index from copies
-(then re-checks them against the live item), runs removals in order, re-reads segment files for
-startup and post-failure rescans, and writes a previous account's items before forgetting them. An id
+(then re-checks them against the live item), runs removals in order (per account: a queued removal
+still runs after an account switch), reads the new account's library (`configure()` and the
+constructor read nothing on the caller; the snapshot is empty until that read is published, merging
+items added meanwhile), re-reads segment files for startup and post-failure rescans, and writes a
+previous account's items before forgetting them. An id
 with removal work outstanding is not started by the transfer worker until it is done. Consequences:
-`erase()` cannot report a removal failure (it is logged), `hasComplete()` trusts the manifest state
+`erase()` cannot report a removal failure (it is logged), `hasComplete()` is false until the library has loaded and then trusts the manifest state
 until the storage thread's rescan records a structural failure, and shutdown drains the queue and
 joins the storage thread. HLS segments are validated structurally as MPEG-TS (sync bytes, PAT/PMT
 CRC, H.264+AAC, continuity); that detects garbage and truncation mid-packet, not payload bit flips.

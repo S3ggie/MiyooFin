@@ -116,10 +116,22 @@ class DownloadManager
     void requestIndexLocked();
     void requestRemoveLocked(const std::string& itemId, bool wholeItem);
     void requestRescanLocked(const std::string& itemId);
+    static std::string busyKey(const std::string& scope, const std::string& itemId)
+    {
+        return scope + '\n' + itemId;
+    }
     bool storageBusyLocked(const std::string& itemId) const
     {
-        return m_storageBusy.count(itemId) != 0;
+        return m_storageBusy.count(busyKey(m_scope, itemId)) != 0;
     }
+    bool storageBusyLocked(const std::string& scope, const std::string& itemId) const
+    {
+        return m_storageBusy.count(busyKey(scope, itemId)) != 0;
+    }
+    // Reads a scope's library (index, else rebuilt from manifests) on the storage thread and
+    // publishes it if that scope is still the one being waited for.
+    void runLoad(const std::string& scope, std::uint64_t token);
+    void patchIndexRemoving(const std::string& scope, const std::set<std::string>& ids);
     void persisterLoop();
     bool storageHasWorkLocked() const;
     // Returns true when the id's manifest became durable for the first time (the index must then
@@ -149,7 +161,16 @@ class DownloadManager
     {
         std::string scope;
         std::vector<DownloadItem> items;
+        bool complete; // false: the library had not finished loading, so its index is merged
     };
+    struct StorageLoad
+    {
+        std::string scope;
+        std::uint64_t token;
+    };
+    std::vector<StorageLoad> m_storageLoads; // libraries to read, in request order
+    std::uint64_t m_loadToken = 0;
+    bool m_loading = false;                  // m_items is not yet the whole library of m_scope
     std::set<std::string> m_asyncPersistIds; // manifests the storage thread owes the disk
     std::set<std::string> m_rescanIds;       // items whose segment files must be re-read
     std::deque<StorageRemoval> m_storageRemovals;

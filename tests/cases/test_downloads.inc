@@ -1,3 +1,5 @@
+#include <sys/stat.h>
+#include <thread>
 #include "../../src/library/LibraryQuery.hpp"
 #include "../../src/library/LibraryCoordinator.hpp"
 #include "../../src/net/TlsConfig.hpp"
@@ -8,6 +10,8 @@ static void testStorageWriteFailureDoesNotLeakDescriptors();
 static void testPauseResumeDoNotWaitForTheDisk();
 static void testErasureAndRedownloadDoNotWaitForTheDisk();
 static void testConfigureDoesNotWaitForTheDisk();
+static void testRemovalSurvivesAccountSwitch();
+static void testAccountLibraryLoadIsAsynchronous();
 static void testDownloadInterruptStates()
 {
     std::printf("[test] download interrupt state mapping\n");
@@ -65,7 +69,7 @@ static void testDownloadRestartPersistence(){
       std::vector<DownloadItem> saved; CHECK(store.loadIndex("anonymous",saved)); CHECK(saved.size()==2);
       for(const auto &item:saved){DownloadItem manifest;CHECK(store.loadManifest("anonymous",item.itemId,manifest));CHECK(manifest.state==DownloadState::Queued);}
     }
-    { DownloadManager restarted({},root); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
+    { DownloadManager restarted({},root); restarted.flushPersistence(); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
       CHECK(snapshot.items.size()==2); }
 
     // A corrupt index which loaded one manifest before finding a missing one
@@ -78,7 +82,7 @@ static void testDownloadRestartPersistence(){
     CHECK(store.loadManifest("fixture","queued",stillQueued)); CHECK(store.reconcile("fixture",stillQueued)); CHECK(stillQueued.state==DownloadState::Queued);
     FILE *bad=fopen((store.scopePath("fixture")+"/index.v1").c_str(),"wb"); CHECK(bad!=nullptr); if(bad){fputs("MFDI=1\nactive\nmissing\n",bad);fclose(bad);}
     Session session;session.serverUrl="http://fixture";session.userId="user";
-    { DownloadManager restarted(session,root); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
+    { DownloadManager restarted(session,root); restarted.flushPersistence(); restarted.setPlaybackActive(true); auto snapshot=restarted.snapshot();
       CHECK(snapshot.items.size()==2); std::set<std::string> ids; for(const auto&i:snapshot.items)ids.insert(i.itemId); CHECK(ids.size()==2); }
     CHECK(store.isCompleteSegment("fixture","active",0));
     std::printf("[test] download restart persistence OK\n");
@@ -194,7 +198,7 @@ static void testDownloadSourceReconciliation()
     item.state=DownloadState::Complete; item.downloadedBytes=100; item.mediaSourceId="source-a"; item.sourceEtag="etag-a"; item.expectedSize=100; CHECK(!reconcileSource(item,SourceCheck::Same,&source)); CHECK(item.downloadedBytes==100&&item.expectedSize==100);
     std::string root="output/test/download-source-fixture-"+std::to_string((long long)getpid()); Session session; session.serverUrl="http://server"; session.userId="user"; session.accessToken="token"; session.deviceId="device";
     DownloadStore store(root); std::string scope=DownloadStore::scopeKey(session.serverUrl,session.userId); DownloadItem local; local.itemId="item"; local.expectedSize=4; local.chunkSize=4; local.downloadedBytes=4; local.state=DownloadState::UpdateAvailable; CHECK(store.saveManifest(scope,local)); CHECK(::mkdir((store.itemPath(scope,"item")+"/chunks").c_str(),0755)==0); FILE *f=std::fopen(store.chunkPath(scope,"item",0).c_str(),"wb"); CHECK(f!=nullptr); std::fwrite("data",1,4,f); std::fclose(f); CHECK(store.saveIndex(scope,{local}));
-    DownloadManager d(session,root); MediaItem media; media.id="item"; CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local); local.state=DownloadState::LocalOnly; CHECK(store.saveManifest(scope,local)); d.configure(session); CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local);
+    DownloadManager d(session,root); d.flushPersistence(); MediaItem media; media.id="item"; CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local); local.state=DownloadState::LocalOnly; CHECK(store.saveManifest(scope,local)); d.configure(session); CHECK(resolvePlayback(media,d,true)==PlaybackSource::Local);
     DownloadItem updated; updated.state=DownloadState::UpdateAvailable; CHECK(downloadIsLocal(local)); CHECK(downloadIsLocal(updated));
     DownloadItem partial; partial.itemId="partial"; partial.expectedSize=4; partial.chunkSize=4; CHECK(store.saveManifest(scope,partial)); CHECK(::mkdir((store.itemPath(scope,"partial")+"/chunks").c_str(),0755)==0); f=std::fopen(store.chunkPath(scope,"partial",0,true).c_str(),"wb"); CHECK(f!=nullptr); std::fwrite("xx",1,2,f); std::fclose(f); CHECK(store.removePartialBytes(scope,"partial")); CHECK(::access(store.chunkPath(scope,"partial",0,true).c_str(),F_OK)!=0);
     std::printf("[test] download source reconciliation OK\n");
@@ -1497,4 +1501,158 @@ static void testConfigureDoesNotWaitForTheDisk()
     manager.flushPersistence();
     CHECK(manager.snapshot().items.size()==2);
     std::printf("[test] configure does not wait for the disk OK\n");
+}
+
+
+static Session fixtureAccount(const std::string& user)
+{
+    Session s; s.serverUrl="http://127.0.0.1:9"; s.userId=user; s.accessToken="fake"; s.deviceId="d";
+    return s;
+}
+
+// An erase in one account must still delete that account's files, and must not come back when the
+// account is selected again, even though the account was switched away before the storage thread
+// reached the removal.
+static void testRemovalSurvivesAccountSwitch()
+{
+    std::printf("[test] queued removal survives an account switch\n");
+    const std::string root="/tmp/miyoofin-switchremove-"+std::to_string((long long)getpid());
+    {
+        DownloadStore store(root);
+        CHECK(seedItem(store,"anonymous",restartFixture("victim",DownloadState::Paused),true));
+        CHECK(seedItem(store,"anonymous",restartFixture("keeper",DownloadState::Paused),true));
+    }
+    DownloadStore store(root);
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true);
+    manager.flushPersistence();
+    CHECK(manager.snapshot().items.size()==2);
+    const Session other=fixtureAccount("other");
+    {
+        DiskStall stall(manager);
+        manager.pause("keeper");                 // storage thread now stuck in a manifest write
+        CHECK(stall.waitReached());
+        CHECK(manager.erase("victim"));
+        manager.configure(other);                // switched away before the removal ran
+        stall.release();
+    }
+    manager.flushPersistence();
+    CHECK(::access(store.itemPath("anonymous","victim").c_str(),F_OK)!=0);
+    std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
+    CHECK(idx.size()==2||idx.size()==1);
+    for(const auto&i:idx)CHECK(i.itemId!="victim");
+    DownloadItem m;CHECK(store.loadManifest("anonymous","keeper",m,nullptr));
+    manager.configure({});
+    manager.flushPersistence();
+    std::set<std::string> ids;for(const auto&i:manager.snapshot().items)ids.insert(i.itemId);
+    CHECK(ids==(std::set<std::string>{"keeper"}));
+    // The id is not left busy: it can be added again and is written.
+    manager.enqueue(restartFixture("victim"));
+    manager.flushPersistence();
+    CHECK(store.loadManifest("anonymous","victim",m,nullptr));
+    // Same sequence, but the switch away and back both happen before the disk moves.
+    {
+        DiskStall stall(manager);
+        manager.pause("keeper");
+        CHECK(stall.waitReached());
+        CHECK(manager.erase("victim"));
+        manager.configure(other);
+        manager.configure({});
+        CHECK(manager.snapshot().items.empty());   // not showing another account's items, nor stale ones
+        stall.release();
+    }
+    manager.flushPersistence();
+    ids.clear();for(const auto&i:manager.snapshot().items)ids.insert(i.itemId);
+    CHECK(ids==(std::set<std::string>{"keeper"}));
+    CHECK(::access(store.itemPath("anonymous","victim").c_str(),F_OK)!=0);
+    std::printf("[test] queued removal survives an account switch OK\n");
+}
+
+// configure() and the constructor read nothing on the caller: a stalled index/manifest read (or a
+// rebuild) leaves callers responsive, and publishes once, merging what was added meanwhile.
+static void testAccountLibraryLoadIsAsynchronous()
+{
+    std::printf("[test] account library load is asynchronous\n");
+    const std::string root="/tmp/miyoofin-asyncload-"+std::to_string((long long)getpid());
+    const Session other=fixtureAccount("other");
+    const std::string otherScope=DownloadStore::scopeKey(other.serverUrl,other.userId);
+    {
+        DownloadStore store(root);
+        CHECK(seedItem(store,otherScope,restartFixture("o1",DownloadState::Paused),true));
+        CHECK(seedItem(store,otherScope,restartFixture("o2",DownloadState::Paused),true));
+        CHECK(seedItem(store,"anonymous",restartFixture("a1",DownloadState::Paused),true));
+    }
+    DownloadStore store(root);
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true);
+    manager.flushPersistence();
+    for(int mode=0;mode<2;++mode){
+        if(mode==1){ // a damaged index: the library is rebuilt from the manifests (also on the storage thread)
+            std::remove((store.scopePath(otherScope)+"/index.v1").c_str());
+        }
+        manager.configure({});
+        manager.flushPersistence();
+        DiskStall stall(manager);
+        manager.pause("a1");                              // storage thread stuck in a write...
+        CHECK(stall.waitReached());
+        const auto start=std::chrono::steady_clock::now();
+        manager.configure(other);                          // ...and the new library's read queued behind it
+        CHECK(manager.snapshot().items.empty());           // no stale data from the previous account
+        manager.enqueue(restartFixture("o3"));            // added while the library is still loading
+        CHECK(!manager.hasComplete("o1"));
+        CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));
+        stall.release();
+        manager.flushPersistence();
+        std::set<std::string> ids;for(const auto&i:manager.snapshot().items)ids.insert(i.itemId);
+        CHECK(ids==(std::set<std::string>{"o1","o2","o3"}));
+        std::vector<DownloadItem> idx;CHECK(store.loadIndex(otherScope,idx,nullptr));
+        std::set<std::string> onDisk;for(const auto&i:idx)onDisk.insert(i.itemId);
+        CHECK(onDisk==ids);                               // the index lists all three, none lost to the early write
+        // Leaving the account while its library is still being read must not shrink its index.
+        manager.configure({});
+        manager.flushPersistence();
+        std::vector<DownloadItem> idx2;CHECK(store.loadIndex(otherScope,idx2,nullptr));
+        CHECK(idx2.size()==3);
+        {
+            DownloadItem x;CHECK(store.loadManifest(otherScope,"o3",x,nullptr));
+        }
+        // remove o3 so the second round starts the same
+        manager.configure(other);manager.flushPersistence();
+        CHECK(manager.erase("o3"));manager.flushPersistence();
+    }
+    // Switch away before the read is even attempted: the index keeps listing everything.
+    {
+        manager.configure({});manager.flushPersistence();
+        DiskStall stall(manager);
+        manager.pause("a1");
+        CHECK(stall.waitReached());
+        manager.configure(other);
+        manager.enqueue(restartFixture("o4"));
+        manager.configure({});
+        stall.release();
+        manager.flushPersistence();
+        std::vector<DownloadItem> idx;CHECK(store.loadIndex(otherScope,idx,nullptr));
+        std::set<std::string> onDisk;for(const auto&i:idx)onDisk.insert(i.itemId);
+        CHECK(onDisk==(std::set<std::string>{"o1","o2","o4"}));
+    }
+    // A read that really blocks in the kernel (a FIFO standing in for the index of a stuck disk):
+    // configure() on the caller must not touch it.
+    {
+        const Session third=fixtureAccount("third");
+        const std::string thirdScope=DownloadStore::scopeKey(third.serverUrl,third.userId);
+        CHECK(store.ensureHlsDirectories(thirdScope,"placeholder"));
+        const std::string fifo=store.scopePath(thirdScope)+"/index.v1";
+        CHECK(::mkfifo(fifo.c_str(),0600)==0);
+        manager.configure({});manager.flushPersistence();
+        std::thread writer([&]{std::this_thread::sleep_for(std::chrono::milliseconds(800));FILE*f=std::fopen(fifo.c_str(),"w");if(f){std::fputs("MFDI=1\n",f);std::fclose(f);}});
+        const auto t0=std::chrono::steady_clock::now();
+        manager.configure(third);
+        const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+        CHECK(ms<300);
+        CHECK(manager.snapshot().items.empty());
+        writer.join();
+        manager.flushPersistence();
+        ::unlink(fifo.c_str());
+    }
+    std::printf("[test] account library load is asynchronous OK\n");
 }

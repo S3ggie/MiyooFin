@@ -77,8 +77,8 @@ class Server
                 const std::string reply = m_handler(request);
                 std::size_t sent = 0;
                 while (sent < reply.size()) {
-                    const ssize_t w = ::send(client, reply.data() + sent, reply.size() - sent,
-                                             MSG_NOSIGNAL);
+                    const ssize_t w =
+                        ::send(client, reply.data() + sent, reply.size() - sent, MSG_NOSIGNAL);
                     if (w <= 0)
                         break;
                     sent += static_cast<std::size_t>(w);
@@ -121,9 +121,9 @@ void testOriginRules()
     CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "http://a:1/y"));
     CHECK(redirectKeepsCredentialsSafe("http://a:1/x", "/relative"));
     CHECK(redirectKeepsCredentialsSafe("http://a/x", "https://a/y")); // http -> https, same host
-    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "http://a:2/y")); // other port
-    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "http://b:1/y")); // other host
-    CHECK(!redirectKeepsCredentialsSafe("https://a/x", "http://a/y"));    // https -> http
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "http://a:2/y"));   // other port
+    CHECK(!redirectKeepsCredentialsSafe("http://a:1/x", "http://b:1/y"));   // other host
+    CHECK(!redirectKeepsCredentialsSafe("https://a/x", "http://a/y"));      // https -> http
     CHECK(!redirectKeepsCredentialsSafe("http://a:8096/x", "https://a/y")); // port changes
     CHECK(!redirectKeepsCredentialsSafe("https://a/x", "https://a.evil.example/y"));
 }
@@ -184,9 +184,8 @@ void testSameOriginRedirectKeepsTheToken()
 void testResponseSizesAreBounded()
 {
     // Text: more than the cap is a stable error, not an unbounded buffer.
-    Server big([](const std::string&) {
-        return ok(std::string(kMaxTextResponseBytes + 4096, 'x'));
-    });
+    Server big(
+        [](const std::string&) { return ok(std::string(kMaxTextResponseBytes + 4096, 'x')); });
     HttpClient client;
     HttpResponse response;
     std::string error;

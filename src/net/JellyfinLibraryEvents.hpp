@@ -3,6 +3,7 @@
 
 #include "JellyfinLibraryEventParse.hpp"
 #include "Session.hpp"
+#include "WebSocketFrames.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -104,18 +105,27 @@ class JellyfinLibraryEvents
     start(std::shared_ptr<JellyfinLibraryEventQueue> queue,
           const std::shared_ptr<std::atomic_bool>& cancelled) const;
 
+    /// Result of one non-blocking read from the socket.
+    enum class Receive
+    {
+        Data,  // bytes were appended
+        Again, // nothing to read right now
+        Eof,   // the peer closed the connection (curl reports that as a successful 0-byte read)
+        Error
+    };
+
   private:
     static bool sendAll(void* curl, const std::string& payload, const std::atomic<bool>& cancelled);
-    static int receiveSome(void* curl, std::vector<unsigned char>& bytes);
+    static Receive receiveSome(void* curl, std::vector<unsigned char>& bytes);
     static std::string hostHeader(const std::string& url);
     static std::string requestTarget(const std::string& url);
 
     bool connectAndConsume(const std::string& baseUrl, JellyfinLibraryEventQueue& queue,
                            const std::atomic<bool>& cancelled, std::string& error) const;
 
-    static bool consumeFrames(void* curl, std::vector<unsigned char>& bytes,
-                              JellyfinLibraryEventQueue& queue, const std::atomic<bool>& cancelled,
-                              std::string& error);
+    static bool consumeFrames(void* curl, WebSocketFrameReader& reader,
+                              std::vector<unsigned char>& bytes, JellyfinLibraryEventQueue& queue,
+                              const std::atomic<bool>& cancelled, std::string& error);
 
     Session m_session;
 };

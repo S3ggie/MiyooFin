@@ -1,6 +1,7 @@
 #include "JellyfinLibraryEvents.hpp"
 #include "JellyfinLibraryEventParse.hpp"
 #include "RouteRequest.hpp"
+#include "TlsConfig.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -60,15 +61,23 @@ bool JellyfinLibraryEvents::sendAll(void* curl, const std::string& payload,
     return offset == payload.size();
 }
 
-int JellyfinLibraryEvents::receiveSome(void* curl, std::vector<unsigned char>& bytes)
+JellyfinLibraryEvents::Receive JellyfinLibraryEvents::receiveSome(void* curl,
+                                                                  std::vector<unsigned char>& bytes)
 {
     CURL* c = static_cast<CURL*>(curl);
     unsigned char buffer[4096];
     std::size_t received = 0;
     const CURLcode code = curl_easy_recv(c, buffer, sizeof(buffer), &received);
-    if (code == CURLE_OK && received != 0)
-        bytes.insert(bytes.end(), buffer, buffer + received);
-    return static_cast<int>(code);
+    if (code == CURLE_AGAIN)
+        return Receive::Again;
+    if (code != CURLE_OK)
+        return Receive::Error;
+    // curl_easy_recv succeeds with exactly 0 bytes when the peer closed the connection. That is
+    // the end of the stream, not "no news": treating it as success made the reader spin.
+    if (received == 0)
+        return Receive::Eof;
+    bytes.insert(bytes.end(), buffer, buffer + received);
+    return Receive::Data;
 }
 
 std::string JellyfinLibraryEvents::hostHeader(const std::string& url)
@@ -107,6 +116,11 @@ bool JellyfinLibraryEvents::connectAndConsume(const std::string& baseUrl,
     else if (connectionUrl.compare(0, 5, "ws://") == 0)
         connectionUrl.replace(0, 5, "http://");
     curl_easy_setopt(curl, CURLOPT_URL, connectionUrl.c_str());
+    // wss:// needs the packaged CA bundle exactly like ordinary HTTPS does on the handheld.
+    if (!configureTls(curl, connectionUrl, &error)) {
+        curl_easy_cleanup(curl);
+        return false;
+    }
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
@@ -129,27 +143,42 @@ bool JellyfinLibraryEvents::connectAndConsume(const std::string& baseUrl,
         return false;
     }
     std::vector<unsigned char> bytes;
+    WebSocketFrameReader reader(jellyfin_library_events_detail::kMaxMessageBytes);
+    bool upgraded = false;
+    constexpr std::size_t kMaxHandshakeBytes = 16 * 1024;
     while (!cancelled.load(std::memory_order_acquire)) {
-        const CURLcode received = static_cast<CURLcode>(receiveSome(curl, bytes));
-        if (received == CURLE_AGAIN) {
+        const Receive received = receiveSome(curl, bytes);
+        if (received == Receive::Again) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
-        if (received != CURLE_OK)
+        if (received == Receive::Eof) {
+            error = "Transport: WebSocket closed by the server";
             break;
-        if (bytes.size() >= 4 && bytes[0] == 'H' && bytes[1] == 'T') {
+        }
+        if (received == Receive::Error)
+            break;
+        if (!upgraded) {
+            // The HTTP upgrade response, bounded: a peer that never finishes its headers must not
+            // make us buffer forever.
             const std::string headers(bytes.begin(), bytes.end());
             const std::size_t end = headers.find("\r\n\r\n");
-            if (end == std::string::npos)
+            if (end == std::string::npos) {
+                if (bytes.size() > kMaxHandshakeBytes) {
+                    error = "WebSocket handshake response too large";
+                    break;
+                }
                 continue;
-            if (headers.find(" 101 ") == std::string::npos) {
+            }
+            if (headers.compare(0, 5, "HTTP/") != 0 || headers.find(" 101 ") == std::string::npos) {
                 error = "HTTP WebSocket upgrade rejected";
                 curl_easy_cleanup(curl);
                 return false;
             }
-            bytes.erase(bytes.begin(), bytes.begin() + end + 4);
+            bytes.erase(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(end + 4));
+            upgraded = true;
         }
-        if (!consumeFrames(curl, bytes, queue, cancelled, error))
+        if (!consumeFrames(curl, reader, bytes, queue, cancelled, error))
             break;
     }
     curl_easy_cleanup(curl);
@@ -160,47 +189,29 @@ bool JellyfinLibraryEvents::connectAndConsume(const std::string& baseUrl,
     return false;
 }
 
-bool JellyfinLibraryEvents::consumeFrames(void* curl, std::vector<unsigned char>& bytes,
+bool JellyfinLibraryEvents::consumeFrames(void* curl, WebSocketFrameReader& reader,
+                                          std::vector<unsigned char>& bytes,
                                           JellyfinLibraryEventQueue& queue,
                                           const std::atomic<bool>& cancelled, std::string& error)
 {
-    CURL* c = static_cast<CURL*>(curl);
-    while (bytes.size() >= 2) {
-        const unsigned char first = bytes[0];
-        const unsigned char second = bytes[1];
-        std::size_t headerSize = 2;
-        std::uint64_t payloadSize = second & 0x7f;
-        if (payloadSize == 126) {
-            if (bytes.size() < 4)
-                return true;
-            payloadSize = (static_cast<std::uint64_t>(bytes[2]) << 8) | bytes[3];
-            headerSize = 4;
-        } else if (payloadSize == 127) {
-            if (bytes.size() < 10)
-                return true;
-            payloadSize = 0;
-            for (unsigned i = 0; i < 8; ++i)
-                payloadSize = (payloadSize << 8) | bytes[2 + i];
-            headerSize = 10;
-        }
-        const bool masked = (second & 0x80) != 0;
-        if (masked)
-            headerSize += 4;
-        if (payloadSize > jellyfin_library_events_detail::kMaxMessageBytes ||
-            bytes.size() < headerSize + payloadSize)
+    for (;;) {
+        const WebSocketFrameReader::Result frame = reader.next(bytes);
+        switch (frame.status) {
+        case WebSocketFrameReader::Status::NeedMore:
             return true;
-        if ((first & 0x0f) == 0x8)
+        case WebSocketFrameReader::Status::Close:
             return false;
-        if ((first & 0x0f) == 0x9) {
-            std::string pong("\x8A\x00", 2);
-            if (!sendAll(c, pong, cancelled))
+        case WebSocketFrameReader::Status::Error:
+            error = frame.error;
+            return false;
+        case WebSocketFrameReader::Status::Ping:
+            // The pong echoes the ping's payload and, being from a client, is masked.
+            if (!sendAll(curl, buildPong(frame.payload), cancelled))
                 return false;
-        } else if ((first & 0x0f) == 0x1) {
-            std::string message(bytes.begin() + static_cast<std::ptrdiff_t>(headerSize),
-                                bytes.begin() +
-                                    static_cast<std::ptrdiff_t>(headerSize + payloadSize));
+            break;
+        case WebSocketFrameReader::Status::Message: {
             JellyfinLibraryChangeBatch batch;
-            const auto parsed = parseMessage(message, batch);
+            const auto parsed = parseMessage(frame.payload, batch);
             if (parsed == JellyfinLibraryEventParse::Malformed ||
                 parsed == JellyfinLibraryEventParse::Oversized) {
                 error = "WebSocket LibraryChanged message malformed";
@@ -208,11 +219,10 @@ bool JellyfinLibraryEvents::consumeFrames(void* curl, std::vector<unsigned char>
             }
             if (parsed == JellyfinLibraryEventParse::Parsed)
                 queue.push(batch);
+            break;
         }
-        bytes.erase(bytes.begin(),
-                    bytes.begin() + static_cast<std::ptrdiff_t>(headerSize + payloadSize));
+        }
     }
-    return true;
 }
 
 JellyfinLibraryEventRun

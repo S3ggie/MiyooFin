@@ -22,7 +22,7 @@ Checked items are done and pushed. Order is the build order.
 - [x] Crash report screen (shows `crash.log`)
 - [x] Scripted on-device smoke test (`tools/miyoo/mfctl.sh smoke`)
 - [ ] README screenshots and a short user guide
-- [ ] Release: version bump, changelog, package, update test
+- [~] Release: version 0.3.0 and CHANGELOG.md done, package stages and passes the legal check; still to do: install `zip` for the ZIP step and run `tools/publish-release.sh v0.3.0` (waits for your go-ahead)
 - [ ] Architecture-map doc (when the app is called done)
 
 ## Later

@@ -5,6 +5,7 @@
 #include "../../download/DownloadManager.hpp"
 #include "../../music/MusicDownloads.hpp"
 #include "../../music/MusicLibrary.hpp"
+#include "../../music/MusicPaths.hpp"
 #include "../../music/MusicPlayer.hpp"
 #include "../../music/MusicSettings.hpp"
 #include "../../net/Session.hpp"
@@ -278,6 +279,7 @@ class MusicScreen : public Screen
     int detailHeaderHeight(const MusicPane& pane) const;
 
     Session m_session;
+    music::MusicPaths m_paths; // this account's folder: cache, history, saved state
     music::MusicPlayer* m_player;
     music::MusicSettings* m_settings;
     music::MusicDownloads* m_downloads;

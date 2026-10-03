@@ -110,6 +110,8 @@ class App
     std::unique_ptr<music::MusicDownloads> m_musicDownloads; // outlives the player's fetches
     std::unique_ptr<music::MusicPlayer> m_music;
     std::shared_ptr<Session> m_musicSession;
+    std::string m_musicRoot; // music/<scope> the current player belongs to
+    void retireMusic();
     void ensureMusicPlayer();
     void switchMode(AppMode mode);
     std::thread m_savedValidationThread;

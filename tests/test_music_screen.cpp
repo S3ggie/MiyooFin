@@ -1,6 +1,7 @@
 #include "test_support.hpp"
 
 #include "../src/music/MusicCache.hpp"
+#include "../src/music/MusicPaths.hpp"
 #include "../src/music/MusicPlayer.hpp"
 #include "../src/ui/screens/MusicScreen.hpp"
 
@@ -44,7 +45,12 @@ struct Rig
         if (chdir(dir.c_str()) != 0)
             std::abort();
         // Cached listings stand in for the server: the screen runs fully offline.
-        MusicCache cache("music-cache/lists");
+        Session account;
+        account.serverUrl = "http://127.0.0.1:1";
+        account.userId = "u";
+        const MusicPaths paths = MusicPaths::forSession(account);
+        paths.ensureDirs();
+        MusicCache cache(paths.cache + "/lists");
         ListingRequest r;
         r.kind = Listing::RecentAlbums;
         cache.saveAlbums(r.key(),
@@ -75,7 +81,7 @@ struct Rig
             return t;
         };
         player = std::make_unique<MusicPlayer>(options, hooks);
-        downloads = std::make_unique<MusicDownloads>("music-downloads", MusicDownloads::Hooks{});
+        downloads = std::make_unique<MusicDownloads>(paths.downloads, MusicDownloads::Hooks{});
         fb = SDL_CreateRGBSurfaceWithFormat(0, 640, 480, 32, SDL_PIXELFORMAT_RGBA32);
     }
     ~Rig()

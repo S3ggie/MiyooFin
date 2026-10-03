@@ -69,6 +69,17 @@ void WatchedSync::setSession(const Session& session)
     m_wake.notify_all();
 }
 
+void WatchedSync::configure(std::string path, const Session& session)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_path = std::move(path);
+        m_session = session;
+        m_nudge = true;
+    }
+    m_wake.notify_all();
+}
+
 void WatchedSync::setPath(std::string path)
 {
     {
@@ -79,10 +90,10 @@ void WatchedSync::setPath(std::string path)
     m_wake.notify_all();
 }
 
-std::vector<WatchedSync::Entry> WatchedSync::loadLocked() const
+std::vector<WatchedSync::Entry> WatchedSync::loadFrom(const std::string& path)
 {
     std::vector<Entry> out;
-    std::ifstream in(m_path);
+    std::ifstream in(path);
     std::string line;
     while (std::getline(in, line)) {
         const std::size_t tab = line.find('\t');
@@ -93,16 +104,16 @@ std::vector<WatchedSync::Entry> WatchedSync::loadLocked() const
     return out;
 }
 
-void WatchedSync::storeLocked(const std::vector<Entry>& entries) const
+void WatchedSync::storeTo(const std::string& path, const std::vector<Entry>& entries)
 {
     if (entries.empty()) {
-        std::remove(m_path.c_str());
+        std::remove(path.c_str());
         return;
     }
     // The account's cache folder may not exist yet.
-    for (std::size_t i = m_path.find('/'); i != std::string::npos; i = m_path.find('/', i + 1))
-        ::mkdir(m_path.substr(0, i).c_str(), 0755);
-    const std::string tmp = m_path + ".tmp";
+    for (std::size_t i = path.find('/'); i != std::string::npos; i = path.find('/', i + 1))
+        ::mkdir(path.substr(0, i).c_str(), 0755);
+    const std::string tmp = path + ".tmp";
     {
         std::ofstream out(tmp, std::ios::trunc);
         for (const Entry& e : entries)
@@ -110,7 +121,7 @@ void WatchedSync::storeLocked(const std::vector<Entry>& entries) const
         if (!out.good())
             return;
     }
-    std::rename(tmp.c_str(), m_path.c_str());
+    std::rename(tmp.c_str(), path.c_str());
 }
 
 void WatchedSync::enqueue(const std::string& itemId, bool played)
@@ -148,6 +159,7 @@ void WatchedSync::loop()
         }
         const Entry entry = all.front();
         const Session session = m_session;
+        const std::string sentFrom = m_path; // the queue this change came out of
         lock.unlock();
         const Result result = m_sender(session, entry.itemId, entry.played);
         lock.lock();
@@ -157,14 +169,15 @@ void WatchedSync::loop()
                             [this] { return m_stop || m_nudge; });
             continue;
         }
-        // Done or Drop: forget it, unless the user changed their mind while it was in flight.
-        std::vector<Entry> now = loadLocked();
+        // Done or Drop: forget it in the queue it came from (the account may have changed while it
+        // was in flight), unless the user changed their mind about it meanwhile.
+        std::vector<Entry> now = loadFrom(sentFrom);
         now.erase(std::remove_if(now.begin(), now.end(),
                                  [&](const Entry& e) {
                                      return e.itemId == entry.itemId && e.played == entry.played;
                                  }),
                   now.end());
-        storeLocked(now);
+        storeTo(sentFrom, now);
     }
 }
 

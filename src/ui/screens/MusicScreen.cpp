@@ -1,5 +1,6 @@
 #include "MusicScreen.hpp"
 #include "../../music/MusicApi.hpp"
+#include "../../music/MusicPaths.hpp"
 #include "../../music/MusicParse.hpp"
 #include "../UiKit.hpp"
 #include "TextEntryScreen.hpp"
@@ -15,9 +16,7 @@ namespace miyoofin {
 
 namespace {
 
-constexpr const char* kStateFile = "music-ui-state.txt";
 constexpr const char* kSettingsFile = "music-settings.txt";
-constexpr const char* kCacheRoot = "music-cache";
 constexpr int kRowHeight = 44;
 constexpr int kGridCols = 4, kGridCellH = 156;
 constexpr int kPrefetchRows = 12;
@@ -184,12 +183,14 @@ music::ListingRequest MusicScreen::requestFor(const MusicFrame& frame, int start
 
 MusicScreen::MusicScreen(const Session& session, music::MusicPlayer* player,
                          music::MusicSettings* settings, music::MusicDownloads* downloads)
-    : m_session(session), m_player(player), m_settings(settings), m_downloads(downloads),
-      m_library(std::make_unique<music::MusicLibrary>(session, kCacheRoot, "music-cache/stream"))
+    : m_session(session), m_paths(music::MusicPaths::forSession(session)), m_player(player),
+      m_settings(settings), m_downloads(downloads),
+      m_library(std::make_unique<music::MusicLibrary>(session, m_paths.cache, m_paths.stream))
 {
+    m_paths.ensureDirs();
     MusicUiState state = MusicUiState::defaults();
     MusicUiState saved;
-    if (MusicUiState::parse(readText(kStateFile), saved))
+    if (MusicUiState::parse(readText(m_paths.uiState), saved))
         state = saved;
     buildFromState(state);
 }
@@ -247,7 +248,7 @@ MusicUiState MusicScreen::snapshotState() const
 
 void MusicScreen::saveState()
 {
-    writeText(kStateFile, snapshotState().serialize());
+    writeText(m_paths.uiState, snapshotState().serialize());
     m_stateDirty = false;
     m_stateSavedAt = m_clock;
 }

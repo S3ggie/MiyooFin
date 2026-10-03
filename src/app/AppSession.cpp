@@ -5,6 +5,7 @@
 #include "../music/MusicTracks.hpp"
 #include "../music/MusicDownloads.hpp"
 #include "../music/PlaysJournal.hpp"
+#include "../music/MusicPaths.hpp"
 #include "../net/WatchedSync.hpp"
 #include "../cache/LibraryCache.hpp"
 #include <ctime>
@@ -150,10 +151,10 @@ void App::loadSavedSession()
 void App::goToHome()
 {
     // Watched/unwatched changes go out from here, under the signed-in account.
-    WatchedSync::instance().setPath("cache/" +
-                                    LibraryCache::scopeKey(m_session.serverUrl, m_session.userId) +
-                                    "/watched-pending.txt");
-    WatchedSync::instance().setSession(m_session);
+    WatchedSync::instance().configure(
+        "cache/" + LibraryCache::scopeKey(m_session.serverUrl, m_session.userId) +
+            "/watched-pending.txt",
+        m_session);
     if (m_stack.size() > 1) {
         m_stack.pop();
     }
@@ -169,10 +170,34 @@ void App::goToHome()
         m_libraryCoordinator ? m_libraryCoordinator->query() : nullptr, m_libraryCoordinator));
 }
 
-void App::ensureMusicPlayer()
+void App::retireMusic()
 {
     if (m_music)
+        m_music->shutdown(1500); // reports and the saved queue are written before it goes
+    m_music.reset();
+    m_musicDownloads.reset(); // after the player: its fetches use the downloads
+    m_musicRoot.clear();
+}
+
+void App::ensureMusicPlayer()
+{
+    // Everything music keeps belongs to the signed-in account; a different account (or server)
+    // gets its own player, downloads, history and queue.
+    const music::MusicPaths paths = music::MusicPaths::forSession(m_session);
+    if (m_music && m_musicRoot != paths.root)
+        retireMusic();
+    if (m_music)
         return;
+    paths.adoptLegacyState();
+    paths.ensureDirs();
+    m_musicRoot = paths.root;
+    // Reports and downloads started by this player always run as the account that started them,
+    // even if another account is current by the time they happen.
+    const Session pinned = m_session;
+    auto liveSession = [this, root = paths.root]() -> std::shared_ptr<Session> {
+        const std::shared_ptr<Session> live = std::atomic_load(&m_musicSession);
+        return live && music::MusicPaths::forSession(*live).root == root ? live : nullptr;
+    };
     music::PlayerOptions options;
     char cwd[1024];
     const std::string dir = getcwd(cwd, sizeof(cwd)) ? std::string(cwd) : std::string(".");
@@ -185,9 +210,10 @@ void App::ensureMusicPlayer()
     m_musicSettings.load("music-settings.txt");
 
     music::MusicDownloads::Hooks downloadHooks;
-    downloadHooks.fetch = [this](const std::string& trackId, const std::string& dest,
-                                 std::string& error, const std::atomic<bool>& cancelled) {
-        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+    downloadHooks.fetch = [this, liveSession](const std::string& trackId, const std::string& dest,
+                                              std::string& error,
+                                              const std::atomic<bool>& cancelled) {
+        const std::shared_ptr<Session> session = liveSession();
         if (!session) {
             error = "Not signed in";
             return false;
@@ -198,42 +224,46 @@ void App::ensureMusicPlayer()
             return music::downloadTrack(c, trackId, quality, dest, error, &cancelled);
         });
     };
-    downloadHooks.offline = [this] {
-        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+    downloadHooks.offline = [liveSession] {
+        const std::shared_ptr<Session> session = liveSession();
         return !session || session->manualOfflineMode;
     };
-    downloadHooks.freeBytes = [] {
+    downloadHooks.freeBytes = [dir = paths.downloads] {
         struct statvfs vfs;
-        if (statvfs("music-downloads", &vfs) != 0 && statvfs(".", &vfs) != 0)
+        if (statvfs(dir.c_str(), &vfs) != 0 && statvfs(".", &vfs) != 0)
             return std::uint64_t{0};
         return static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
     };
     m_musicDownloads =
-        std::make_unique<music::MusicDownloads>("music-downloads", std::move(downloadHooks));
+        std::make_unique<music::MusicDownloads>(paths.downloads, std::move(downloadHooks));
 
     music::PlayerHooks hooks;
-    hooks.resolve = [this](const music::Track& track, const std::atomic<bool>& cancelled) {
-        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+    hooks.resolve = [this, liveSession, stream = paths.stream](const music::Track& track,
+                                                               const std::atomic<bool>& cancelled) {
+        const std::shared_ptr<Session> session = liveSession();
         music::ResolvedTrack out;
         if (!session) {
             out.error = "Not signed in";
             return out;
         }
-        music::TrackSourceConfig source =
-            music::makeServerSource(*session, "music-cache/stream",
-                                    {music::MusicSettings::sanitize(m_musicSettings.streamKbps)});
+        music::TrackSourceConfig source = music::makeServerSource(
+            *session, stream, {music::MusicSettings::sanitize(m_musicSettings.streamKbps)});
         // Offline copies win over everything else (and work with no network at all).
         source.downloadedPath = [this](const std::string& id) {
             return m_musicDownloads ? m_musicDownloads->pathFor(id) : std::string();
         };
         return music::resolveTrack(source, track, cancelled);
     };
-    hooks.report = [this](music::ReportKind kind, const music::Track& track, std::int64_t ticks,
-                          bool paused, const std::string& playSessionId) {
-        const std::shared_ptr<Session> session = std::atomic_load(&m_musicSession);
+    auto journalPtr = std::make_shared<music::PlaysJournal>(paths.journal);
+    hooks.report = [liveSession, pinned,
+                    journalPtr](music::ReportKind kind, const music::Track& track,
+                                std::int64_t ticks, bool paused, const std::string& playSessionId) {
+        // The account that played the song reports it: the live session while it is still the
+        // current one, otherwise the one this player was made for.
+        std::shared_ptr<Session> session = liveSession();
         if (!session)
-            return;
-        static music::PlaysJournal journal("music-plays.journal");
+            session = std::make_shared<Session>(pinned);
+        music::PlaysJournal& journal = *journalPtr;
         std::string error;
         const bool reported = !session->manualOfflineMode &&
                               music::onRoute(*session, error, [&](const music::Connection& c) {
@@ -265,19 +295,20 @@ void App::ensureMusicPlayer()
             std::remove("/tmp/stay_awake");
         }
     };
-    hooks.saveQueue = [](const std::string& text) {
+    hooks.saveQueue = [queuePath = paths.queue](const std::string& text) {
         if (text.empty()) {
-            std::remove("music-queue.txt");
+            std::remove(queuePath.c_str());
             return;
         }
-        if (FILE* f = std::fopen("music-queue.txt.tmp", "w")) {
+        const std::string tmp = queuePath + ".tmp";
+        if (FILE* f = std::fopen(tmp.c_str(), "w")) {
             std::fwrite(text.data(), 1, text.size(), f);
             std::fclose(f);
-            std::rename("music-queue.txt.tmp", "music-queue.txt");
+            std::rename(tmp.c_str(), queuePath.c_str());
         }
     };
     m_music = std::make_unique<music::MusicPlayer>(std::move(options), std::move(hooks));
-    if (FILE* f = std::fopen("music-queue.txt", "r")) {
+    if (FILE* f = std::fopen(paths.queue.c_str(), "r")) {
         std::string text;
         char buf[4096];
         std::size_t n;
@@ -371,6 +402,7 @@ void App::logout()
     if (m_music)
         m_music->stop();
     std::atomic_store(&m_musicSession, std::shared_ptr<Session>()); // music workers: signed out
+    retireMusic(); // its queue, history and downloads stay with the account that made them
     if (m_libraryCoordinator) {
         m_libraryCoordinator->stop();
     }

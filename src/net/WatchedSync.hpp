@@ -35,6 +35,9 @@ class WatchedSync
     void setSession(const Session& session);
     /// Where pending changes are kept (changes with the signed-in account).
     void setPath(std::string path);
+    /// Switches account in one step: the queue file and the session always belong together, so
+    /// a send can never pair one account's pending changes with another account's credentials.
+    void configure(std::string path, const Session& session);
     void enqueue(const std::string& itemId, bool played);
     std::size_t pending() const;
     /// Seconds to wait after a failed attempt (overridable so tests do not sleep).
@@ -50,8 +53,16 @@ class WatchedSync
         bool played;
     };
     void loop();
-    std::vector<Entry> loadLocked() const;
-    void storeLocked(const std::vector<Entry>& entries) const;
+    static std::vector<Entry> loadFrom(const std::string& path);
+    static void storeTo(const std::string& path, const std::vector<Entry>& entries);
+    std::vector<Entry> loadLocked() const
+    {
+        return loadFrom(m_path);
+    }
+    void storeLocked(const std::vector<Entry>& entries) const
+    {
+        storeTo(m_path, entries);
+    }
 
     std::string m_path;
     Sender m_sender;

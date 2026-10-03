@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <mutex>
 #include <thread>
@@ -71,6 +72,71 @@ struct Rig
     }
 };
 
+// Account A's change is in flight when the user switches to B. A's acknowledgement must clear A's
+// queue only: B's identical change (same item id) stays queued and goes out under B's session.
+void testAccountSwitchDuringSend()
+{
+    std::printf("[test] watched sync: switching account while a send is in flight\n");
+    char tmpl[] = "/tmp/miyoofin-watched-acct-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    const std::string pathA = dir + "/a.txt", pathB = dir + "/b.txt";
+    std::mutex m;
+    std::condition_variable cv;
+    bool inFlight = false, release = false;
+    std::vector<std::string> sentBy; // "user:item"
+    {
+        WatchedSync sync(pathA, [&](const Session& s, const std::string& id, bool) {
+            if (s.userId == "A") {
+                std::unique_lock<std::mutex> lock(m);
+                inFlight = true;
+                cv.notify_all();
+                cv.wait(lock, [&] { return release; });
+                sentBy.push_back("A:" + id);
+                return WatchedSync::Result::Done;
+            }
+            std::lock_guard<std::mutex> lock(m);
+            sentBy.push_back(s.userId + ":" + id);
+            return WatchedSync::Result::Retry; // keep B's change so it can be inspected
+        });
+        sync.retrySeconds = [] { return 3600; };
+        Session a;
+        a.serverUrl = "http://x";
+        a.accessToken = "ta";
+        a.userId = "A";
+        Session b = a;
+        b.accessToken = "tb";
+        b.userId = "B";
+        sync.configure(pathA, a);
+        sync.enqueue("shared-item", true);
+        {
+            std::unique_lock<std::mutex> lock(m);
+            CHECK(cv.wait_for(lock, std::chrono::seconds(4), [&] { return inFlight; }));
+        }
+        sync.configure(pathB, b); // A's request is still outstanding
+        sync.enqueue("shared-item", true);
+        {
+            std::lock_guard<std::mutex> lock(m);
+            release = true;
+        }
+        cv.notify_all();
+        for (int i = 0; i < 400; ++i) { // until B's send has been attempted
+            {
+                std::lock_guard<std::mutex> lock(m);
+                if (sentBy.size() >= 2)
+                    break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(sync.pending() == 1); // B's change survived A's acknowledgement
+        std::lock_guard<std::mutex> lock(m);
+        CHECK(sentBy.size() == 2 && sentBy[0] == "A:shared-item" && sentBy[1] == "B:shared-item");
+    }
+    CHECK(access(pathA.c_str(), F_OK) != 0); // A's queue was cleared
+    CHECK(access(pathB.c_str(), F_OK) == 0); // B's is still there
+    std::system(("rm -rf " + dir).c_str());
+    std::printf("[test] watched sync: switching account while a send is in flight OK\n");
+}
+
 void testSendsAndForgets()
 {
     std::printf("[test] watched sync sends and forgets\n");
@@ -132,6 +198,7 @@ void testSurvivesRestartAndDrops()
 
 int main()
 {
+    testAccountSwitchDuringSend();
     testSendsAndForgets();
     testOfflineKeepsAndRetries();
     testSurvivesRestartAndDrops();

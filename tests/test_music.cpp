@@ -4,6 +4,7 @@
 #include "../src/music/MusicCache.hpp"
 #include "../src/music/MusicParse.hpp"
 #include "../src/music/MusicLibrary.hpp"
+#include "../src/music/MusicPaths.hpp"
 #include "../src/music/MusicQueue.hpp"
 #include "../src/music/MusicSettings.hpp"
 #include "../src/music/MusicTracks.hpp"
@@ -462,6 +463,47 @@ void testQueuePersistence()
     std::printf("[test] saved queue OK\n");
 }
 
+void testAccountPaths()
+{
+    Session a;
+    a.serverUrl = "http://one:8096";
+    a.userId = "alice";
+    Session sameServerOtherUser = a;
+    sameServerOtherUser.userId = "bob";
+    Session otherServerSameUser = a;
+    otherServerSameUser.serverUrl = "http://two:8096";
+    const MusicPaths pa = MusicPaths::forSession(a);
+    CHECK(pa.root != MusicPaths::forSession(sameServerOtherUser).root);
+    CHECK(pa.root != MusicPaths::forSession(otherServerSameUser).root);
+    CHECK(pa.root == MusicPaths::forSession(a).root);
+    CHECK(pa.cache.find(pa.root) == 0 && pa.downloads.find(pa.root) == 0 &&
+          pa.journal.find(pa.root) == 0 && pa.queue.find(pa.root) == 0);
+
+    // The data from before accounts were separated goes to the first account to open Music,
+    // by moving it, and no other account ever sees it.
+    char cwd[1024];
+    const std::string old = getcwd(cwd, sizeof(cwd)) ? cwd : ".";
+    char tmpl[] = "/tmp/miyoofin-music-acct-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    CHECK(chdir(dir.c_str()) == 0);
+    CHECK(
+        std::system("mkdir -p music-downloads/tracks && echo audio > music-downloads/tracks/x.mp3 "
+                    "&& echo q > music-queue.txt && echo j > music-plays.journal") == 0);
+    pa.adoptLegacyState();
+    CHECK(access((pa.downloads + "/tracks/x.mp3").c_str(), F_OK) == 0);
+    CHECK(access(pa.queue.c_str(), F_OK) == 0 && access(pa.journal.c_str(), F_OK) == 0);
+    CHECK(access("music-downloads", F_OK) != 0 && access("music-queue.txt", F_OK) != 0);
+    const MusicPaths pb = MusicPaths::forSession(sameServerOtherUser);
+    pb.adoptLegacyState();
+    CHECK(access(pb.root.c_str(), F_OK) == 0);
+    CHECK(access(pb.downloads.c_str(), F_OK) != 0 && access(pb.queue.c_str(), F_OK) != 0);
+    CHECK(access((pa.downloads + "/tracks/x.mp3").c_str(), F_OK) == 0); // A's data untouched
+    pa.adoptLegacyState();                                              // asking again is harmless
+    CHECK(access((pa.downloads + "/tracks/x.mp3").c_str(), F_OK) == 0);
+    CHECK(chdir(old.c_str()) == 0);
+    std::system(("rm -rf " + dir).c_str());
+}
+
 void testFavoritesUrl()
 {
     ListingRequest r;
@@ -634,6 +676,7 @@ int main()
     testSettingsAlbumGrid();
     testLyrics();
     testFavoritesUrl();
+    testAccountPaths();
     testParsing();
     testUrls();
     testCache();

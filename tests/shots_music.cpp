@@ -2,6 +2,7 @@
 // real server, so no personal data (server address, user, playlists, covers) can appear.
 // Run with `make shots-music`; the BMPs land in output/shots/.
 #include "../src/music/MusicCache.hpp"
+#include "../src/music/MusicPaths.hpp"
 #include "../src/music/MusicPlayer.hpp"
 #include "../src/ui/Design.hpp"
 #include "../src/ui/screens/MusicScreen.hpp"
@@ -78,7 +79,12 @@ int main(int argc, char** argv)
                                albumNames[i].first, "al" + std::to_string(i), albumNames[i].second,
                                1, 200));
 
-    MusicCache cache("music-cache/lists");
+    Session account;
+    account.serverUrl = "http://127.0.0.1:1";
+    account.userId = "u";
+    const MusicPaths paths = MusicPaths::forSession(account);
+    paths.ensureDirs();
+    MusicCache cache(paths.cache + "/lists");
     ListingRequest r;
     r.kind = Listing::RecentAlbums;
     cache.saveAlbums(r.key(), albums, static_cast<int>(albums.size()));
@@ -119,7 +125,7 @@ int main(int argc, char** argv)
     };
     MusicPlayer player(options, hooks);
     MusicSettings settings;
-    MusicDownloads downloads("music-downloads", MusicDownloads::Hooks{});
+    MusicDownloads downloads(paths.downloads, MusicDownloads::Hooks{});
     SDL_Surface* fb = SDL_CreateRGBSurfaceWithFormat(0, 640, 480, 32, SDL_PIXELFORMAT_RGBA32);
 
     Session session;

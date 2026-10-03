@@ -493,6 +493,9 @@ bool HomeScreen::handleAction(Action action)
             case SettingsRowAction::MusicMode:
                 m_musicModeRequested = true;
                 return true;
+            case SettingsRowAction::TestConnection:
+                startConnectionTest();
+                return true;
             case SettingsRowAction::AudioLanguage:
             case SettingsRowAction::SubtitleLanguage:
                 openLanguageMenu(settingsRowAction(m_settingsState.selected, m_session) ==

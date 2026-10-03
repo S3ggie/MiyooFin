@@ -14,7 +14,7 @@ Checked items are done and pushed. Order is the build order.
 - [x] Screen-off listening, with the buttons locked after a combo
 
 ## Signing in
-- [ ] Test connection for each server address
+- [x] Test connection for each server address
 - [ ] Quick Connect sign-in (approve the Miyoo from a phone)
 
 ## Quality and housekeeping

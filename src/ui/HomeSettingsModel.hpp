@@ -17,6 +17,7 @@ enum class HomeSettingsRowAction
     Logout,
     CheckForUpdates,
     MusicMode,
+    TestConnection,
     AudioLanguage,
     SubtitleLanguage
 };
@@ -29,7 +30,8 @@ struct HomeSettingsAddressRow
 
 constexpr int homeSettingsBaseRowCount()
 {
-    return 15; // fixed: offline, 2 addresses, 9 info/action rows, change server, log out
+    return 16; // fixed: offline, 2 addresses, test connection, 9 info/action rows, change server,
+               // log out
 }
 std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session);
 int homeSettingsRowCount(const Session& session);

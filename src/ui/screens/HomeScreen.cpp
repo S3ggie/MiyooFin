@@ -107,6 +107,8 @@ void HomeScreen::joinAllWorkers()
     if (m_libraryFetch)
         m_libraryFetch->joinAllWorkers();
     m_downloadRefreshWorker.join();
+    m_connectionTest.cancel();
+    m_connectionTest.join();
     if (m_artworkController)
         m_artworkController->joinAllWorkers();
 }
@@ -261,6 +263,8 @@ void HomeScreen::leave()
 
 void HomeScreen::update(Uint32 dt)
 {
+    if (m_connectionTest.reap())
+        m_connectionTestResult = m_connectionTestPending;
     if (!m_catalogScopeReadyLogged && catalogScopeReady()) {
         m_catalogScopeReadyLogged = true;
         uiDiagnostics().log("[HomeScreen] startup stage=catalog_scope_ready epoch=" +

@@ -309,6 +309,11 @@ class HomeScreen : public Screen
     // Default audio/subtitle language (player-prefs.txt) and the picker for it.
     PlayerPrefs m_playerPrefs;
     bool m_playerPrefsLoaded = false;
+    // "Test connection": both saved addresses, checked on a worker.
+    WorkerSlot m_connectionTest;
+    std::string m_connectionTestResult;
+    std::string m_connectionTestPending; // written by the worker, read after reap()
+    void startConnectionTest();
     ChoiceMenu m_languageMenu;
     bool m_languageIsAudio = false;
     void openLanguageMenu(bool audio);

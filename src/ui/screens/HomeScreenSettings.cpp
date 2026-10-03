@@ -89,6 +89,37 @@ std::string HomeScreen::languageValue(bool audio)
     return m_playerPrefs.subLang.empty() ? "Automatic" : languageName(m_playerPrefs.subLang);
 }
 
+void HomeScreen::startConnectionTest()
+{
+    const Session::Routes routes = m_session.routes();
+    const std::string serverId = m_session.serverId;
+    const bool started =
+        m_connectionTest.start([this, routes, serverId](const CancelToken& cancel) {
+            auto check = [&](const std::string& url) -> std::string {
+                if (url.empty())
+                    return "not set";
+                ServerInfo info;
+                std::string error;
+                const auto t0 = std::chrono::steady_clock::now();
+                const bool ok = JellyfinApi::getSystemInfo(url, info, error, cancel.get());
+                const long ms =
+                    static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - t0)
+                                          .count());
+                if (!ok)
+                    return "failed";
+                if (!serverId.empty() && !JellyfinApi::serverIdsMatch(serverId, info.serverId))
+                    return "different server";
+                return "OK " + std::to_string(ms) + " ms";
+            };
+            const std::string home = check(routes.lan);
+            const std::string internet = check(routes.pub);
+            m_connectionTestPending = "Home: " + home + "  |  Internet: " + internet;
+        });
+    if (started)
+        m_connectionTestResult = "Testing...";
+}
+
 void HomeScreen::openLanguageMenu(bool audio)
 {
     languageValue(audio); // load once
@@ -133,6 +164,9 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
     std::vector<SettingRow> rows = {{"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"}};
     for (const SettingsAddressRow& row : settingsAddressRows(m_session))
         rows.push_back({row.section, row.value});
+    rows.push_back({"Test connection", m_connectionTestResult.empty()
+                                           ? "Press A to check both addresses"
+                                           : m_connectionTestResult});
     rows.insert(rows.end(),
                 {{"Last API Route", lastApiRouteValue()},
                  {"Account", m_userName.empty() ? "Unknown" : m_userName},

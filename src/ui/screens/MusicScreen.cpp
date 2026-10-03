@@ -693,6 +693,8 @@ void MusicScreen::refreshDownloadRows(MusicPane& pane)
                 info = "Failed: " + s.error;
             else if (s.done < s.total)
                 info = (s.active ? "Downloading " : "Waiting ") + info;
+            if (s.collection.sync && !s.failed)
+                info += " - keeps in sync";
             r.subtitle = info;
             r.right = formatMegabytes(s.bytes);
             r.artId = s.collection.artId;
@@ -1601,9 +1603,15 @@ void MusicScreen::openMenu(const MusicRow& row)
             return;
         m_menu.items = {{"Play", kMenuPlayDownloaded}, {"Shuffle", kMenuShuffleDownloaded}};
         if (m_downloads) {
-            for (const music::DownloadStatus& s : m_downloads->snapshot())
-                if (kDownloadPrefix + s.collection.id == row.id && s.failed)
+            for (const music::DownloadStatus& s : m_downloads->snapshot()) {
+                if (kDownloadPrefix + s.collection.id != row.id)
+                    continue;
+                if (s.failed)
                     m_menu.items.push_back({"Retry download", kMenuRetry});
+                if (s.collection.kind == "playlist")
+                    m_menu.items.push_back(
+                        {s.collection.sync ? "Stop keeping in sync" : "Keep in sync", kMenuSync});
+            }
         }
         m_menu.items.push_back({"Remove download", kMenuRemove});
         break;
@@ -1681,8 +1689,13 @@ void MusicScreen::runMenuAction(int action, const MusicRow& row)
     case kMenuSync: {
         if (!m_downloads)
             break;
-        const bool on = !m_downloads->syncOf(row.id);
-        m_downloads->setSync(row.id, on);
+        // A row in the Downloads tab carries the "dl:" prefix on its collection id.
+        const std::string collectionId =
+            row.id.compare(0, std::strlen(kDownloadPrefix), kDownloadPrefix) == 0
+                ? row.id.substr(std::strlen(kDownloadPrefix))
+                : row.id;
+        const bool on = !m_downloads->syncOf(collectionId);
+        m_downloads->setSync(collectionId, on);
         m_toast = on ? "Keeping " + row.title + " in sync" : "No longer syncing " + row.title;
         m_toastUntil = m_clock + 2500;
         if (on)

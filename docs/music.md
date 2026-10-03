@@ -118,3 +118,10 @@ reaping, resume, queue saving) and `test_music_downloads`. The threaded groups a
 On the device, build with `tools/miyoo/mfctl.sh deploy all` (the engine must come from the Docker
 toolchain: a host-built binary needs a newer glibc than the Miyoo has) and drive the UI with
 `mfctl.sh press ...` / `look`.
+
+## Screen-off listening
+
+Press START and SELECT together (within half a second) while music is loaded: the backlight goes
+dark and every button, including MENU, is ignored. Press START + SELECT together again to
+unlock. The previous backlight value is saved in `screen-lock.txt`, so a crash while locked is
+undone the next time the app starts.

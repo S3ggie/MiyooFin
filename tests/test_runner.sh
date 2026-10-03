@@ -34,6 +34,7 @@ test_music_downloads
 test_music_screen
 test_watched_sync
 test_player_prefs
+test_screen_lock
 '
 pids=
 

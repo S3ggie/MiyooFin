@@ -19,6 +19,7 @@
 #include "../music/MusicPlayer.hpp"
 #include "../music/MusicSettings.hpp"
 #include "AppMode.hpp"
+#include "ScreenLock.hpp"
 
 namespace miyoofin {
 
@@ -99,6 +100,7 @@ class App
         std::string identity, lan, pub;
     } m_routeMemory;
     AppMode m_mode = AppMode::Video;
+    ScreenLock m_screenLock;
     music::MusicSettings m_musicSettings;
     std::unique_ptr<music::MusicDownloads> m_musicDownloads; // outlives the player's fetches
     std::unique_ptr<music::MusicPlayer> m_music;

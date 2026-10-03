@@ -116,6 +116,7 @@ App::App()
 
 App::~App()
 {
+    m_screenLock.unlock();
     m_music.reset(); // stops the audio engine and its workers
     m_musicDownloads.reset();
     uiDiagnostics().setSuspended(true);
@@ -161,6 +162,7 @@ App::~App()
 
 bool App::init()
 {
+    m_screenLock.recover(); // a lock left by a crash
     printf("[App] %s %s on %s\n", APP_NAME, VERSION_STR, DEVICE_NAME);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -437,6 +439,20 @@ int App::run()
                 pollRemoteControl(actions); // developer control, off unless .remote-control exists
             if (!m_playbackStarting) {
                 for (Action a : actions) {
+                    // Screen-off listening: START + SELECT together darken the screen and
+                    // lock the buttons (music mode, while a track is loaded); again unlocks.
+                    if (m_screenLock.comboPressed(a, static_cast<long>(SDL_GetTicks())) &&
+                        (m_screenLock.locked() ||
+                         (m_mode == AppMode::Music && m_music &&
+                          m_music->view().state != music::PlayState::Idle))) {
+                        if (m_screenLock.locked())
+                            m_screenLock.unlock();
+                        else
+                            m_screenLock.lock();
+                        continue;
+                    }
+                    if (m_screenLock.locked())
+                        continue; // buttons are off (MENU / power included)
                     uiDiagnostics().setLastAction(actionName(a));
 #if defined(MIYOOFIN_ENABLE_PERF_TELEMETRY) && MIYOOFIN_ENABLE_PERF_TELEMETRY == 1
                     telemetry.setAction(PerformanceTelemetry::actionIdFromAction(a));

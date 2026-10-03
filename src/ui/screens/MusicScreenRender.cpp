@@ -3,6 +3,7 @@
 #include "../UiKit.hpp"
 #include "MusicScreen.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 namespace miyoofin {
@@ -188,6 +189,10 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
         renderGrid(fb, pane, listTop, bottom);
         return;
     }
+    if (pane.frame.kind == MusicPaneKind::Settings) {
+        renderSettingsCards(fb, pane, listTop, bottom);
+        return;
+    }
     const int visible = std::max(1, (bottom - listTop) / kRowHeight);
     int y = listTop;
     for (int i = pane.frame.scroll; i < static_cast<int>(pane.rows.size()) && y + 26 <= bottom;
@@ -258,6 +263,55 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
 
 // ---- mini player, now playing
 // ---------------------------------------------------------------------
+
+// The same cards as MiyooFin's Settings tab. "Enter MiyooFin" wears the video side's blue.
+void MusicScreen::renderSettingsCards(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
+{
+    constexpr int kRowH = 58, kPitch = 66;
+    const int w = d::kScreenW - 2 * d::kMargin - 8;
+    const int total = static_cast<int>(pane.rows.size());
+    const int visible = std::max(1, (bottom - top) / kPitch);
+    for (int slot = 0; slot < visible; ++slot) {
+        const int index = pane.frame.scroll + slot;
+        if (index >= total)
+            break;
+        const MusicRow& row = pane.rows[index];
+        const int y = top + 6 + slot * kPitch;
+        const bool selected = index == pane.frame.selected;
+        const bool enter = index == 0; // the way back to MiyooFin
+        const ui::BrandTone& tone = ui::kVideoTone;
+        if (selected && enter)
+            ui::focusRingTone(fb, d::kMargin, y, w, kRowH, tone.dim, tone.glow, tone.main,
+                              tone.soft, tone.edge);
+        else if (selected)
+            ui::focusRing(fb, d::kMargin, y, w, kRowH);
+        ui::roundFill(fb, d::kMargin, y, w, kRowH, d::kRadius,
+                      selected ? (enter ? tone.raised : d::kRaised) : d::kPanel);
+        ui::roundOutline(fb, d::kMargin, y, w, kRowH, d::kRadius,
+                         selected ? (enter ? tone.edge : d::kAccent) : d::kBorder);
+        const std::string value = row.right.empty() ? row.subtitle : row.right;
+        if (enter) { // "Miyoo" white, "Fin" blue
+            ui::brandWord(fb, d::kMargin + 14, y + 10, d::kText, tone.main, "", d::kText);
+            ui::textClamped(fb, d::kMargin + 14, y + 30, w - 28, "Press A to enter MiyooFin",
+                            selected ? d::kText : d::kTextSecondary);
+            continue;
+        }
+        std::string label = row.title;
+        for (char& c : label)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        ui::text(fb, d::kMargin + 14, y + 10, label, selected ? d::kAccentHi : d::kTextMuted);
+        ui::textClamped(fb, d::kMargin + 14, y + 30, w - 28, value,
+                        selected ? d::kText : d::kTextSecondary);
+    }
+    if (total > visible) {
+        const int trackH = visible * kPitch - 8;
+        const int thumbH = std::max(16, trackH * visible / total);
+        const int thumbY =
+            top + (trackH - thumbH) * pane.frame.scroll / std::max(1, total - visible);
+        ui::fill(fb, d::kScreenW - 10, top, 3, trackH, d::kDivider);
+        ui::roundFill(fb, d::kScreenW - 10, thumbY, 3, thumbH, 1, d::kAccentDim);
+    }
+}
 
 void MusicScreen::renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
 {

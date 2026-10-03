@@ -40,6 +40,20 @@ std::vector<std::string> wrap(const std::string& s, int maxWidthPx, int maxLines
 // ------------------------------------------------------------------ controls
 // Soft electric-blue focus ring drawn just outside (x, y, w, h).
 void focusRing(SDL_Surface* fb, int x, int y, int w, int h, int radius = design::kRadius);
+// The same glow in explicit colours (outer glow to bright edge), for rows that carry their own
+// brand colour regardless of the active palette.
+void focusRingTone(SDL_Surface* fb, int x, int y, int w, int h, Rgb dim, Rgb glow, Rgb main,
+                   Rgb soft, Rgb edge, int radius = design::kRadius);
+// Brand tones of the two modes: "MiyooFin" (blue) and "MiyooFin Music" (purple / magenta).
+struct BrandTone
+{
+    Rgb dim, glow, main, soft, edge, raised;
+};
+extern const BrandTone kVideoTone;
+extern const BrandTone kMusicTone;
+// "MIYOOFIN" label-style wordmark: the two halves in their own colours, then optional rest.
+int brandWord(SDL_Surface* fb, int x, int y, Rgb miyoo, Rgb fin, const std::string& rest,
+              Rgb restColor);
 
 enum class ButtonStyle
 {

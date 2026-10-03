@@ -207,11 +207,23 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
             break;
         const int y = TOP + visible * PITCH;
         const bool selected = index == m_settingsState.selected;
-        if (selected)
+        const bool musicRow = rows[index].section == "MIYOOFIN MUSIC";
+        const ui::BrandTone& tone = ui::kMusicTone;
+        if (selected && musicRow)
+            ui::focusRingTone(fb, d::kMargin, y, W, ROW_H, tone.dim, tone.glow, tone.main,
+                              tone.soft, tone.edge);
+        else if (selected)
             ui::focusRing(fb, d::kMargin, y, W, ROW_H);
-        ui::roundFill(fb, d::kMargin, y, W, ROW_H, d::kRadius, selected ? d::kRaised : d::kPanel);
+        ui::roundFill(fb, d::kMargin, y, W, ROW_H, d::kRadius,
+                      selected ? (musicRow ? tone.raised : d::kRaised) : d::kPanel);
         ui::roundOutline(fb, d::kMargin, y, W, ROW_H, d::kRadius,
-                         selected ? d::kAccent : d::kBorder);
+                         selected ? (musicRow ? tone.edge : d::kAccent) : d::kBorder);
+        if (musicRow) { // "Miyoo" purple, "Fin" and "Music" white
+            ui::brandWord(fb, d::kMargin + 14, y + 10, tone.main, d::kText, " MUSIC", d::kText);
+            ui::textClamped(fb, d::kMargin + 14, y + 30, W - 28, rows[index].value,
+                            selected ? d::kText : d::kTextSecondary);
+            continue;
+        }
         std::string label = rows[index].section;
         for (char& c : label)
             c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

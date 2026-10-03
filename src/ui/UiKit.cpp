@@ -213,6 +213,31 @@ void focusRing(SDL_Surface* fb, int x, int y, int w, int h, int radius)
     roundOutline(fb, x, y, w, h, radius, kAccentHi);
 }
 
+void focusRingTone(SDL_Surface* fb, int x, int y, int w, int h, Rgb dim, Rgb glow, Rgb main,
+                   Rgb soft, Rgb edge, int radius)
+{
+    roundOutline(fb, x - 4, y - 4, w + 8, h + 8, radius + 4, dim);
+    roundOutline(fb, x - 3, y - 3, w + 6, h + 6, radius + 3, glow);
+    roundOutline(fb, x - 2, y - 2, w + 4, h + 4, radius + 2, main);
+    roundOutline(fb, x - 1, y - 1, w + 2, h + 2, radius + 1, soft);
+    roundOutline(fb, x, y, w, h, radius, edge);
+}
+
+const BrandTone kVideoTone{{24, 70, 150},  {34, 95, 180},   {60, 150, 255},
+                           {90, 175, 255}, {150, 205, 255}, {21, 28, 48}};
+const BrandTone kMusicTone{{84, 40, 150},  {120, 55, 200}, {150, 80, 255},
+                           {200, 75, 240}, {240, 70, 220}, {34, 20, 52}};
+
+int brandWord(SDL_Surface* fb, int x, int y, Rgb miyoo, Rgb fin, const std::string& rest,
+              Rgb restColor)
+{
+    int w = text(fb, x, y, "MIYOO", miyoo);
+    w += text(fb, x + w, y, "FIN", fin);
+    if (!rest.empty())
+        w += text(fb, x + w, y, rest, restColor);
+    return w;
+}
+
 void button(SDL_Surface* fb, int x, int y, int w, int h, const std::string& label,
             ButtonStyle style, bool focused, bool enabled)
 {

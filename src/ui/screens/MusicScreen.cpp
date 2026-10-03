@@ -324,6 +324,8 @@ int MusicScreen::visibleRows(const MusicPane& pane) const
     const int top = 76 + detailHeaderHeight(pane);
     if (isGrid(pane))
         return kGridCols * std::max(1, (contentBottom() - top) / kGridCellH);
+    if (pane.frame.kind == MusicPaneKind::Settings)
+        return std::max(1, (contentBottom() - top) / 66); // tall cards, as in MiyooFin Settings
     return std::max(1, (contentBottom() - top) / kRowHeight);
 }
 
@@ -951,7 +953,8 @@ void MusicScreen::refreshSettingsRows(MusicPane& pane)
         action("Server",
                m_session.routes().lan.empty() ? m_session.routes().pub : m_session.routes().lan,
                ""),
-        action("Account", m_session.userName, m_session.manualOfflineMode ? "Offline mode" : "")};
+        action("Account",
+               m_session.userName + (m_session.manualOfflineMode ? " (offline mode)" : ""), "")};
     pane.requested = true;
     pane.loadedOnce = true;
     clampPane(pane);

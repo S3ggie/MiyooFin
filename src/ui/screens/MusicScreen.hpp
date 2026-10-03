@@ -252,6 +252,7 @@ class MusicScreen : public Screen
     int contentBottom() const;
     int visibleRows(const MusicPane& pane) const;
     bool isGrid(const MusicPane& pane) const; ///< Albums tab shown as a cover grid
+    void renderSettingsCards(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
     void renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom);
     int detailHeaderHeight(const MusicPane& pane) const;
 

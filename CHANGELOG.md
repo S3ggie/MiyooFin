@@ -17,6 +17,8 @@
   or removed without signing out, and a **Test connection** row.
 - Player: B shows or hides the bar; MENU quits only on a plain tap so the brightness combo is safe.
 - **Crash report** screen (Settings → Diagnostics).
+- **Favorites** (music): heart a song from its menu or from Now Playing (Down), a "Favorite songs"
+  list in Playlists, and a song menu on Now Playing (add to playlist, go to album or artist).
 - **Lyrics** in Now Playing (Up), following the song when they are time-synced.
 - **Keep in sync** for downloaded playlists: new songs are downloaded, removed ones deleted unless
   another download still uses them.

@@ -145,6 +145,8 @@ void MusicScreen::renderDetailHeader(SDL_Surface* fb, const MusicPane& pane, int
     if (f.kind == MusicPaneKind::ArtistAlbums)
         std::snprintf(meta, sizeof(meta), "%d %s", static_cast<int>(pane.rows.size()),
                       pane.rows.size() == 1 ? "album" : "albums");
+    else if (pane.total > tracks && tracks > 0) // still loading: the whole list's size, no minutes
+        std::snprintf(meta, sizeof(meta), "%d tracks", pane.total);
     else if (tracks > 0)
         std::snprintf(meta, sizeof(meta), "%d %s - %d min", tracks,
                       tracks == 1 ? "track" : "tracks", static_cast<int>(ticks / 10000000 / 60));

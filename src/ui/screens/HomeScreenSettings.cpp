@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "HomeScreen.hpp"
 #include "../BitmapFont.hpp"
+#include "../ClockSettings.hpp"
 #include "../Theme.hpp"
 #include "../../download/DownloadSupport.hpp"
 #include "miyoofin/version.hpp"
@@ -127,8 +128,33 @@ void HomeScreen::startConnectionTest()
         m_connectionTestResult = "Testing...";
 }
 
+void HomeScreen::openZoneMenu()
+{
+    m_zoneMenu = true;
+    std::vector<std::string> items = {"Automatic (from network)", "Device setting"};
+    for (const ClockZone& z : clockZones())
+        items.push_back(z.label);
+    m_languageMenu.open("Time zone", items);
+}
+
+void HomeScreen::applyZoneChoice(int index)
+{
+    ClockSettings& clock = ClockSettings::instance();
+    if (index == 0) {
+        clock.setZoneMode("auto");
+        clock.requestDetect();
+    } else if (index == 1) {
+        clock.setZoneMode("device");
+    } else if (index - 2 < static_cast<int>(clockZones().size())) {
+        clock.setZoneMode(clockZones()[index - 2].key);
+    }
+    clock.applyZone();
+    clock.save("clock-settings.txt");
+}
+
 void HomeScreen::openLanguageMenu(bool audio)
 {
+    m_zoneMenu = false;
     languageValue(audio); // load once
     m_languageIsAudio = audio;
     std::vector<std::string> items = {"Automatic"};
@@ -182,6 +208,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
                  {"DIAGNOSTICS",
                   hasCrashLog() ? "Crash report available - press A" : "No crashes recorded"},
+                 {"Clock format", ClockSettings::instance().hour24() ? "24-hour" : "12-hour"},
+                 {"Time zone", ClockSettings::instance().zoneSummary()},
                  {"Default audio language", languageValue(true)},
                  {"Default subtitles", languageValue(false)},
                  {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});

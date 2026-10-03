@@ -197,6 +197,7 @@ class MusicScreen : public Screen
     // playlists
     void syncDownloadedPlaylists(); // refresh the copies marked "keep in sync"
     bool m_syncStarted = false;
+    bool m_zonePick = false; // the picker is choosing a time zone
     void startPlaylistPicker(std::vector<music::Track> tracks);
     void openPickerFor(const std::vector<music::Playlist>& playlists);
     void chosePlaylist(int index);

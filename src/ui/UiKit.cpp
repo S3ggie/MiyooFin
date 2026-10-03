@@ -1,4 +1,5 @@
 #include "UiKit.hpp"
+#include "ClockSettings.hpp"
 
 #include "BatteryMonitor.hpp"
 #include "BitmapFont.hpp"
@@ -466,12 +467,8 @@ void header(SDL_Surface* fb, const HeaderSpec& spec)
     const int contentLeft = 16 + 8 * 8 * 2 + 20; // after the 128px wordmark
     int statusLeft = kScreenW - kMargin;
     if (spec.showStatus) {
-        std::time_t now = std::time(nullptr);
-        std::tm local{};
-        localtime_r(&now, &local);
-        char clock[8];
-        std::snprintf(clock, sizeof(clock), "%02d:%02d", local.tm_hour, local.tm_min);
-        const int clockX = kScreenW - kMargin - 40;
+        const std::string clock = ClockSettings::instance().formatNow();
+        const int clockX = kScreenW - kMargin - textWidth(clock);
         text(fb, clockX, (kHeaderH - 16) / 2, clock, kText);
         const int batteryX = clockX - 12 - 24;
         iconBattery(fb, batteryX, (kHeaderH - 11) / 2, spec.batteryPercent, spec.charging);

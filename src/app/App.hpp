@@ -20,6 +20,7 @@
 #include "../music/MusicSettings.hpp"
 #include "AppMode.hpp"
 #include "ScreenLock.hpp"
+#include "../ui/WorkerSlot.hpp"
 
 namespace miyoofin {
 
@@ -101,6 +102,10 @@ class App
     } m_routeMemory;
     AppMode m_mode = AppMode::Video;
     ScreenLock m_screenLock;
+    // Header clock: the time zone is looked up from the network (IP) on a worker.
+    std::string m_zoneFound;
+    WorkerSlot m_zoneWorker;
+    void pollClock();
     music::MusicSettings m_musicSettings;
     std::unique_ptr<music::MusicDownloads> m_musicDownloads; // outlives the player's fetches
     std::unique_ptr<music::MusicPlayer> m_music;

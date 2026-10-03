@@ -122,7 +122,7 @@ static void testHomeSyncStatusStrings()
 static void testHomeSettingsModel()
 {
     std::printf("[test] Home settings address rows and actions\n");
-    CHECK(homeSettingsBaseRowCount() == 16);
+    CHECK(homeSettingsBaseRowCount() == 18);
 
     // Two plainly named addresses, whatever the session looks like.
     Session lan;
@@ -135,18 +135,18 @@ static void testHomeSettingsModel()
     CHECK_EQ(lanRows[1].section, "Internet address");
     CHECK_EQ(lanRows[1].value, "Not set");
     CHECK(lanRows[1].action == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowCount(lan) == 16);
+    CHECK(homeSettingsRowCount(lan) == 18);
     CHECK(homeSettingsRowAction(0, lan) == HomeSettingsRowAction::OfflineMode);
     CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::LocalAddress);
     CHECK(homeSettingsRowAction(2, lan) == HomeSettingsRowAction::PublicAddress);
     CHECK(homeSettingsRowAction(3, lan) == HomeSettingsRowAction::TestConnection);
-    CHECK(homeSettingsRowAction(9, lan) == HomeSettingsRowAction::AudioLanguage);
-    CHECK(homeSettingsRowAction(10, lan) == HomeSettingsRowAction::SubtitleLanguage);
-    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::MusicMode);
-    CHECK(homeSettingsRowAction(12, lan) == HomeSettingsRowAction::CheckForUpdates);
-    CHECK(homeSettingsRowAction(13, lan) == HomeSettingsRowAction::None); // about
-    CHECK(homeSettingsRowAction(14, lan) == HomeSettingsRowAction::ChangeServer);
-    CHECK(homeSettingsRowAction(15, lan) == HomeSettingsRowAction::Logout);
+    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::AudioLanguage);
+    CHECK(homeSettingsRowAction(12, lan) == HomeSettingsRowAction::SubtitleLanguage);
+    CHECK(homeSettingsRowAction(13, lan) == HomeSettingsRowAction::MusicMode);
+    CHECK(homeSettingsRowAction(14, lan) == HomeSettingsRowAction::CheckForUpdates);
+    CHECK(homeSettingsRowAction(15, lan) == HomeSettingsRowAction::None); // about
+    CHECK(homeSettingsRowAction(16, lan) == HomeSettingsRowAction::ChangeServer);
+    CHECK(homeSettingsRowAction(17, lan) == HomeSettingsRowAction::Logout);
     CHECK(homeSettingsRowAction(6, lan) == HomeSettingsRowAction::None);
 
     Session pub;

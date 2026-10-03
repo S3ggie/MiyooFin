@@ -86,6 +86,7 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/ui/screens/AudioChoiceMenu.cpp \
     $(SRC_DIR)/ui/screens/ChoiceMenu.cpp \
     $(SRC_DIR)/ui/screens/CrashReportScreen.cpp \
+    $(SRC_DIR)/ui/ClockSettings.cpp \
     $(SRC_DIR)/ui/screens/TextEntryScreen.cpp \
     $(SRC_DIR)/download/DownloadManager.cpp \
     $(SRC_DIR)/download/DownloadManagerPlanning.cpp \

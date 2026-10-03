@@ -1,4 +1,6 @@
 #include "App.hpp"
+#include "../ui/ClockSettings.hpp"
+#include "../net/HttpClient.hpp"
 #include "RemoteExitSignal.hpp"
 #include "RemoteControl.hpp"
 #include "DisplaySizing.hpp"
@@ -169,6 +171,10 @@ bool App::init()
     installCrashLog();
     m_mode = loadAppMode();
     design::usePalette(m_mode == AppMode::Music);
+    ClockSettings::instance().load("clock-settings.txt");
+    ClockSettings::instance().applyZone();
+    if (ClockSettings::instance().zoneMode() == "auto")
+        ClockSettings::instance().requestDetect(); // refreshed once per start
     const char* desktopInput = std::getenv("MIYOOFIN_DESKTOP_INPUT");
     const char* diagnosticsPath = std::getenv("MIYOOFIN_UI_DIAGNOSTICS");
     if (desktopInput && desktopInput[0] != '\0' && desktopInput[0] != '0' && diagnosticsPath &&
@@ -395,6 +401,29 @@ void App::pollScreenshotRequest()
         fprintf(stderr, "[App] Screenshot failed: %s\n", SDL_GetError());
 }
 
+void App::pollClock()
+{
+    ClockSettings& clock = ClockSettings::instance();
+    if (m_zoneWorker.reap() && !m_zoneFound.empty()) {
+        clock.setDetected(m_zoneFound);
+        clock.applyZone();
+        clock.save("clock-settings.txt");
+    }
+    if (clock.takeDetectRequest() && !m_session.manualOfflineMode) {
+        m_zoneFound.clear();
+        m_zoneWorker.start([this](const CancelToken& cancel) {
+            HttpClient client;
+            client.setTimeoutSec(8);
+            std::string body, error;
+            long code = 0;
+            // Public IP-to-zone lookup (plain HTTP, no key); only the zone name is used.
+            if (client.get("http://ip-api.com/json/?fields=status,timezone", body, code, error,
+                           cancel.get()))
+                m_zoneFound = JellyfinApi::jsonStringField(body, "timezone");
+        });
+    }
+}
+
 int App::run()
 {
     while (m_running) {
@@ -406,6 +435,7 @@ int App::run()
             telemetry.setPlaybackState(PlaybackState::UiActive);
 #endif
         uiDiagnostics().heartbeat();
+        pollClock();
         uiDiagnostics().setPhase("event/input");
         Uint32 now = SDL_GetTicks();
         Uint32 dt = now - m_lastTick;

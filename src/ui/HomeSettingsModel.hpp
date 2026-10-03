@@ -19,6 +19,8 @@ enum class HomeSettingsRowAction
     MusicMode,
     TestConnection,
     CrashReport,
+    ClockFormat,
+    TimeZone,
     AudioLanguage,
     SubtitleLanguage
 };
@@ -31,7 +33,7 @@ struct HomeSettingsAddressRow
 
 constexpr int homeSettingsBaseRowCount()
 {
-    return 16; // fixed: offline, 2 addresses, test connection, 9 info/action rows, change server,
+    return 18; // fixed: offline, 2 addresses, test connection, 11 info/action rows, change server,
                // log out
 }
 std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session);

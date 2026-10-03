@@ -3,6 +3,7 @@
 #include "../../music/MusicParse.hpp"
 #include "../UiKit.hpp"
 #include "TextEntryScreen.hpp"
+#include "../ClockSettings.hpp"
 #include "../../app/ScreenStack.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -948,6 +949,10 @@ void MusicScreen::refreshSettingsRows(MusicPane& pane)
         action("Download quality", "Used for offline music", std::to_string(download) + " kbps"),
         action("Album view", "Albums as a list or a grid of covers",
                m_settings && m_settings->albumGrid.load() ? "Grid" : "List"),
+        action("Clock format", "12 or 24 hour clock in the header",
+               ClockSettings::instance().hour24() ? "24-hour" : "12-hour"),
+        action("Time zone", "Where the header clock gets its time zone",
+               ClockSettings::instance().zoneSummary()),
         action("Clear music cache", "Streamed tracks and covers (downloads stay)",
                m_cacheClearArmed ? "Press A again" : ""),
         action("Server",
@@ -1050,6 +1055,25 @@ bool MusicScreen::handleAction(Action action)
 {
     if (m_picker.active()) {
         const ChoiceMenu::Result result = m_picker.handle(action);
+        if (m_zonePick) {
+            if (result != ChoiceMenu::Result::None)
+                m_zonePick = false;
+            if (result == ChoiceMenu::Result::Chosen) {
+                ClockSettings& clock = ClockSettings::instance();
+                const int index = m_picker.chosen();
+                if (index == 0) {
+                    clock.setZoneMode("auto");
+                    clock.requestDetect();
+                } else if (index == 1) {
+                    clock.setZoneMode("device");
+                } else if (index - 2 < static_cast<int>(clockZones().size())) {
+                    clock.setZoneMode(clockZones()[index - 2].key);
+                }
+                clock.applyZone();
+                clock.save("clock-settings.txt");
+            }
+            return true;
+        }
         if (result == ChoiceMenu::Result::Chosen)
             chosePlaylist(m_picker.chosen());
         return true;
@@ -1719,6 +1743,16 @@ void MusicScreen::settingsAction(int index)
             clampPane(p);
         markDirty();
     } else if (index == 4) {
+        ClockSettings& clock = ClockSettings::instance();
+        clock.setHour24(!clock.hour24());
+        clock.save("clock-settings.txt");
+    } else if (index == 5) {
+        m_zonePick = true;
+        std::vector<std::string> items = {"Automatic (from network)", "Device setting"};
+        for (const ClockZone& z : clockZones())
+            items.push_back(z.label);
+        m_picker.open("Time zone", items);
+    } else if (index == 6) {
         if (!m_cacheClearArmed) {
             m_cacheClearArmed = true;
             m_toast = "Press A again to clear the music cache";

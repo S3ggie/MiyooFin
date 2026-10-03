@@ -1,5 +1,6 @@
 #include "HomeScreen.hpp"
 #include "CrashReportScreen.hpp"
+#include "../ClockSettings.hpp"
 #include "SeriesScreen.hpp"
 #include "MovieDetailsScreen.hpp"
 #include "EpisodeBrowserScreen.hpp"
@@ -447,8 +448,12 @@ bool HomeScreen::handleAction(Action action)
     }
 
     if (m_languageMenu.active()) {
-        if (m_languageMenu.handle(action) == ChoiceMenu::Result::Chosen)
-            applyLanguageChoice(m_languageMenu.chosen());
+        if (m_languageMenu.handle(action) == ChoiceMenu::Result::Chosen) {
+            if (m_zoneMenu)
+                applyZoneChoice(m_languageMenu.chosen());
+            else
+                applyLanguageChoice(m_languageMenu.chosen());
+        }
         return true;
     }
     // Ready: normal navigation
@@ -500,6 +505,15 @@ bool HomeScreen::handleAction(Action action)
                 return true;
             case SettingsRowAction::TestConnection:
                 startConnectionTest();
+                return true;
+            case SettingsRowAction::ClockFormat: {
+                ClockSettings& clock = ClockSettings::instance();
+                clock.setHour24(!clock.hour24());
+                clock.save("clock-settings.txt");
+                return true;
+            }
+            case SettingsRowAction::TimeZone:
+                openZoneMenu();
                 return true;
             case SettingsRowAction::AudioLanguage:
             case SettingsRowAction::SubtitleLanguage:

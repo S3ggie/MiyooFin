@@ -316,6 +316,9 @@ class HomeScreen : public Screen
     void startConnectionTest();
     ChoiceMenu m_languageMenu;
     bool m_languageIsAudio = false;
+    bool m_zoneMenu = false; // the picker is choosing a time zone, not a language
+    void openZoneMenu();
+    void applyZoneChoice(int index);
     void openLanguageMenu(bool audio);
     void applyLanguageChoice(int index);
     std::string languageValue(bool audio);

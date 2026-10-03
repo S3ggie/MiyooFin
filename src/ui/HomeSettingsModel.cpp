@@ -16,7 +16,7 @@ std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& sessi
 
 int homeSettingsRowCount(const Session& session)
 {
-    return 1 + (int)homeSettingsAddressRows(session).size() + 13;
+    return 1 + (int)homeSettingsAddressRows(session).size() + 15;
 }
 
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
@@ -29,8 +29,12 @@ HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
     if (row == static_cast<int>(addresses.size()) + 1)
         return HomeSettingsRowAction::TestConnection;
     const int count = homeSettingsRowCount(session);
-    if (row == count - 8)
+    if (row == count - 10)
         return HomeSettingsRowAction::CrashReport;
+    if (row == count - 9)
+        return HomeSettingsRowAction::ClockFormat;
+    if (row == count - 8)
+        return HomeSettingsRowAction::TimeZone;
     if (row == count - 7)
         return HomeSettingsRowAction::AudioLanguage;
     if (row == count - 6)

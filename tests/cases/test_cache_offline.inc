@@ -129,18 +129,18 @@ static void testOfflineLibraryProjection(){
     CHECK(transitionTabIndex(offline,3,online)==4);
 }
 static void testSettingsRowActions(){
-    CHECK(HomeScreen::settingsRowCount() == 13);
+    CHECK(HomeScreen::settingsRowCount() == 15);
     CHECK(HomeScreen::settingsRowAction(0)==HomeScreen::SettingsRowAction::OfflineMode);
     CHECK(HomeScreen::settingsRowAction(1)==HomeScreen::SettingsRowAction::LocalAddress);
     CHECK(HomeScreen::settingsRowAction(2)==HomeScreen::SettingsRowAction::PublicAddress);
     CHECK(HomeScreen::settingsRowAction(3)==HomeScreen::SettingsRowAction::None);
     CHECK(HomeScreen::settingsRowAction(7)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(8)==HomeScreen::SettingsRowAction::MusicMode);
-    CHECK(HomeScreen::settingsRowAction(9)==HomeScreen::SettingsRowAction::CheckForUpdates);
-    CHECK(HomeScreen::settingsRowAction(10)==HomeScreen::SettingsRowAction::None);
-    CHECK(HomeScreen::settingsRowAction(11)==HomeScreen::SettingsRowAction::ChangeServer);
+    CHECK(HomeScreen::settingsRowAction(10)==HomeScreen::SettingsRowAction::MusicMode);
+    CHECK(HomeScreen::settingsRowAction(11)==HomeScreen::SettingsRowAction::CheckForUpdates);
+    CHECK(HomeScreen::settingsRowAction(12)==HomeScreen::SettingsRowAction::None);
+    CHECK(HomeScreen::settingsRowAction(13)==HomeScreen::SettingsRowAction::ChangeServer);
     // Logout is the last row.
-    CHECK(HomeScreen::settingsRowAction(12)==HomeScreen::SettingsRowAction::Logout);
+    CHECK(HomeScreen::settingsRowAction(14)==HomeScreen::SettingsRowAction::Logout);
 }
 static void testLanServerAddressClassificationAndSettingsLayout(){
     std::printf("[test] LAN server address classification and Settings layout\n");
@@ -167,7 +167,7 @@ static void testLanServerAddressClassificationAndSettingsLayout(){
     CHECK_EQ(lanRows[1].section,"Internet address");
     CHECK_EQ(lanRows[1].value,"Not set");
     CHECK(lanRows[1].action==HomeScreen::SettingsRowAction::PublicAddress);
-    CHECK(HomeScreen::settingsRowCount(lanOnly)==13);
+    CHECK(HomeScreen::settingsRowCount(lanOnly)==15);
     CHECK(HomeScreen::settingsRowAction(1,lanOnly)==HomeScreen::SettingsRowAction::LocalAddress);
     CHECK(HomeScreen::settingsRowAction(2,lanOnly)==HomeScreen::SettingsRowAction::PublicAddress);
     lanOnly.publicServerUrl="https://public.example.com";

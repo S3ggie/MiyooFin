@@ -33,6 +33,7 @@ test_music_player
 test_music_downloads
 test_music_screen
 test_watched_sync
+test_player_prefs
 '
 pids=
 

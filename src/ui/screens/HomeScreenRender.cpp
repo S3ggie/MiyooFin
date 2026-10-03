@@ -272,6 +272,7 @@ void HomeScreen::render(SDL_Surface* fb)
         }
     }
     drawBottomHints(fb);
+    m_languageMenu.render(fb);
 }
 
 void HomeScreen::drawTabBar(SDL_Surface* fb)

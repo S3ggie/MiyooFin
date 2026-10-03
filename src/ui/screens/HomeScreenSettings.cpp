@@ -54,6 +54,73 @@ HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Sessi
     return homeSettingsRowAction(row, session);
 }
 
+namespace {
+constexpr const char* kPlayerPrefsPath = "player-prefs.txt";
+struct Language
+{
+    const char* code;
+    const char* name;
+};
+// ISO 639-2 codes as the player sees them in the file's track tags.
+constexpr Language kLanguages[] = {{"eng", "English"},    {"jpn", "Japanese"}, {"spa", "Spanish"},
+                                   {"fre", "French"},     {"ger", "German"},   {"ita", "Italian"},
+                                   {"por", "Portuguese"}, {"kor", "Korean"},   {"chi", "Chinese"},
+                                   {"rus", "Russian"}};
+std::string languageName(const std::string& code)
+{
+    for (const Language& l : kLanguages)
+        if (code == l.code)
+            return l.name;
+    return code;
+}
+} // namespace
+
+std::string HomeScreen::languageValue(bool audio)
+{
+    if (!m_playerPrefsLoaded) {
+        m_playerPrefs = PlayerPrefs::load(kPlayerPrefsPath);
+        m_playerPrefsLoaded = true;
+    }
+    if (audio)
+        return m_playerPrefs.audioLang.empty() ? "Automatic"
+                                               : languageName(m_playerPrefs.audioLang);
+    if (m_playerPrefs.subOff)
+        return "Off";
+    return m_playerPrefs.subLang.empty() ? "Automatic" : languageName(m_playerPrefs.subLang);
+}
+
+void HomeScreen::openLanguageMenu(bool audio)
+{
+    languageValue(audio); // load once
+    m_languageIsAudio = audio;
+    std::vector<std::string> items = {"Automatic"};
+    if (!audio)
+        items.push_back("Off");
+    for (const Language& l : kLanguages)
+        items.push_back(l.name);
+    m_languageMenu.open(audio ? "Default audio language" : "Default subtitles", items);
+}
+
+void HomeScreen::applyLanguageChoice(int index)
+{
+    const int offset = m_languageIsAudio ? 1 : 2;
+    PlayerPrefs prefs = PlayerPrefs::load(kPlayerPrefsPath); // keep what the player wrote
+    std::string code;
+    bool off = false;
+    if (index >= offset)
+        code = kLanguages[index - offset].code;
+    else if (!m_languageIsAudio && index == 1)
+        off = true;
+    if (m_languageIsAudio) {
+        prefs.audioLang = code;
+    } else {
+        prefs.subLang = code;
+        prefs.subOff = off;
+    }
+    prefs.save(kPlayerPrefsPath);
+    m_playerPrefs = prefs;
+}
+
 void HomeScreen::drawSettingsTab(SDL_Surface* fb)
 {
     const auto syncStatus = m_libraryCoordinator ? m_libraryCoordinator->status()
@@ -73,6 +140,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                  {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
                  {"DIAGNOSTICS", "UI Stall Logger Enabled"},
+                 {"Default audio language", languageValue(true)},
+                 {"Default subtitles", languageValue(false)},
                  {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});
     // UPDATES row — directly above ABOUT.
     {

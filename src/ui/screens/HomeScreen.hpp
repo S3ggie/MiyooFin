@@ -17,6 +17,8 @@
 #include "HomeLibraryController.hpp"
 #include "HomeArtworkController.hpp"
 #include "../../update/UpdateManager.hpp"
+#include "../PlayerPrefs.hpp"
+#include "ChoiceMenu.hpp"
 #include <atomic>
 #include <algorithm>
 #include <cstdint>
@@ -304,6 +306,14 @@ class HomeScreen : public Screen
     bool m_changeServerRequested = false;
     bool m_localAddressRequested = false;
     bool m_musicModeRequested = false;
+    // Default audio/subtitle language (player-prefs.txt) and the picker for it.
+    PlayerPrefs m_playerPrefs;
+    bool m_playerPrefsLoaded = false;
+    ChoiceMenu m_languageMenu;
+    bool m_languageIsAudio = false;
+    void openLanguageMenu(bool audio);
+    void applyLanguageChoice(int index);
+    std::string languageValue(bool audio);
     bool m_publicAddressRequested = false;
 
     // Update manager

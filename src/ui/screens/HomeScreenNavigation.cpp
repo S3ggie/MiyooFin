@@ -445,6 +445,11 @@ bool HomeScreen::handleAction(Action action)
         return false;
     }
 
+    if (m_languageMenu.active()) {
+        if (m_languageMenu.handle(action) == ChoiceMenu::Result::Chosen)
+            applyLanguageChoice(m_languageMenu.chosen());
+        return true;
+    }
     // Ready: normal navigation
     if (activeTabNamed("Downloads") && handleDownloadsAction(action))
         return true;
@@ -487,6 +492,11 @@ bool HomeScreen::handleAction(Action action)
             }
             case SettingsRowAction::MusicMode:
                 m_musicModeRequested = true;
+                return true;
+            case SettingsRowAction::AudioLanguage:
+            case SettingsRowAction::SubtitleLanguage:
+                openLanguageMenu(settingsRowAction(m_settingsState.selected, m_session) ==
+                                 SettingsRowAction::AudioLanguage);
                 return true;
             case SettingsRowAction::LocalAddress:
                 m_localAddressRequested = true;

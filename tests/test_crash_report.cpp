@@ -26,9 +26,9 @@ int main()
     CHECK(pcFound && frameFound && !oldFound);
 
     // Only the newest crash's pc line counts, even when it lacks one.
-    const CrashReport noPc = summarizeCrashLog(
-        "pc=0x1 lr=0x2 addr=0x0\n--- fatal signal 6 at t=1700000000\nf1\n\n"
-        "--- fatal signal 7 at t=1700000100\nf2\n\n");
+    const CrashReport noPc =
+        summarizeCrashLog("pc=0x1 lr=0x2 addr=0x0\n--- fatal signal 6 at t=1700000000\nf1\n\n"
+                          "--- fatal signal 7 at t=1700000100\nf2\n\n");
     CHECK(noPc.crashes == 2);
     for (const std::string& line : noPc.lines)
         CHECK(line.compare(0, 3, "pc=") != 0);

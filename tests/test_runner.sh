@@ -36,6 +36,7 @@ test_watched_sync
 test_player_prefs
 test_screen_lock
 test_crash_report
+test_http_methods
 '
 pids=
 

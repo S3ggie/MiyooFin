@@ -48,8 +48,8 @@ void CrashReportScreen::render(SDL_Surface* fb)
         ui::text(fb, d::kMargin, y, "No crashes recorded.", d::kTextSecondary);
     } else {
         ui::text(fb, d::kMargin, y,
-                 std::to_string(m_report.crashes) + (m_report.crashes == 1 ? " crash" : " crashes") +
-                     " recorded - the newest:",
+                 std::to_string(m_report.crashes) +
+                     (m_report.crashes == 1 ? " crash" : " crashes") + " recorded - the newest:",
                  d::kAccentHi);
         y += 28;
         for (const std::string& line : m_report.lines) {

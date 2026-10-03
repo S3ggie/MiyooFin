@@ -273,6 +273,8 @@ bool HttpClient::perform(const std::string& method, const std::string& url,
             headerList = curl_slist_append(headerList, "Content-Type: application/json");
     } else {
         curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+        if (method != "GET") // DELETE (unmark watched, playlists) must not go out as a GET
+            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
     }
 
     if (headerList)

@@ -261,7 +261,8 @@ void MusicScreen::renderPane(SDL_Surface* fb, const MusicPane& pane, int top, in
 
 void MusicScreen::renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, int bottom)
 {
-    const int cellW = (d::kScreenW - 2 * d::kMargin) / kGridCols, cover = cellW - 16;
+    const int cellW = (d::kScreenW - 2 * d::kMargin) / kGridCols, cover = 108;
+    const int pad = (cellW - cover) / 2;
     const int total = static_cast<int>(pane.rows.size());
     for (int i = pane.frame.scroll; i < total; ++i) {
         const int slot = i - pane.frame.scroll;
@@ -273,11 +274,11 @@ void MusicScreen::renderGrid(SDL_Surface* fb, const MusicPane& pane, int top, in
         const bool selected = i == pane.frame.selected;
         if (selected)
             ui::roundFill(fb, x + 2, y, cellW - 4, kGridCellH - 4, d::kRadius, d::kRaised);
-        drawCover(fb, row.artId, row.artTag, x + 8, y + 6, cover, 128, row.title);
+        drawCover(fb, row.artId, row.artTag, x + pad, y + 5, cover, 128, row.title);
         if (selected)
-            ui::roundOutline(fb, x + 8, y + 6, cover, cover, 4, d::kAccentHi);
-        ui::textClamped(fb, x + 8, y + cover + 8, cellW - 16, row.title, d::kText);
-        ui::textClamped(fb, x + 8, y + cover + 26, cellW - 16, row.subtitle,
+            ui::roundOutline(fb, x + pad, y + 5, cover, cover, 4, d::kAccentHi);
+        ui::textClamped(fb, x + 8, y + cover + 9, cellW - 16, row.title, d::kText);
+        ui::textClamped(fb, x + 8, y + cover + 27, cellW - 16, row.subtitle,
                         selected ? d::kTextSecondary : d::kTextMuted);
     }
     const int rows = (total + kGridCols - 1) / kGridCols, shown = (bottom - top) / kGridCellH;

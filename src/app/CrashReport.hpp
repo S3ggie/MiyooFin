@@ -38,7 +38,8 @@ inline CrashReport summarizeCrashLog(const std::string& text, std::size_t maxFra
     static const std::string kHead = "--- fatal signal ";
     CrashReport report;
     std::size_t last = std::string::npos, prev = std::string::npos;
-    for (std::size_t at = text.find(kHead); at != std::string::npos; at = text.find(kHead, at + 1)) {
+    for (std::size_t at = text.find(kHead); at != std::string::npos;
+         at = text.find(kHead, at + 1)) {
         prev = last;
         last = at;
         ++report.crashes;

@@ -14,38 +14,35 @@ std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& sessi
              HomeSettingsRowAction::PublicAddress}};
 }
 
+const std::vector<HomeSettingsRow>& homeSettingsRows(const Session&)
+{
+    using A = HomeSettingsRowAction;
+    // Grouped by what the user is doing: library, playback, display, connection, the app, the
+    // account (the risky rows last).
+    static const std::vector<HomeSettingsRow> rows = {
+        {A::OfflineMode, "LIBRARY", ""},       {A::None, "LIBRARY", "sync"},
+        {A::None, "LIBRARY", "storage"},       {A::AudioLanguage, "PLAYBACK", ""},
+        {A::SubtitleLanguage, "PLAYBACK", ""}, {A::ClockFormat, "DISPLAY", ""},
+        {A::TimeZone, "DISPLAY", ""},          {A::LocalAddress, "CONNECTION", ""},
+        {A::PublicAddress, "CONNECTION", ""},  {A::TestConnection, "CONNECTION", ""},
+        {A::None, "CONNECTION", "route"},      {A::MusicMode, "APP", ""},
+        {A::CheckForUpdates, "APP", ""},       {A::None, "APP", "about"},
+        {A::CrashReport, "APP", ""},           {A::None, "ACCOUNT", "account"},
+        {A::ChangeServer, "ACCOUNT", ""},      {A::Logout, "ACCOUNT", ""},
+    };
+    return rows;
+}
+
 int homeSettingsRowCount(const Session& session)
 {
-    return 1 + (int)homeSettingsAddressRows(session).size() + 15;
+    return static_cast<int>(homeSettingsRows(session).size());
 }
 
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session)
 {
-    if (row == 0)
-        return HomeSettingsRowAction::OfflineMode;
-    const std::vector<HomeSettingsAddressRow> addresses = homeSettingsAddressRows(session);
-    if (row >= 1 && row <= static_cast<int>(addresses.size()))
-        return addresses[row - 1].action;
-    if (row == static_cast<int>(addresses.size()) + 1)
-        return HomeSettingsRowAction::TestConnection;
-    const int count = homeSettingsRowCount(session);
-    if (row == count - 10)
-        return HomeSettingsRowAction::CrashReport;
-    if (row == count - 9)
-        return HomeSettingsRowAction::ClockFormat;
-    if (row == count - 8)
-        return HomeSettingsRowAction::TimeZone;
-    if (row == count - 7)
-        return HomeSettingsRowAction::AudioLanguage;
-    if (row == count - 6)
-        return HomeSettingsRowAction::SubtitleLanguage;
-    if (row == count - 5)
-        return HomeSettingsRowAction::MusicMode;
-    if (row == count - 4)
-        return HomeSettingsRowAction::CheckForUpdates;
-    if (row == count - 2)
-        return HomeSettingsRowAction::ChangeServer;
-    return row == count - 1 ? HomeSettingsRowAction::Logout : HomeSettingsRowAction::None;
+    const auto& rows = homeSettingsRows(session);
+    return row >= 0 && row < static_cast<int>(rows.size()) ? rows[row].action
+                                                           : HomeSettingsRowAction::None;
 }
 
 void HomeSettingsState::move(int delta, int rowCount)

@@ -10,10 +10,12 @@ const std::vector<ClockZone>& clockZones()
 {
     static const std::vector<ClockZone> zones = {
         {"eastern", "Eastern (US, Canada)", "EST5EDT,M3.2.0,M11.1.0",
-         "America/New_York America/Detroit America/Toronto America/Montreal America/Indiana/Indianapolis "
+         "America/New_York America/Detroit America/Toronto America/Montreal "
+         "America/Indiana/Indianapolis "
          "America/Kentucky/Louisville America/Nassau"},
         {"central", "Central (US, Canada)", "CST6CDT,M3.2.0,M11.1.0",
-         "America/Chicago America/Winnipeg America/Menominee America/Indiana/Knox America/Matamoros"},
+         "America/Chicago America/Winnipeg America/Menominee America/Indiana/Knox "
+         "America/Matamoros"},
         {"mountain", "Mountain (US, Canada)", "MST7MDT,M3.2.0,M11.1.0",
          "America/Denver America/Edmonton America/Boise America/Yellowknife"},
         {"arizona", "Arizona (no DST)", "MST7", "America/Phoenix"},
@@ -21,17 +23,19 @@ const std::vector<ClockZone>& clockZones()
          "America/Los_Angeles America/Vancouver America/Tijuana"},
         {"alaska", "Alaska", "AKST9AKDT,M3.2.0,M11.1.0", "America/Anchorage America/Juneau"},
         {"hawaii", "Hawaii", "HST10", "Pacific/Honolulu"},
-        {"atlantic", "Atlantic (Canada)", "AST4ADT,M3.2.0,M11.1.0", "America/Halifax Atlantic/Bermuda"},
-        {"mexico", "Mexico City", "CST6", "America/Mexico_City America/Monterrey America/Guatemala"},
+        {"atlantic", "Atlantic (Canada)", "AST4ADT,M3.2.0,M11.1.0",
+         "America/Halifax Atlantic/Bermuda"},
+        {"mexico", "Mexico City", "CST6",
+         "America/Mexico_City America/Monterrey America/Guatemala"},
         {"brazil", "Brasilia", "<-03>3", "America/Sao_Paulo America/Argentina/Buenos_Aires"},
         {"utc", "UTC", "UTC0", "UTC Etc/UTC"},
-        {"london", "London, Dublin", "GMT0BST,M3.5.0/1,M10.5.0",
-         "Europe/London Europe/Dublin"},
+        {"london", "London, Dublin", "GMT0BST,M3.5.0/1,M10.5.0", "Europe/London Europe/Dublin"},
         {"lisbon", "Lisbon", "WET0WEST,M3.5.0/1,M10.5.0", "Europe/Lisbon Atlantic/Canary"},
         {"cet", "Central Europe", "CET-1CEST,M3.5.0,M10.5.0/3",
          "Europe/Paris Europe/Berlin Europe/Madrid Europe/Rome Europe/Amsterdam Europe/Brussels "
          "Europe/Vienna Europe/Zurich Europe/Stockholm Europe/Oslo Europe/Copenhagen Europe/Prague "
-         "Europe/Warsaw Europe/Budapest Europe/Belgrade Europe/Zagreb Europe/Luxembourg Europe/Malta"},
+         "Europe/Warsaw Europe/Budapest Europe/Belgrade Europe/Zagreb Europe/Luxembourg "
+         "Europe/Malta"},
         {"eet", "Eastern Europe", "EET-2EEST,M3.5.0/3,M10.5.0/4",
          "Europe/Athens Europe/Helsinki Europe/Kiev Europe/Kyiv Europe/Bucharest Europe/Sofia "
          "Europe/Riga Europe/Tallinn Europe/Vilnius"},
@@ -127,7 +131,8 @@ std::string ClockSettings::zoneSummary() const
         const ClockZone* z = clockZoneForIana(m_detectedIana);
         if (z)
             return std::string("Automatic: ") + z->label;
-        return m_detectedIana.empty() ? "Automatic (not found yet)" : "Automatic: " + m_detectedIana;
+        return m_detectedIana.empty() ? "Automatic (not found yet)"
+                                      : "Automatic: " + m_detectedIana;
     }
     const ClockZone* z = clockZoneForKey(m_zoneMode);
     return z ? z->label : "Device setting";
@@ -160,8 +165,9 @@ std::string ClockSettings::format(const std::tm& local) const
         std::snprintf(buf, sizeof(buf), "%02d:%02d", local.tm_hour, local.tm_min);
     } else {
         const int h = local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12;
-        std::snprintf(buf, sizeof(buf), "%d:%02d %s", h, local.tm_min,
-                      local.tm_hour < 12 ? "AM" : "PM");
+        // "9:05p": the short form keeps the header's tabs and battery from crowding.
+        std::snprintf(buf, sizeof(buf), "%d:%02d%s", h, local.tm_min,
+                      local.tm_hour < 12 ? "a" : "p");
     }
     return buf;
 }

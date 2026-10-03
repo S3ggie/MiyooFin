@@ -137,17 +137,22 @@ static void testHomeSettingsModel()
     CHECK(lanRows[1].action == HomeSettingsRowAction::PublicAddress);
     CHECK(homeSettingsRowCount(lan) == 18);
     CHECK(homeSettingsRowAction(0, lan) == HomeSettingsRowAction::OfflineMode);
-    CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::LocalAddress);
-    CHECK(homeSettingsRowAction(2, lan) == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowAction(3, lan) == HomeSettingsRowAction::TestConnection);
-    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::AudioLanguage);
-    CHECK(homeSettingsRowAction(12, lan) == HomeSettingsRowAction::SubtitleLanguage);
-    CHECK(homeSettingsRowAction(13, lan) == HomeSettingsRowAction::MusicMode);
-    CHECK(homeSettingsRowAction(14, lan) == HomeSettingsRowAction::CheckForUpdates);
-    CHECK(homeSettingsRowAction(15, lan) == HomeSettingsRowAction::None); // about
+    CHECK(homeSettingsRowAction(1, lan) == HomeSettingsRowAction::None); // last sync
+    CHECK(homeSettingsRowAction(3, lan) == HomeSettingsRowAction::AudioLanguage);
+    CHECK(homeSettingsRowAction(4, lan) == HomeSettingsRowAction::SubtitleLanguage);
+    CHECK(homeSettingsRowAction(5, lan) == HomeSettingsRowAction::ClockFormat);
+    CHECK(homeSettingsRowAction(6, lan) == HomeSettingsRowAction::TimeZone);
+    CHECK(homeSettingsRowAction(7, lan) == HomeSettingsRowAction::LocalAddress);
+    CHECK(homeSettingsRowAction(8, lan) == HomeSettingsRowAction::PublicAddress);
+    CHECK(homeSettingsRowAction(9, lan) == HomeSettingsRowAction::TestConnection);
+    CHECK(homeSettingsRowAction(11, lan) == HomeSettingsRowAction::MusicMode);
+    CHECK(homeSettingsRowAction(12, lan) == HomeSettingsRowAction::CheckForUpdates);
+    CHECK(homeSettingsRowAction(13, lan) == HomeSettingsRowAction::None); // about
+    CHECK(homeSettingsRowAction(14, lan) == HomeSettingsRowAction::CrashReport);
     CHECK(homeSettingsRowAction(16, lan) == HomeSettingsRowAction::ChangeServer);
     CHECK(homeSettingsRowAction(17, lan) == HomeSettingsRowAction::Logout);
-    CHECK(homeSettingsRowAction(6, lan) == HomeSettingsRowAction::None);
+    CHECK(std::string(homeSettingsRows(lan)[0].group) == "LIBRARY" &&
+          std::string(homeSettingsRows(lan)[17].group) == "ACCOUNT");
 
     Session pub;
     pub.serverUrl = "https://jellyfin.example.com";
@@ -174,8 +179,8 @@ static void testHomeSettingsModel()
     CHECK_EQ(emptyRows[0].value, "Not set");
     CHECK_EQ(emptyRows[1].value, "Not set");
     CHECK(homeSettingsRowAction(0, empty) == HomeSettingsRowAction::OfflineMode);
-    CHECK(homeSettingsRowAction(2, empty) == HomeSettingsRowAction::PublicAddress);
-    CHECK(homeSettingsRowAction(4, empty) == HomeSettingsRowAction::None);
+    CHECK(homeSettingsRowAction(8, empty) == HomeSettingsRowAction::PublicAddress);
+    CHECK(homeSettingsRowAction(10, empty) == HomeSettingsRowAction::None);
     std::printf("[test] Home settings address rows and actions OK\n");
 }
 

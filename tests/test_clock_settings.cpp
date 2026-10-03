@@ -8,8 +8,10 @@ using namespace miyoofin;
 
 int main()
 {
-    CHECK(clockZoneForIana("America/Chicago") && std::string(clockZoneForIana("America/Chicago")->key) == "central");
-    CHECK(clockZoneForIana("Europe/Rome") && std::string(clockZoneForIana("Europe/Rome")->key) == "cet");
+    CHECK(clockZoneForIana("America/Chicago") &&
+          std::string(clockZoneForIana("America/Chicago")->key) == "central");
+    CHECK(clockZoneForIana("Europe/Rome") &&
+          std::string(clockZoneForIana("Europe/Rome")->key) == "cet");
     CHECK(clockZoneForIana("Mars/Olympus") == nullptr);
 
     std::tm t{};
@@ -18,11 +20,11 @@ int main()
     ClockSettings s;
     CHECK_EQ(s.format(t), "21:05");
     s.setHour24(false);
-    CHECK_EQ(s.format(t), "9:05 PM");
+    CHECK_EQ(s.format(t), "9:05p");
     t.tm_hour = 0;
-    CHECK_EQ(s.format(t), "12:05 AM");
+    CHECK_EQ(s.format(t), "12:05a");
     t.tm_hour = 12;
-    CHECK_EQ(s.format(t), "12:05 PM");
+    CHECK_EQ(s.format(t), "12:05p");
 
     // Central rule: 03:00 UTC on 2026-01-15 is 21:00 the evening before; in July it is 22:00.
     ClockSettings c;

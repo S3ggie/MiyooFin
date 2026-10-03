@@ -193,38 +193,93 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
     {
         std::string section;
         std::string value;
+        std::string group;
+        SettingsRowAction action;
     };
-    std::vector<SettingRow> rows = {{"Offline Mode", m_session.manualOfflineMode ? "ON" : "OFF"}};
-    for (const SettingsAddressRow& row : settingsAddressRows(m_session))
-        rows.push_back({row.section, row.value});
-    rows.push_back({"Test connection", m_connectionTestResult.empty()
-                                           ? "Press A to check both addresses"
-                                           : m_connectionTestResult});
-    rows.insert(rows.end(),
-                {{"Last API Route", lastApiRouteValue()},
-                 {"Account", m_userName.empty() ? "Unknown" : m_userName},
-                 {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
-                 {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
-                                   " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
-                 {"DIAGNOSTICS",
-                  hasCrashLog() ? "Crash report available - press A" : "No crashes recorded"},
-                 {"Clock format", ClockSettings::instance().hour24() ? "24-hour" : "12-hour"},
-                 {"Time zone", ClockSettings::instance().zoneSummary()},
-                 {"Default audio language", languageValue(true)},
-                 {"Default subtitles", languageValue(false)},
-                 {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});
-    // UPDATES row — directly above ABOUT.
-    {
-        std::string updateValue = updateStatusText(m_updateSnapshot);
-        if (m_updateSnapshot.stage == UpdateStage::Available &&
-            m_settingsState.confirmation == SettingsConfirmation::CheckForUpdates) {
-            updateValue = "Press A again to install v" + m_updateSnapshot.availableVersion;
+    std::vector<SettingRow> rows;
+    const std::vector<SettingsAddressRow> addresses = settingsAddressRows(m_session);
+    for (const HomeSettingsRow& spec : homeSettingsRows(m_session)) {
+        SettingRow row{"", "", spec.group, spec.action};
+        const std::string key = spec.key;
+        switch (spec.action) {
+        case SettingsRowAction::OfflineMode:
+            row.section = "Offline Mode";
+            row.value = m_session.manualOfflineMode ? "ON" : "OFF";
+            break;
+        case SettingsRowAction::LocalAddress:
+            row.section = addresses[0].section;
+            row.value = addresses[0].value;
+            break;
+        case SettingsRowAction::PublicAddress:
+            row.section = addresses[1].section;
+            row.value = addresses[1].value;
+            break;
+        case SettingsRowAction::TestConnection:
+            row.section = "Test connection";
+            row.value = m_connectionTestResult.empty() ? "Press A to check both addresses"
+                                                       : m_connectionTestResult;
+            break;
+        case SettingsRowAction::CrashReport:
+            row.section = "Diagnostics";
+            row.value = hasCrashLog() ? "Crash report available - press A" : "No crashes recorded";
+            break;
+        case SettingsRowAction::ClockFormat:
+            row.section = "Clock format";
+            row.value = ClockSettings::instance().hour24() ? "24-hour" : "12-hour";
+            break;
+        case SettingsRowAction::TimeZone:
+            row.section = "Time zone";
+            row.value = ClockSettings::instance().zoneSummary();
+            break;
+        case SettingsRowAction::AudioLanguage:
+            row.section = "Default audio language";
+            row.value = languageValue(true);
+            break;
+        case SettingsRowAction::SubtitleLanguage:
+            row.section = "Default subtitles";
+            row.value = languageValue(false);
+            break;
+        case SettingsRowAction::MusicMode:
+            row.section = "MIYOOFIN MUSIC";
+            row.value = "Press A to enter MiyooFin Music";
+            break;
+        case SettingsRowAction::CheckForUpdates:
+            row.section = "UPDATES";
+            row.value = updateStatusText(m_updateSnapshot);
+            if (m_updateSnapshot.stage == UpdateStage::Available &&
+                m_settingsState.confirmation == SettingsConfirmation::CheckForUpdates)
+                row.value = "Press A again to install v" + m_updateSnapshot.availableVersion;
+            break;
+        case SettingsRowAction::ChangeServer:
+            row.section = "Change server";
+            row.value = "Sign in to a different server";
+            break;
+        case SettingsRowAction::Logout:
+            row.section = "Sign out";
+            row.value = "Log Out";
+            break;
+        default:
+            if (key == "sync") {
+                row.section = "Last sync";
+                row.value = compactSyncAge(syncStatus.lastSuccessfulMs);
+            } else if (key == "storage") {
+                row.section = "Downloads";
+                row.value = "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
+                            " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes);
+            } else if (key == "route") {
+                row.section = "Last API Route";
+                row.value = lastApiRouteValue();
+            } else if (key == "about") {
+                row.section = "ABOUT";
+                row.value = std::string(APP_NAME) + " " + VERSION_STR;
+            } else {
+                row.section = "Signed in as";
+                row.value = m_userName.empty() ? "Unknown" : m_userName;
+            }
+            break;
         }
-        rows.push_back({"UPDATES", updateValue});
+        rows.push_back(std::move(row));
     }
-    rows.insert(rows.end(), {{"ABOUT", std::string(APP_NAME) + " " + VERSION_STR},
-                             {"SERVER", "Sign in to a different server"},
-                             {"ACCOUNT", "Log Out"}});
     namespace d = design;
     constexpr int ROW_H = 58, PITCH = 66, TOP = d::kHeaderH + 10,
                   W = d::kScreenW - 2 * d::kMargin - 8;
@@ -247,6 +302,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
         ui::roundOutline(fb, d::kMargin, y, W, ROW_H, d::kRadius,
                          selected ? (musicRow ? tone.edge : d::kAccent) : d::kBorder);
         if (musicRow) { // "Miyoo" white, "Fin" blue, "Music" purple
+            ui::text(fb, d::kMargin + W - 14 - ui::textWidth(rows[index].group), y + 10,
+                     rows[index].group, d::kTextMuted);
             ui::brandWord(fb, d::kMargin + 14, y + 10, d::kText, ui::kVideoTone.main, " MUSIC",
                           tone.main);
             ui::textClamped(fb, d::kMargin + 14, y + 30, W - 28, rows[index].value,
@@ -257,11 +314,14 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
         for (char& c : label)
             c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         ui::text(fb, d::kMargin + 14, y + 10, label, selected ? d::kAccentHi : d::kTextMuted);
+        // Which group the card belongs to, small and quiet at the right edge.
+        ui::text(fb, d::kMargin + W - 14 - ui::textWidth(rows[index].group), y + 10,
+                 rows[index].group, d::kTextMuted);
         const std::string& raw = rows[index].value;
         d::Rgb color = selected ? d::kText : d::kTextSecondary;
         if (label == "OFFLINE MODE")
             color = raw == "ON" ? d::kWarning : d::kSuccess;
-        else if (label == "ACCOUNT" && raw == "Log Out")
+        else if (rows[index].action == SettingsRowAction::Logout)
             color = d::kDanger;
         else if (raw == "Not set")
             color = d::kTextMuted;

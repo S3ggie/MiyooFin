@@ -64,7 +64,7 @@ class ClockSettings
     std::string zoneSummary() const;
     /// Sets TZ for this process from the current choice (no-op for "device").
     void applyZone() const;
-    /// "21:05" or "9:05 PM".
+    /// "21:05" or "9:05p".
     std::string format(const std::tm& local) const;
     std::string formatNow() const;
 

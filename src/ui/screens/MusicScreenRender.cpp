@@ -289,6 +289,13 @@ void MusicScreen::renderSettingsCards(SDL_Surface* fb, const MusicPane& pane, in
                       selected ? (enter ? tone.raised : d::kRaised) : d::kPanel);
         ui::roundOutline(fb, d::kMargin, y, w, kRowH, d::kRadius,
                          selected ? (enter ? tone.edge : d::kAccent) : d::kBorder);
+        // Same group tags as MiyooFin Settings (the rows are fixed, in this order).
+        static const char* const kGroups[] = {"APP",     "PLAYBACK", "PLAYBACK",
+                                              "DISPLAY", "DISPLAY",  "DISPLAY",
+                                              "STORAGE", "ACCOUNT",  "ACCOUNT"};
+        if (index < static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0])))
+            ui::text(fb, d::kMargin + w - 14 - ui::textWidth(kGroups[index]), y + 10,
+                     kGroups[index], d::kTextMuted);
         const std::string value = row.right.empty() ? row.subtitle : row.right;
         if (enter) { // "Miyoo" white, "Fin" blue
             ui::brandWord(fb, d::kMargin + 14, y + 10, d::kText, tone.main, "", d::kText);

@@ -37,6 +37,17 @@ constexpr int homeSettingsBaseRowCount()
                // log out
 }
 std::vector<HomeSettingsAddressRow> homeSettingsAddressRows(const Session& session);
+
+/// One card of the Settings tab, in display order. `key` names the content of read-only cards
+/// (action None): "sync", "storage", "route", "about", "account".
+struct HomeSettingsRow
+{
+    HomeSettingsRowAction action;
+    const char*
+        group; // small tag on the card: LIBRARY, PLAYBACK, DISPLAY, CONNECTION, APP, ACCOUNT
+    const char* key;
+};
+const std::vector<HomeSettingsRow>& homeSettingsRows(const Session& session);
 int homeSettingsRowCount(const Session& session);
 HomeSettingsRowAction homeSettingsRowAction(int row, const Session& session);
 

@@ -40,18 +40,20 @@ test_http_methods
 test_clock_settings
 '
 pids=
+failed=
 
 for test_binary in $TEST_BINARIES
 do
     "$TEST_DIR/$test_binary" >"$run_dir/$test_binary.log" 2>&1 &
-    pids="$pids $!"
+    pids="$pids $!:$test_binary"
 done
 
 status=0
-for pid in $pids
+for entry in $pids
 do
-    if ! wait "$pid"; then
+    if ! wait "${entry%%:*}"; then
         status=1
+        failed="$failed ${entry#*:}"
     fi
 done
 
@@ -61,6 +63,7 @@ for serialized_test in test_catalog test_catalog_parity_sync test_telemetry_form
 do
     if ! "$TEST_DIR/$serialized_test" >"$run_dir/$serialized_test.log" 2>&1; then
         status=1
+        failed="$failed $serialized_test"
     fi
 done
 
@@ -69,6 +72,7 @@ if [ "$status" -ne 0 ]; then
     do
         [ -f "$run_dir/$test_binary.log" ] && cat "$run_dir/$test_binary.log"
     done
+    printf '%s\n' "[test] FAILED groups:$failed" >&2
     exit "$status"
 fi
 

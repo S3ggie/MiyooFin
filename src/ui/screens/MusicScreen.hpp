@@ -160,6 +160,7 @@ class MusicScreen : public Screen
         PendingKind kind;
         int startIndex = 0;
         music::DownloadCollection collection; // for Download
+        std::vector<music::Track> loaded;     // pages of a long list fetched so far
     };
     struct MenuItem
     {

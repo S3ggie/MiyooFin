@@ -1220,9 +1220,27 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
         openPickerFor(r.playlists.items);
         return;
     }
+    // Later pages of a long list (the server answers one page at a time) only count from the
+    // network; the first page may come from the cache when that holds the whole list.
+    if (r.request.start > 0 && r.fromCache)
+        return;
+    std::vector<music::Track> all = pending.loaded;
+    all.insert(all.end(), r.tracks.items.begin(), r.tracks.items.end());
+    if (!r.fromCache && !r.tracks.items.empty() && static_cast<int>(all.size()) < r.tracks.total) {
+        Pending next = pending;
+        next.loaded = std::move(all);
+        music::ListingRequest more = r.request;
+        more.start = static_cast<int>(next.loaded.size());
+        m_pending.erase(r.ticket);
+        m_toast = "Loading " + std::to_string(next.loaded.size()) + " of " +
+                  std::to_string(r.tracks.total) + "...";
+        m_toastUntil = m_clock + 2000;
+        m_pending[m_library->requestList(more)] = std::move(next);
+        return;
+    }
     // A cached answer is trimmed to its first rows: act on it only when it is complete.
-    const bool complete = !r.fromCache || static_cast<int>(r.tracks.items.size()) >= r.tracks.total;
-    if (r.tracks.items.empty() || !complete) {
+    const bool complete = !r.fromCache || static_cast<int>(all.size()) >= r.tracks.total;
+    if (all.empty() || !complete) {
         if (r.final) {
             m_pending.erase(r.ticket);
             m_toast = r.ok ? "Nothing to play" : "Couldn't load: " + r.error;
@@ -1238,34 +1256,34 @@ void MusicScreen::applyPending(const music::ListResult& r, const Pending& pendin
     case PendingKind::PickPlaylist:
         break;
     case PendingKind::AddToPlaylist:
-        startPlaylistPicker(r.tracks.items);
+        startPlaylistPicker(all);
         break;
     case PendingKind::PlayAll:
-        m_player->playTracks(r.tracks.items, 0, false);
+        m_player->playTracks(all, 0, false);
         break;
     case PendingKind::ShuffleAll:
-        m_player->playTracks(r.tracks.items, 0, true);
+        m_player->playTracks(all, 0, true);
         break;
     case PendingKind::PlayNext: {
         if (!m_player->active()) {
-            m_player->playTracks(r.tracks.items, 0, false);
+            m_player->playTracks(all, 0, false);
             break;
         }
-        for (auto it = r.tracks.items.rbegin(); it != r.tracks.items.rend(); ++it)
+        for (auto it = all.rbegin(); it != all.rend(); ++it)
             m_player->playNext(*it);
         m_toast = "Playing next";
         m_toastUntil = m_clock + 1500;
         break;
     }
     case PendingKind::Download:
-        downloadTracks(pending.collection, r.tracks.items);
+        downloadTracks(pending.collection, all);
         break;
     case PendingKind::Append:
         if (!m_player->active()) {
-            m_player->playTracks(r.tracks.items, 0, false);
+            m_player->playTracks(all, 0, false);
             break;
         }
-        for (const music::Track& t : r.tracks.items)
+        for (const music::Track& t : all)
             m_player->append(t);
         m_toast = "Added to queue";
         m_toastUntil = m_clock + 1500;
@@ -1349,9 +1367,16 @@ void MusicScreen::openMenu(const MusicRow& row)
                         {"Add to playlist...", kMenuAddToPlaylist}};
         if (row.kind == MusicRow::Kind::Playlist)
             m_menu.items.push_back({"Delete playlist", kMenuDeletePlaylist});
-        if (m_downloads)
+        if (m_downloads) {
+            // A copy made when lists were cut at 500 songs (or a playlist that has grown) is
+            // topped up from here.
+            if (isDownloaded(row) && row.kind == MusicRow::Kind::Playlist &&
+                row.playlist.trackCount >
+                    static_cast<int>(m_downloads->tracksOf(row.playlist.id).size()))
+                m_menu.items.push_back({"Download the rest", kMenuDownload});
             m_menu.items.push_back(isDownloaded(row) ? MenuItem{"Remove download", kMenuRemove}
                                                      : MenuItem{"Download", kMenuDownload});
+        }
         break;
     case MusicRow::Kind::Action:
         if (!isDownloadRow)

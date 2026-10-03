@@ -384,7 +384,7 @@ std::vector<MusicScreen::HomeSegment> MusicScreen::homeSegments(const MusicPane&
 
 int MusicScreen::homeSegmentHeight(const HomeSegment& s) const
 {
-    return s.card ? 72 : 24 + 104 + 44;
+    return s.card ? 72 : 24 + 84 + 44;
 }
 
 void MusicScreen::clampPane(MusicPane& pane)

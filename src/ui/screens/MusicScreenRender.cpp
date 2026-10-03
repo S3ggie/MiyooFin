@@ -304,7 +304,7 @@ void MusicScreen::renderHome(SDL_Surface* fb, const MusicPane& pane, int top, in
         ui::text(fb, d::kMargin + 4, y + 2, heading.title, d::kAccentHi);
         ui::fill(fb, d::kMargin + 4 + ui::textWidth(heading.title) + 8, y + 10,
                  rowW - ui::textWidth(heading.title) - 20, 1, d::kDivider);
-        constexpr int kTileW = 120, kCover = 104;
+        constexpr int kTileW = 100, kCover = 84;
         const int cols = rowW / kTileW;
         const int offset = pane.frame.selected - seg.first;
         const bool railSelected = offset >= 0 && offset < seg.count;

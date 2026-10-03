@@ -272,6 +272,14 @@ class MusicScreen : public Screen
     };
     std::vector<TabRuntime> m_tabs;
     View m_view = View::Browse;
+    // Lyrics (Now Playing, Up): fetched per track on a job, synced lines follow the position.
+    bool m_lyricsView = false;
+    std::string m_lyricsFor; // track id the lyrics below belong to
+    bool m_lyricsLoading = false;
+    std::vector<music::LyricLine> m_lyrics;
+    int m_lyricsScroll = 0; // first line shown when the lyrics are not synced
+    void requestLyrics();
+    void renderLyrics(SDL_Surface* fb);
     bool m_queueView = false; // Now Playing shows the queue instead of the art
     int m_queueSelected = 0;
     Menu m_menu;

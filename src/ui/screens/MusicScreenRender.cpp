@@ -324,11 +324,45 @@ void MusicScreen::renderMiniPlayer(SDL_Surface* fb, int top)
     }
 }
 
+void MusicScreen::renderLyrics(SDL_Surface* fb)
+{
+    const music::PlayerView& v = m_playerView;
+    const int top = d::kHeaderH + 10, left = d::kMargin + 8, width = d::kScreenW - 2 * left;
+    ui::textClamped(fb, left, top, width, v.track.title, d::kAccentHi);
+    ui::textClamped(fb, left, top + 20, width, v.track.artist, d::kTextMuted);
+    if (m_lyrics.empty()) {
+        ui::text(fb, left, top + 90,
+                 m_lyricsLoading ? "Loading lyrics..." : "No lyrics for this song",
+                 d::kTextSecondary);
+        return;
+    }
+    const bool synced = m_lyrics.front().startMs >= 0;
+    const int areaTop = top + 52, lineH = 30;
+    const int rows = (d::kScreenH - d::kFooterH - areaTop - 6) / lineH;
+    int first = m_lyricsScroll, current = -1;
+    if (synced) { // follow the song: the line being sung stays in the middle
+        const long long now = static_cast<long long>(v.position * 1000);
+        for (int i = 0; i < static_cast<int>(m_lyrics.size()); ++i)
+            if (m_lyrics[i].startMs <= now)
+                current = i;
+        first = std::max(0, current - rows / 2);
+    }
+    for (int i = 0; i < rows && first + i < static_cast<int>(m_lyrics.size()); ++i) {
+        const bool now = first + i == current;
+        ui::textClamped(fb, left, areaTop + i * lineH, width, m_lyrics[first + i].text,
+                        now ? d::kText : d::kTextMuted, now ? 2 : 1);
+    }
+}
+
 void MusicScreen::renderNowPlaying(SDL_Surface* fb)
 {
     ui::fill(fb, 0, d::kHeaderH, d::kScreenW, d::kScreenH - d::kHeaderH - d::kFooterH, d::kCanvas);
     const music::PlayerView& v = m_playerView;
     const int top = d::kHeaderH + 14;
+    if (m_lyricsView && !m_queueView) {
+        renderLyrics(fb);
+        return;
+    }
     if (!m_queueView) {
         drawCover(fb, v.track.artId(), v.track.artTag(), 24, top, 216, 256, v.track.title);
         const int x = 268, w = d::kScreenW - x - 20;
@@ -441,9 +475,11 @@ void MusicScreen::renderFooter(SDL_Surface* fb, bool miniShown)
                             {ui::Key::Y, "Remove"},
                             {ui::Key::X, "Save as playlist"},
                             {ui::Key::B, "Back"}};
+        else if (m_lyricsView)
+            footer.hints = {{ui::Key::A, "Pause"}, {ui::Key::Dpad, "Scroll"}, {ui::Key::B, "Back"}};
         else
             footer.hints = {{ui::Key::A, "Pause"},
-                            {ui::Key::Dpad, "Seek"},
+                            {ui::Key::Dpad, "Seek, Up: lyrics"},
                             {ui::Key::L2, "Skip"},
                             {ui::Key::X, "Shuffle"},
                             {ui::Key::Y, "Repeat"}};

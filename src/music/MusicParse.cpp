@@ -1,4 +1,5 @@
 #include "MusicParse.hpp"
+#include <cstdlib>
 #include "../net/JellyfinApi.hpp"
 
 namespace miyoofin {
@@ -102,6 +103,53 @@ Track parseTrack(const std::string& obj)
     if (!userData.empty() && userData[0] == '{')
         t.favorite = J::jsonBoolField(userData, "IsFavorite");
     return t;
+}
+
+std::vector<LyricLine> parseLyrics(const std::string& body)
+{
+    std::vector<LyricLine> lines;
+    for (const std::string& item : J::jsonExtractArray(body, "Lyrics")) {
+        LyricLine line;
+        line.text = J::jsonStringField(item, "Text");
+        const std::string start = J::jsonRawValue(item, "Start");
+        if (!start.empty())
+            line.startMs = std::atoll(start.c_str()) / 10000; // ticks -> ms
+        lines.push_back(std::move(line));
+    }
+    return lines;
+}
+
+std::string packLyrics(const std::vector<LyricLine>& lines)
+{
+    std::string out;
+    for (const LyricLine& line : lines) {
+        std::string text = line.text;
+        for (char& c : text)
+            if (c == '\t' || c == '\n' || c == '\r')
+                c = ' ';
+        out += std::to_string(line.startMs) + "\t" + text + "\n";
+    }
+    return out;
+}
+
+std::vector<LyricLine> unpackLyrics(const std::string& packed)
+{
+    std::vector<LyricLine> lines;
+    std::size_t pos = 0;
+    while (pos < packed.size()) {
+        std::size_t eol = packed.find('\n', pos);
+        if (eol == std::string::npos)
+            eol = packed.size();
+        const std::size_t tab = packed.find('\t', pos);
+        if (tab != std::string::npos && tab < eol) {
+            LyricLine line;
+            line.startMs = std::atoll(packed.c_str() + pos);
+            line.text = packed.substr(tab + 1, eol - tab - 1);
+            lines.push_back(std::move(line));
+        }
+        pos = eol + 1;
+    }
+    return lines;
 }
 
 Album parseAlbum(const std::string& obj)

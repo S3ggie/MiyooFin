@@ -462,6 +462,19 @@ void testQueuePersistence()
     std::printf("[test] saved queue OK\n");
 }
 
+void testLyrics()
+{
+    const auto synced = parseLyrics("{\"Lyrics\":[{\"Text\":\"Hello\",\"Start\":125000000},{"
+                                    "\"Text\":\"World\",\"Start\":300000000}]}");
+    CHECK(synced.size() == 2 && synced[0].startMs == 12500 && synced[1].text == "World");
+    const auto plain = parseLyrics("{\"Lyrics\":[{\"Text\":\"No timing\"}]}");
+    CHECK(plain.size() == 1 && plain[0].startMs < 0);
+    CHECK(parseLyrics("{}").empty());
+    const auto back = unpackLyrics(packLyrics(synced));
+    CHECK(back.size() == 2 && back[0].startMs == 12500 && back[0].text == "Hello");
+    CHECK(unpackLyrics(packLyrics({{-1, "a\tb\nc"}}))[0].text == "a b c");
+}
+
 void testSettingsAlbumGrid()
 {
     const std::string path = "music-settings-test.txt";
@@ -606,6 +619,7 @@ void testScreenRequests()
 int main()
 {
     testSettingsAlbumGrid();
+    testLyrics();
     testParsing();
     testUrls();
     testCache();

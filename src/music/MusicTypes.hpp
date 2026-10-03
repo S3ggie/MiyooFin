@@ -46,6 +46,13 @@ struct Artist
     std::string id, name, imageTag;
 };
 
+/// One line of a song's lyrics; `startMs` is -1 when the lyrics are not time-synced.
+struct LyricLine
+{
+    long long startMs = -1;
+    std::string text;
+};
+
 struct Playlist
 {
     std::string id, title, imageTag;

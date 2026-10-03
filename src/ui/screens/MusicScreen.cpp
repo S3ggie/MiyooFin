@@ -1,5 +1,6 @@
 #include "MusicScreen.hpp"
 #include "../../music/MusicApi.hpp"
+#include "../../music/MusicParse.hpp"
 #include "../UiKit.hpp"
 #include "TextEntryScreen.hpp"
 #include "../../app/ScreenStack.hpp"
@@ -543,6 +544,8 @@ void MusicScreen::update(Uint32 dt)
         pane.frame.selected + kPrefetchRows >= static_cast<int>(pane.rows.size()))
         requestPane(pane, true);
     requestVisibleCovers();
+    if (m_lyricsView && m_view == View::NowPlaying)
+        requestLyrics(); // a new track while the lyrics are open
 
     if (m_stateDirty && m_clock - m_stateSavedAt >= kStateSaveMs)
         saveState();
@@ -840,9 +843,31 @@ void MusicScreen::refreshPlaylists()
     }
 }
 
+void MusicScreen::requestLyrics()
+{
+    const std::string id = m_playerView.track.id;
+    if (id.empty() || id == m_lyricsFor)
+        return;
+    m_lyricsFor = id;
+    m_lyrics.clear();
+    m_lyricsScroll = 0;
+    m_lyricsLoading = true;
+    m_library->runJob("lyrics|" + id + "|",
+                      [id](const music::Connection& c, std::string& packed, std::string& error) {
+                          return music::fetchLyrics(c, id, packed, error);
+                      });
+}
+
 void MusicScreen::applyJobResults()
 {
     for (const music::JobResult& r : m_library->takeJobs()) {
+        if (r.label.compare(0, 7, "lyrics|") == 0) {
+            if (r.label.substr(7, r.label.find('|', 7) - 7) == m_lyricsFor) {
+                m_lyricsLoading = false;
+                m_lyrics = music::unpackLyrics(r.id);
+            }
+            continue;
+        }
         const std::size_t first = r.label.find('|');
         const std::size_t second = r.label.find('|', first + 1);
         const std::string kind = r.label.substr(0, first);
@@ -1513,6 +1538,8 @@ bool MusicScreen::handleNowPlaying(Action action)
     case Action::Back:
         if (m_queueView)
             m_queueView = false;
+        else if (m_lyricsView)
+            m_lyricsView = false;
         else
             m_view = View::Browse;
         return true;
@@ -1530,12 +1557,24 @@ bool MusicScreen::handleNowPlaying(Action action)
             m_player->togglePause();
         return true;
     case Action::Up:
-        if (m_queueView && m_queueSelected > 0)
-            --m_queueSelected;
+        if (m_queueView) {
+            if (m_queueSelected > 0)
+                --m_queueSelected;
+        } else if (m_lyricsView) {
+            m_lyricsScroll = std::max(0, m_lyricsScroll - 1);
+        } else {
+            m_lyricsView = true;
+            requestLyrics();
+        }
         return true;
     case Action::Down:
-        if (m_queueView && m_queueSelected + 1 < queueSize)
-            ++m_queueSelected;
+        if (m_queueView) {
+            if (m_queueSelected + 1 < queueSize)
+                ++m_queueSelected;
+        } else if (m_lyricsView) {
+            m_lyricsScroll =
+                std::min(std::max(0, static_cast<int>(m_lyrics.size()) - 1), m_lyricsScroll + 1);
+        }
         return true;
     case Action::Left:
         if (!m_queueView)

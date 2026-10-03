@@ -383,6 +383,30 @@ bool deletePlaylist(const Connection& c, const std::string& playlistId, std::str
                          error);
 }
 
+bool fetchLyrics(const Connection& c, const std::string& trackId, std::string& packed,
+                 std::string& error)
+{
+    packed.clear();
+    HttpClient client;
+    client.setTimeoutSec(10);
+    HttpResponse response;
+    auto headers = JellyfinApi::buildAuthHeaders(c.accessToken, c.deviceId);
+    if (!client.perform("GET", c.baseUrl + "/Audio/" + percentEncode(trackId) + "/Lyrics", headers,
+                        {}, response, error)) {
+        if (error.empty())
+            error = "Could not reach server";
+        return false;
+    }
+    if (response.status == 404)
+        return true; // no lyrics for this song
+    if (!response.ok()) {
+        error = "Lyrics failed (HTTP " + std::to_string(response.status) + ")";
+        return false;
+    }
+    packed = packLyrics(parseLyrics(response.body));
+    return true;
+}
+
 bool markPlayed(const Connection& c, const std::string& trackId, const std::string& isoTime,
                 bool& gone, std::string& error)
 {

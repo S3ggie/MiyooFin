@@ -1404,10 +1404,14 @@ void MusicScreen::openMenu(const MusicRow& row)
         if (m_downloads) {
             // A copy made when lists were cut at 500 songs (or a playlist that has grown) is
             // topped up from here.
-            if (isDownloaded(row) && row.kind == MusicRow::Kind::Playlist &&
-                row.playlist.trackCount >
-                    static_cast<int>(m_downloads->tracksOf(row.playlist.id).size()))
-                m_menu.items.push_back({"Download the rest", kMenuDownload});
+            if (isDownloaded(row) && row.kind == MusicRow::Kind::Playlist) {
+                int wanted = 0; // songs the copy already covers, finished or still downloading
+                for (const music::DownloadStatus& st : m_downloads->snapshot())
+                    if (st.collection.id == row.playlist.id)
+                        wanted = st.total;
+                if (row.playlist.trackCount > wanted)
+                    m_menu.items.push_back({"Download the rest", kMenuDownload});
+            }
             if (isDownloaded(row) && row.kind == MusicRow::Kind::Playlist)
                 m_menu.items.push_back(
                     {m_downloads->syncOf(row.playlist.id) ? "Stop keeping in sync" : "Keep in sync",

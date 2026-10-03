@@ -7,6 +7,7 @@
 #include "../../download/DownloadSupport.hpp"
 #include "miyoofin/version.hpp"
 #include <ctime>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace miyoofin {
@@ -56,6 +57,11 @@ HomeScreen::SettingsRowAction HomeScreen::settingsRowAction(int row, const Sessi
 }
 
 namespace {
+bool hasCrashLog()
+{
+    struct stat st;
+    return ::stat("crash.log", &st) == 0 && st.st_size > 0;
+}
 constexpr const char* kPlayerPrefsPath = "player-prefs.txt";
 struct Language
 {
@@ -102,13 +108,13 @@ void HomeScreen::startConnectionTest()
                 ServerInfo info;
                 std::string error;
                 const auto t0 = std::chrono::steady_clock::now();
-                const bool ok = JellyfinApi::getSystemInfo(url, info, error, cancel.get());
+                const bool ok = JellyfinApi::getSystemInfo(url, info, error, cancel.get(), 20);
                 const long ms =
                     static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                           std::chrono::steady_clock::now() - t0)
                                           .count());
                 if (!ok)
-                    return "failed";
+                    return error.empty() ? "failed" : "failed (" + error.substr(0, 40) + ")";
                 if (!serverId.empty() && !JellyfinApi::serverIdsMatch(serverId, info.serverId))
                     return "different server";
                 return "OK " + std::to_string(ms) + " ms";
@@ -174,8 +180,8 @@ void HomeScreen::drawSettingsTab(SDL_Surface* fb)
                  {"LIBRARY", "Last Sync: " + compactSyncAge(syncStatus.lastSuccessfulMs)},
                  {"DOWNLOADS", "Local " + formatBytes(m_downloadsState.snapshot.localBytes) +
                                    " | Free " + formatBytes(m_downloadsState.snapshot.freeBytes)},
-                 {"DIAGNOSTICS", access("crash.log", F_OK) == 0 ? "Crash report available - press A"
-                                                                : "No crashes recorded"},
+                 {"DIAGNOSTICS",
+                  hasCrashLog() ? "Crash report available - press A" : "No crashes recorded"},
                  {"Default audio language", languageValue(true)},
                  {"Default subtitles", languageValue(false)},
                  {"MIYOOFIN MUSIC", "Press A to enter MiyooFin Music"}});

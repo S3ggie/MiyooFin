@@ -58,10 +58,10 @@ AuthError JellyfinApi::classifyAuthError(long httpStatus, const std::string& bod
 // ===================================================================
 
 bool JellyfinApi::getSystemInfo(const std::string& baseUrl, ServerInfo& info, std::string& error,
-                                const std::atomic<bool>* cancelled)
+                                const std::atomic<bool>* cancelled, int timeoutSec)
 {
     HttpClient client;
-    client.setTimeoutSec(5);
+    client.setTimeoutSec(timeoutSec);
 
     std::string url = baseUrl + "/System/Info/Public";
     std::string body;

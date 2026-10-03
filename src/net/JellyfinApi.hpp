@@ -99,7 +99,7 @@ class JellyfinApi
   public:
     /// Call GET /System/Info/Public on the given server base URL.
     static bool getSystemInfo(const std::string& baseUrl, ServerInfo& info, std::string& error,
-                              const std::atomic<bool>* cancelled = nullptr);
+                              const std::atomic<bool>* cancelled = nullptr, int timeoutSec = 5);
 
     /// Parse a /System/Info/Public response. Public for focused tests.
     static bool parseSystemInfoResponse(const std::string& body, ServerInfo& info);

@@ -250,70 +250,23 @@ void DownloadManager::worker()
         Session session;
         std::string scope;
         std::uint64_t generation = 0;
-        bool persistOnly = false;
         {
             std::unique_lock<std::mutex> l(m_mutex);
             performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer, false);
             m_wake.wait(l, [&] {
-                if (m_stop || m_persistRequested)
+                if (m_stop)
                     return true;
                 if (!m_playback)
                     for (const auto& i : m_items)
-                        if (i.state == DownloadState::Queued)
+                        if (i.state == DownloadState::Queued && !storageBusyLocked(i.itemId))
                             return true;
                 return false;
             });
             if (m_stop)
                 return;
-            if (m_persistRequested) {
-                scope = m_scope;
-                generation = m_generation;
-                persistOnly = true;
-                // Id-set-change persist (enqueue() added ids, in-memory only on
-                // the UI thread): manifests for ONLY the pending ids, each read
-                // LIVE under its own short lock acquisition, plus one index write
-                // (durable-manifest ids only, via saveIndexLocked) at the end.
-                // The pending set is swapped under a
-                // short hold and the mutex is released across file I/O, so every
-                // hold spans a single small manifest/index write — a season-sized
-                // enqueue never stalls SDL-thread state queries, pause(), or
-                // enqueue() behind N fsyncs.  Read and write still share one acquisition
-                // per item, so a pause()/erase()/playback-interrupt landing
-                // before an item's write is written as-is, and one landing after
-                // carries its own synchronous per-item persist that lands last —
-                // either order converges, and a stale pass can never revert a
-                // newer state.  A scope/generation change mid-pass (configure())
-                // aborts the remainder: configure() already converged the whole
-                // library under its own lock.
-                std::set<std::string> pending;
-                pending.swap(m_persistPendingIds);
-                m_persistRequested = false;
-                l.unlock();
-                for (const auto& id : pending) {
-                    std::lock_guard<std::mutex> pl(m_mutex);
-                    if (m_stop || generation != m_generation || scope != m_scope)
-                        break;
-                    auto q = std::find_if(m_items.begin(), m_items.end(),
-                                          [&](const DownloadItem& i) { return i.itemId == id; });
-                    if (q == m_items.end())
-                        continue;
-                    if (q->hlsStorage)
-                        m_store.ensureHlsDirectories(scope, q->itemId);
-                    // An id joins the durable-manifest set only after its write
-                    // succeeded; a later-enqueued id (or a failed write) stays
-                    // out, so the index below can never name a manifestless id.
-                    if (m_store.saveManifest(scope, *q, nullptr))
-                        m_indexedIds.insert(id);
-                }
-                {
-                    std::lock_guard<std::mutex> il(m_mutex);
-                    if (!m_stop && generation == m_generation && scope == m_scope)
-                        saveIndexLocked();
-                }
-                l.lock();
-            } else {
-                auto p = std::find_if(m_items.begin(), m_items.end(), [](const DownloadItem& i) {
-                    return i.state == DownloadState::Queued;
+            {
+                auto p = std::find_if(m_items.begin(), m_items.end(), [&](const DownloadItem& i) {
+                    return i.state == DownloadState::Queued && !storageBusyLocked(i.itemId);
                 });
                 if (p == m_items.end())
                     continue;
@@ -327,22 +280,11 @@ void DownloadManager::worker()
                 publishDownloadGauges(m_items, m_planJobs.size());
                 performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer, true);
             }
-            // The dequeue flip changes no ids — the on-disk index already lists
-            // this id (it is rewritten whenever the id set changes: the persist
-            // pass above, erase, configure), so only the dequeued item's manifest
-            // is rewritten here under the same lock acquisition as the state
-            // change.  Bounded single-file I/O only: never network I/O, and no
-            // lock order changes (m_mutex alone, as every other persist call site).
-            if (!persistOnly) {
-                if (work.hlsStorage)
-                    m_store.ensureHlsDirectories(scope, work.itemId);
-                persistItemLocked(work.itemId);
-            }
+            // The dequeue flip changes no ids: the manifest is written by the storage thread.
+            persistItemLocked(work.itemId);
         }
-        if (persistOnly)
-            continue;
-        // Enqueue never performs removable-storage I/O: the worker above persists
-        // before any transfer starts, so UI-thread enqueue stays in-memory only.
+        // Enqueue never performs removable-storage I/O: the storage thread writes the manifest and
+        // the directories are created by transfer() with no lock held.
         transfer(work, session, scope, generation);
         performanceTelemetry().setWorkerActive(WorkerId::DownloadTransfer, false);
     }
@@ -432,20 +374,31 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     // id set is unchanged by discovery, so only this item's manifest is
     // persisted (the index already lists this id).
     {
+        DownloadItem scan;
+        {
+            std::lock_guard<std::mutex> l(m_mutex);
+            auto live = std::find_if(m_items.begin(), m_items.end(), [&](const DownloadItem& i) {
+                return i.itemId == item.itemId;
+            });
+            if (live == m_items.end())
+                return false;
+            if (transferSourceChanged(*live, transferSourceId, transferEtag))
+                return false;
+            live->hlsSegmentCount = item.hlsSegmentCount;
+            live->hlsStorage = true;
+            scan = *live;
+        }
+        // Recovery scan on a copy with no lock held (the segment files are read here), merged
+        // back onto the LIVE item only if it is still this transfer's source.
+        m_store.reconcileInMemory(scope, scan, nullptr);
         std::lock_guard<std::mutex> l(m_mutex);
         for (auto& i : m_items)
             if (i.itemId == item.itemId) {
                 if (transferSourceChanged(i, transferSourceId, transferEtag))
                     return false;
-                i.hlsSegmentCount = item.hlsSegmentCount;
-                i.hlsStorage = true;
-                // Recovery scan on the LIVE item (never the worker-local copy)
-                // under this same lock: recompute resumed bytes from the
-                // segment files on disk and persist the live manifest, so a
-                // pause/reconciler-reset that landed before this point is
-                // written as-is and never overwritten by stale local state.
-                m_store.reconcile(scope, i, nullptr);
+                i.downloadedBytes = scan.downloadedBytes;
                 item.downloadedBytes = i.downloadedBytes;
+                requestAsyncPersistLocked(i.itemId);
                 break;
             }
     }
@@ -484,13 +437,12 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                     return i.itemId == item.itemId;
                 });
                 if (p != m_items.end()) {
-                    m_store.removeItem(scope, item.itemId, nullptr);
                     m_items.erase(p);
                     m_progressSamples.erase(item.itemId);
                     m_indexedIds.erase(item.itemId);
-                    m_persistPendingIds.erase(item.itemId);
+                    requestRemoveLocked(item.itemId, true);
                 } // Id set changed: index only.
-                saveIndexLocked();
+                requestIndexLocked();
                 publishDownloadGauges(m_items, m_planJobs.size());
             }
             return false;
@@ -716,19 +668,19 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             if (p == m_items.end())
                 return false;
             if (m_deleteRequested.erase(item.itemId)) {
-                m_store.removeItem(scope, item.itemId, nullptr);
                 m_items.erase(p);
                 m_progressSamples.erase(item.itemId);
                 m_indexedIds.erase(item.itemId);
-                m_persistPendingIds.erase(item.itemId);
-                saveIndexLocked(); // Id set changed: index only.
+                requestRemoveLocked(item.itemId, true);
+                requestIndexLocked(); // Id set changed: index only.
                 publishDownloadGauges(m_items, m_planJobs.size());
                 return false;
             }
             if (rc == CURLE_ABORTED_BY_CALLBACK) {
                 p->recentBytesPerSec = 0;
                 m_progressSamples.erase(item.itemId);
-                m_store.reconcile(scope, *p, nullptr);
+                requestRescanLocked(item.itemId);
+                requestAsyncPersistLocked(item.itemId);
                 publishDownloadGauges(m_items, m_planJobs.size());
                 return false;
             }
@@ -737,7 +689,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             p->recentBytesPerSec = 0;
             m_progressSamples.erase(item.itemId);
             p->lastError = detail;
-            m_store.reconcile(scope, *p, nullptr);
+            requestRescanLocked(item.itemId);
+            requestAsyncPersistLocked(item.itemId);
             publishDownloadGauges(m_items, m_planJobs.size());
             return false;
         }
@@ -751,25 +704,32 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         applyHlsSegmentCompleted(item, k, bytes);
         item.hlsCurrentSegmentBytes = item.hlsCurrentSegmentSize = 0;
         item.hlsActivePercent = downloadPercent(item);
+        bool staleSegment = false;
         {
             std::lock_guard<std::mutex> l(m_mutex);
             for (auto& i : m_items)
                 if (i.itemId == item.itemId) {
-                    // The reconciler already wiped this source's segment files when it
-                    // reset the identity above; drop the just-renamed stale file inside
-                    // this same critical section (never after unlock, never twice) so a
-                    // concurrently restarted new-source transfer cannot rename a valid
-                    // segment onto this path in between, then stop cleanly.
                     if (transferSourceChanged(i, transferSourceId, transferEtag)) {
-                        std::remove(done.c_str());
-                        return false;
+                        staleSegment = true;
+                        break;
                     }
                     publishTransferProgress(i, item);
                     persistItemLocked(i.itemId);
                     break;
                 }
         }
+        if (staleSegment) {
+            // The reconciler already wiped this source's segment files when it reset the
+            // identity; drop the just-renamed stale file, then stop. This is the only transfer
+            // thread, so no new-source transfer can write this path before we return.
+            std::remove(done.c_str());
+            return false;
+        }
     }
+    // The whole-download check reads every segment file: done with no lock held, then the
+    // outcome is applied below only if neither a delete nor a source change decided it.
+    std::string validationError;
+    const bool diskValid = m_store.validateCompletedDownload(scope, item, &validationError);
     std::lock_guard<std::mutex> l(m_mutex);
     auto p = std::find_if(m_items.begin(), m_items.end(),
                           [&](const DownloadItem& i) { return i.itemId == item.itemId; });
@@ -782,17 +742,14 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     // runs when neither delete nor a source change already decided it (C).
     const bool sourceChanged =
         !deleteRequested && transferSourceChanged(*p, transferSourceId, transferEtag);
-    std::string validationError;
-    const bool validated = !deleteRequested && !sourceChanged &&
-                           m_store.validateCompletedDownload(scope, item, &validationError);
+    const bool validated = !deleteRequested && !sourceChanged && diskValid;
     switch (decideTransferFinish(deleteRequested, sourceChanged, validated)) {
     case TransferFinish::Removed:
-        m_store.removeItem(scope, item.itemId, nullptr);
         m_items.erase(p);
         m_progressSamples.erase(item.itemId);
         m_indexedIds.erase(item.itemId);
-        m_persistPendingIds.erase(item.itemId);
-        saveIndexLocked(); // Id set changed: index only.
+        requestRemoveLocked(item.itemId, true);
+        requestIndexLocked(); // Id set changed: index only.
         publishDownloadGauges(m_items, m_planJobs.size());
         return false;
     case TransferFinish::StaleAborted:
@@ -800,7 +757,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     case TransferFinish::RetryFailed:
         applyTransferValidationFailure(*p, validationError);
         m_progressSamples.erase(p->itemId);
-        m_store.reconcile(scope, *p, nullptr);
+        requestRescanLocked(item.itemId);
+        requestAsyncPersistLocked(item.itemId);
         publishDownloadGauges(m_items, m_planJobs.size());
         return false;
     case TransferFinish::Complete:
@@ -828,7 +786,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     p->recentBytesPerSec = 0;
     p->lastError.clear();
     m_progressSamples.erase(p->itemId);
-    m_store.saveManifest(scope, *p, nullptr);
+    m_segmentsVerified[p->itemId] = true; // just validated against the files
+    requestAsyncPersistLocked(p->itemId);
     publishDownloadGauges(m_items, m_planJobs.size());
     return true;
 }

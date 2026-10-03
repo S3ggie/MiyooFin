@@ -495,6 +495,16 @@ bool DownloadStore::validateCompletedDownload(const std::string& s, const Downlo
 }
 bool DownloadStore::reconcile(const std::string& s, DownloadItem& i, std::string* e) const
 {
+    if (!reconcileInMemory(s, i, e))
+        return false;
+    return saveManifest(s, i, e);
+}
+
+// Recomputes the item's byte count and (Downloading -> Queued, all segments present -> Complete)
+// state from the files on disk. Reads only: it never writes, so it can run on a copy with no
+// lock held and the caller merges the result.
+bool DownloadStore::reconcileInMemory(const std::string& s, DownloadItem& i, std::string* e) const
+{
     if (i.hlsStorage) {
         // Count only segments that are really media (the same quick structural check that
         // completeness uses), so a damaged or fake file is neither "downloaded bytes" nor a
@@ -513,7 +523,7 @@ bool DownloadStore::reconcile(const std::string& s, DownloadItem& i, std::string
                 i.state = DownloadState::Complete;
         } else if (i.state == DownloadState::Downloading)
             i.state = DownloadState::Queued;
-        return saveManifest(s, i, e);
+        return true;
     }
     std::uint64_t got = 0, n = chunkCount(i.expectedSize, i.chunkSize);
     for (std::uint64_t k = 0; k < n; k++) {
@@ -543,7 +553,7 @@ bool DownloadStore::reconcile(const std::string& s, DownloadItem& i, std::string
             i.state = DownloadState::Complete;
     } else if (i.state == DownloadState::Downloading)
         i.state = DownloadState::Queued;
-    return saveManifest(s, i, e);
+    return true;
 }
 bool DownloadStore::removePartialBytes(const std::string& s, const std::string& id,
                                        std::string* e) const

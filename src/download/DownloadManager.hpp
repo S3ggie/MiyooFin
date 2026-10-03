@@ -67,7 +67,7 @@ class DownloadManager
     bool tryPlanSnapshot(std::uint64_t id, DownloadPlanSnapshot& snapshot) const;
     /// Waits until every requested write has reached the disk (shutdown and tests).
     void flushPersistence();
-    /// Test seam: runs on the storage thread before each manifest write.
+    /// Test seam: runs on the storage thread before each disk operation (write, removal, scan).
     std::function<void()> beforeAsyncWriteForTest;
     static bool acceptsPlanResult(std::uint64_t jobGeneration, std::uint64_t currentGeneration)
     {
@@ -102,13 +102,34 @@ class DownloadManager
     void persistLocked();
     void persistItemLocked(const std::string& itemId);
     void saveIndexLocked();
-    // UI-thread transitions (pause/resume/retry, playback interrupt) change memory only and ask
-    // the storage thread to write: fsyncs never run on the caller, never under m_mutex.
+    // Disk work never runs on a UI caller and never while m_mutex (which snapshot() takes) is
+    // held. Memory is the authority; every transition changes it first and asks the storage
+    // thread, which owns ALL steady-state disk writes, deletions and rescans, to follow:
+    //   * manifests and the index are written from copies taken under the lock, and verified
+    //     against the live item afterwards, so what stays on disk is always the live state;
+    //   * removals (an erased item, a re-download's old bytes) run in order on that same thread,
+    //     so a write can never resurrect what a removal deleted, and an id with removal work
+    //     outstanding is not started by the transfer worker until it is done (m_storageBusy);
+    //   * rescans of segment files (startup, after a failed segment) read a copy and merge the
+    //     result into the live item only where it has not changed meanwhile.
     void requestAsyncPersistLocked(const std::string& itemId);
+    void requestIndexLocked();
+    void requestRemoveLocked(const std::string& itemId, bool wholeItem);
+    void requestRescanLocked(const std::string& itemId);
+    bool storageBusyLocked(const std::string& itemId) const
+    {
+        return m_storageBusy.count(itemId) != 0;
+    }
     void persisterLoop();
-    void persistManifestAsync(const std::string& scope, std::uint64_t generation,
+    bool storageHasWorkLocked() const;
+    // Returns true when the id's manifest became durable for the first time (the index must then
+    // list it).
+    bool persistManifestAsync(const std::string& scope, std::uint64_t generation,
                               const std::string& itemId);
     void persistIndexAsync(const std::string& scope, std::uint64_t generation);
+    void rescanItemAsync(const std::string& scope, std::uint64_t generation,
+                         const std::string& itemId);
+    void runRemoval(const std::string& scope, const std::string& itemId, bool wholeItem);
     std::uint64_t freeBytes() const;
     static bool statvfsFreeBytes(const DownloadStore& store, const std::string& scope,
                                  std::uint64_t& out);
@@ -119,19 +140,29 @@ class DownloadManager
     std::condition_variable m_wake, m_planWake, m_reconcileWake;
     std::thread m_thread, m_planThread, m_reconcileThread, m_persisterThread;
     std::condition_variable m_persisterWake;
+    struct StorageRemoval
+    {
+        std::string scope, id;
+        bool wholeItem; // else: only the downloaded bytes (a re-download starts clean)
+    };
+    struct StorageFinalWrite
+    {
+        std::string scope;
+        std::vector<DownloadItem> items;
+    };
     std::set<std::string> m_asyncPersistIds; // manifests the storage thread owes the disk
-    bool m_asyncIndexDue = false, m_persisterBusy = false;
+    std::set<std::string> m_rescanIds;       // items whose segment files must be re-read
+    std::deque<StorageRemoval> m_storageRemovals;
+    std::vector<StorageFinalWrite> m_storageFinalWrites; // a previous account's items, kept
+    std::map<std::string, int> m_storageBusy;            // id -> removals queued or running
+    std::map<std::string, bool> m_segmentsVerified;      // id -> last structural check result
+    bool m_asyncIndexDue = false, m_persisterBusy = false, m_rescanAllDue = false;
     bool m_stop = false, m_playback = false, m_reconcileRequested = false,
-         m_persistRequested = false, m_startupReconcile = false;
+         m_startupReconcile = false, m_configured = false;
     std::uint64_t m_generation = 0, m_nextPlanId = 1;
     std::set<std::string> m_deleteRequested;
     std::map<std::string, RecentSpeedSample> m_progressSamples;
     std::vector<DownloadItem> m_items;
-    // Ids enqueue() added since the worker's last persist pass.  The worker
-    // persists exactly these manifests (read live, under the same lock
-    // acquisition) plus the index, so a persist pass can never overwrite a
-    // newer per-item state with stale bytes.  Guarded by m_mutex.
-    std::set<std::string> m_persistPendingIds;
     // Ids with a durable manifest on disk.  An id enters only after its
     // manifest write succeeded and leaves when the item is removed.  Every
     // index write is built from this set intersected with the live ids, so

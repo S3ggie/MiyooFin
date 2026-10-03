@@ -34,6 +34,8 @@ int main()
     testHlsSegmentIntegrity();
     testStorageWriteFailureDoesNotLeakDescriptors();
     testPauseResumeDoNotWaitForTheDisk();
+    testErasureAndRedownloadDoNotWaitForTheDisk();
+    testConfigureDoesNotWaitForTheDisk();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();
     testDownloadHierarchy();

@@ -100,7 +100,7 @@ void DownloadManager::reconciler()
                     continue;
                 const bool discard = applyReconciledSource(*p, result, source, nowMs);
                 if (discard)
-                    m_store.removePartialBytes(scope, p->itemId, nullptr);
+                    requestRemoveLocked(p->itemId, false); // storage thread; id is busy until done
                 changed.push_back({old.itemId, discard});
             }
         }
@@ -108,9 +108,9 @@ void DownloadManager::reconciler()
         // The id set is unchanged by reconcile (source/state flips only; stale bytes
         // are removed, never manifests), so the index is NOT rewritten here —
         // segment/state churn never needs it.  Stale partial-byte removal happens atomically
-        // with the in-memory apply above (same critical section) so a wake in between
-        // cannot start the new source's transfer over mixed old/new segment files;
-        // only the manifest writes are deferred here.
+        // is requested with the in-memory apply above (same critical section; the id is busy until
+        // the storage thread has removed them) so a wake in between cannot start the new source's
+        // transfer over mixed old/new segment files; only the manifest writes are deferred here.
         {
             std::lock_guard<std::mutex> l(m_mutex);
             if (!aborted && !m_stop && generation == m_generation && scope == m_scope &&
@@ -121,8 +121,7 @@ void DownloadManager::reconciler()
                                      [&](const DownloadItem& i) { return i.itemId == c.first; });
                     if (p == m_items.end() || p->state == DownloadState::Downloading)
                         continue;
-                    if (m_store.saveManifest(scope, *p, nullptr))
-                        m_indexedIds.insert(p->itemId);
+                    requestAsyncPersistLocked(p->itemId);
                 }
                 publishDownloadGauges(m_items, m_planJobs.size());
             }

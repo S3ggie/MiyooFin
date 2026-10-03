@@ -29,7 +29,8 @@ Bytes readFile(const std::string& path)
 void writeFile(const std::string& path, const Bytes& data)
 {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    out.write(reinterpret_cast<const char*>(data.data()),
+              static_cast<std::streamsize>(data.size()));
 }
 
 bool accepted(const Bytes& data, TsDepth depth)
@@ -196,7 +197,8 @@ void testMutationsNeverCrash(const Bytes& legit)
         const TsVerdict full = validateMpegTs(mutated.data(), mutated.size(), TsDepth::Full);
         const TsVerdict quick = validateMpegTs(mutated.data(), mutated.size(), TsDepth::Quick);
         if (full.ok)
-            CHECK(quick.ok || true); // Full accepting while Quick refuses would be odd; not required
+            CHECK(quick.ok ||
+                  true); // Full accepting while Quick refuses would be odd; not required
         rejected += full.ok ? 0 : 1;
     }
     CHECK(rejected > 300); // most random damage is detected
@@ -230,8 +232,10 @@ void testRealSegmentsIfProvided()
             } else if (name.size() > 4 && name.compare(name.size() - 4, 4, ".bin") == 0) {
                 ++files;
                 const bool ok =
-                    validateMpegTsFile(path, static_cast<std::uint64_t>(st.st_size), TsDepth::Full).ok &&
-                    validateMpegTsFile(path, static_cast<std::uint64_t>(st.st_size), TsDepth::Quick).ok;
+                    validateMpegTsFile(path, static_cast<std::uint64_t>(st.st_size), TsDepth::Full)
+                        .ok &&
+                    validateMpegTsFile(path, static_cast<std::uint64_t>(st.st_size), TsDepth::Quick)
+                        .ok;
                 if (!ok) {
                     ++failed;
                     std::printf("  real segment rejected: %s\n", path.c_str());

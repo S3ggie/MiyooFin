@@ -36,7 +36,13 @@ DownloadManager::DownloadManager(const Session& s, const std::string& r) : m_sto
 
 DownloadManager::~DownloadManager()
 {
-    flushPersistence(); // owed writes land before the final whole-library convergence below
+    {
+        // Whole-library write justified: rare lifecycle event (shutdown); every steady-state
+        // transition already asked for its own write, this only converges any last state.
+        std::lock_guard<std::mutex> lock(m_mutex);
+        persistLocked();
+    }
+    flushPersistence(); // the storage thread drains what is owed, then is stopped
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stop = true;
@@ -49,10 +55,6 @@ DownloadManager::~DownloadManager()
             if (job.cancellation)
                 job.cancellation->store(true);
         }
-        // Whole-library write justified: rare lifecycle event (shutdown);
-        // every steady-state transition already persisted per-item/index
-        // above, so this only converges any last in-memory state.
-        persistLocked();
     }
     m_wake.notify_all();
     m_planWake.notify_all();
@@ -68,15 +70,35 @@ DownloadManager::~DownloadManager()
         m_reconcileThread.join();
 }
 
-// configure() switches scope and rebuilds the id set from disk, so both
-// persistLocked() calls below stay whole-library (rare lifecycle event;
-// see persistLocked()).  Steady-state transitions never take this path.
+// configure() switches the account. Reading the new account's library (index + manifests) is the
+// only disk work done here, and only when the scope really changes; nothing is written or
+// rescanned: the previous account's items are handed to the storage thread (written, then
+// forgotten) and the new account's items are re-checked against their segment files there too.
 void DownloadManager::configure(const Session& s)
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    // A write that the storage thread has already started belongs to the old account; let it
-    // finish before the whole library is converged below, or it could land after and win.
-    m_persisterWake.wait(lock, [this] { return !m_persisterBusy; });
+    const std::string newScope =
+        s.valid() ? DownloadStore::scopeKey(s.serverUrl, s.userId) : "anonymous";
+    bool sameScope = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        sameScope = m_configured && newScope == m_scope;
+    }
+    // Reads only, no lock held (a different scope's files are untouched by pending writes).
+    std::vector<DownloadItem> loaded;
+    if (!sameScope) {
+        if (!m_store.loadIndex(newScope, loaded, nullptr)) {
+            loaded.clear();
+            std::vector<DownloadItem> rebuilt;
+            if (m_store.rebuildIndex(newScope, rebuilt, nullptr))
+                loaded.swap(rebuilt);
+        }
+        std::set<std::string> seen;
+        loaded.erase(
+            std::remove_if(loaded.begin(), loaded.end(),
+                           [&](const DownloadItem& i) { return !seen.insert(i.itemId).second; }),
+            loaded.end());
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_activePlanCancellation)
         m_activePlanCancellation->store(true);
     const auto hierarchyRequest = m_activePlanHierarchyRequest.load(std::memory_order_acquire);
@@ -86,41 +108,34 @@ void DownloadManager::configure(const Session& s)
         if (job.cancellation)
             job.cancellation->store(true);
     }
-    persistLocked();
-    m_asyncPersistIds.clear(); // persistLocked() wrote everything
-    m_asyncIndexDue = false;
     ++m_generation;
     m_session = s;
-    m_scope = s.valid() ? DownloadStore::scopeKey(s.serverUrl, s.userId) : "anonymous";
     m_deleteRequested.clear();
     m_progressSamples.clear();
-    m_persistRequested = false;
-    m_persistPendingIds.clear();
-    // Never let a failed index load leak its partial result into a rebuild.
-    // Both paths use independent vectors, then publish one complete result.
-    std::vector<DownloadItem> loaded;
-    if (!m_store.loadIndex(m_scope, loaded, nullptr)) {
-        loaded.clear();
-        std::vector<DownloadItem> rebuilt;
-        if (m_store.rebuildIndex(m_scope, rebuilt, nullptr))
-            loaded.swap(rebuilt);
+    if (!sameScope) {
+        if (m_configured && !m_items.empty()) {
+            // The account we are leaving: its in-memory state is written out, from a copy, by
+            // the storage thread (it must not be lost, and must not be written under this lock).
+            m_storageFinalWrites.push_back({m_scope, m_items});
+        }
+        m_asyncPersistIds.clear();
+        m_rescanIds.clear();
+        m_storageRemovals.erase(
+            std::remove_if(m_storageRemovals.begin(), m_storageRemovals.end(),
+                           [&](const StorageRemoval& r) { return r.scope != newScope; }),
+            m_storageRemovals.end()); // (removals of the old account stay queued: they still run)
+        m_segmentsVerified.clear();
+        m_scope = newScope;
+        m_items.swap(loaded);
+        // Every loaded id has a readable manifest on disk; the storage thread only ever adds.
+        m_indexedIds.clear();
+        for (const auto& i : m_items)
+            m_indexedIds.insert(i.itemId);
+        // Re-check each item against its segment files (a crash can leave "Downloading" behind,
+        // or a segment half written) without doing that scan here.
+        m_rescanAllDue = true;
     }
-    std::set<std::string> seen;
-    loaded.erase(
-        std::remove_if(loaded.begin(), loaded.end(),
-                       [&](const DownloadItem& i) { return !seen.insert(i.itemId).second; }),
-        loaded.end());
-    for (auto& i : loaded)
-        m_store.reconcile(m_scope, i, nullptr);
-    m_items.swap(loaded);
-    // Seed the durable-manifest set from the successful load/rebuild: every
-    // id here has a readable manifest on disk.  persistLocked() below only
-    // ever adds (a failed re-save leaves the old manifest in place), so the
-    // set stays consistent even if a rewrite fails.
-    m_indexedIds.clear();
-    for (const auto& i : m_items)
-        m_indexedIds.insert(i.itemId);
-    persistLocked();
+    m_configured = true;
     if (s.valid()) {
         m_reconcileRequested = true;
         m_startupReconcile = true;
@@ -130,78 +145,117 @@ void DownloadManager::configure(const Session& s)
         performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile, 1);
     m_wake.notify_all();
     m_reconcileWake.notify_one();
-}
-
-void DownloadManager::saveIndexLocked()
-{
-    std::vector<DownloadItem> indexed;
-    indexed.reserve(m_items.size());
-    for (const auto& i : m_items) {
-        if (m_indexedIds.count(i.itemId))
-            indexed.push_back(i);
-    }
-    m_store.saveIndex(m_scope, indexed, nullptr);
+    m_persisterWake.notify_all();
 }
 
 void DownloadManager::requestAsyncPersistLocked(const std::string& itemId)
 {
     m_asyncPersistIds.insert(itemId);
+    m_persisterWake.notify_all();
+}
+
+void DownloadManager::requestIndexLocked()
+{
     m_asyncIndexDue = true;
     m_persisterWake.notify_all();
+}
+
+void DownloadManager::requestRescanLocked(const std::string& itemId)
+{
+    m_rescanIds.insert(itemId);
+    m_segmentsVerified.erase(itemId);
+    m_persisterWake.notify_all();
+}
+
+void DownloadManager::requestRemoveLocked(const std::string& itemId, bool wholeItem)
+{
+    if (wholeItem)
+        m_asyncPersistIds.erase(itemId); // the removal supersedes any write still owed
+    m_segmentsVerified.erase(itemId);
+    m_storageRemovals.push_back({m_scope, itemId, wholeItem});
+    ++m_storageBusy[itemId];
+    m_persisterWake.notify_all();
+}
+
+// Kept for the existing call sites: the writes are requests now.
+void DownloadManager::saveIndexLocked()
+{
+    requestIndexLocked();
+}
+
+void DownloadManager::persistLocked()
+{
+    for (const auto& i : m_items)
+        m_asyncPersistIds.insert(i.itemId);
+    m_asyncIndexDue = true;
+    m_persisterWake.notify_all();
+}
+
+void DownloadManager::persistItemLocked(const std::string& id)
+{
+    requestAsyncPersistLocked(id);
+}
+
+bool DownloadManager::storageHasWorkLocked() const
+{
+    return !m_asyncPersistIds.empty() || m_asyncIndexDue || !m_storageRemovals.empty() ||
+           !m_storageFinalWrites.empty() || !m_rescanIds.empty() || m_rescanAllDue;
 }
 
 void DownloadManager::flushPersistence()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_persisterWake.wait(lock, [this] {
-        return m_stop || (m_asyncPersistIds.empty() && !m_asyncIndexDue && !m_persisterBusy);
-    });
+    m_persisterWake.wait(
+        lock, [this] { return m_stop || (!storageHasWorkLocked() && !m_persisterBusy); });
 }
 
 // Writes `itemId`'s manifest from a copy taken under the lock, with the lock released for the
 // disk I/O, then checks the live item did not change meanwhile (or get overwritten by a
 // synchronous writer's newer state): if it did, the newer state is written too. The file therefore
 // always converges to the live state, and an older copy can never be what stays on disk.
-void DownloadManager::persistManifestAsync(const std::string& scope, std::uint64_t generation,
+bool DownloadManager::persistManifestAsync(const std::string& scope, std::uint64_t,
                                            const std::string& itemId)
 {
+    bool newlyIndexed = false;
     for (int round = 0; round < 8; ++round) {
         DownloadItem copy;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_stop || generation != m_generation || scope != m_scope)
-                return;
+            if (m_stop || scope != m_scope)
+                return newlyIndexed;
             auto it = std::find_if(m_items.begin(), m_items.end(),
                                    [&](const DownloadItem& i) { return i.itemId == itemId; });
             if (it == m_items.end())
-                return; // erased meanwhile
+                return newlyIndexed; // erased meanwhile: nothing to write, nothing to resurrect
             copy = *it;
         }
         if (beforeAsyncWriteForTest)
             beforeAsyncWriteForTest();
+        m_store.ensureHlsDirectories(scope, itemId);
         const bool ok = m_store.saveManifest(scope, copy, nullptr);
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (generation != m_generation || scope != m_scope)
-            return;
+        if (scope != m_scope)
+            return newlyIndexed;
         auto it = std::find_if(m_items.begin(), m_items.end(),
                                [&](const DownloadItem& i) { return i.itemId == itemId; });
         if (it == m_items.end())
-            return;
-        if (ok)
-            m_indexedIds.insert(itemId);
+            return newlyIndexed;
+        if (ok && m_indexedIds.insert(itemId).second)
+            newlyIndexed = true;
         if (DownloadStore::manifestText(*it) == DownloadStore::manifestText(copy))
-            return; // what is on disk is the live state
+            return newlyIndexed; // what is on disk is the live state
     }
+    return newlyIndexed;
 }
 
-void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t generation)
+void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t)
 {
     for (int round = 0; round < 8; ++round) {
         std::vector<DownloadItem> indexed;
         std::set<std::string> idsWritten;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_stop || generation != m_generation || scope != m_scope)
+            if (m_stop || scope != m_scope)
                 return;
             for (const auto& i : m_items)
                 if (m_indexedIds.count(i.itemId)) {
@@ -209,9 +263,11 @@ void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t 
                     idsWritten.insert(i.itemId);
                 }
         }
+        if (beforeAsyncWriteForTest)
+            beforeAsyncWriteForTest();
         m_store.saveIndex(scope, indexed, nullptr);
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (generation != m_generation || scope != m_scope)
+        if (scope != m_scope)
             return;
         std::set<std::string> now;
         for (const auto& i : m_items)
@@ -222,60 +278,141 @@ void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t 
     }
 }
 
+// Removes an item's files (or only its downloaded bytes) on the storage thread, then lets the
+// transfer worker start that id again if it was added back meanwhile.
+void DownloadManager::runRemoval(const std::string& scope, const std::string& itemId,
+                                 bool wholeItem)
+{
+    if (beforeAsyncWriteForTest)
+        beforeAsyncWriteForTest();
+    std::string error;
+    const bool ok = wholeItem ? m_store.removeItem(scope, itemId, &error)
+                              : m_store.removePartialBytes(scope, itemId, &error);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto busy = m_storageBusy.find(itemId);
+    if (busy != m_storageBusy.end() && --busy->second <= 0)
+        m_storageBusy.erase(busy);
+    if (!ok)
+        std::printf("[Download] storage: could not remove %s%s: %s\n",
+                    wholeItem ? "" : "old bytes of ", itemId.c_str(), error.c_str());
+    if (scope == m_scope) {
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+                               [&](const DownloadItem& i) { return i.itemId == itemId; });
+        if (it != m_items.end()) {
+            // Added back (or re-downloading) while the old files were going: it needs a manifest
+            // again, and an old copy that could not be cleared must not be built on.
+            if (!ok && !wholeItem && it->state == DownloadState::Queued) {
+                it->state = DownloadState::Failed;
+                it->lastError = "Could not clear the old copy";
+            }
+            m_asyncPersistIds.insert(itemId);
+            m_asyncIndexDue = true;
+        }
+    }
+    m_wake.notify_all();
+    m_persisterWake.notify_all();
+}
+
+// Re-reads one item's segment files on a copy and merges what it learned into the live item,
+// but only where the live item has not changed in the meantime.
+void DownloadManager::rescanItemAsync(const std::string& scope, std::uint64_t generation,
+                                      const std::string& itemId)
+{
+    DownloadItem copy;
+    DownloadState before;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_stop || generation != m_generation || scope != m_scope || storageBusyLocked(itemId))
+            return;
+        auto it = std::find_if(m_items.begin(), m_items.end(),
+                               [&](const DownloadItem& i) { return i.itemId == itemId; });
+        if (it == m_items.end() || it->state == DownloadState::Downloading)
+            return; // a transfer in progress owns its counters
+        copy = *it;
+        before = it->state;
+    }
+    if (beforeAsyncWriteForTest)
+        beforeAsyncWriteForTest();
+    m_store.reconcileInMemory(scope, copy, nullptr);
+    const bool structurallyComplete =
+        copy.hlsStorage ? m_store.validateCompletedDownload(scope, copy, nullptr) : true;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (generation != m_generation || scope != m_scope || storageBusyLocked(itemId))
+        return;
+    auto it = std::find_if(m_items.begin(), m_items.end(),
+                           [&](const DownloadItem& i) { return i.itemId == itemId; });
+    if (it == m_items.end() || it->state == DownloadState::Downloading)
+        return;
+    m_segmentsVerified[itemId] = structurallyComplete;
+    bool changed = it->downloadedBytes != copy.downloadedBytes;
+    it->downloadedBytes = copy.downloadedBytes;
+    if (it->state == before && copy.state != before) {
+        it->state = copy.state;
+        changed = true;
+    }
+    if (changed) {
+        m_asyncPersistIds.insert(itemId);
+        publishDownloadGauges(m_items, m_planJobs.size());
+        m_wake.notify_all();
+    }
+}
+
 void DownloadManager::persisterLoop()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
     for (;;) {
-        m_persisterWake.wait(
-            lock, [this] { return m_stop || !m_asyncPersistIds.empty() || m_asyncIndexDue; });
+        m_persisterWake.wait(lock, [this] { return m_stop || storageHasWorkLocked(); });
         if (m_stop)
             return;
+        std::vector<StorageFinalWrite> finals;
+        finals.swap(m_storageFinalWrites);
+        std::deque<StorageRemoval> removals;
+        removals.swap(m_storageRemovals);
         std::set<std::string> ids;
         ids.swap(m_asyncPersistIds);
+        std::set<std::string> rescans;
+        rescans.swap(m_rescanIds);
+        if (m_rescanAllDue) {
+            for (const auto& i : m_items)
+                rescans.insert(i.itemId);
+            m_rescanAllDue = false;
+        }
+        bool indexDue = m_asyncIndexDue;
         m_asyncIndexDue = false;
         const std::string scope = m_scope;
         const std::uint64_t generation = m_generation;
         m_persisterBusy = true;
         lock.unlock();
-        for (const std::string& id : ids)
-            persistManifestAsync(scope, generation, id);
-        persistIndexAsync(scope, generation);
+        // 1. A previous account's items, written out whole before they are forgotten.
+        for (const StorageFinalWrite& f : finals) {
+            std::vector<DownloadItem> indexed;
+            for (const DownloadItem& i : f.items) {
+                if (beforeAsyncWriteForTest)
+                    beforeAsyncWriteForTest();
+                if (m_store.saveManifest(f.scope, i, nullptr))
+                    indexed.push_back(i);
+            }
+            m_store.saveIndex(f.scope, indexed, nullptr);
+        }
+        // 2. Removals, in the order they were asked for.
+        for (const StorageRemoval& r : removals) {
+            runRemoval(r.scope, r.id, r.wholeItem);
+            indexDue = true;
+        }
+        // 3. Re-reads of segment files.
+        for (const std::string& id : rescans)
+            rescanItemAsync(scope, generation, id);
+        // 4. Manifests (writes after removals, so a re-added id is written to a clean slate).
+        bool newlyIndexed = false;
+        const std::set<std::string>& toWrite = ids; // later requests get their own cycle
+        for (const std::string& id : toWrite)
+            newlyIndexed = persistManifestAsync(scope, generation, id) || newlyIndexed;
+        // 5. The index, when ids came or went.
+        if (indexDue || newlyIndexed)
+            persistIndexAsync(scope, generation);
         lock.lock();
         m_persisterBusy = false;
         m_persisterWake.notify_all();
-    }
-}
-
-void DownloadManager::persistLocked()
-{
-    for (const auto& i : m_items) {
-        if (m_store.saveManifest(m_scope, i, nullptr))
-            m_indexedIds.insert(i.itemId);
-    }
-    saveIndexLocked();
-}
-
-// persistLocked() rewrites the whole library (every manifest + the index,
-// each fsync).  It stays ONLY for rare lifecycle events that rebuild the id
-// set or shut down: configure() (scope/load) and the destructor.  Every
-// steady-state transition below uses persistItemLocked() (one small atomic
-// manifest write, milliseconds under the mutex) or a single saveIndex() when
-// the id set itself changed, so SDL-thread callers never block on slow
-// whole-library SD writes and no stale whole-library pass can revert a
-// newer per-item state.
-// Segment completions only touch one item's bytes, and the index lists item
-// ids (unchanged by segment progress), so the per-segment path persists just
-// that item's manifest instead of rewriting the whole library.  The manifest
-// stays crash-safe via atomic write+fsync; segment files on disk remain the
-// source of truth that startup reconcile rebuilds from.
-void DownloadManager::persistItemLocked(const std::string& id)
-{
-    for (const auto& i : m_items) {
-        if (i.itemId == id) {
-            if (m_store.saveManifest(m_scope, i, nullptr))
-                m_indexedIds.insert(id);
-            break;
-        }
     }
 }
 
@@ -330,8 +467,7 @@ void DownloadManager::enqueue(const std::vector<DownloadItem>& incoming)
             i.state = DownloadState::Queued;
             m_progressSamples.erase(i.itemId);
             m_items.push_back(std::move(i));
-            m_persistRequested = true;
-            m_persistPendingIds.insert(m_items.back().itemId);
+            requestAsyncPersistLocked(m_items.back().itemId);
         }
         m_reconcileRequested = true;
         performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile, 1);
@@ -382,8 +518,9 @@ bool DownloadManager::redownload(const std::string& id)
     for (auto& i : m_items) {
         if (i.itemId == id && i.state == DownloadState::UpdateAvailable &&
             !i.availableMediaSourceId.empty() && (i.hlsStorage || i.availableSize)) {
-            if (!m_store.removePartialBytes(m_scope, id, nullptr))
-                return false;
+            // The old bytes go on the storage thread; the transfer worker waits (m_storageBusy)
+            // until they are gone before it starts this id again.
+            requestRemoveLocked(id, false);
             i.mediaSourceId = i.availableMediaSourceId;
             i.sourceEtag = i.availableSourceEtag;
             if (i.hlsStorage)
@@ -425,21 +562,18 @@ bool DownloadManager::erase(const std::string& id, std::string* e)
         m_wake.notify_all();
         return true;
     }
+    // Gone from memory (and so from every snapshot) at once; its files, manifest and index entry
+    // are removed by the storage thread, which also keeps the id from being started or written
+    // in the meantime. A removal that fails there is logged; it cannot be reported from here.
+    (void)e;
     m_deleteRequested.erase(id);
-    bool ok = m_store.removeItem(m_scope, id, e);
-    if (ok) {
-        m_items.erase(p);
-        m_progressSamples.erase(id);
-        m_indexedIds.erase(id);
-        m_persistPendingIds.erase(id);
-    }
-    // Id set changed: only the index is rewritten (the removed
-    // manifest is already gone via removeItem); unrelated manifests
-    // are untouched.  The index is rebuilt from the durable-manifest
-    // set, so it can never retain the removed id.
-    saveIndexLocked();
+    m_items.erase(p);
+    m_progressSamples.erase(id);
+    m_indexedIds.erase(id);
+    requestRemoveLocked(id, true);
+    requestIndexLocked();
     publishDownloadGauges(m_items, m_planJobs.size());
-    return ok;
+    return true;
 }
 
 bool DownloadManager::statvfsFreeBytes(const DownloadStore& store, const std::string& scope,
@@ -563,8 +697,12 @@ bool DownloadManager::hasComplete(const std::string& id) const
         if (i.itemId == id &&
             (i.state == DownloadState::Complete || i.state == DownloadState::LocalOnly ||
              i.state == DownloadState::UpdateAvailable) &&
-            m_store.validateCompletedDownload(m_scope, i, nullptr))
-            return true;
+            !storageBusyLocked(id)) {
+            // Memory only (callers are on the UI thread): the manifest state is trusted until the
+            // storage thread's rescan has checked the files and recorded a failure.
+            auto v = m_segmentsVerified.find(id);
+            return v == m_segmentsVerified.end() || v->second;
+        }
     }
     return false;
 }

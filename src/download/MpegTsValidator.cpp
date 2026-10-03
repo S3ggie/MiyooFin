@@ -255,7 +255,8 @@ TsVerdict validateMpegTsFile(const std::string& path, std::uint64_t size, TsDept
     auto readAt = [&](std::uint64_t offset, unsigned char* out, std::size_t n) {
         std::size_t done = 0;
         while (done < n) {
-            const ssize_t got = ::pread(fd, out + done, n - done, static_cast<off_t>(offset + done));
+            const ssize_t got =
+                ::pread(fd, out + done, n - done, static_cast<off_t>(offset + done));
             if (got <= 0)
                 return false;
             done += static_cast<std::size_t>(got);
@@ -315,7 +316,8 @@ TsVerdict validateMpegTsFile(const std::string& path, std::uint64_t size, TsDept
     unsigned char one[kPacket];
     const std::size_t samples = 8;
     for (std::size_t s = 1; s <= samples + 1; ++s) {
-        const std::size_t i = s == samples + 1 ? packets - 1 : head + (packets - head) * s / (samples + 1);
+        const std::size_t i =
+            s == samples + 1 ? packets - 1 : head + (packets - head) * s / (samples + 1);
         if (i >= packets)
             continue;
         if (!readAt(static_cast<std::uint64_t>(i) * kPacket, one, kPacket) ||

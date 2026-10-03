@@ -52,6 +52,9 @@ class DownloadStore
                               std::string* error = nullptr) const;
     bool rebuildIndex(const std::string& scope, std::vector<DownloadItem>& items,
                       std::string* error = nullptr) const;
+    /// reconcile() without the manifest write (see the .cpp).
+    bool reconcileInMemory(const std::string& scope, DownloadItem& item,
+                           std::string* error = nullptr) const;
     bool reconcile(const std::string& scope, DownloadItem& item,
                    std::string* error = nullptr) const;
     bool validateCompletedDownload(const std::string& scope, const DownloadItem& item,

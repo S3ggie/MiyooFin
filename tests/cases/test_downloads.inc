@@ -6,6 +6,8 @@
 static void testHlsSegmentIntegrity();
 static void testStorageWriteFailureDoesNotLeakDescriptors();
 static void testPauseResumeDoNotWaitForTheDisk();
+static void testErasureAndRedownloadDoNotWaitForTheDisk();
+static void testConfigureDoesNotWaitForTheDisk();
 static void testDownloadInterruptStates()
 {
     std::printf("[test] download interrupt state mapping\n");
@@ -943,7 +945,7 @@ static void testWorkerPersistMatchesLiveState()
             manager.enqueue(items);
             for(unsigned n=0;n<2000;++n){DownloadItem m;if(store.loadManifest("anonymous","bulk-0",m,nullptr))break;usleep(1000);}
             CHECK(manager.erase("race-item"));
-            usleep(200000);
+            manager.flushPersistence();
             DownloadItem ghost;CHECK(!store.loadManifest("anonymous","race-item",ghost,nullptr));
             std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
             for(const auto&i:idx)CHECK(i.itemId!="race-item");
@@ -1019,6 +1021,7 @@ static void testPersistTouchesOnlyAffectedItem()
     // manifests are untouched.
     const std::string aBefore=manifestIdentity(store,"anonymous","item-a"), bBefore2=manifestIdentity(store,"anonymous","item-b");
     CHECK(manager.erase("item-c"));
+    manager.flushPersistence();
     CHECK(::access(store.manifestPath("anonymous","item-c").c_str(),F_OK)!=0);
     std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));CHECK(idx.size()==2);
     CHECK(manifestIdentity(store,"anonymous","item-a")==aBefore);
@@ -1346,4 +1349,152 @@ static void testPauseResumeDoNotWaitForTheDisk()
     DownloadItem onDisk;CHECK(store.loadManifest("anonymous","slow-a",onDisk,nullptr));
     CHECK(onDisk.state==DownloadState::Paused); // the newest state won, not the one the stalled write held
     std::printf("[test] pause/resume do not wait for the disk OK\n");
+}
+
+
+namespace {
+// Holds the storage thread inside its next disk write until release() so a test can issue UI
+// calls while "the disk is stalled". The hook is removed by the destructor.
+struct DiskStall
+{
+    DownloadManager& manager;
+    std::mutex m;
+    std::condition_variable cv;
+    bool reached = false, released = false;
+    explicit DiskStall(DownloadManager& mgr) : manager(mgr)
+    {
+        manager.beforeAsyncWriteForTest = [this] {
+            std::unique_lock<std::mutex> l(m);
+            reached = true;
+            cv.notify_all();
+            cv.wait(l, [this] { return released; });
+        };
+    }
+    bool waitReached()
+    {
+        std::unique_lock<std::mutex> l(m);
+        return cv.wait_for(l, std::chrono::seconds(4), [this] { return reached; });
+    }
+    void release()
+    {
+        {
+            std::lock_guard<std::mutex> l(m);
+            released = true;
+        }
+        cv.notify_all();
+        manager.beforeAsyncWriteForTest = nullptr;
+    }
+};
+
+bool seedItem(DownloadStore& store, const std::string& scope, DownloadItem item, bool segment)
+{
+    std::vector<DownloadItem> index;
+    store.loadIndex(scope, index, nullptr);
+    if (!store.ensureHlsDirectories(scope, item.itemId) || !store.saveManifest(scope, item, nullptr))
+        return false;
+    if (segment)
+        for (std::uint64_t k = 0; k < item.hlsSegmentCount; ++k)
+            writeLegit(store.segmentPath(scope, item.itemId, k), k == 0);
+    index.push_back(item);
+    return store.saveIndex(scope, index, nullptr);
+}
+} // namespace
+
+static void testErasureAndRedownloadDoNotWaitForTheDisk()
+{
+    std::printf("[test] erase/redownload/snapshot/hasComplete do not wait for the disk\n");
+    const std::string root="/tmp/miyoofin-asyncerase-"+std::to_string((long long)getpid());
+    {
+        DownloadStore store(root);
+        DownloadItem done=restartFixture("done",DownloadState::Complete);
+        DownloadItem gone=restartFixture("gone",DownloadState::Paused);
+        DownloadItem readd=restartFixture("readd",DownloadState::Paused);
+        DownloadItem upd=restartFixture("upd",DownloadState::UpdateAvailable);
+        upd.availableMediaSourceId="ms2"; upd.updateAvailable=true;
+        DownloadItem poke=restartFixture("poke",DownloadState::Paused);
+        for(const DownloadItem&i:{done,gone,readd,upd,poke})CHECK(seedItem(store,"anonymous",i,i.itemId!="poke"));
+    }
+    DownloadStore store(root);
+    const std::string goneSeg=store.segmentPath("anonymous","gone",0), readdSeg=store.segmentPath("anonymous","readd",0),
+                      updSeg=store.segmentPath("anonymous","upd",0);
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true);
+    manager.flushPersistence();
+    CHECK(manager.snapshot().items.size()==5);
+
+    DiskStall stall(manager);
+    manager.pause("poke");          // wakes the storage thread, which now hangs in its first write
+    CHECK(stall.waitReached());
+    const auto start=std::chrono::steady_clock::now();
+    CHECK(manager.erase("gone"));
+    CHECK(manager.erase("readd"));
+    manager.enqueue(restartFixture("readd"));      // deleted and added back while the disk is stuck
+    CHECK(manager.redownload("upd"));
+    CHECK(manager.hasComplete("done"));
+    CHECK(!manager.hasComplete("gone"));
+    bool sawGone=false, updQueued=false, readdQueued=false;
+    for(const auto&i:manager.snapshot().items){
+        sawGone=sawGone||i.itemId=="gone";
+        if(i.itemId=="upd")updQueued=i.state==DownloadState::Queued&&i.mediaSourceId=="ms2";
+        if(i.itemId=="readd")readdQueued=i.state==DownloadState::Queued;
+    }
+    CHECK(!sawGone); CHECK(updQueued); CHECK(readdQueued);
+    CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));
+    // Nothing has touched the disk yet: the work is queued, not done by the UI caller.
+    CHECK(::access(goneSeg.c_str(),F_OK)==0); CHECK(::access(updSeg.c_str(),F_OK)==0);
+
+    stall.release();
+    manager.flushPersistence();
+    CHECK(::access(goneSeg.c_str(),F_OK)!=0);
+    CHECK(::access(store.manifestPath("anonymous","gone").c_str(),F_OK)!=0);
+    CHECK(::access(updSeg.c_str(),F_OK)!=0);               // re-download starts from clean
+    CHECK(::access(readdSeg.c_str(),F_OK)!=0);             // the old copy did not survive the re-add
+    DownloadItem m;
+    CHECK(store.loadManifest("anonymous","readd",m,nullptr)); CHECK(m.state==DownloadState::Queued); // the re-add was written after the removal
+    CHECK(store.loadManifest("anonymous","upd",m,nullptr)); CHECK(m.state==DownloadState::Queued&&m.mediaSourceId=="ms2");
+    std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));
+    std::set<std::string> ids;for(const auto&i:idx)ids.insert(i.itemId);
+    CHECK(ids==(std::set<std::string>{"done","readd","upd","poke"}));
+    std::printf("[test] erase/redownload/snapshot/hasComplete do not wait for the disk OK\n");
+}
+
+static void testConfigureDoesNotWaitForTheDisk()
+{
+    std::printf("[test] configure does not wait for the disk\n");
+    const std::string root="/tmp/miyoofin-asyncconfigure-"+std::to_string((long long)getpid());
+    {
+        DownloadStore store(root);
+        CHECK(seedItem(store,"anonymous",restartFixture("old-a",DownloadState::Paused),false));
+        CHECK(seedItem(store,"anonymous",restartFixture("old-b",DownloadState::Paused),false));
+    }
+    DownloadStore store(root);
+    DownloadManager manager({},root);
+    manager.setPlaybackActive(true);
+    manager.flushPersistence();
+    DiskStall stall(manager);
+    manager.resume("old-a");
+    CHECK(stall.waitReached());
+    Session other; other.serverUrl="http://127.0.0.1:1"; other.userId="u2"; other.accessToken="t"; other.deviceId="d";
+    const auto start=std::chrono::steady_clock::now();
+    manager.configure(other);
+    CHECK(manager.snapshot().items.empty());                  // the other account's (empty) library
+    manager.enqueue(restartFixture("new-1"));
+    CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));
+    stall.release();
+    manager.flushPersistence();
+    // The account we left was written out whole (including the change made just before the
+    // switch); the new account's item went to its own scope only.
+    DownloadItem m;
+    CHECK(store.loadManifest("anonymous","old-a",m,nullptr)); CHECK(m.state==DownloadState::Queued);
+    CHECK(store.loadManifest("anonymous","old-b",m,nullptr));
+    CHECK(!store.loadManifest("anonymous","new-1",m,nullptr));
+    const std::string scope=DownloadStore::scopeKey(other.serverUrl,other.userId);
+    CHECK(store.loadManifest(scope,"new-1",m,nullptr));
+    std::vector<DownloadItem> idx;CHECK(store.loadIndex("anonymous",idx,nullptr));CHECK(idx.size()==2);
+    std::vector<DownloadItem> idx2;CHECK(store.loadIndex(scope,idx2,nullptr));CHECK(idx2.size()==1);
+    // And switching back reads the first account's library again.
+    Session none; manager.configure(none);
+    manager.flushPersistence();
+    CHECK(manager.snapshot().items.size()==2);
+    std::printf("[test] configure does not wait for the disk OK\n");
 }

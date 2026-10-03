@@ -37,6 +37,7 @@ int main()
     testErasureAndRedownloadDoNotWaitForTheDisk();
     testConfigureDoesNotWaitForTheDisk();
     testRemovalSurvivesAccountSwitch();
+    testStaleTransferNeverTouchesAnotherAccount();
     testAccountLibraryLoadIsAsynchronous();
     testDownloadRestartPersistence();
     testDownloadsUiHelpers();

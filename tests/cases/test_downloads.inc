@@ -1,5 +1,8 @@
 #include <sys/stat.h>
 #include <thread>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "../../src/library/LibraryQuery.hpp"
 #include "../../src/library/LibraryCoordinator.hpp"
 #include "../../src/net/TlsConfig.hpp"
@@ -11,6 +14,7 @@ static void testPauseResumeDoNotWaitForTheDisk();
 static void testErasureAndRedownloadDoNotWaitForTheDisk();
 static void testConfigureDoesNotWaitForTheDisk();
 static void testRemovalSurvivesAccountSwitch();
+static void testStaleTransferNeverTouchesAnotherAccount();
 static void testAccountLibraryLoadIsAsynchronous();
 static void testDownloadInterruptStates()
 {
@@ -1655,4 +1659,192 @@ static void testAccountLibraryLoadIsAsynchronous()
         ::unlink(fifo.c_str());
     }
     std::printf("[test] account library load is asynchronous OK\n");
+}
+
+
+namespace {
+// Minimal loopback HTTP server whose handler may block (a "held" response). One request at a time.
+class HeldServer
+{
+  public:
+    explicit HeldServer(std::function<std::string(const std::string&)> handler) : m_handler(std::move(handler))
+    {
+        m_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        int on = 1;
+        ::setsockopt(m_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ::bind(m_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        ::listen(m_fd, 8);
+        socklen_t len = sizeof(addr);
+        ::getsockname(m_fd, reinterpret_cast<sockaddr*>(&addr), &len);
+        m_port = ntohs(addr.sin_port);
+        m_thread = std::thread([this] { run(); });
+    }
+    ~HeldServer()
+    {
+        m_stop = true;
+        ::shutdown(m_fd, SHUT_RDWR);
+        ::close(m_fd);
+        m_thread.join();
+    }
+    std::string base() const { return "http://127.0.0.1:" + std::to_string(m_port); }
+    int hits() const { return m_hits.load(); }
+
+  private:
+    void run()
+    {
+        while (!m_stop) {
+            const int client = ::accept(m_fd, nullptr, nullptr);
+            if (client < 0)
+                return;
+            char buf[4096];
+            const ssize_t n = ::recv(client, buf, sizeof(buf) - 1, 0);
+            if (n > 0) {
+                ++m_hits;
+                const std::string reply = m_handler(std::string(buf, buf + n));
+                std::size_t sent = 0;
+                while (sent < reply.size()) {
+                    const ssize_t w = ::send(client, reply.data() + sent, reply.size() - sent, MSG_NOSIGNAL);
+                    if (w <= 0)
+                        break;
+                    sent += static_cast<std::size_t>(w);
+                }
+            }
+            ::close(client);
+        }
+    }
+    std::function<std::string(const std::string&)> m_handler;
+    int m_fd = -1;
+    unsigned short m_port = 0;
+    std::atomic<bool> m_stop{false};
+    std::atomic<int> m_hits{0};
+    std::thread m_thread;
+};
+
+std::string httpReply(int code, const std::string& body)
+{
+    return "HTTP/1.1 " + std::to_string(code) + (code == 200 ? " OK" : " Err") +
+           "\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+}
+
+// A held response: the handler parks until released.
+struct Gate
+{
+    std::mutex m;
+    std::condition_variable cv;
+    bool reached = false, open = false;
+    void hold()
+    {
+        std::unique_lock<std::mutex> l(m);
+        reached = true;
+        cv.notify_all();
+        cv.wait(l, [this] { return open; });
+    }
+    bool waitReached()
+    {
+        std::unique_lock<std::mutex> l(m);
+        return cv.wait_for(l, std::chrono::seconds(8), [this] { return reached; });
+    }
+    void release()
+    {
+        {
+            std::lock_guard<std::mutex> l(m);
+            open = true;
+        }
+        cv.notify_all();
+    }
+};
+
+DownloadItem pickItem(DownloadManager& manager, const std::string& id)
+{
+    for (const auto& i : manager.snapshot().items)
+        if (i.itemId == id)
+            return i;
+    return DownloadItem{};
+}
+} // namespace
+
+// An account's in-flight transfer (its network response still held) must never publish into,
+// delete, or fail an item of the same id in the account that is current when the response arrives
+// -- the same item and source ids are normal for two users of one Jellyfin server.
+static void testStaleTransferNeverTouchesAnotherAccount()
+{
+    std::printf("[test] stale transfer never touches another account\n");
+    for (int stage = 0; stage < 2; ++stage) {      // 0: playlist discovery fails, 1: a segment is in flight
+        for (int bounce = 0; bounce < 2; ++bounce) { // 0: A->B, 1: A->B->A
+            Gate gate;
+            const std::string seg = legitSegment(true);
+            HeldServer server([&](const std::string& req) -> std::string {
+                if (req.find("/seg") != std::string::npos) {
+                    gate.hold();
+                    return httpReply(200, seg);
+                }
+                if (stage == 0) {
+                    gate.hold();
+                    return httpReply(401, "");
+                }
+                return httpReply(200, "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts\n#EXTINF:2,\nseg1.ts\n#EXT-X-ENDLIST\n");
+            });
+            const std::string root = "/tmp/miyoofin-staletransfer-" + std::to_string((long long)getpid()) + "-" +
+                                     std::to_string(stage) + std::to_string(bounce);
+            Session a; a.serverUrl = server.base(); a.userId = "A"; a.accessToken = "fake-A"; a.deviceId = "t";
+            Session b = a; b.userId = "B"; b.accessToken = "fake-B";
+            const std::string bScope = DownloadStore::scopeKey(b.serverUrl, b.userId);
+            const std::string aScope = DownloadStore::scopeKey(a.serverUrl, a.userId);
+            {
+                DownloadStore store(root);
+                DownloadItem bi = restartFixture("shared", DownloadState::Failed);
+                bi.lastError = "B-original";
+                CHECK(seedItem(store, bScope, bi, false));
+            }
+            DownloadManager manager(a, root);
+            manager.setPlaybackActive(true);
+            manager.flushPersistence();
+            DownloadItem ai; ai.itemId = "shared"; ai.hlsStorage = true; ai.runtimeTicks = 20000000;
+            manager.enqueue(ai);
+            manager.setPlaybackActive(false);     // A's transfer starts and its response is held
+            CHECK(gate.waitReached());
+            manager.setPlaybackActive(true);
+            manager.configure(b);
+            manager.flushPersistence();
+            const DownloadItem bBefore = pickItem(manager, "shared");
+            CHECK(bBefore.state == DownloadState::Failed && bBefore.lastError == "B-original");
+            if (bounce == 1) {                     // and back to A before the held response arrives
+                manager.configure(a);
+                manager.flushPersistence();
+            }
+            const int hitsBefore = server.hits();
+            gate.release();
+            // Let the stale transfer run to its end (its next request would show it did not stop).
+            for (int n = 0; n < 40; ++n) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            CHECK(server.hits() <= hitsBefore + 3);
+            if (bounce == 0) {
+                const DownloadItem bAfter = pickItem(manager, "shared");
+                CHECK(bAfter.state == bBefore.state);
+                CHECK(bAfter.lastError == "B-original");
+                CHECK(bAfter.downloadedBytes == bBefore.downloadedBytes);
+                CHECK(manager.snapshot().items.size() == 1);
+            } else {
+                const DownloadItem again = pickItem(manager, "shared");
+                CHECK(again.state != DownloadState::Unauthorized && again.state != DownloadState::Complete &&
+                      again.state != DownloadState::Failed); // the reloaded A item is not the stale transfer's
+            }
+            manager.setPlaybackActive(true);
+            manager.flushPersistence();
+            {
+                // B's item on disk is untouched as well.
+                DownloadStore store(root);
+                DownloadItem onDisk;
+                if (store.loadManifest(bScope, "shared", onDisk, nullptr)) {
+                    CHECK(onDisk.state == DownloadState::Failed && onDisk.lastError == "B-original");
+                }
+            }
+            (void)aScope;
+        }
+    }
+    std::printf("[test] stale transfer never touches another account OK\n");
 }

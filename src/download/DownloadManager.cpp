@@ -149,6 +149,10 @@ void DownloadManager::runLoad(const std::string& scope, std::uint64_t token)
         });
         if (known)
             continue; // added again since the switch: the newer in-memory state wins
+        // A transfer cannot be running for a library that was just read: a leftover
+        // "Downloading" is from before an exit or an account switch, so it waits its turn again.
+        if (item.state == DownloadState::Downloading)
+            item.state = DownloadState::Queued;
         m_indexedIds.insert(item.itemId);
         m_items.push_back(std::move(item));
     }

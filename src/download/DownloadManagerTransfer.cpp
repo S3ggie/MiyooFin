@@ -342,6 +342,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             },
             error)) {
         std::lock_guard<std::mutex> l(m_mutex);
+        if (generation != m_generation || scope != m_scope)
+            return false; // another account (or a reconfigure) owns the library now: leave it alone
         for (auto& i : m_items)
             if (i.itemId == item.itemId) {
                 // A reconciler reset to a new source during discovery leaves Queued: it must not
@@ -377,6 +379,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         DownloadItem scan;
         {
             std::lock_guard<std::mutex> l(m_mutex);
+            if (generation != m_generation || scope != m_scope)
+                return false; // another account (or a reconfigure) owns the library now: leave it
+                              // alone
             auto live = std::find_if(m_items.begin(), m_items.end(), [&](const DownloadItem& i) {
                 return i.itemId == item.itemId;
             });
@@ -392,6 +397,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         // back onto the LIVE item only if it is still this transfer's source.
         m_store.reconcileInMemory(scope, scan, nullptr);
         std::lock_guard<std::mutex> l(m_mutex);
+        if (generation != m_generation || scope != m_scope)
+            return false; // another account (or a reconfigure) owns the library now: leave it alone
         for (auto& i : m_items)
             if (i.itemId == item.itemId) {
                 if (transferSourceChanged(i, transferSourceId, transferEtag))
@@ -416,6 +423,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     // of being reverted to Downloading by a stale whole-item assignment.
     {
         std::lock_guard<std::mutex> l(m_mutex);
+        if (generation != m_generation || scope != m_scope)
+            return false; // another account (or a reconfigure) owns the library now: leave it alone
         for (auto& i : m_items)
             if (i.itemId == item.itemId) {
                 if (transferSourceChanged(i, transferSourceId, transferEtag))
@@ -432,6 +441,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         // Delete still wins over pause/playback/generation aborts.
         if (shouldAbort(item.itemId, scope, generation)) {
             std::lock_guard<std::mutex> l(m_mutex);
+            if (generation != m_generation || scope != m_scope)
+                return false; // another account (or a reconfigure) owns the library now: leave it
+                              // alone
             if (m_deleteRequested.erase(item.itemId)) {
                 auto p = std::find_if(m_items.begin(), m_items.end(), [&](const DownloadItem& i) {
                     return i.itemId == item.itemId;
@@ -663,6 +675,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
                                  " curl=" + std::to_string((int)rc) + " " + curl_easy_strerror(rc) +
                                  " HTTP=" + std::to_string(code);
             std::lock_guard<std::mutex> l(m_mutex);
+            if (generation != m_generation || scope != m_scope)
+                return false; // another account (or a reconfigure) owns the library now: leave it
+                              // alone
             auto p = std::find_if(m_items.begin(), m_items.end(),
                                   [&](const DownloadItem& i) { return i.itemId == item.itemId; });
             if (p == m_items.end())
@@ -707,6 +722,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
         bool staleSegment = false;
         {
             std::lock_guard<std::mutex> l(m_mutex);
+            if (generation != m_generation || scope != m_scope)
+                return false; // another account (or a reconfigure) owns the library now: leave it
+                              // alone
             for (auto& i : m_items)
                 if (i.itemId == item.itemId) {
                     if (transferSourceChanged(i, transferSourceId, transferEtag)) {
@@ -731,6 +749,8 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
     std::string validationError;
     const bool diskValid = m_store.validateCompletedDownload(scope, item, &validationError);
     std::lock_guard<std::mutex> l(m_mutex);
+    if (generation != m_generation || scope != m_scope)
+        return false; // another account (or a reconfigure) owns the library now: leave it alone
     auto p = std::find_if(m_items.begin(), m_items.end(),
                           [&](const DownloadItem& i) { return i.itemId == item.itemId; });
     if (p == m_items.end())

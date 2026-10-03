@@ -136,6 +136,17 @@ reconciliation, and HLS transfer/progress work are separated into their own impl
 This preserves segmented resumable downloads, `.part` recovery, retries, pause/resume/retry/delete,
 and download reconciliation.
 
+Download storage is single-threaded by design. Memory (`m_items`) is the authority; UI callers
+(`enqueue`, `pause`, `resume`, `erase`, `redownload`, `configure`, `snapshot`, `hasComplete`) only
+change memory and *request* disk work. One storage thread writes manifests and the index from copies
+(then re-checks them against the live item), runs removals in order, re-reads segment files for
+startup and post-failure rescans, and writes a previous account's items before forgetting them. An id
+with removal work outstanding is not started by the transfer worker until it is done. Consequences:
+`erase()` cannot report a removal failure (it is logged), `hasComplete()` trusts the manifest state
+until the storage thread's rescan records a structural failure, and shutdown drains the queue and
+joins the storage thread. HLS segments are validated structurally as MPEG-TS (sync bytes, PAT/PMT
+CRC, H.264+AAC, continuity); that detects garbage and truncation mid-packet, not payload bit flips.
+
 The test cases remain grouped in `tests/cases/*.inc` files, but focused `tests/test_*.cpp` wrappers
 compile them into independent binaries. `tests/test_support.hpp` contains shared fixtures and
 assertion support, while `output/test/test_runner` runs every group for the aggregate test target.

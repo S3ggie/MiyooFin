@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem with MiyooFin.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before submitting. Include the details you know;
+        write "unknown" when a version is unavailable. Remove passwords, tokens,
+        authenticated URLs, and personal information from logs and screenshots.
+  - type: input
+    id: miyoofin-version
+    attributes:
+      label: MiyooFin version
+      description: Release version, or commit SHA for a development build.
+      placeholder: "Example: 0.3.1"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Device and server versions
+      description: Include OnionOS and Jellyfin versions. For a host build, include the OS and compiler.
+      placeholder: |
+        Device: Miyoo Mini Plus
+        OnionOS version:
+        Jellyfin server version:
+        Connection: Home network / Internet / offline
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Video
+        - Music
+        - Sign-in or connection
+        - Installation or updates
+        - Host build or tooling
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the starting screen, online/offline state, and button presses when relevant.
+      placeholder: |
+        1. Launch MiyooFin...
+        2. Open...
+        3. Press...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error message and whether this happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Logs, crash report, or screenshots
+      description: Optional. Settings → Diagnostics shows crash reports. Paste redacted logs or attach screenshots here.
+    validations:
+      required: false

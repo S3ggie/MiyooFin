@@ -1,29 +1,41 @@
 # Roadmap
 
-Checked items are done and pushed. Order is the build order.
+This page summarizes shipped capabilities and future directions. Completed
+items are available in released versions; ideas below have no committed
+schedule. See the [changelog](CHANGELOG.md) for release details and
+[known limitations](README.md#known-limitations) for current gaps.
 
-## Video
-- [x] Mark watched / unwatched for movies, episodes, seasons and series (confirm for seasons and series; offline changes sync later)
-- [x] Default audio and subtitle language in Settings
-- [x] Skip intro / credits button in the player (Jellyfin media segments)
+## Completed
 
-## Music
-- [x] Playlist maker: add to playlist, new playlist, remove from playlist, delete playlist (music only)
-- [x] Save the current queue as a playlist
-- [x] Album grid view (Music Settings → Album view)
-- [x] Screen-off listening, with the buttons locked after a combo
+### Video
 
-## Signing in
-- [x] Test connection for each server address
-- [x] Quick Connect sign-in (approve the Miyoo from a phone)
+- [x] Mark movies, episodes, seasons, and series watched or unwatched; offline changes sync later.
+- [x] Default audio and subtitle language settings.
+- [x] Skip intro and credits using Jellyfin media segments.
 
-## Quality and housekeeping
-- [x] Home tab missing after turning offline mode off (safety net; not reproduced on host)
-- [x] Crash report screen (shows `crash.log`)
-- [x] Scripted on-device smoke test (`tools/miyoo/mfctl.sh smoke`)
-- [ ] README screenshots and a short user guide
-- [~] Release: version 0.3.0 and CHANGELOG.md done, package stages and passes the legal check; still to do: install `zip` for the ZIP step and run `tools/publish-release.sh v0.3.0` (waits for your go-ahead)
-- [ ] Architecture-map doc (when the app is called done)
+### Music
 
-## Later
-Music and video search, favorites, filters, instant mix, sleep timer, storage manager, playing a long track while it downloads.
+- [x] Browse artists, albums, songs, and playlists.
+- [x] Create and edit playlists, or save the current queue as a playlist.
+- [x] Album grid view and screen-off listening with button locking.
+- [x] Favorite songs and lyrics, including time-synced lyrics when available.
+- [x] Offline music downloads and playlist synchronization.
+
+### Sign-in and maintenance
+
+- [x] Quick Connect and connection testing for Home network and Internet addresses.
+- [x] Crash report viewer and scripted device smoke-test tooling.
+- [x] [README screenshots](README.md#screenshots) and a [user guide](docs/user-guide.md).
+- [x] [Architecture documentation](docs/architecture.md).
+- [x] [Published releases](https://github.com/S3ggie/MiyooFin/releases), including v0.3.0 and v0.3.1,
+      with manual installation and OTA update assets.
+
+## Future directions
+
+- Text search for video and music.
+- Video favorites, collections, and additional library filters.
+- Music instant mix and a sleep timer.
+- A storage manager for downloaded media.
+- Music playback before a track finishes downloading.
+
+Suggest improvements through [GitHub Issues](https://github.com/S3ggie/MiyooFin/issues).

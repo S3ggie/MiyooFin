@@ -45,7 +45,9 @@ MusicScreen (UI thread)  ->  MusicPlayer (UI thread API)  ->  miyoofin-audio (ch
   listing/cover loading), `MusicQueue` (play order, shuffle, repeat, saved queue),
   `MusicPlayer` (engine supervisor), `MusicTracks` (where a track's file comes from),
   `MusicDownloads` (offline music), `PlaysJournal`, `MusicSettings`.
-* `src/ui/screens/MusicScreen*.cpp` is the UI; `src/ui/MusicUiState.*` is the persisted page state.
+* `src/ui/screens/MusicScreen*.cpp` is the UI (one `MusicScreen` class, defined across lifecycle, panes,
+  input, playlists, downloads, settings and render units; `MusicScreenInternal.hpp` holds their shared
+  constants); `src/ui/MusicUiState.*` is the persisted page state.
 * `src/app/AppMode.*` remembers the mode; `App::switchMode` swaps the root screen.
 * The video library is never touched: music has its own small caches and does not use
   `CatalogDb`/`LibraryCoordinator`. In music mode the coordinator is created without Home's

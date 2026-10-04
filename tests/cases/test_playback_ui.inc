@@ -324,29 +324,36 @@ static void testMovieDetailsOpensBeforeArtworkPreparation()
     session.deviceId="test-device";
     MediaItem movie=titledMovie("movie-async","Async Movie");
     movie.imageTags["Primary"]="uncached-artwork";
-    MovieDetailsScreen screen(session,movie);
-    CHECK(std::string(screen.diagnosticName())=="MovieDetailsScreen");
-    CHECK(screen.deferDestruction());
-    const auto start=std::chrono::steady_clock::now();
-    screen.enter();
-    const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now()-start).count();
-    // enter() only owns/starts the cancellable worker. Cache I/O, HTTP and
-    // JPEG decode cannot delay the first interactive state.
-    CHECK(elapsed < 100);
-    CHECK(screen.handleAction(Action::Right));
-    SDL_Surface *fb=SDL_CreateRGBSurface(0,640,480,32,
-        0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
-    CHECK(fb!=nullptr);
-    if(fb){
-        const auto renderStart=std::chrono::steady_clock::now();
-        screen.render(fb);
-        const auto renderElapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now()-renderStart).count();
-        CHECK(renderElapsed < 100);
-        SDL_FreeSurface(fb);
+    // enter() only owns/starts the cancellable worker, and the FIRST render must not wait on cache
+    // I/O, HTTP or JPEG decode (a later render is not equivalent: it has the artwork cached and
+    // m_firstRender cleared). Each attempt is a fresh screen judged on its own enter() and first
+    // render, so a blocking regression fails every attempt, while one descheduled sample on a
+    // loaded host (the whole suite under ASan) only costs a retry on equivalent fresh state.
+    bool fast=false;
+    for(int attempt=0;attempt<5&&!fast;++attempt){
+        MovieDetailsScreen screen(session,movie);
+        CHECK(std::string(screen.diagnosticName())=="MovieDetailsScreen");
+        CHECK(screen.deferDestruction());
+        const auto start=std::chrono::steady_clock::now();
+        screen.enter();
+        const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now()-start).count();
+        CHECK(screen.handleAction(Action::Right));
+        SDL_Surface *fb=SDL_CreateRGBSurface(0,640,480,32,
+            0x000000FF,0x0000FF00,0x00FF0000,0xFF000000);
+        CHECK(fb!=nullptr);
+        long long renderElapsed=1000000;
+        if(fb){
+            const auto renderStart=std::chrono::steady_clock::now();
+            screen.render(fb);
+            renderElapsed=std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now()-renderStart).count();
+            SDL_FreeSurface(fb);
+        }
+        screen.leave();
+        fast=elapsed<100&&renderElapsed<100;
     }
-    screen.leave();
+    CHECK(fast);
     std::printf("[test] MovieDetailsScreen asynchronous first state OK\n");
 }
 

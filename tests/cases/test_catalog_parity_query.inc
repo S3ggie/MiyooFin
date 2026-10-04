@@ -280,7 +280,7 @@ static void testCatalogDbBoundedMediaPaging()
     const std::string controllerSource =
         readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string coordinatorSource =
-        readTestBytes("src/library/LibraryCoordinator.cpp");
+        readLibraryCoordinatorSources();
     CHECK(controllerSource.find("std::thread(&HomeLibraryController::fetchWorker") !=
           std::string::npos);
     CHECK(coordinatorSource.find("getLibraryItemsPage") != std::string::npos);
@@ -434,7 +434,7 @@ static void testLibraryQueryDomainBoundary()
     CHECK(header.find("LibraryMembership") != std::string::npos);
     CHECK(header.find("LibraryQueryErrorCategory") != std::string::npos);
     const std::string coordinatorSource =
-        readTestBytes("src/library/LibraryCoordinator.cpp");
+        readLibraryCoordinatorSources();
     CHECK(sourceCount(coordinatorSource, "new LibraryQuery(") == 1);
     CHECK(sourceContains(coordinatorSource,
                          "m_query(std::shared_ptr<LibraryQuery>(new LibraryQuery(db, scopeEpoch)))"));

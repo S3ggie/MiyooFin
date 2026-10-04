@@ -67,6 +67,11 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/library/LibrarySyncEvents.cpp \
     $(SRC_DIR)/library/LibraryQuery.cpp \
     $(SRC_DIR)/library/LibraryCoordinator.cpp \
+    $(SRC_DIR)/library/LibraryCoordinatorStartup.cpp \
+    $(SRC_DIR)/library/LibraryCoordinatorPopulation.cpp \
+    $(SRC_DIR)/library/LibraryCoordinatorMaintenance.cpp \
+    $(SRC_DIR)/library/LibraryCoordinatorHierarchy.cpp \
+    $(SRC_DIR)/library/LibraryCoordinatorLive.cpp \
     $(SRC_DIR)/download/DownloadStore.cpp \
     $(SRC_DIR)/download/DownloadSubtitles.cpp \
     $(SRC_DIR)/download/DownloadAudio.cpp \
@@ -132,6 +137,11 @@ MIYOOFIN_PROD_SRCS := \
     $(SRC_DIR)/ui/screens/SeriesScreenRender.cpp \
     $(SRC_DIR)/ui/MusicUiState.cpp \
     $(SRC_DIR)/ui/screens/MusicScreen.cpp \
+    $(SRC_DIR)/ui/screens/MusicScreenPanes.cpp \
+    $(SRC_DIR)/ui/screens/MusicScreenInput.cpp \
+    $(SRC_DIR)/ui/screens/MusicScreenPlaylists.cpp \
+    $(SRC_DIR)/ui/screens/MusicScreenDownloads.cpp \
+    $(SRC_DIR)/ui/screens/MusicScreenSettings.cpp \
     $(SRC_DIR)/ui/screens/MusicScreenRender.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserScreen.cpp \
     $(SRC_DIR)/ui/screens/EpisodeBrowserData.cpp \

@@ -49,9 +49,10 @@ uninstrumented, so a race whose both sides live entirely inside them cannot be
 reported. `SANITIZE=1` and `TSAN=1` are mutually exclusive: ASan and TSan cannot
 instrument the same binary, and the Makefile rejects the combination.
 
-The runner is serial and focused on `test_library_coordinator`,
+The runner is serial and focused on the `test_library_coordinator*` groups,
 `test_library_hierarchy`, `test_catalog`, `test_home_library_controller`,
-`test_home_artwork_controller`, and `test_downloads`. It fails on any non-zero
+`test_home_artwork_controller`, the `test_downloads*` groups, and the other
+concurrency suites listed in `TSAN_GROUPS` in the Makefile. It fails on any non-zero
 exit (TSan exits 66 on a report) and on any `ThreadSanitizer` marker in a log,
 and keeps per-binary logs under `output/tsan/test/logs/` on failure. There are
 no suppressions: a first-party race must be fixed, not silenced. An

@@ -239,7 +239,7 @@ void testLibraryCacheHomeParityHarness()
     // (AGENTS.md "Current library and UI ownership boundaries".)
     const std::string syncSource = readTestBytes("src/ui/screens/HomeLibraryController.cpp");
     const std::string hierarchySource = readTestBytes("src/ui/screens/HomeScreenHierarchy.cpp");
-    const std::string coordinatorSource = readTestBytes("src/library/LibraryCoordinator.cpp");
+    const std::string coordinatorSource = readLibraryCoordinatorSources();
     const std::string lifecycleSource = readTestBytes("src/ui/screens/HomeScreen.cpp");
     const std::string homeHeader = readTestBytes("src/ui/screens/HomeScreen.hpp");
     CHECK(syncSource.find("writeSyncState") == std::string::npos);

@@ -1,6 +1,7 @@
 #ifndef MIYOOFIN_TEST_SUPPORT_HPP
 #define MIYOOFIN_TEST_SUPPORT_HPP
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -76,6 +78,28 @@ inline std::string readTestBytes(const std::string& path)
 {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+// LibraryCoordinator is one class whose definitions are split across
+// src/library/LibraryCoordinator*.cpp by responsibility; structural guards about "the coordinator
+// source" read all of those units.
+inline std::string readLibraryCoordinatorSources()
+{
+    std::vector<std::string> names;
+    if (DIR* dir = ::opendir("src/library")) {
+        while (const dirent* entry = ::readdir(dir)) {
+            const std::string name = entry->d_name;
+            if (name.rfind("LibraryCoordinator", 0) == 0 && name.size() > 4 &&
+                name.compare(name.size() - 4, 4, ".cpp") == 0)
+                names.push_back(name);
+        }
+        ::closedir(dir);
+    }
+    std::sort(names.begin(), names.end());
+    std::string all;
+    for (const auto& name : names)
+        all += readTestBytes("src/library/" + name);
+    return all;
 }
 
 // Whitespace-insensitive production-source matcher for structural tests.
@@ -280,6 +304,7 @@ inline int finish(const char* group)
 
 } // namespace miyoofin_test
 
+using miyoofin_test::readLibraryCoordinatorSources;
 using miyoofin_test::readTestBytes;
 using miyoofin_test::sourceBetween;
 using miyoofin_test::sourceContains;

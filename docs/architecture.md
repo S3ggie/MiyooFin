@@ -52,6 +52,14 @@ src/
     HomeScreenOffline.cpp        Offline projection preparation/application
     HomeScreenSyncApply.cpp      UI-thread sync result publication
     HomeScreenRefresh.cpp        Lightweight refresh work
+    MusicScreen.cpp              MusicScreen lifecycle, state save/restore, tab/frame core, job results
+    MusicScreenPanes.cpp         Music pane layout, paging, row building, list results, covers
+    MusicScreenInput.cpp         Music input, navigation, context menu, playback handoff
+    MusicScreenPlaylists.cpp     Music playlist picker/editing and favorites
+    MusicScreenDownloads.cpp     Music Downloads tab rows and download requests
+    MusicScreenSettings.cpp      Music Settings rows and actions
+    MusicScreenRender.cpp        Music rendering
+    MusicScreenInternal.hpp      Constants and row builders shared by the MusicScreen units
     EpisodeBrowserScreen.cpp     EpisodeBrowserScreen lifecycle/core
     EpisodeBrowserRender.cpp     Episode rendering
     EpisodeBrowserArtwork.cpp    Artwork and bounded prefetch worker
@@ -74,7 +82,14 @@ src/
     CatalogDbHierarchy.cpp       Hierarchy persistence and reconciliation
     CatalogDbTestCommands.cpp    Test-only command queue/dispatch (MIYOOFIN_TEST_BUILD)
   library/
-    LibraryCoordinator.*         Session-scoped sync/query lifecycle and publication
+    LibraryCoordinator.*         Session-scoped sync/query lifecycle and publication: operation
+                                 admission, startup sequencing, worker start/stop, status
+    LibraryCoordinatorStartup.cpp      Startup sync request, result and wait
+    LibraryCoordinatorPopulation.cpp   Full population, checkpoint and legacy full-sync reservation
+    LibraryCoordinatorMaintenance.cpp  Safety reconcile, maintenance and Home rail refresh
+    LibraryCoordinatorHierarchy.cpp    Series/season/episode requests and the hierarchy worker
+    LibraryCoordinatorLive.cpp         Live-change queue, catch-up and the live-change worker
+    LibraryCoordinatorInternal.hpp     Small helpers shared by the coordinator units
     LibraryChangeTypes.hpp       Domain library-change publication types
     LibraryQuery.*               Domain-neutral bounded catalog reads and result types
     LibrarySync.cpp              Lower-level sync primitive used by the coordinator
@@ -160,6 +175,14 @@ recovery), not a first run. To deliberately start over, delete the downloads fol
 The test cases remain grouped in `tests/cases/*.inc` files, but focused `tests/test_*.cpp` wrappers
 compile them into independent binaries. `tests/test_support.hpp` contains shared fixtures and
 assertion support, while `output/test/test_runner` runs every group for the aggregate test target.
+Large subsystems are several binaries that share one `tests/cases/test_<subsystem>_support.hpp`
+(inline fixtures, so a group that does not use one does not warn): `test_downloads`,
+`test_downloads_transfer`, `test_downloads_storage` and `test_downloads_recovery`;
+`test_library_coordinator` plus its `_live`, `_maintenance`, `_population`, `_admission` and
+`_handoff` groups; `test_ui_models` and `test_ui_models_monitors`; `test_artwork_episode` and
+`test_artwork_episode_scheduling`; `test_update` and `test_update_installer`. Each test runs in exactly
+one binary. Structural guards that read the coordinator source use `readLibraryCoordinatorSources()`,
+which concatenates every `src/library/LibraryCoordinator*.cpp` unit.
 Production sources are compiled once into reusable test objects and archived for selective linker
 extraction, so changing one case only rebuilds and relinks its focused binary. Desktop-only runtime
 checks are exposed through the separate `Makefile.desktop` targets rather than `make test`.

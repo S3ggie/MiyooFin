@@ -80,6 +80,6 @@ ARM: about 30 s warm. Use it between edits, and run `make ci-local` before a pus
 Focused test binaries (`make output/test/test_ui_models`) are faster still.
 
 What is left in the 70 s is mostly the slowest test binaries
-(`test_library_coordinator` 6.6 s, `test_downloads` 6 s, running in parallel),
+(the `test_library_coordinator*` and `test_downloads*` groups, now several smaller binaries running in parallel),
 the serialised timing-sensitive tests, and the UI flows (`series` 7 s,
 `login-400` 10 s) that wait on a real app and stub server.

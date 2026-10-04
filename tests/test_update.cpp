@@ -1,6 +1,5 @@
 #include "test_support.hpp"
 #include "cases/test_update.inc"
-#include "cases/test_update_installer.inc"
 #include "cases/test_update_manager.inc"
 #include <curl/curl.h>
 
@@ -46,48 +45,18 @@ int main()
     testParseManifestRejectsFileAssetStrict();
 
     // ELF/ARM helpers
-    testIsElfMagic();
-    testIsElfArm();
 
     // downloadToFile
-    testDownloadToFileBasic();
-    testDownloadToFileProgress();
-    testDownloadToFileCancel();
-    testDownloadToFileResume();
-    testDownloadToFileRedirect();
-    testDownloadToFile404();
 
     // installUpdate
-    testInstallUpdateBasic();
-    testInstallUpdateUnsafeArchive();
-    testInstallUpdateCancel();
-    testInstallUpdateProgress();
-    testInstallUpdateBackupByteIdentical();
-    testInstallUpdateHardlinkRejected();
 
     // downloadToFile additional
-    testDownloadToFile404NoCorruption();
-    testDownloadToFileCompletePartSkipDownload();
-    testDownloadToFileStaleResumeReset();
 
     // installUpdate additional
-    testInstallUpdateRollbackOnFailure();
-    testInstallUpdateDotComponentsCannotReachUserState();
-    testInstallUpdateRejectsSpecialFiles();
-    testManifestHostAndVersionValidation();
 
     // parseTarListingLine
-    testParseTarListingLineBusyBoxRegular();
-    testParseTarListingLineGNURegular();
-    testParseTarListingLineBusyBoxDirectory();
-    testParseTarListingLineSymlink();
-    testParseTarListingLineHardlink();
-    testParseTarListingLineUnparseable();
-    testParseTarListingLinePathWithDatetimeSubstring();
 
     // Executable install modes (OTA reporter regression)
-    testExecutableInstallPathsCoverWhitelist();
-    testInstallUpdateReporterExecutable();
 
     // UpdateManager
     testUpdateStatusText();

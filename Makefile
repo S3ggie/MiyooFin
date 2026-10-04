@@ -218,10 +218,10 @@ ONION_REMOTE_LAUNCH_TEST := tests/test_onion_remote_launcher.sh
 MEDIA_ITEM_HEADER_TEST := tests/test_media_item_header.sh
 LIBRARY_SYNC_GUARD_TEST := tests/test_library_sync_guard.sh
 MODULE_BOUNDARIES_TEST := tests/test_module_boundaries.sh
-TEST_GROUPS := catalog api_session ui_foundation ui_models home_artwork_controller cache_offline \
-               artwork_episode downloads misc playback telemetry telemetry_format telemetry_service telemetry_schema \
+TEST_GROUPS := catalog api_session ui_foundation ui_models ui_models_monitors home_artwork_controller cache_offline \
+               artwork_episode artwork_episode_scheduling downloads downloads_transfer downloads_storage downloads_recovery misc playback telemetry telemetry_format telemetry_service telemetry_schema \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync api_core api_events session \
-               imagecache update library_coordinator library_hierarchy library_query home_library_controller worker_slot player music music_player music_downloads music_screen watched_sync player_prefs screen_lock crash_report http_methods clock_settings http_security websocket mpeg_ts
+               imagecache update update_installer library_coordinator library_coordinator_live library_coordinator_maintenance library_coordinator_population library_coordinator_admission library_coordinator_handoff library_hierarchy library_query home_library_controller worker_slot player music music_player music_downloads music_screen watched_sync player_prefs screen_lock crash_report http_methods clock_settings http_security websocket mpeg_ts
 TEST_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TEST_GROUPS))
 TEST_PROD_SRCS := $(MIYOOFIN_TEST_SRCS)
 TEST_PROD_OBJS := $(TEST_PROD_SRCS:src/%.cpp=$(TEST_DIR)/objects/%.o)
@@ -263,9 +263,9 @@ test-sanitize:
 # serial and keeps per-binary logs under output/tsan/test/logs so a report
 # survives for triage.  It is intentionally separate from ci-local/ci-local-full
 # because it needs an instrumented rebuild and a TSan-capable host toolchain.
-TSAN_GROUPS := library_coordinator library_hierarchy library_query catalog \
+TSAN_GROUPS := library_coordinator library_coordinator_live library_coordinator_maintenance library_coordinator_population library_coordinator_admission library_coordinator_handoff library_hierarchy library_query catalog \
                catalog_parity_query catalog_parity_hierarchy catalog_parity_sync \
-               home_library_controller home_artwork_controller downloads worker_slot ui_models \
+               home_library_controller home_artwork_controller downloads downloads_transfer downloads_storage downloads_recovery worker_slot ui_models ui_models_monitors \
                music music_player music_downloads music_screen
 TSAN_GROUP_TARGETS := $(addprefix $(TEST_DIR)/test_,$(TSAN_GROUPS))
 TSAN_RUNNER := tests/test_tsan_runner.sh
@@ -339,12 +339,20 @@ $(TEST_DIR)/test_api_core: tests/cases/test_api_core.inc
 $(TEST_DIR)/test_api_events: tests/cases/test_api_events.inc
 $(TEST_DIR)/test_session: tests/cases/test_session.inc
 $(TEST_DIR)/test_ui_foundation: tests/cases/test_ui_foundation.inc
+$(addprefix $(TEST_DIR)/test_,ui_models ui_models_monitors): tests/cases/test_ui_models_support.hpp
 $(TEST_DIR)/test_ui_models: tests/cases/test_ui_models.inc
+$(TEST_DIR)/test_ui_models_monitors: tests/cases/test_ui_models_monitors.inc
 $(TEST_DIR)/test_home_artwork_controller: tests/test_home_artwork_controller.cpp
 $(TEST_DIR)/test_home_library_controller: tests/cases/test_catalog_migration_support.hpp
 $(TEST_DIR)/test_cache_offline: tests/cases/test_cache_offline.inc
+$(addprefix $(TEST_DIR)/test_,artwork_episode artwork_episode_scheduling): tests/cases/test_artwork_episode_support.hpp
 $(TEST_DIR)/test_artwork_episode: tests/cases/test_artwork_episode.inc
-$(TEST_DIR)/test_downloads: tests/cases/test_downloads.inc
+$(TEST_DIR)/test_artwork_episode_scheduling: tests/cases/test_artwork_episode_scheduling.inc
+DOWNLOADS_TEST_SUPPORT := tests/cases/test_downloads_support.hpp
+$(TEST_DIR)/test_downloads: tests/cases/test_downloads.inc $(DOWNLOADS_TEST_SUPPORT)
+$(TEST_DIR)/test_downloads_transfer: tests/cases/test_downloads_transfer.inc $(DOWNLOADS_TEST_SUPPORT)
+$(TEST_DIR)/test_downloads_storage: tests/cases/test_downloads_storage.inc $(DOWNLOADS_TEST_SUPPORT)
+$(TEST_DIR)/test_downloads_recovery: tests/cases/test_downloads_recovery.inc $(DOWNLOADS_TEST_SUPPORT)
 $(TEST_DIR)/test_misc: tests/cases/test_misc_regressions.inc
 $(TEST_DIR)/test_playback: tests/cases/test_playback_ui.inc
 $(TEST_DIR)/test_telemetry: tests/cases/test_telemetry_core.inc
@@ -355,10 +363,12 @@ $(TEST_DIR)/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_cat
 $(TEST_DIR)/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
 $(TEST_DIR)/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc
 $(TEST_DIR)/test_catalog_parity_sync: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_sync.inc
-$(TEST_DIR)/test_library_coordinator: src/library/LibraryCoordinator.hpp
+LIBRARY_COORDINATOR_TEST_SUPPORT := tests/cases/test_library_coordinator_support.hpp
+$(addprefix $(TEST_DIR)/test_,library_coordinator library_coordinator_live library_coordinator_maintenance library_coordinator_population library_coordinator_admission library_coordinator_handoff): src/library/LibraryCoordinator.hpp $(LIBRARY_COORDINATOR_TEST_SUPPORT)
 $(TEST_DIR)/test_library_hierarchy: src/library/LibraryCoordinator.hpp
 $(TEST_DIR)/test_library_query: src/library/LibraryQuery.hpp src/library/LibraryCoordinator.hpp
-$(TEST_DIR)/test_update: tests/cases/test_update.inc tests/cases/test_update_installer.inc tests/cases/test_update_manager.inc src/update/UpdateInstaller.hpp src/update/UpdateManager.hpp src/net/HttpClient.hpp
+$(TEST_DIR)/test_update: tests/cases/test_update.inc tests/cases/test_update_manager.inc src/update/UpdateManager.hpp src/net/HttpClient.hpp
+$(TEST_DIR)/test_update_installer: tests/cases/test_update_installer.inc src/update/UpdateInstaller.hpp src/net/HttpClient.hpp
 
 $(TEST_DIR)/objects/%.o: src/%.cpp $(TEST_LIB_PCH_GCH) | $(TEST_DIR)
 	@mkdir -p $(@D)

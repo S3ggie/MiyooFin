@@ -1,4 +1,5 @@
 #include "test_support.hpp"
+#include "cases/test_artwork_episode_support.hpp"
 #include "cases/test_artwork_episode.inc"
 
 int main()
@@ -35,8 +36,6 @@ int main()
     testMovieRowKeyPrimary();
     testEpisodeRowKeyPrimary();
     testNoPrimaryTagEmptyKey();
-    testSameKeyNotLoadedTwice();
-    testAllVisibleCandidatesScheduledPerCycle();
     testSeasonIndexNumber();
     testSeasonTypeNormalization();
     testEpisodeJsonParsing();
@@ -47,23 +46,9 @@ int main()
     testFindEpisodeIndexNotFound();
     testFindEpisodeIndexEmpty();
     testFindEpisodeIndexEmptyList();
-    testEpisodePrefetchScheduler();
-    testEpisodeArtworkPreemption();
-    testEpisodePrefetchPlaybackResume();
     testRowCardScrollOffsetFocused();
     testRowCardScrollOffsetUnfocused();
     testRowCardScrollOffsetReportedScenario();
     testRowCardScrollOffsetEqualityContract();
-    testPosterDedupPreventsRequeueWhilePending();
-    testPosterDedupSuccessEraseAllowsReAdmit();
-    testPosterDedupEvictionRecovery();
-    testDecodeRetryBoundBelowLimit();
-    testDecodeRetryBoundAtLimit();
-    testDecodeRetryBoundSuccessResets();
-    testDecodeRetryBoundNewKeyIsFresh();
-    testBuildPosterJobFromKeyPrimary();
-    testBuildPosterJobFromKeyThumb();
-    testEvictedKeyResubmittedForDecode();
-    testFailedKeySkippedByGate();
     return miyoofin_test::finish("artwork-episode");
 }

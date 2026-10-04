@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1
+
+### Fixed
+- **Downloads survive storage trouble.** An unreadable or swapped SD card is reported as "can't
+  read your saved downloads" (never shown as an empty library) and is picked up again automatically
+  when it returns; downloads that reappear are merged back without a restart. Disk writes, erase,
+  pause/resume and account switches no longer wait on the card or leak another account's state.
+- Downloaded HLS segments are checked to be real, complete media; oversized playlists fail cleanly
+  instead of retrying forever; credentials stay on their own server across redirects.
+- **Updater:** refuses unsafe archive entries and special files, rolls back files it created, and
+  checks durability errors.
+- **Music:** state, history, queue and pending plays are kept per account; a delete/re-add race in
+  music downloads is closed; covers are cached at their drawn size; keep-in-sync no longer acts on a
+  partly loaded list.
+- Sign-in hands over as soon as it succeeds (Quick Connect needed an extra button press);
+  WebSocket handling is bounded and handles disconnects.
+
+### Internal
+- Large test groups and the music screen / library coordinator sources are split by responsibility
+  (no behavior change).
+
 ## 0.3.0
 
 ### New

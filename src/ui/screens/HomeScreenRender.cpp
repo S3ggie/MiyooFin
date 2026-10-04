@@ -528,11 +528,24 @@ void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
                      d::kDivider);
     }
 
+    // Plain warning strip while downloads are not being read or saved; goes away by itself once
+    // storage recovers (the message comes from the manager's snapshot).
+    const auto drawStorageNotice = [&] {
+        if (snap.storageError.empty())
+            return;
+        // Takes the summary panel's place (the figures are not trustworthy while storage fails).
+        ui::panel(fb, d::kMargin, DL_SUMMARY_Y, d::kScreenW - 2 * d::kMargin, DL_SUMMARY_H,
+                  ui::mix(d::kPanel, d::kWarning, 14), d::kWarning);
+        ui::textClamped(fb, d::kMargin + 14, DL_SUMMARY_Y + DL_SUMMARY_H / 2 - 8,
+                        d::kScreenW - 2 * d::kMargin - 28, snap.storageError, d::kWarning);
+    };
     const auto& rows = m_downloadsState.hierarchy.visible;
     if (rows.empty()) {
-        drawCenteredNote(fb, "No downloads yet",
-                         "Open a movie or episode and choose Download to watch it offline.",
-                         d::kTextSecondary);
+        const DownloadsEmptyState empty = downloadsEmptyState(snap);
+        drawCenteredNote(fb, empty.title, empty.detail,
+                         snap.storageError.empty() ? d::kTextSecondary : d::kWarning);
+        if (!snap.loading)
+            drawStorageNotice();
         if (!m_downloadsState.missingJournal.empty()) {
             ui::panel(fb, d::kMargin, d::kScreenH - d::kFooterH - 52, d::kScreenW - 2 * d::kMargin,
                       40, ui::mix(d::kPanel, d::kWarning, 14), d::kWarning);
@@ -650,6 +663,7 @@ void HomeScreen::drawDownloadsTab(SDL_Surface* fb)
         ui::progressBar(fb, rx + 12, ry + DL_ROW_H - 10, rw - 24, 4, percent,
                         done ? d::kSuccess : d::kAccent);
     }
+    drawStorageNotice();
 }
 
 void HomeScreen::drawBottomHints(SDL_Surface* fb)

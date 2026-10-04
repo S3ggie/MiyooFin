@@ -16,6 +16,7 @@ int main()
     testHomeDownloadsStateExpandCollapse();
     testHomeDownloadsStateRemovalAndBulkConfirm();
     testHomeDownloadsStateJournalDiscard();
+    testDownloadsEmptyStateNeverHidesAStorageProblem();
     testHomeArtworkCacheLruEviction();
     testHomeArtworkCacheProtectedAndTouch();
     testHomeArtworkCacheCardSurfaces();

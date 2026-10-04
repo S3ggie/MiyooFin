@@ -151,6 +151,8 @@ struct DownloadSnapshot
     std::vector<DownloadItem> items;
     std::uint64_t freeBytes = 0, reservedBytes = 0, localBytes = 0;
     bool playbackActive = false;
+    bool loading = false;     // the library is still being read: empty does not mean no downloads
+    std::string storageError; // non-empty while writes/removals are failing and still owed
 };
 struct DownloadPlan
 {

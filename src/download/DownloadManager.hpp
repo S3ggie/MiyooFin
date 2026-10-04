@@ -3,7 +3,9 @@
 #include "DownloadStore.hpp"
 #include "../net/Session.hpp"
 #include "../data/MediaItem.hpp"
+#include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -65,10 +67,25 @@ class DownloadManager
     /// UI-safe non-blocking snapshot.  A busy manager leaves the caller's
     /// previously published state intact instead of stalling a frame.
     bool tryPlanSnapshot(std::uint64_t id, DownloadPlanSnapshot& snapshot) const;
-    /// Waits until every requested write has reached the disk (shutdown and tests).
-    void flushPersistence();
+    /// Makes the storage thread attempt everything it owes now (ignoring retry backoff) and waits
+    /// for that pass to end. Returns true only if nothing is owed any more: work that failed
+    /// stays owed (and is retried with backoff), so a false result means "not on disk".
+    /// Used by shutdown and tests; never call from the UI thread.
+    bool flushPersistence();
+    /// Non-empty while writes or removals are failing and still owed (UI-readable; also in
+    /// DownloadSnapshot::storageError).
+    std::string storageError() const;
     /// Test seam: runs on the storage thread before each disk operation (write, removal, scan).
-    std::function<void()> beforeAsyncWriteForTest;
+    /// Installed and removed under a lock; clearing it waits until no invocation is still running.
+    void setAsyncWriteHookForTest(std::function<void()> hook);
+    /// Test seam: runs on the storage thread between the first-index scan and its exclusive create.
+    void setIndexGapHookForTest(std::function<void()> hook);
+    /// Test seam: first retry delay after a failed storage pass (doubles, capped at 8 s).
+    void setRetryBaseMsForTest(unsigned ms)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_retryBaseMs = ms;
+    }
     static bool acceptsPlanResult(std::uint64_t jobGeneration, std::uint64_t currentGeneration)
     {
         return jobGeneration == currentGeneration;
@@ -130,18 +147,27 @@ class DownloadManager
     }
     // Reads a scope's library (index, else rebuilt from manifests) on the storage thread and
     // publishes it if that scope is still the one being waited for.
-    void runLoad(const std::string& scope, std::uint64_t token);
-    void patchIndexRemoving(const std::string& scope, const std::set<std::string>& ids);
+    bool runLoad(const std::string& scope, std::uint64_t token); // false: read failed, still owed
+    bool patchIndexRemoving(const std::string& scope, const std::set<std::string>& ids);
     void persisterLoop();
     bool storageHasWorkLocked() const;
     // Returns true when the id's manifest became durable for the first time (the index must then
     // list it).
-    bool persistManifestAsync(const std::string& scope, std::uint64_t generation,
-                              const std::string& itemId);
-    void persistIndexAsync(const std::string& scope, std::uint64_t generation);
+    struct PersistResult
+    {
+        bool newlyIndexed = false;
+        bool failed = false; // the write did not reach the disk: the id stays owed
+    };
+    PersistResult persistManifestAsync(const std::string& scope, std::uint64_t generation,
+                                       const std::string& itemId);
+    bool persistIndexAsync(const std::string& scope, std::uint64_t generation); // false: owed
+    void callAsyncWriteHook(bool gap = false);
+    void mergeLoadedLocked(const std::string& scope, std::vector<DownloadItem>& loaded,
+                           const std::set<std::string>& notDurable);
+    void requestReloadLocked(const std::string& scope);
     void rescanItemAsync(const std::string& scope, std::uint64_t generation,
                          const std::string& itemId);
-    void runRemoval(const std::string& scope, const std::string& itemId, bool wholeItem);
+    bool runRemoval(const std::string& scope, const std::string& itemId, bool wholeItem);
     std::uint64_t freeBytes() const;
     static bool statvfsFreeBytes(const DownloadStore& store, const std::string& scope,
                                  std::uint64_t& out);
@@ -168,9 +194,28 @@ class DownloadManager
         std::string scope;
         std::uint64_t token;
     };
+    // Failure handling: owed work stays in the sets above and is retried with backoff.
+    std::map<std::string, std::set<std::string>> m_indexPatches; // scope -> ids to drop from index
+    bool m_kick = false;         // flush asked for an immediate attempt
+    std::uint64_t m_passSeq = 0; // storage passes completed
+    unsigned m_retryBaseMs = 250;
+    bool m_lastPassFailed = false;
+    unsigned m_retryAttempt = 0;
+    std::chrono::steady_clock::time_point m_retryNotBefore{};
+    std::string m_storageError;
+    mutable std::mutex m_hookMutex;
+    std::condition_variable m_hookDrained;
+    std::shared_ptr<std::function<void()>> m_hook;
+    std::shared_ptr<std::function<void()>> m_gapHook;
+    unsigned m_hookInflight = 0;
     std::vector<StorageLoad> m_storageLoads; // libraries to read, in request order
     std::uint64_t m_loadToken = 0;
-    bool m_loading = false;                  // m_items is not yet the whole library of m_scope
+    // The library was read as "nothing there" (a first run or a new account): until its index has
+    // been created exclusively, storage that turns out to hold a library is re-read and merged,
+    // never replaced.
+    bool m_scopeFresh = false;
+    bool m_lateScanOwed = false; // manifests may sit beside an index created without them
+    bool m_loading = false;      // m_items is not yet the whole library of m_scope
     std::set<std::string> m_asyncPersistIds; // manifests the storage thread owes the disk
     std::set<std::string> m_rescanIds;       // items whose segment files must be re-read
     std::deque<StorageRemoval> m_storageRemovals;

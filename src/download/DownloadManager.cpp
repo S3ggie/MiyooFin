@@ -42,7 +42,10 @@ DownloadManager::~DownloadManager()
         std::lock_guard<std::mutex> lock(m_mutex);
         persistLocked();
     }
-    flushPersistence(); // the storage thread drains what is owed, then is stopped
+    // One attempt at everything owed, then stop: work that still fails is reported, never waited
+    // for (a permanently failing disk must not hang shutdown).
+    if (!flushPersistence())
+        std::printf("[Download] storage: shutting down with unwritten state\n");
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stop = true;
@@ -104,6 +107,7 @@ void DownloadManager::configure(const Session& s)
         m_items.clear();
         m_indexedIds.clear();
         m_loading = true;
+        m_scopeFresh = false;
         ++m_loadToken;
         m_storageLoads.clear(); // only the newest request matters
         m_storageLoads.push_back({newScope, m_loadToken});
@@ -122,25 +126,86 @@ void DownloadManager::configure(const Session& s)
 }
 
 // Storage thread: read the library of `scope`, then publish it unless the account changed again.
-void DownloadManager::runLoad(const std::string& scope, std::uint64_t token)
+// A read that fails is NOT an empty library: nothing is published, the account stays
+// non-authoritative (no index is written for it) and the load stays owed and is retried.
+bool DownloadManager::runLoad(const std::string& scope, std::uint64_t token)
 {
-    if (beforeAsyncWriteForTest)
-        beforeAsyncWriteForTest();
+    // A final write of this account that has not reached the disk yet (its write failed and is
+    // being retried) is newer than anything on the disk: it becomes the library, not the disk copy.
+    // It is only consumed once the load is published.
+    std::vector<DownloadItem> pending;
+    bool havePending = false, pendingComplete = true;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_stop || token != m_loadToken || scope != m_scope)
+            return true; // superseded
+        for (const auto& f : m_storageFinalWrites) {
+            if (f.scope == scope) {
+                havePending = true;
+                pendingComplete = pendingComplete && f.complete;
+                pending = f.items; // later entries are newer
+            }
+        }
+    }
+    callAsyncWriteHook();
     std::vector<DownloadItem> loaded;
-    if (!m_store.loadIndex(scope, loaded, nullptr)) {
-        loaded.clear();
-        std::vector<DownloadItem> rebuilt;
-        if (m_store.rebuildIndex(scope, rebuilt, nullptr))
-            loaded.swap(rebuilt);
+    bool readFresh = true; // nothing read from disk (an owed final write) counts as unverified
+    if (!havePending || !pendingComplete) {
+        std::string why;
+        const LibraryStatus status = m_store.readLibrary(scope, loaded, &why);
+        readFresh = status == LibraryStatus::NewScope;
+        if (status == LibraryStatus::Unavailable) {
+            std::printf("[Download] storage: could not read the downloads library: %s\n",
+                        why.c_str());
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_stop && token == m_loadToken && scope == m_scope && m_storageLoads.empty())
+                m_storageLoads.push_back({scope, token});
+            return false;
+        }
     }
     std::set<std::string> seen;
-    loaded.erase(
-        std::remove_if(loaded.begin(), loaded.end(),
-                       [&](const DownloadItem& i) { return !seen.insert(i.itemId).second; }),
-        loaded.end());
+    std::set<std::string> notDurable;
+    std::vector<DownloadItem> merged;
+    for (const auto& item : pending) {
+        if (seen.insert(item.itemId).second) {
+            notDurable.insert(item.itemId);
+            merged.push_back(item);
+        }
+    }
+    for (auto& item : loaded)
+        if (seen.insert(item.itemId).second)
+            merged.push_back(std::move(item));
+    loaded.swap(merged);
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_stop || token != m_loadToken || scope != m_scope)
-        return; // superseded: the account changed again
+        return true; // superseded: the account changed again (its final writes are still owed)
+    m_storageFinalWrites.erase(
+        std::remove_if(m_storageFinalWrites.begin(), m_storageFinalWrites.end(),
+                       [&](const StorageFinalWrite& f) { return f.scope == scope; }),
+        m_storageFinalWrites.end());
+    mergeLoadedLocked(scope, loaded, notDurable);
+    m_loading = false;
+    m_scopeFresh = readFresh;
+    m_lateScanOwed = false; // this read saw the whole library
+    m_rescanAllDue = true;
+    m_asyncIndexDue = true; // the index is rewritten once, now that it can list everything
+    if (m_session.valid()) {
+        m_reconcileRequested = true;
+        m_startupReconcile = true;
+        performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile, 1);
+    }
+    publishDownloadGauges(m_items, m_planJobs.size());
+    m_wake.notify_all();
+    m_reconcileWake.notify_one();
+    m_persisterWake.notify_all();
+    return true;
+}
+
+// Adds what a read found to the live state (caller holds m_mutex): ids being removed are skipped
+// (the disk copy is going away) and so are ids already live (the newer in-memory state wins).
+void DownloadManager::mergeLoadedLocked(const std::string& scope, std::vector<DownloadItem>& loaded,
+                                        const std::set<std::string>& notDurable)
+{
     for (auto& item : loaded) {
         if (storageBusyLocked(scope, item.itemId))
             continue; // being removed: the disk copy is going away
@@ -153,51 +218,67 @@ void DownloadManager::runLoad(const std::string& scope, std::uint64_t token)
         // "Downloading" is from before an exit or an account switch, so it waits its turn again.
         if (item.state == DownloadState::Downloading)
             item.state = DownloadState::Queued;
-        m_indexedIds.insert(item.itemId);
+        if (notDurable.count(item.itemId))
+            m_asyncPersistIds.insert(item.itemId); // becomes indexed once its write succeeds
+        else
+            m_indexedIds.insert(item.itemId);
         m_items.push_back(std::move(item));
     }
-    m_loading = false;
-    m_rescanAllDue = true;
-    m_asyncIndexDue = true; // the index is rewritten once, now that it can list everything
-    if (m_session.valid()) {
-        m_reconcileRequested = true;
-        m_startupReconcile = true;
-        performanceTelemetry().setWorkerQueueDepth(WorkerId::DownloadReconcile, 1);
-    }
-    publishDownloadGauges(m_items, m_planJobs.size());
-    m_wake.notify_all();
-    m_reconcileWake.notify_one();
-    m_persisterWake.notify_all();
 }
 
 // Drops removed ids from a scope's on-disk index (a scope that is not, or not yet, fully live).
-void DownloadManager::patchIndexRemoving(const std::string& scope, const std::set<std::string>& ids)
+// Returns false when the index could not be read or written (the patch stays owed).
+bool DownloadManager::patchIndexRemoving(const std::string& scope, const std::set<std::string>& ids)
 {
     std::vector<DownloadItem> index;
-    if (!m_store.loadIndex(scope, index, nullptr))
-        return;
+    switch (m_store.readLibrary(scope, index, nullptr)) {
+    case LibraryStatus::Unavailable:
+        return false; // could not look: the patch stays owed, nothing is retired or rewritten
+    case LibraryStatus::NewScope:
+    case LibraryStatus::Rebuilt:
+        return true; // nothing indexed lists these ids (a rebuilt index never names a removed one)
+    case LibraryStatus::Loaded:
+        break;
+    }
     const auto before = index.size();
     index.erase(std::remove_if(index.begin(), index.end(),
                                [&](const DownloadItem& i) { return ids.count(i.itemId) != 0; }),
                 index.end());
-    if (index.size() != before)
-        m_store.saveIndex(scope, index, nullptr);
+    return index.size() == before || m_store.saveIndex(scope, index, nullptr);
+}
+
+// Asks the storage thread to read the current account's library again and merge it in (the
+// account stays usable meanwhile; index writes wait until the merge is published).
+void DownloadManager::requestReloadLocked(const std::string& scope)
+{
+    if (scope != m_scope)
+        return;
+    m_loading = true;
+    m_scopeFresh = false;
+    ++m_loadToken;
+    m_storageLoads.clear();
+    m_storageLoads.push_back({scope, m_loadToken});
+    m_asyncIndexDue = true;
+    m_persisterWake.notify_all();
 }
 
 void DownloadManager::requestAsyncPersistLocked(const std::string& itemId)
 {
+    m_retryNotBefore = {}; // fresh work is not held back by an earlier failure's backoff
     m_asyncPersistIds.insert(itemId);
     m_persisterWake.notify_all();
 }
 
 void DownloadManager::requestIndexLocked()
 {
+    m_retryNotBefore = {}; // fresh work is not held back by an earlier failure's backoff
     m_asyncIndexDue = true;
     m_persisterWake.notify_all();
 }
 
 void DownloadManager::requestRescanLocked(const std::string& itemId)
 {
+    m_retryNotBefore = {}; // fresh work is not held back by an earlier failure's backoff
     m_rescanIds.insert(itemId);
     m_segmentsVerified.erase(itemId);
     m_persisterWake.notify_all();
@@ -205,6 +286,7 @@ void DownloadManager::requestRescanLocked(const std::string& itemId)
 
 void DownloadManager::requestRemoveLocked(const std::string& itemId, bool wholeItem)
 {
+    m_retryNotBefore = {}; // fresh work is not held back by an earlier failure's backoff
     if (wholeItem)
         m_asyncPersistIds.erase(itemId); // the removal supersedes any write still owed
     m_segmentsVerified.erase(itemId);
@@ -221,6 +303,7 @@ void DownloadManager::saveIndexLocked()
 
 void DownloadManager::persistLocked()
 {
+    m_retryNotBefore = {}; // fresh work is not held back by an earlier failure's backoff
     for (const auto& i : m_items)
         m_asyncPersistIds.insert(i.itemId);
     m_asyncIndexDue = true;
@@ -236,120 +319,245 @@ bool DownloadManager::storageHasWorkLocked() const
 {
     return !m_asyncPersistIds.empty() || m_asyncIndexDue || !m_storageRemovals.empty() ||
            !m_storageFinalWrites.empty() || !m_rescanIds.empty() || m_rescanAllDue ||
-           !m_storageLoads.empty();
+           !m_storageLoads.empty() || !m_indexPatches.empty();
 }
 
-void DownloadManager::flushPersistence()
+void DownloadManager::setAsyncWriteHookForTest(std::function<void()> hook)
+{
+    std::unique_lock<std::mutex> lock(m_hookMutex);
+    m_hook = hook ? std::make_shared<std::function<void()>>(std::move(hook)) : nullptr;
+    if (!m_hook)
+        m_hookDrained.wait(lock, [this] { return m_hookInflight == 0; });
+}
+
+void DownloadManager::setIndexGapHookForTest(std::function<void()> hook)
+{
+    std::unique_lock<std::mutex> lock(m_hookMutex);
+    m_gapHook = hook ? std::make_shared<std::function<void()>>(std::move(hook)) : nullptr;
+    if (!m_gapHook)
+        m_hookDrained.wait(lock, [this] { return m_hookInflight == 0; });
+}
+
+void DownloadManager::callAsyncWriteHook(bool gap)
+{
+    std::shared_ptr<std::function<void()>> hook;
+    {
+        std::lock_guard<std::mutex> lock(m_hookMutex);
+        hook = gap ? m_gapHook : m_hook;
+        if (!hook)
+            return;
+        ++m_hookInflight;
+    }
+    (*hook)(); // outside the lock; the copy keeps the callable alive
+    std::lock_guard<std::mutex> lock(m_hookMutex);
+    if (--m_hookInflight == 0)
+        m_hookDrained.notify_all();
+}
+
+std::string DownloadManager::storageError() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_storageError;
+}
+
+bool DownloadManager::flushPersistence()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_persisterWake.wait(
-        lock, [this] { return m_stop || (!storageHasWorkLocked() && !m_persisterBusy); });
+    if (!storageHasWorkLocked() && !m_persisterBusy)
+        return true;
+    // Returns when nothing is owed, or when a pass that began after this call ended with
+    // failures (work that fails stays owed; it is not waited for). A clean pass that leaves
+    // follow-up work (a library just loaded asks for an index write) is followed by the next.
+    const std::uint64_t target = m_passSeq + (m_persisterBusy ? 2 : 1);
+    m_kick = true;
+    m_persisterWake.notify_all();
+    m_persisterWake.wait(lock, [&] {
+        return m_stop || (m_passSeq >= target && m_lastPassFailed) ||
+               (!storageHasWorkLocked() && !m_persisterBusy);
+    });
+    return !m_stop && !storageHasWorkLocked() && !m_persisterBusy;
 }
 
 // Writes `itemId`'s manifest from a copy taken under the lock, with the lock released for the
 // disk I/O, then checks the live item did not change meanwhile (or get overwritten by a
 // synchronous writer's newer state): if it did, the newer state is written too. The file therefore
 // always converges to the live state, and an older copy can never be what stays on disk.
-bool DownloadManager::persistManifestAsync(const std::string& scope, std::uint64_t,
-                                           const std::string& itemId)
+// A write that did not succeed is reported (failed) and the id stays owed; if the convergence
+// rounds run out the id is simply asked for again.
+DownloadManager::PersistResult DownloadManager::persistManifestAsync(const std::string& scope,
+                                                                     std::uint64_t,
+                                                                     const std::string& itemId)
 {
-    bool newlyIndexed = false;
+    PersistResult result;
     for (int round = 0; round < 8; ++round) {
         DownloadItem copy;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_stop || scope != m_scope)
-                return newlyIndexed;
+                return result;
             auto it = std::find_if(m_items.begin(), m_items.end(),
                                    [&](const DownloadItem& i) { return i.itemId == itemId; });
             if (it == m_items.end())
-                return newlyIndexed; // erased meanwhile: nothing to write, nothing to resurrect
+                return result; // erased meanwhile: nothing to write, nothing to resurrect
             copy = *it;
         }
-        if (beforeAsyncWriteForTest)
-            beforeAsyncWriteForTest();
+        callAsyncWriteHook();
         m_store.ensureHlsDirectories(scope, itemId);
         const bool ok = m_store.saveManifest(scope, copy, nullptr);
         std::lock_guard<std::mutex> lock(m_mutex);
         if (scope != m_scope)
-            return newlyIndexed;
+            return result; // the account was left: its final write carries the state
         auto it = std::find_if(m_items.begin(), m_items.end(),
                                [&](const DownloadItem& i) { return i.itemId == itemId; });
         if (it == m_items.end())
-            return newlyIndexed;
-        if (ok && m_indexedIds.insert(itemId).second)
-            newlyIndexed = true;
+            return result;
+        if (!ok) {
+            result.failed = true; // acknowledged as not written: still owed
+            return result;
+        }
+        if (m_indexedIds.insert(itemId).second)
+            result.newlyIndexed = true;
         if (DownloadStore::manifestText(*it) == DownloadStore::manifestText(copy))
-            return newlyIndexed; // what is on disk is the live state
+            return result; // what is on disk is the live state
     }
-    return newlyIndexed;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_asyncPersistIds.insert(itemId); // still changing: converge on a later pass
+    return result;
 }
 
-void DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t)
+bool DownloadManager::persistIndexAsync(const std::string& scope, std::uint64_t)
 {
     for (int round = 0; round < 8; ++round) {
         std::vector<DownloadItem> indexed;
         std::set<std::string> idsWritten;
+        bool fresh = false, lateScan = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_stop || scope != m_scope)
-                return;
+                return true;
             if (m_loading)
-                return; // the index would drop what has not been read yet; the load rewrites it
+                return true; // the index would drop what has not been read yet; the load rewrites
+                             // it
+            fresh = m_scopeFresh;
+            lateScan = m_lateScanOwed;
             for (const auto& i : m_items)
                 if (m_indexedIds.count(i.itemId)) {
                     indexed.push_back(i);
                     idsWritten.insert(i.itemId);
                 }
         }
-        if (beforeAsyncWriteForTest)
-            beforeAsyncWriteForTest();
-        m_store.saveIndex(scope, indexed, nullptr);
+        if (fresh && indexed.empty())
+            return true; // a library read as "nothing there" with nothing to list needs no index
+                         // yet
+        callAsyncWriteHook();
+        if (lateScan) {
+            std::vector<DownloadItem> late;
+            if (m_store.scanManifests(scope, late, nullptr) == LibraryStatus::Unavailable)
+                return false; // could not look: stays owed, the index is not rewritten meanwhile
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (scope != m_scope)
+                return true;
+            mergeLoadedLocked(scope, late, {});
+            m_lateScanOwed = false;
+            continue; // the index is built again from the merged set
+        }
+        bool ok;
+        if (fresh) {
+            // The library was read as "nothing there". If storage has come back with one since,
+            // nothing is replaced: it is read again and merged (see runLoad), and only an index
+            // that did not exist is ever created here.
+            std::vector<DownloadItem> found;
+            const LibraryStatus st = m_store.readLibrary(scope, found, nullptr);
+            if (st == LibraryStatus::Unavailable)
+                return false;
+            bool foreign = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (scope != m_scope)
+                    return true;
+                for (const auto& f : found) {
+                    const bool ours =
+                        std::any_of(m_items.begin(), m_items.end(),
+                                    [&](const DownloadItem& i) { return i.itemId == f.itemId; });
+                    if (!ours && !storageBusyLocked(scope, f.itemId))
+                        foreign = true;
+                }
+            }
+            callAsyncWriteHook(true);
+            const DownloadStore::IndexCreate made =
+                (st == LibraryStatus::Loaded || foreign)
+                    ? DownloadStore::IndexCreate::Exists
+                    : m_store.createIndexExclusive(scope, indexed, nullptr);
+            if (made == DownloadStore::IndexCreate::Failed)
+                return false;
+            if (made == DownloadStore::IndexCreate::Exists) {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                requestReloadLocked(scope);
+                return true;
+            }
+            ok = true;
+            // Manifests may have returned between the scan above and the create, and the index
+            // just made lists only ours: the next pass scans for them (the index is not trusted
+            // for that) and merges them before writing the index again.
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (scope == m_scope) {
+                m_scopeFresh = false; // established: ordinary replacing writes from here on
+                m_lateScanOwed = true;
+                m_asyncIndexDue = true;
+            }
+        } else {
+            ok = m_store.saveIndex(scope, indexed, nullptr);
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         if (scope != m_scope)
-            return;
+            return true;
+        if (!ok)
+            return false; // not on disk: stays owed
         std::set<std::string> now;
         for (const auto& i : m_items)
             if (m_indexedIds.count(i.itemId))
                 now.insert(i.itemId);
         if (now == idsWritten)
-            return; // the index lists exactly the live set
+            return true; // the index lists exactly the live set
     }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_asyncIndexDue = true; // the id set kept changing: converge on a later pass
+    return true;
 }
 
 // Removes an item's files (or only its downloaded bytes) on the storage thread, then lets the
 // transfer worker start that id again if it was added back meanwhile.
-void DownloadManager::runRemoval(const std::string& scope, const std::string& itemId,
+bool DownloadManager::runRemoval(const std::string& scope, const std::string& itemId,
                                  bool wholeItem)
 {
-    if (beforeAsyncWriteForTest)
-        beforeAsyncWriteForTest();
+    callAsyncWriteHook();
     std::string error;
     const bool ok = wholeItem ? m_store.removeItem(scope, itemId, &error)
                               : m_store.removePartialBytes(scope, itemId, &error);
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (!ok) {
+        // Stays queued by the caller and keeps the id busy, so nothing is built on (or next to)
+        // the old files meanwhile and a deleted item cannot come back at the next load.
+        std::printf("[Download] storage: could not remove %s%s: %s\n",
+                    wholeItem ? "" : "old bytes of ", itemId.c_str(), error.c_str());
+        return false;
+    }
     auto busy = m_storageBusy.find(busyKey(scope, itemId));
     if (busy != m_storageBusy.end() && --busy->second <= 0)
         m_storageBusy.erase(busy);
-    if (!ok)
-        std::printf("[Download] storage: could not remove %s%s: %s\n",
-                    wholeItem ? "" : "old bytes of ", itemId.c_str(), error.c_str());
     if (scope == m_scope) {
         auto it = std::find_if(m_items.begin(), m_items.end(),
                                [&](const DownloadItem& i) { return i.itemId == itemId; });
         if (it != m_items.end()) {
             // Added back (or re-downloading) while the old files were going: it needs a manifest
-            // again, and an old copy that could not be cleared must not be built on.
-            if (!ok && !wholeItem && it->state == DownloadState::Queued) {
-                it->state = DownloadState::Failed;
-                it->lastError = "Could not clear the old copy";
-            }
+            // again.
             m_asyncPersistIds.insert(itemId);
             m_asyncIndexDue = true;
         }
     }
     m_wake.notify_all();
     m_persisterWake.notify_all();
+    return true;
 }
 
 // Re-reads one item's segment files on a copy and merges what it learned into the live item,
@@ -370,8 +578,7 @@ void DownloadManager::rescanItemAsync(const std::string& scope, std::uint64_t ge
         copy = *it;
         before = it->state;
     }
-    if (beforeAsyncWriteForTest)
-        beforeAsyncWriteForTest();
+    callAsyncWriteHook();
     m_store.reconcileInMemory(scope, copy, nullptr);
     const bool structurallyComplete =
         copy.hlsStorage ? m_store.validateCompletedDownload(scope, copy, nullptr) : true;
@@ -400,13 +607,26 @@ void DownloadManager::persisterLoop()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
     for (;;) {
-        m_persisterWake.wait(lock, [this] { return m_stop || storageHasWorkLocked(); });
-        if (m_stop)
-            return;
+        for (;;) {
+            if (m_stop)
+                return;
+            if (!storageHasWorkLocked()) {
+                m_persisterWake.wait(lock);
+                continue;
+            }
+            // Owed work that failed waits out its backoff (a timed wait, not polling), unless a
+            // flush asks for an immediate attempt or fresh work resets the delay.
+            if (m_kick || std::chrono::steady_clock::now() >= m_retryNotBefore)
+                break;
+            m_persisterWake.wait_until(lock, m_retryNotBefore);
+        }
+        m_kick = false;
         std::vector<StorageFinalWrite> finals;
         finals.swap(m_storageFinalWrites);
         std::deque<StorageRemoval> removals;
         removals.swap(m_storageRemovals);
+        std::map<std::string, std::set<std::string>> patches;
+        patches.swap(m_indexPatches);
         std::set<std::string> ids;
         ids.swap(m_asyncPersistIds);
         std::set<std::string> rescans;
@@ -420,66 +640,142 @@ void DownloadManager::persisterLoop()
         m_asyncIndexDue = false;
         const std::string scope = m_scope;
         const std::uint64_t generation = m_generation;
+        const unsigned retryBaseMs = m_retryBaseMs;
         m_persisterBusy = true;
         lock.unlock();
+        bool failed = false;
+        // Whatever fails below is handed back, still owed, when the pass ends.
+        std::vector<StorageFinalWrite> retryFinals;
+        std::deque<StorageRemoval> retryRemovals;
+        std::map<std::string, std::set<std::string>> retryPatches;
+        std::set<std::string> retryIds;
         // 1. A previous account's items, written out whole before they are forgotten.
         for (const StorageFinalWrite& f : finals) {
             std::vector<DownloadItem> indexed;
-            if (!f.complete)
-                m_store.loadIndex(f.scope, indexed, nullptr); // what was never read stays listed
+            bool ok = true;
+            bool mergedIndex = true;
+            if (!f.complete) {
+                // What was never read stays listed. If it cannot be read, no index is written.
+                mergedIndex =
+                    m_store.readLibrary(f.scope, indexed, nullptr) != LibraryStatus::Unavailable;
+                if (!mergedIndex)
+                    indexed.clear();
+            }
             for (const DownloadItem& i : f.items) {
-                if (beforeAsyncWriteForTest)
-                    beforeAsyncWriteForTest();
+                callAsyncWriteHook();
                 if (m_store.saveManifest(f.scope, i, nullptr)) {
                     indexed.erase(
                         std::remove_if(indexed.begin(), indexed.end(),
                                        [&](const DownloadItem& x) { return x.itemId == i.itemId; }),
                         indexed.end());
                     indexed.push_back(i);
+                } else {
+                    ok = false;
                 }
             }
-            m_store.saveIndex(f.scope, indexed, nullptr);
+            ok = mergedIndex && m_store.saveIndex(f.scope, indexed, nullptr) && ok;
+            if (!ok) {
+                failed = true;
+                retryFinals.push_back(f); // the whole snapshot is rewritten next time
+            }
         }
         // 2. Removals, in the order they were asked for; each scope's index is then corrected.
         std::map<std::string, std::set<std::string>> removedByScope;
+        bool blocked = false; // a failed removal holds back later ones for the same scope+id
+        std::set<std::string> failedKeys;
         for (const StorageRemoval& r : removals) {
-            runRemoval(r.scope, r.id, r.wholeItem);
+            const std::string key = busyKey(r.scope, r.id);
+            if (failedKeys.count(key) || !runRemoval(r.scope, r.id, r.wholeItem)) {
+                failedKeys.insert(key);
+                retryRemovals.push_back(r);
+                failed = blocked = true;
+                continue;
+            }
             if (r.wholeItem)
                 removedByScope[r.scope].insert(r.id);
         }
-        for (const auto& entry : removedByScope) {
+        for (const auto& entry : removedByScope)
+            for (const std::string& id : entry.second)
+                patches[entry.first].insert(id);
+        for (const auto& entry : patches) {
             bool live;
             {
                 std::lock_guard<std::mutex> relock(m_mutex);
                 live = entry.first == m_scope && !m_loading;
             }
-            if (live)
+            if (live) {
                 indexDue = true;
-            else
-                patchIndexRemoving(entry.first, entry.second);
+            } else if (!patchIndexRemoving(entry.first, entry.second)) {
+                failed = true;
+                retryPatches[entry.first].insert(entry.second.begin(), entry.second.end());
+            }
         }
+        (void)blocked;
         // 2b. Libraries to read (after the writes and removals above, which they must observe).
         {
             std::vector<StorageLoad> loads;
             {
                 std::lock_guard<std::mutex> relock(m_mutex);
                 loads.swap(m_storageLoads);
+                // Final writes that failed above are still the newest state of their account: a
+                // load of that account (below) must find them, not the older disk copy.
+                m_storageFinalWrites.insert(m_storageFinalWrites.begin(), retryFinals.begin(),
+                                            retryFinals.end());
+                retryFinals.clear();
             }
             for (const StorageLoad& l : loads)
-                runLoad(l.scope, l.token);
+                if (!runLoad(l.scope, l.token))
+                    failed = true;
         }
         // 3. Re-reads of segment files.
         for (const std::string& id : rescans)
             rescanItemAsync(scope, generation, id);
         // 4. Manifests (writes after removals, so a re-added id is written to a clean slate).
         bool newlyIndexed = false;
-        const std::set<std::string>& toWrite = ids; // later requests get their own cycle
-        for (const std::string& id : toWrite)
-            newlyIndexed = persistManifestAsync(scope, generation, id) || newlyIndexed;
-        // 5. The index, when ids came or went.
-        if (indexDue || newlyIndexed)
-            persistIndexAsync(scope, generation);
+        for (const std::string& id : ids) {
+            const PersistResult r = persistManifestAsync(scope, generation, id);
+            newlyIndexed = r.newlyIndexed || newlyIndexed;
+            if (r.failed) {
+                failed = true;
+                retryIds.insert(id);
+            }
+        }
+        // 5. The index, when ids came or went (and only once its manifests are down).
+        bool indexRetry = false;
+        if ((indexDue || newlyIndexed) && !persistIndexAsync(scope, generation)) {
+            failed = true;
+            indexRetry = true;
+        }
         lock.lock();
+        for (auto it = retryFinals.rbegin(); it != retryFinals.rend(); ++it)
+            m_storageFinalWrites.insert(m_storageFinalWrites.begin(), *it);
+        for (auto it = retryRemovals.rbegin(); it != retryRemovals.rend(); ++it)
+            m_storageRemovals.push_front(*it);
+        for (const auto& entry : retryPatches)
+            m_indexPatches[entry.first].insert(entry.second.begin(), entry.second.end());
+        for (const std::string& id : retryIds) {
+            // Only while the item still exists in the library the write was for.
+            if (scope == m_scope)
+                m_asyncPersistIds.insert(id);
+        }
+        if (indexRetry && scope == m_scope)
+            m_asyncIndexDue = true;
+        if (failed) {
+            ++m_retryAttempt;
+            const unsigned shift = std::min(m_retryAttempt - 1, 5u);
+            const unsigned delayMs = std::min(8000u, retryBaseMs << shift);
+            m_retryNotBefore =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+            m_storageError = m_loading ? "Can't read your saved downloads. Check the SD card."
+                                       : "Downloads aren't being saved. Check the SD card.";
+        } else {
+            m_retryAttempt = 0;
+            m_retryNotBefore = {};
+        }
+        if (!storageHasWorkLocked())
+            m_storageError.clear();
+        m_lastPassFailed = failed;
+        ++m_passSeq;
         m_persisterBusy = false;
         m_persisterWake.notify_all();
     }
@@ -699,15 +995,21 @@ DownloadSnapshot DownloadManager::snapshot() const
 {
     std::vector<DownloadItem> items;
     bool playback = false;
+    std::string storageErr;
+    bool loadingNow = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         items = m_items;
         playback = m_playback;
+        storageErr = m_storageError;
+        loadingNow = m_loading;
     }
     DownloadSnapshot x;
     x.items = std::move(items);
     x.freeBytes = freeBytes();
     x.playbackActive = playback;
+    x.storageError = storageErr;
+    x.loading = loadingNow;
     for (auto& i : x.items) {
         if (i.state != DownloadState::Complete && i.state != DownloadState::LocalOnly &&
             i.state != DownloadState::UpdateAvailable) {

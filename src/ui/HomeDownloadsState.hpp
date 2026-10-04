@@ -10,6 +10,14 @@
 
 namespace miyoofin {
 
+/// What the Downloads tab says in place of the list when it is empty. A library that is still
+/// loading, or that could not be read, is never presented as "no downloads".
+struct DownloadsEmptyState
+{
+    std::string title, detail;
+};
+DownloadsEmptyState downloadsEmptyState(const DownloadSnapshot& snapshot);
+
 // UI-thread state and pure transitions for Home's Downloads tab. It holds the
 // copied manager snapshot, the expanded/selected hierarchy view and the
 // two-press confirmation state. It performs no I/O: operations that must

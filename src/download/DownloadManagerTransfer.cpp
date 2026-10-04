@@ -410,8 +410,9 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             }
     }
     // Subtitles for offline viewing: small, best effort, and outside the lock.
-    fetchSubtitleSidecars(session, m_store.itemPath(scope, item.itemId), item.itemId,
-                          item.mediaSourceId);
+    if (m_store.storageReadable()) // (never write into storage that is not the library's)
+        fetchSubtitleSidecars(session, m_store.itemPath(scope, item.itemId), item.itemId,
+                              item.mediaSourceId);
     // Recovery scan runs once per transfer; the resume offset is reused below
     // instead of scanning the segment directory a second time.
     const std::uint64_t resumeFrom = m_store.firstIncompleteSegment(scope, item);
@@ -477,7 +478,7 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             primaryMeasured = fallbackMeasured = fallbackAttempted = false;
             primaryGood = fallbackGood = false;
             // "wb" deliberately replaces a failed response body before every retry.
-            FILE* f = std::fopen(part.c_str(), "wb");
+            FILE* f = m_store.storageReadable() ? std::fopen(part.c_str(), "wb") : nullptr;
             if (!f) {
                 rc = CURLE_WRITE_ERROR;
                 break;
@@ -659,7 +660,7 @@ bool DownloadManager::transfer(DownloadItem& item, const Session& session, const
             // Publish it: rename to the final name, then make the rename durable. A rename or a
             // directory sync that really fails means this segment cannot be trusted to be there
             // after a power cut, so it counts as a failed segment (not silently as a good one).
-            if (std::rename(part.c_str(), done.c_str()) != 0) {
+            if (!m_store.storageReadable() || std::rename(part.c_str(), done.c_str()) != 0) {
                 good = false;
             } else if (!syncParentDir(done)) {
                 std::remove(done.c_str());

@@ -95,6 +95,15 @@ std::vector<std::string> HomeDownloadsState::pressRemoval()
     return {};
 }
 
+DownloadsEmptyState downloadsEmptyState(const DownloadSnapshot& snapshot)
+{
+    if (snapshot.loading && !snapshot.storageError.empty())
+        return {"Can't read downloads", snapshot.storageError};
+    if (snapshot.loading)
+        return {"Loading downloads...", ""};
+    return {"No downloads yet", "Open a movie or episode and choose Download to watch it offline."};
+}
+
 std::string HomeDownloadsState::pressJournalDiscard()
 {
     if (missingJournal.empty())

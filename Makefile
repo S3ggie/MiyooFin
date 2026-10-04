@@ -350,7 +350,7 @@ $(TEST_DIR)/test_playback: tests/cases/test_playback_ui.inc
 $(TEST_DIR)/test_telemetry: tests/cases/test_telemetry_core.inc
 $(TEST_DIR)/test_telemetry_format: tests/cases/test_telemetry_format.inc
 $(TEST_DIR)/test_telemetry_service: tests/cases/test_telemetry_service.inc
-$(TEST_DIR)/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc
+$(TEST_DIR)/test_telemetry_schema: tests/cases/test_telemetry_schema.inc tests/cases/test_telemetry_schema_tail.inc tests/cases/test_telemetry_format.inc
 $(TEST_DIR)/test_catalog: tests/cases/test_catalog_core.inc tests/cases/test_catalog_migration.inc tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_hierarchy.inc tests/cases/test_catalog_parity_sync.inc
 $(TEST_DIR)/test_catalog_parity_query: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_query.inc tests/cases/test_catalog_parity_sync.inc
 $(TEST_DIR)/test_catalog_parity_hierarchy: tests/cases/test_catalog_migration_support.hpp tests/cases/test_catalog_parity_support.hpp tests/cases/test_catalog_parity_hierarchy.inc

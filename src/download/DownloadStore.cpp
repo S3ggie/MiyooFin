@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cctype>
@@ -275,6 +276,25 @@ bool parse(const std::string& b, DownloadItem& i)
     i.hlsProfile = get(b, "profile");
     return i.chunkSize > 0;
 }
+// Like read(), but says why it failed (errno-style) so "not there" and "could not read" differ.
+bool readWhy(const std::string& p, std::string& b, int& why)
+{
+    why = 0;
+    FILE* f = std::fopen(p.c_str(), "rb");
+    if (!f) {
+        why = errno ? errno : EIO;
+        return false;
+    }
+    char q[4096];
+    size_t n;
+    while ((n = std::fread(q, 1, sizeof q, f)))
+        b.append(q, n);
+    const bool ok = !std::ferror(f);
+    if (!ok)
+        why = EIO;
+    std::fclose(f);
+    return ok;
+}
 bool read(const std::string& p, std::string& b)
 {
     FILE* f = std::fopen(p.c_str(), "rb");
@@ -321,7 +341,7 @@ std::string DownloadStore::segmentPath(const std::string& s, const std::string& 
 }
 bool DownloadStore::ensureHlsDirectories(const std::string& s, const std::string& i) const
 {
-    return safeId(s) && safeId(i) && mkdirs(itemPath(s, i) + "/segments");
+    return safeId(s) && safeId(i) && storageReadable() && mkdirs(itemPath(s, i) + "/segments");
 }
 bool DownloadStore::validHlsSegment(const std::string& path, std::uint64_t size, bool full,
                                     std::string* why)
@@ -355,11 +375,13 @@ std::string DownloadStore::manifestText(const DownloadItem& i)
 }
 bool DownloadStore::saveManifest(const std::string& s, const DownloadItem& i, std::string* e) const
 {
-    if (!safeId(s) || !safeId(i.itemId) || !atomic(manifestPath(s, i.itemId), serialize(i))) {
+    if (!safeId(s) || !safeId(i.itemId) || !storageReadable() ||
+        !atomic(manifestPath(s, i.itemId), serialize(i))) {
         if (e)
             *e = "manifest save failed";
         return false;
     }
+    noteEstablished();
     return true;
 }
 bool DownloadStore::loadManifest(const std::string& s, const std::string& id, DownloadItem& i,
@@ -386,12 +408,54 @@ bool DownloadStore::saveIndex(const std::string& s, const std::vector<DownloadIt
     for (const auto& i : v)
         if (seen.insert(i.itemId).second)
             b += i.itemId + "\n";
-    if (!atomic(scopePath(s) + "/index.v1", b)) {
+    if (!storageReadable() || !atomic(scopePath(s) + "/index.v1", b)) {
         if (e)
             *e = "index save failed";
         return false;
     }
+    noteEstablished();
     return true;
+}
+DownloadStore::IndexCreate DownloadStore::createIndexExclusive(const std::string& s,
+                                                               const std::vector<DownloadItem>& v,
+                                                               std::string* e) const
+{
+    if (!safeId(s) || !storageReadable() || !mkdirs(scopePath(s))) {
+        if (e)
+            *e = "index save failed";
+        return IndexCreate::Failed;
+    }
+    std::string b = "MFDI=1\n";
+    std::set<std::string> seen;
+    for (const auto& i : v)
+        if (seen.insert(i.itemId).second)
+            b += i.itemId + "\n";
+    const int fd = ::open((scopePath(s) + "/index.v1").c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) {
+        if (errno == EEXIST)
+            return IndexCreate::Exists;
+        if (e)
+            *e = "index save failed";
+        return IndexCreate::Failed;
+    }
+    size_t done = 0;
+    bool ok = true;
+    while (done < b.size() && ok) {
+        const ssize_t n = ::write(fd, b.data() + done, b.size() - done);
+        if (n <= 0)
+            ok = false;
+        else
+            done += static_cast<size_t>(n);
+    }
+    ok = ok && ::fsync(fd) == 0;
+    ok = (::close(fd) == 0) && ok;
+    if (!ok) {
+        if (e)
+            *e = "index save failed";
+        return IndexCreate::Failed; // (a partial file is a damaged index: rebuilt from manifests)
+    }
+    noteEstablished();
+    return IndexCreate::Created;
 }
 bool DownloadStore::loadIndex(const std::string& s, std::vector<DownloadItem>& v,
                               std::string* e) const
@@ -433,9 +497,193 @@ bool DownloadStore::loadCompleteMetadata(const std::string& s, std::vector<Downl
             v.push_back(i);
     return true;
 }
+std::string DownloadStore::markerPath() const
+{
+    std::string root = m_root;
+    while (root.size() > 1 && root.back() == '/')
+        root.pop_back();
+    const std::size_t slash = root.find_last_of('/');
+    const std::string parent =
+        slash == std::string::npos ? "." : (slash == 0 ? "/" : root.substr(0, slash));
+    const std::string base = slash == std::string::npos ? root : root.substr(slash + 1);
+    return parent + "/." + base + ".root";
+}
+bool DownloadStore::storageReadable() const
+{
+    struct stat st
+    {};
+    std::string marker;
+    int markerErr = 0;
+    const bool haveMarker = readWhy(markerPath(), marker, markerErr);
+    if (::stat(m_root.c_str(), &st) == 0) {
+        if (!S_ISDIR(st.st_mode) || ::access(m_root.c_str(), R_OK | X_OK) != 0)
+            return false;
+        if (haveMarker) {
+            // An empty mount point left behind by storage that went away is on another device
+            // than the library was.
+            const std::size_t at = marker.find("root_dev=");
+            if (at != std::string::npos && std::strtoull(marker.c_str() + at + 9, nullptr, 10) !=
+                                               static_cast<unsigned long long>(st.st_dev))
+                return false;
+        }
+        return true;
+    }
+    if (errno != ENOENT)
+        return false;
+    // A dangling link is storage that is not there, not a fresh install.
+    struct stat link
+    {};
+    if (::lstat(m_root.c_str(), &link) == 0)
+        return false;
+    // Not created yet is fine only for storage that never held a library: the marker beside the
+    // root (written after the first successful write) says otherwise. And the place it would be
+    // created in must be there; a vanished card takes the parent with it.
+    if (haveMarker || markerErr != ENOENT)
+        return false;
+    std::string parent = m_root;
+    while (parent.size() > 1 && parent.back() == '/')
+        parent.pop_back();
+    const std::size_t slash = parent.find_last_of('/');
+    parent = slash == std::string::npos ? "." : (slash == 0 ? "/" : parent.substr(0, slash));
+    return ::stat(parent.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+void DownloadStore::noteEstablished() const
+{
+    if (m_established->load())
+        return;
+    struct stat st
+    {};
+    if (::stat(m_root.c_str(), &st) != 0)
+        return;
+    const std::string body =
+        "MFRT=1\nroot_dev=" + std::to_string((unsigned long long)st.st_dev) + "\n";
+    if (atomic(markerPath(), body))
+        m_established->store(true);
+}
+LibraryStatus DownloadStore::readLibrary(const std::string& s, std::vector<DownloadItem>& out,
+                                         std::string* e) const
+{
+    auto unavailable = [&](const char* why) {
+        if (e)
+            *e = why;
+        return LibraryStatus::Unavailable;
+    };
+    if (!safeId(s))
+        return unavailable("bad scope");
+    if (!storageReadable())
+        return unavailable("storage unavailable");
+    const std::string scopeDir = scopePath(s);
+    struct stat st
+    {};
+    if (::stat(scopeDir.c_str(), &st) != 0)
+        return errno == ENOENT ? LibraryStatus::NewScope : unavailable("scope unreadable");
+    if (!S_ISDIR(st.st_mode))
+        return unavailable("scope is not a directory");
+    // 1. The index and the manifests it names.
+    std::string b;
+    int why = 0;
+    bool needScan = false;
+    if (!readWhy(scopeDir + "/index.v1", b, why)) {
+        if (why != ENOENT)
+            return unavailable("index unreadable");
+        needScan = true; // no index: the manifests are the truth
+    } else if (b.rfind("MFDI=1\n", 0)) {
+        needScan = true; // corrupt index
+    }
+    std::vector<DownloadItem> loaded;
+    if (!needScan) {
+        std::set<std::string> seen;
+        size_t p = 7;
+        while (p < b.size() && !needScan) {
+            size_t z = b.find('\n', p);
+            std::string id = b.substr(p, z - p);
+            if (!id.empty() && seen.insert(id).second) {
+                std::string mb;
+                DownloadItem i;
+                if (!safeId(id)) {
+                    needScan = true;
+                } else if (!readWhy(manifestPath(s, id), mb, why)) {
+                    if (why != ENOENT)
+                        return unavailable("manifest unreadable");
+                    needScan = true;
+                } else if (!parse(mb, i)) {
+                    needScan = true;
+                } else {
+                    loaded.push_back(std::move(i));
+                }
+            }
+            if (z == std::string::npos)
+                break;
+            p = z + 1;
+        }
+        if (!needScan) {
+            out.insert(out.end(), loaded.begin(), loaded.end());
+            return LibraryStatus::Loaded;
+        }
+    }
+    // 2. Reconstruction from the manifests.
+    return scanManifests(s, out, e);
+}
+LibraryStatus DownloadStore::scanManifests(const std::string& s, std::vector<DownloadItem>& out,
+                                           std::string* e) const
+{
+    auto unavailable = [&](const char* why) {
+        if (e)
+            *e = why;
+        return LibraryStatus::Unavailable;
+    };
+    int why = 0;
+    // Same trust as readLibrary: a missing/mismatched storage root or scope is "could not look",
+    // never an empty library.
+    struct stat st
+    {};
+    if (!safeId(s) || !storageReadable())
+        return unavailable("storage unavailable");
+    if (::stat(scopePath(s).c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+        return unavailable("scope unreadable");
+    // Every directory must be read; an I/O error anywhere fails the whole scan (a partial scan
+    // would look like a smaller library).
+    DIR* d = opendir((scopePath(s) + "/items").c_str());
+    if (!d)
+        return errno == ENOENT ? LibraryStatus::NewScope : unavailable("items unreadable");
+    std::vector<DownloadItem> rebuilt;
+    std::set<std::string> seen;
+    dirent* x;
+    errno = 0;
+    while ((x = readdir(d))) {
+        if (x->d_name[0] == '.' || !seen.insert(x->d_name).second)
+            continue;
+        if (!safeId(x->d_name))
+            continue;
+        std::string mb;
+        if (!readWhy(manifestPath(s, x->d_name), mb, why)) {
+            if (why != ENOENT) {
+                closedir(d);
+                return unavailable("manifest unreadable");
+            }
+            continue; // a directory without a manifest
+        }
+        DownloadItem i;
+        if (parse(mb, i))
+            rebuilt.push_back(
+                std::move(i)); // (a manifest that does not parse is corrupt, not lost)
+        errno = 0;
+    }
+    const bool scanFailed = errno != 0;
+    closedir(d);
+    if (scanFailed)
+        return unavailable("items unreadable");
+    out.insert(out.end(), rebuilt.begin(), rebuilt.end());
+    return rebuilt.empty() ? LibraryStatus::NewScope : LibraryStatus::Rebuilt;
+}
 bool DownloadStore::rebuildIndex(const std::string& s, std::vector<DownloadItem>& v,
                                  std::string* e) const
 {
+    if (!storageReadable()) {
+        if (e)
+            *e = "storage unavailable";
+        return false;
+    }
     sweepTmpFiles(scopePath(s));
     DIR* d = opendir((scopePath(s) + "/items").c_str());
     if (!d) {
@@ -563,27 +811,47 @@ bool DownloadStore::removePartialBytes(const std::string& s, const std::string& 
             *e = "unsafe id";
         return false;
     }
+    if (!storageReadable()) {
+        if (e)
+            *e = "storage unavailable";
+        return false;
+    }
+    bool clean = true;
     for (const char* dir : {"chunks", "segments"}) {
         DIR* d = opendir((itemPath(s, id) + "/" + dir).c_str());
-        if (!d)
+        if (!d) {
+            if (errno != ENOENT)
+                clean = false;
             continue;
+        }
         dirent* x;
         while ((x = readdir(d))) {
             std::string n = x->d_name;
             if ((std::string(dir) == "chunks" ? n.rfind("chunk-", 0) == 0 : true) &&
                 (n.size() > 4 &&
                  (n.rfind(".bin") == n.size() - 4 || n.rfind(".part") == n.size() - 5)))
-                std::remove((itemPath(s, id) + "/" + dir + "/" + n).c_str());
+                if (std::remove((itemPath(s, id) + "/" + dir + "/" + n).c_str()) != 0 &&
+                    errno != ENOENT)
+                    clean = false;
         }
         closedir(d);
     }
-    return true;
+    if (!clean && e)
+        *e = "could not clear old bytes";
+    return clean;
 }
 bool DownloadStore::removeItem(const std::string& s, const std::string& id, std::string* e) const
 {
     if (!safeId(s) || !safeId(id)) {
         if (e)
             *e = "unsafe id";
+        return false;
+    }
+    // Before the first deletion: on unavailable or mismatched storage nothing may be touched (the
+    // same ids on another volume are not ours to delete). The removal stays owed.
+    if (!storageReadable()) {
+        if (e)
+            *e = "storage unavailable";
         return false;
     }
     DownloadItem i;
@@ -602,6 +870,16 @@ bool DownloadStore::removeItem(const std::string& s, const std::string& id, std:
     ::rmdir((itemPath(s, id) + "/chunks").c_str());
     ::rmdir((itemPath(s, id) + "/segments").c_str());
     ::rmdir(itemPath(s, id).c_str());
+    // Done only if the manifest is really gone from storage we can read: a failed removal (or
+    // unreadable storage) must not be reported as success, or the item returns at the next load.
+    struct stat gone
+    {};
+    if (!storageReadable() || (::stat(manifestPath(s, id).c_str(), &gone) == 0) ||
+        errno != ENOENT) {
+        if (e)
+            *e = "could not remove download";
+        return false;
+    }
     return true;
 }
 }

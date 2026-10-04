@@ -37,6 +37,13 @@ int main()
     testErasureAndRedownloadDoNotWaitForTheDisk();
     testConfigureDoesNotWaitForTheDisk();
     testRemovalSurvivesAccountSwitch();
+    testFailedStorageWritesStayOwedAndRetry();
+    testUnavailableStorageIsNeverAnEmptyLibrary();
+    testEstablishedStorageIsNeverMistakenForAFirstRun();
+    testStorageReturningBeforeTheFirstIndexWriteIsMerged();
+    testStorageReturningInTheIndexCreateGapIsMerged();
+    testLateScanStaysOwedWhileStorageIsGone();
+    testMismatchedStorageIsNeverMutated();
     testStaleTransferNeverTouchesAnotherAccount();
     testAccountLibraryLoadIsAsynchronous();
     testDownloadRestartPersistence();

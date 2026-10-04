@@ -685,6 +685,22 @@ static void testHomeDownloadsStateRemovalAndBulkConfirm()
     std::printf("[test] HomeDownloadsState two-press removal OK\n");
 }
 
+static void testDownloadsEmptyStateNeverHidesAStorageProblem()
+{
+    std::printf("[test] Downloads empty state vs loading/unreadable\n");
+    DownloadSnapshot s;
+    CHECK(downloadsEmptyState(s).title == "No downloads yet");
+    s.loading = true; // still being read: not "no downloads"
+    CHECK(downloadsEmptyState(s).title == "Loading downloads...");
+    s.storageError = "Can't read your saved downloads. Check the SD card.";
+    CHECK(downloadsEmptyState(s).title == "Can't read downloads");
+    CHECK(downloadsEmptyState(s).detail == s.storageError);
+    s.loading = false;
+    s.storageError.clear(); // recovery clears it again
+    CHECK(downloadsEmptyState(s).title == "No downloads yet");
+    std::printf("[test] Downloads empty state vs loading/unreadable OK\n");
+}
+
 static void testHomeDownloadsStateJournalDiscard()
 {
     std::printf("[test] HomeDownloadsState journal discard confirm\n");

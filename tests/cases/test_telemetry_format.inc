@@ -188,6 +188,19 @@ static void testMftV2CatalogDbTelemetry()
     PerformanceTelemetry::setSchemaVersionForTest(2);
     PerformanceTelemetry &telemetry = performanceTelemetry();
     telemetry.stop();
+    // Keep the sampling clock still until every fixture counter is populated.
+    static std::atomic<uint64_t> catalogNowUs{1};
+    static std::atomic<unsigned> catalogMetricSamples{0};
+    catalogNowUs.store(1, std::memory_order_release);
+    catalogMetricSamples.store(0, std::memory_order_relaxed);
+    const auto catalogClock = []() noexcept -> uint64_t {
+        return catalogNowUs.load(std::memory_order_acquire);
+    };
+    const auto catalogMetrics = [](const LinuxProcessMetrics&, bool) noexcept {
+        catalogMetricSamples.fetch_add(1, std::memory_order_relaxed);
+        return LinuxProcessMetricsSnapshot{};
+    };
+    PerformanceTelemetry::setTestHooks({catalogClock, catalogMetrics});
     const std::string root = "/tmp/miyoofin-v2-catalog-"
         + std::to_string(static_cast<long long>(getpid()));
     const std::string path = root + "/telemetry.mft";
@@ -218,8 +231,13 @@ static void testMftV2CatalogDbTelemetry()
     telemetry.recordCatalogDbSqliteError(5);
     telemetry.recordCatalogDbSqliteError(10);
     telemetry.recordCatalogDbSqliteError(11);
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    catalogNowUs.store(1001, std::memory_order_release);
+    for (int attempt = 0; attempt < 100 && catalogMetricSamples.load(std::memory_order_relaxed) < 2;
+         ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(catalogMetricSamples.load(std::memory_order_relaxed) >= 2);
     telemetry.stop();
+    PerformanceTelemetry::clearTestHooks();
     std::ifstream input(path, std::ios::binary);
     const std::vector<uint8_t> bytes(
         (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());

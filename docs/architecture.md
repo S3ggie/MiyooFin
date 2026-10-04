@@ -150,6 +150,13 @@ until the storage thread's rescan records a structural failure, and shutdown dra
 joins the storage thread. HLS segments are validated structurally as MPEG-TS (sync bytes, PAT/PMT
 CRC, H.264+AAC, continuity); that detects garbage and truncation mid-packet, not payload bit flips.
 
+A library that cannot be read is never treated as empty. `DownloadStore::readLibrary` separates a
+new scope from unreadable storage, and a marker file beside the downloads folder
+(`.downloads.root`, holding the device the folder was on) records that the folder has held a
+library: a missing folder, a dangling link, or an empty mount point on another device is then
+"storage unavailable" (retried with backoff, plain warning on the Downloads tab, automatic
+recovery), not a first run. To deliberately start over, delete the downloads folder and that file.
+
 The test cases remain grouped in `tests/cases/*.inc` files, but focused `tests/test_*.cpp` wrappers
 compile them into independent binaries. `tests/test_support.hpp` contains shared fixtures and
 assertion support, while `output/test/test_runner` runs every group for the aggregate test target.

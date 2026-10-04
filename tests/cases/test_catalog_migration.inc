@@ -710,7 +710,8 @@ static void testCatalogDbOfflineDownloadReconstruction()
     const std::string url =
         "https://sqlite-offline-downloads-" + suffix + ".example";
     const std::string user = "offline-downloads-user";
-    const std::string root = "downloads/task16-" + suffix;
+    // absolute root: DownloadStore needs the root's parent to exist, and a clean checkout has no ./downloads
+    const std::string root = "/tmp/miyoofin-task16-" + suffix;
     DownloadStore store(root);
     const std::string scope = store.scopeKey(url, user);
     const auto paths = catalogMigrationTestPaths(url, user);
@@ -855,6 +856,7 @@ static void testCatalogDbOfflineDownloadReconstruction()
     ::rmdir((store.scopePath(scope) + "/items").c_str());
     ::rmdir(store.scopePath(scope).c_str());
     ::rmdir(root.c_str());
+    std::remove(store.markerPath().c_str());
     removeCatalogMigrationTestPaths(paths);
 }
 
@@ -865,7 +867,7 @@ static void testCatalogDbOfflineRebuildAfterScopeActivation()
     const std::string url =
         "https://sqlite-scope-activation-" + suffix + ".example";
     const std::string user = "scope-activation-user";
-    const std::string root = "downloads";
+    const std::string root = "/tmp/miyoofin-task17-" + suffix;
     DownloadStore store(root);
     const std::string scope = store.scopeKey(url, user);
     const auto paths = catalogMigrationTestPaths(url, user);
@@ -911,5 +913,7 @@ static void testCatalogDbOfflineRebuildAfterScopeActivation()
     std::remove((store.scopePath(scope) + "/index.v1").c_str());
     ::rmdir((store.scopePath(scope) + "/items").c_str());
     ::rmdir(store.scopePath(scope).c_str());
+    ::rmdir(root.c_str());
+    std::remove(store.markerPath().c_str());
     removeCatalogMigrationTestPaths(paths);
 }

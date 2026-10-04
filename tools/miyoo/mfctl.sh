@@ -133,6 +133,12 @@ deploy)
             all:*|app:miyoofin|bridge:miyoofin-https-bridge|reporter:miyoofin-playback-reporter|player:miyoofin-player|player:miyoofin-audio) ;;
             *) continue ;;
         esac
+        # `make ci-local-full` leaves an unstripped (~100 MB) debug build in the same directory;
+        # only the RELEASE=1 build above is meant for the card.
+        if file "output/build-arm/$f" | grep -q "not stripped"; then
+            echo "refusing to deploy unstripped output/build-arm/$f (not a RELEASE=1 build); rerun deploy" >&2
+            exit 6
+        fi
         scp -q -P 2222 -i "$KEY" -o BatchMode=yes "output/build-arm/$f" "onion@$HOST:$APP/$f.new"
         r "cd $APP && mv $f.new $f"
         echo "deployed $f"

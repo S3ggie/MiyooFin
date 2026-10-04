@@ -5,7 +5,7 @@
 # (this shared box also runs Jellyfin/media services).
 #   MF_MEM   memory cap          (default 6G)
 #   MF_TIME  runtime cap seconds (default 1800)
-#   MF_CPU   CPU quota percent   (default 400 = 4 cores)
+#   MF_CPU   CPU quota percent   (default 400 = 4 cores; "300" or "300%")
 #   MF_HIGH  soft limit          (default 75% of MF_MEM)
 # Fails closed (exit 125) when no user systemd scope is available.
 # Usage: tools/bounded.sh [--] command args...
@@ -22,4 +22,4 @@ if ! command -v systemd-run >/dev/null 2>&1 || ! systemd-run --user --scope -q t
 fi
 exec systemd-run --user --scope --quiet --collect \
     -p MemoryMax="$mem" -p MemoryHigh="$high" -p MemorySwapMax=0 -p TasksMax=4096 \
-    -p CPUQuota="${MF_CPU:-400}%" -p RuntimeMaxSec="${MF_TIME:-1800}" -- "$@"
+    -p CPUQuota="$(printf %s "${MF_CPU:-400}" | tr -d %)%" -p RuntimeMaxSec="${MF_TIME:-1800}" -- "$@"

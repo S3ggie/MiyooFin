@@ -183,6 +183,9 @@ Large subsystems are several binaries that share one `tests/cases/test_<subsyste
 `test_artwork_episode_scheduling`; `test_update` and `test_update_installer`. Each test runs in exactly
 one binary. Structural guards that read the coordinator source use `readLibraryCoordinatorSources()`,
 which concatenates every `src/library/LibraryCoordinator*.cpp` unit.
+The aggregate runner starts at most `MIYOOFIN_TEST_JOBS` groups at once (default: CPU count, at most 8) and
+stops any group that runs longer than `MIYOOFIN_TEST_TIMEOUT` seconds (default 900); the timing-sensitive
+groups it lists run once, serially, afterwards.
 Production sources are compiled once into reusable test objects and archived for selective linker
 extraction, so changing one case only rebuilds and relinks its focused binary. Desktop-only runtime
 checks are exposed through the separate `Makefile.desktop` targets rather than `make test`.

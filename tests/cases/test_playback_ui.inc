@@ -1,7 +1,8 @@
 static void testPlaybackRequestMovie()
 {
     std::printf("[test] B5f2: PlaybackRequest valid movie\n");
-    const char *tmpPath = "test_playback_movie.txt";
+    const std::string tmpPathStr = "test_playback_movie." + std::to_string(::getpid()) + ".txt";
+    const char *tmpPath = tmpPathStr.c_str();
     std::remove(tmpPath);
     std::string error;
     CHECK(PlaybackRequest::writeTo(tmpPath, "abc123", "movie",
@@ -29,7 +30,8 @@ static void testPlaybackRequestMovie()
 static void testPlaybackRequestEpisode()
 {
     std::printf("[test] B5f2: PlaybackRequest valid episode\n");
-    const char *tmpPath = "test_playback_episode.txt";
+    const std::string tmpPathStr = "test_playback_episode." + std::to_string(::getpid()) + ".txt";
+    const char *tmpPath = tmpPathStr.c_str();
     std::remove(tmpPath);
 
     std::string error;
@@ -75,7 +77,8 @@ static void testPlaybackRequestEmptyType()
 static void testPlaybackRequestRemove()
 {
     std::printf("[test] B5f2: PlaybackRequest remove\n");
-    const char *tmpPath = "test_playback_rm.txt";
+    const std::string tmpPathStr = "test_playback_rm." + std::to_string(::getpid()) + ".txt";
+    const char *tmpPath = tmpPathStr.c_str();
     std::string error;
     CHECK(PlaybackRequest::writeTo(tmpPath, "x", "movie", -42, error));
     {
@@ -108,7 +111,8 @@ static void writePlaybackResultFixture(const char *path,
 static void testPlaybackResultParsing()
 {
     std::printf("[test] playback result strict 64-bit parsing\n");
-    const char *path = "test_playback_result.txt";
+    const std::string pathStr = "test_playback_result." + std::to_string(::getpid()) + ".txt";
+    const char *path = pathStr.c_str();
     std::int64_t ticks = -1;
     std::string error;
 

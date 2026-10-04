@@ -4,8 +4,7 @@ set -eu
 TEST_DIR=${MIYOOFIN_TEST_DIR:-$(CDPATH= cd -- "$(dirname "$0")" && pwd)}
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/miyoofin-test-run.XXXXXX")
 trap 'rm -rf "$run_dir"' EXIT HUP INT TERM
-TEST_BINARIES='test_catalog
-test_api_session
+TEST_BINARIES='test_api_session
 test_api_core
 test_api_events
 test_ui_foundation
@@ -55,34 +54,61 @@ test_mpeg_ts
 '
 pids=
 failed=
-
-for test_binary in $TEST_BINARIES
-do
-    "$TEST_DIR/$test_binary" >"$run_dir/$test_binary.log" 2>&1 &
-    pids="$pids $!:$test_binary"
-done
-
 status=0
-for entry in $pids
-do
+
+# At most MIYOOFIN_TEST_JOBS groups run at once (default: the CPU count, at most 8): launching every
+# binary at once starves the timing-sensitive ones on a loaded or CPU-capped host. Each group also
+# has a wall-clock limit (MIYOOFIN_TEST_TIMEOUT seconds, default 900) so a hung test fails the run
+# instead of waiting for the caller's limit.
+jobs=${MIYOOFIN_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}
+[ "$jobs" -gt 8 ] 2>/dev/null && [ -z "${MIYOOFIN_TEST_JOBS:-}" ] && jobs=8
+[ "$jobs" -ge 1 ] 2>/dev/null || jobs=4
+limit=${MIYOOFIN_TEST_TIMEOUT:-900}
+run_group() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$limit" "$TEST_DIR/$1" >"$run_dir/$1.log" 2>&1
+    else
+        "$TEST_DIR/$1" >"$run_dir/$1.log" 2>&1
+    fi
+}
+reap_first() {
+    pids=${pids# }
+    entry=${pids%% *}
+    pids=${pids#"$entry"}
     if ! wait "${entry%%:*}"; then
         status=1
         failed="$failed ${entry#*:}"
     fi
+}
+running=0
+for test_binary in $TEST_BINARIES
+do
+    if [ "$running" -ge "$jobs" ]; then
+        reap_first
+        running=$((running - 1))
+    fi
+    run_group "$test_binary" &
+    pids="$pids $!:$test_binary"
+    running=$((running + 1))
+done
+while [ -n "${pids# }" ]
+do
+    reap_first
 done
 
-# These groups have timing-sensitive fixture/codecs; run them serially after
+# These groups have timing-sensitive fixture/codecs; run them serially (once) after
 # the independent groups complete.
-for serialized_test in test_catalog test_catalog_parity_sync test_telemetry_format test_telemetry_schema test_session
+SERIAL_BINARIES='test_catalog test_catalog_parity_sync test_telemetry_format test_telemetry_schema test_session'
+for serialized_test in $SERIAL_BINARIES
 do
-    if ! "$TEST_DIR/$serialized_test" >"$run_dir/$serialized_test.log" 2>&1; then
+    if ! run_group "$serialized_test"; then
         status=1
         failed="$failed $serialized_test"
     fi
 done
 
 if [ "$status" -ne 0 ]; then
-    for test_binary in $TEST_BINARIES test_catalog_parity_sync test_telemetry_format test_telemetry_schema test_session
+    for test_binary in $TEST_BINARIES $SERIAL_BINARIES
     do
         [ -f "$run_dir/$test_binary.log" ] && cat "$run_dir/$test_binary.log"
     done
@@ -90,7 +116,7 @@ if [ "$status" -ne 0 ]; then
     exit "$status"
 fi
 
-for test_binary in $TEST_BINARIES
+for test_binary in $TEST_BINARIES $SERIAL_BINARIES
 do
     cat "$run_dir/$test_binary.log"
 done

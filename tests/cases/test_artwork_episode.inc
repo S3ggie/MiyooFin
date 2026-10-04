@@ -66,7 +66,7 @@ static void testCacheFilename()
 static void testCacheWriteRead()
 {
     std::printf("[test] Cache write/read roundtrip\n");
-    ImageCache::setCacheDir("test_cache_images/");
+    ImageCache::setCacheDir((std::string("test_cache_images.") + std::to_string(::getpid()) + "/"));
     const unsigned char data[] = {0x01, 0x02, 0x03, 0xFF, 0xFE};
     CHECK(ImageCache::writeToCache("item1", ImageType::Primary, "t", 50, 50, data, sizeof(data)));
     CHECK(ImageCache::isCached("item1", ImageType::Primary, "t", 50, 50));
@@ -74,7 +74,7 @@ static void testCacheWriteRead()
     CHECK(rb.size() == sizeof(data));
     CHECK(std::memcmp(rb.data(), data, sizeof(data)) == 0);
     std::remove(ImageCache::cachePath("item1", ImageType::Primary, "t", 50, 50).c_str());
-    ::rmdir("test_cache_images");
+    ::rmdir((std::string("test_cache_images.") + std::to_string(::getpid())).c_str());
     ImageCache::setCacheDir("cache/images/");
     std::printf("[test] Cache write/read OK\n");
 }
@@ -222,7 +222,8 @@ static void testCachedJpegDecodeRoundtrip()
     std::fread(jpegBytes.data(), 1, jpegBytes.size(), f);
     std::fclose(f);
 
-    ImageCache::setCacheDir("test_b5b_cache/");
+    const std::string b5bCacheDir = "test_b5b_cache." + std::to_string(::getpid());
+    ImageCache::setCacheDir(b5bCacheDir + "/");
     CHECK(ImageCache::writeToCache("b5b-test", ImageType::Primary,
         "roundtrip", 72, 98, jpegBytes.data(), jpegBytes.size()));
     CHECK(ImageCache::isCached("b5b-test", ImageType::Primary, "roundtrip", 72, 98));
@@ -231,8 +232,8 @@ static void testCachedJpegDecodeRoundtrip()
     auto decoded = ImageDecoder::decodeJpeg(cached.data(), cached.size());
     CHECK(!decoded.empty());
 
-    std::remove("test_b5b_cache/b5b-test_Primary_roundtrip_72x98.jpg");
-    ::rmdir("test_b5b_cache");
+    std::remove((b5bCacheDir + "/b5b-test_Primary_roundtrip_72x98.jpg").c_str());
+    ::rmdir(b5bCacheDir.c_str());
     ImageCache::setCacheDir("cache/images/");
     std::printf("[test] B5b: cached JPEG decode roundtrip OK\n");
 }

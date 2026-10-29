@@ -3,8 +3,8 @@
 # Uses Debian Buster (glibc 2.28 = same as Miyoo device) with
 # gcc-arm-linux-gnueabihf cross-compiler from archive.debian.org.
 #
-# SDL2 from XK9274/sdl2_miyoo vanilla branch (Miyoo-patched).
-# Pinned: vanilla @ 478ddde6a415d48b4c497ce3a2679c08afd23f40
+# SDL2 from VortexGhost/sdl2_miyoo (fork of XK9274's Miyoo-patched SDL2).
+# Pinned: original XK9274 commit @ 478ddde6a415d48b4c497ce3a2679c08afd23f40
 #
 # Build:
 #   docker build -f Dockerfile.onionos -t miyoofin-toolchain .
@@ -34,13 +34,16 @@ RUN apt-get update && \
 
 # -------------------------------------------------------------------
 # Build SDL2 for Miyoo target (Miyoo-patched version)
-# Pinned: XK9274/sdl2_miyoo vanilla @ 478ddde6
+# Pinned: XK9274 commit 478ddde6 via VortexGhost fork
 # -------------------------------------------------------------------
-RUN git clone https://github.com/XK9274/sdl2_miyoo.git /tmp/sdl2_miyoo && \
-    cd /tmp/sdl2_miyoo && git checkout 478ddde6a415d48b4c497ce3a2679c08afd23f40 && \
+RUN git init -q /tmp/sdl2_miyoo && \
+    git -C /tmp/sdl2_miyoo remote add origin https://github.com/VortexGhost/sdl2_miyoo.git && \
+    git -C /tmp/sdl2_miyoo fetch --no-tags origin 478ddde6a415d48b4c497ce3a2679c08afd23f40 && \
+    git -C /tmp/sdl2_miyoo checkout --detach 478ddde6a415d48b4c497ce3a2679c08afd23f40 && \
+    cd /tmp/sdl2_miyoo && \
       sed -i '/eglUpdateBufferSettings(display, surface, ppFunc, pfb_idx, pfb_vaddr);/d' src/video/mmiyoo/SDL_opengles_mmiyoo.c && \
     sed -i '/#include "SDL_ttf.h"/d; /#include "SDL_image.h"/d' src/video/mmiyoo/SDL_video_mmiyoo.h && \
-    [ -e /opt/miyoo/lib/libEGL.so ] || ln -s /opt/miyoo/lib/libEGL.so.1 /opt/miyoo/lib/libEGL.so && \
+    { [ -e /opt/miyoo/lib/libEGL.so ] || ln -s /opt/miyoo/lib/libEGL.so.1 /opt/miyoo/lib/libEGL.so; } && \
     echo "=== Patching configure to enable mmiyoo driver with clean flags ===" && \
     sed -i \
       -e 's|-I/opt/mmiyoo/arm-buildroot-linux-gnueabihf/sysroot/usr/include/SDL2||g' \

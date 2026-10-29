@@ -25,13 +25,13 @@ Binary release paths include:
 - `lib/libSDL2-2.0.so.0.18.2`
 - `lib/libSDL2.so`
 
-MiyooFin builds these files from the `vanilla` line of `XK9274/sdl2_miyoo`,
+MiyooFin builds these files from the original `XK9274/sdl2_miyoo` source, fetched through the `VortexGhost/sdl2_miyoo` fork,
 pinned to commit:
 
 `478ddde6a415d48b4c497ce3a2679c08afd23f40`
 
 Pinned source:
-https://github.com/XK9274/sdl2_miyoo/tree/478ddde6a415d48b4c497ce3a2679c08afd23f40
+https://github.com/VortexGhost/sdl2_miyoo/tree/478ddde6a415d48b4c497ce3a2679c08afd23f40
 
 The pinned repository carries a GPL-3.0 license. MiyooFin applies a small set
 of build-time source edits while constructing the cross-toolchain. Those edits

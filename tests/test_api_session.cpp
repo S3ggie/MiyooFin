@@ -5,6 +5,7 @@
 #include "cases/test_api_events.inc"
 int main()
 {
+    testJellyfin12AuthHeaders();
     testNormaliseUrl();
     testSession();
     testSessionBackwardCompatibility();

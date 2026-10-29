@@ -104,10 +104,10 @@ bool JellyfinApi::authenticateByName(const std::string& baseUrl, const std::stri
     errCode = AuthError::None;
     error.clear();
 
-    // Build X-Emby-Authorization header
+    // Build Jellyfin 12 Authorization header
     char authHeader[512];
     std::snprintf(authHeader, sizeof(authHeader),
-                  "X-Emby-Authorization: MediaBrowser "
+                  "Authorization: MediaBrowser "
                   "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
                   APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
 
@@ -156,7 +156,7 @@ std::vector<std::string> quickConnectHeaders(const std::string& deviceId)
 {
     char authHeader[512];
     std::snprintf(authHeader, sizeof(authHeader),
-                  "X-Emby-Authorization: MediaBrowser "
+                  "Authorization: MediaBrowser "
                   "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
                   APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
     return {authHeader, "Content-Type: application/json"};
@@ -273,17 +273,7 @@ TokenValidation JellyfinApi::validateTokenStatus(const std::string& baseUrl,
     HttpClient client;
     client.setTimeoutSec(5);
 
-    std::vector<std::string> headers;
-    char authLine[512];
-    std::snprintf(authLine, sizeof(authLine), "X-Emby-Token: %s", accessToken.c_str());
-    headers.push_back(authLine);
-
-    char identityHeader[512];
-    std::snprintf(identityHeader, sizeof(identityHeader),
-                  "X-Emby-Authorization: MediaBrowser "
-                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
-                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
-    headers.push_back(identityHeader);
+    const auto headers = buildAuthHeaders(accessToken, deviceId);
 
     std::string url = baseUrl + "/Users/" + userId;
 
@@ -342,17 +332,13 @@ std::string JellyfinApi::normaliseUrl(const std::string& input)
 std::vector<std::string> JellyfinApi::buildAuthHeaders(const std::string& accessToken,
                                                        const std::string& deviceId)
 {
-    std::vector<std::string> headers;
-    char authLine[512];
-    std::snprintf(authLine, sizeof(authLine), "X-Emby-Token: %s", accessToken.c_str());
-    headers.push_back(authLine);
-    char identityHeader[512];
-    std::snprintf(identityHeader, sizeof(identityHeader),
-                  "X-Emby-Authorization: MediaBrowser "
-                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
-                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
-    headers.push_back(identityHeader);
-    return headers;
+    // Jellyfin 12: identity and token in one Authorization header.
+    char authHeader[1024];
+    std::snprintf(authHeader, sizeof(authHeader),
+                  "Authorization: MediaBrowser "
+                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\", Token=\"%s\"",
+                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR, accessToken.c_str());
+    return {authHeader};
 }
 
 } // namespace miyoofin

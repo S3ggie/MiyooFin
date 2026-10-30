@@ -14,7 +14,7 @@ The current Dockerfile.onionos uses a clean, reproducible approach:
     in `THIRD_PARTY_NOTICES.md`
   - **Prefix:** `arm-linux-gnueabihf-`
   - **Sysroot:** `/usr/arm-linux-gnueabihf`
-- **SDL2:** Miyoo-patched version from VortexGhost/sdl2_miyoo (originally XK9274/sdl2_miyoo)
+- **SDL2:** Miyoo-patched version from S3ggie/sdl2_miyoo (mirror; originally XK9274/sdl2_miyoo)
   - **Revision:** pinned commit (detached HEAD; originally from `vanilla`)
   - **Commit:** `478ddde6a415d48b4c497ce3a2679c08afd23f40`
   - Built with minimal options (no X11, OpenGL, ALSA, etc.)

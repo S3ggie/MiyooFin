@@ -1,6 +1,17 @@
 // The tab projection belongs to the UI layer, not JellyfinApi.
 #include "../../src/ui/HomeTabs.hpp"
 
+static void testJellyfin12AuthHeaders()
+{
+    std::printf("[test] Jellyfin 12 Authorization header\n");
+    const auto headers = JellyfinApi::buildAuthHeaders("token123", "device456");
+    CHECK(headers.size() == 1);
+    CHECK(headers[0].find("Authorization: MediaBrowser ") == 0);
+    CHECK(headers[0].find("Token=\"token123\"") != std::string::npos);
+    CHECK(headers[0].find("DeviceId=\"device456\"") != std::string::npos);
+    CHECK(headers[0].find("X-Emby-") == std::string::npos);
+}
+
 static void testNormaliseUrl()
 {
     std::printf("[test] JellyfinApi::normaliseUrl\n");

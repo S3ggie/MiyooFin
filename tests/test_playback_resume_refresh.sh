@@ -31,7 +31,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         item = self.path.rsplit("/", 1)[-1]
-        if not self.headers.get("X-Emby-Token"):
+        if 'Token="SECRET_TOKEN"' not in (self.headers.get("Authorization") or ""):
             self.send_response(401); self.end_headers(); return
         if item == "bad": self.send_response(500); self.end_headers(); return
         if item == "nobody": self.send_response(404); self.end_headers(); return

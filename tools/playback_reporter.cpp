@@ -232,13 +232,14 @@ static PostResult post_json(const std::string& url, const std::vector<std::strin
 // Jellyfin auth header builder — matches existing MiyooFin identity
 // ===================================================================
 
-static void build_identity_headers(const std::string& deviceId, std::vector<std::string>& headers)
+static void build_identity_headers(const std::string& deviceId, const std::string& token,
+                                   std::vector<std::string>& headers)
 {
-    char hdr[512];
+    char hdr[1024];
     std::snprintf(hdr, sizeof(hdr),
-                  "X-Emby-Authorization: MediaBrowser "
-                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\"",
-                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR);
+                  "Authorization: MediaBrowser "
+                  "Client=\"%s\", Device=\"%s\", DeviceId=\"%s\", Version=\"%s\", Token=\"%s\"",
+                  APP_NAME, DEVICE_NAME, deviceId.c_str(), VERSION_STR, token.c_str());
     headers.push_back(hdr);
 }
 
@@ -282,8 +283,7 @@ static bool report_event(const char* name, const std::string& path, const Playba
                          const std::string& cacertPath)
 {
     std::vector<std::string> headers;
-    headers.push_back("X-Emby-Token: " + token);
-    build_identity_headers(deviceId, headers);
+    build_identity_headers(deviceId, token, headers);
     const std::string body = stopped ? build_stopped_payload(itemId, positionTicks, failed)
                                      : build_playing_payload(itemId, positionTicks, true);
     PostResult result = post_json(route.primary + path, headers, body, cacertPath);
@@ -490,8 +490,7 @@ static bool load_remote_context(const std::string& appDir, const char* tag, Remo
         }
         ctx.cacertPath.clear();
     }
-    ctx.headers.push_back("X-Emby-Token: " + accessToken);
-    build_identity_headers(deviceId, ctx.headers);
+    build_identity_headers(deviceId, accessToken, ctx.headers);
     return true;
 }
 

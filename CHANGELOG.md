@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2
+
+> **Stuck on the login screen after updating your server to Jellyfin 12?** 0.3.1 can't sign in to
+> Jellyfin 12, so the in-app updater can't be reached. Install 0.3.2 manually: download
+> `MiyooFin.zip`, unzip it, and copy the `MiyooFin` folder over `App/MiyooFin` on your SD card
+> (settings and downloads are kept). Everyone else can update from Settings, Updates as usual.
+
+### Fixed
+- **Jellyfin 12 sign-in.** The app now sends its token in the standard `Authorization` header,
+  which Jellyfin 12 requires. Still works with Jellyfin 10.8 through 10.11.
+
+### Internal
+- The Miyoo SDL2 build now comes from a maintainer-owned mirror, since the original source is no
+  longer available (no behavior change).
+- Test runner and build tooling hardening.
+
 ## 0.3.1
 
 ### Fixed

@@ -6,6 +6,10 @@
 > Jellyfin 12, so the in-app updater can't be reached. Install 0.3.2 manually: download
 > `MiyooFin.zip`, unzip it, and copy the `MiyooFin` folder over `App/MiyooFin` on your SD card
 > (settings and downloads are kept). Everyone else can update from Settings, Updates as usual.
+>
+> Server admins can instead set `<EnableLegacyAuthorization>true</EnableLegacyAuthorization>` in
+> Jellyfin's `config/system.xml` and restart Jellyfin, which lets 0.3.1 sign in again; update from
+> Settings, Updates, then set it back to `false`.
 
 ### Fixed
 - **Jellyfin 12 sign-in.** The app now sends its token in the standard `Authorization` header,
